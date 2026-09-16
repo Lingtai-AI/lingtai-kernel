@@ -171,14 +171,6 @@ def build_agent_config(
     )
 
 
-def _make_mcp_tool_handler(client: Any, tool_name: str, input_schema: Any, mcp_service: Any):
-    """Dispatch handler for one MCP tool, shared by mount and catalog reconcile."""
-    def handler(tool_args: dict) -> dict:
-        prepared = mcp_service.prepare_mcp_tool_arguments(tool_args, input_schema)
-        return client.call_tool(tool_name, prepared)
-    return handler
-
-
 def _schema_declares_reasoning_param(schema: Any) -> bool:
     """True if a tool's own parameter schema has somewhere for reasoning to go.
 
@@ -1310,10 +1302,27 @@ class Agent(BaseAgent):
             retried.append(name)
             self._log("mcp_retry_attempt", name=name, source=source)
 
-            # Tear down the dead client (if any) through the one locked discard
-            # path; connect_mcp* will append a fresh one below.
+            # Tear down the dead client (if any). connect_mcp* will append a
+            # fresh one. We also remove the dead client from
+            # self._mcp_clients so stop()/refresh teardown does not double-
+            # close it.
             if client is not None:
-                self._discard_mcp_client(client)
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                clients = getattr(self, "_mcp_clients", None)
+                if isinstance(clients, list):
+                    try:
+                        clients.remove(client)
+                    except ValueError:
+                        pass
+                # Drop this client's reverse routes and advertised metadata now,
+                # while we still know which tools were its. A reconnect below
+                # may fail (see the `except` branch), and without this the
+                # closed client would keep a live-looking route and metadata.
+                # Other clients' entries are untouched.
+                self._forget_mcp_client_tools(client)
 
             # Re-attempt the spawn. Mirrors the dispatch in
             # `_load_mcp_from_workdir._spawn` — kept inline (not factored)
@@ -1368,7 +1377,17 @@ class Agent(BaseAgent):
                 # otherwise a server this retry reports as failed would keep a
                 # live-looking reverse route and advertised metadata.
                 if new_client is not None:
-                    self._discard_mcp_client(new_client)
+                    try:
+                        new_client.close()
+                    except Exception:
+                        pass
+                    clients = getattr(self, "_mcp_clients", None)
+                    if isinstance(clients, list):
+                        try:
+                            clients.remove(new_client)
+                        except ValueError:
+                            pass
+                    self._forget_mcp_client_tools(new_client)
                 spec["client"] = None
                 self._log("mcp_retry_failed", name=name,
                           error="client not connected after retry")
@@ -1580,22 +1599,15 @@ class Agent(BaseAgent):
             )
 
     def _discard_mcp_client(self, client: Any) -> None:
-        """Close and forget one client (failed mount, dead retry, rollback).
-
-        Held under the shared tool-surface lock so it cannot interleave with a
-        ``tools/list_changed`` reconcile mutating the same structures.
-        """
-        from .services.session_mcp import _surface_lock
-
-        with _surface_lock(self):
-            self._forget_mcp_client_tools(client)
-            clients = getattr(self, "_mcp_clients", None)
-            if isinstance(clients, list) and client in clients:
-                clients.remove(client)
-            try:
-                client.close()
-            except Exception:
-                pass
+        """Close and forget one client after a failed external mount attempt."""
+        self._forget_mcp_client_tools(client)
+        clients = getattr(self, "_mcp_clients", None)
+        if isinstance(clients, list) and client in clients:
+            clients.remove(client)
+        try:
+            client.close()
+        except Exception:
+            pass
 
     def connect_mcp(
         self,
@@ -1674,15 +1686,7 @@ class Agent(BaseAgent):
         closing/removing the just-started client on *any* publication failure.
         This is deliberately narrower than a process-wide transaction: it
         protects one connection and preserves earlier live clients unchanged.
-        Publication holds the shared tool-surface lock so a concurrent
-        ``tools/list_changed`` reconcile for another client cannot interleave.
         """
-        from .services.session_mcp import _surface_lock
-
-        with _surface_lock(self):
-            return self._mount_mcp_tools_locked(client, tools, mcp_service)
-
-    def _mount_mcp_tools_locked(self, client: Any, tools: list[dict], mcp_service: Any) -> list[str]:
         # The caller appends the just-started client before preflight; it is
         # intentionally absent from the pre-connection snapshot restored below.
         clients_before = [
@@ -1707,11 +1711,19 @@ class Agent(BaseAgent):
                 name = tool["name"]
                 schema = tool.get("schema", {})
 
+                def _make_handler(c: Any, tool_name: str, input_schema: Any):
+                    def handler(tool_args: dict) -> dict:
+                        prepared = mcp_service.prepare_mcp_tool_arguments(
+                            tool_args, input_schema
+                        )
+                        return c.call_tool(tool_name, prepared)
+                    return handler
+
                 metadata[name] = mcp_service.tool_metadata(tool)
                 self.add_tool(
                     name,
                     schema=schema,
-                    handler=_make_mcp_tool_handler(client, name, schema, mcp_service),
+                    handler=_make_handler(client, name, schema),
                     description=tool.get("description", ""),
                 )
                 registered.append(name)
@@ -1723,11 +1735,6 @@ class Agent(BaseAgent):
             for name in registered:
                 self._record_mcp_tool_owner(name, client)
             self._maybe_setup_task_card_controller()
-            # Standard MCP dynamic catalogs: later ``tools/list_changed`` signals
-            # from this client reconcile exactly the tools it owns.
-            watch = getattr(client, "watch_tools_changed", None)
-            if callable(watch):
-                watch(lambda records, _c=client: self._reconcile_mcp_client_tools(_c, records))
             return registered
         except Exception:
             # Close/remove the new transport first; then restore every state
@@ -1749,82 +1756,6 @@ class Agent(BaseAgent):
                 pass
             self._token_decomp_dirty = True
             raise
-
-    def _reconcile_mcp_client_tools(self, client: Any, tools: list[dict]) -> dict:
-        """Replace the tools owned by one live MCP client with its current catalog.
-
-        Runs on the client's catalog delivery thread after a standard
-        ``tools/list_changed`` refetch. Validated first, then applied atomically
-        under the shared tool-surface lock: the client's old tools go, the
-        listed ones are (re)registered; nothing else is touched. A malformed
-        record, a duplicate, or a name held by an intrinsic, an official plugin,
-        a native handler, or another client rejects the whole delivery, so the
-        last good catalog stays. A delivery for a discarded/closed client is
-        ignored. The next provider send rebuilds its tool list from the surface.
-        """
-        from lingtai.kernel.llm import FunctionSchema
-        from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
-
-        from .services import mcp as mcp_service
-        from .services.session_mcp import _surface_lock
-
-        label = getattr(client, "name", None) or getattr(client, "_url", None) or repr(client)
-
-        def _rejected(reason: str, **fields) -> dict:
-            self._log("mcp_catalog_reconcile_rejected", client=label, reason=reason, **fields)
-            return {"status": "rejected", "reason": reason, **fields}
-
-        with _surface_lock(self):
-            if client not in (getattr(self, "_mcp_clients", None) or []) or not client.is_connected():
-                return _rejected("client_not_live")
-            records: list[tuple[str, dict, str, dict]] = []
-            for tool in tools if isinstance(tools, list) else []:
-                name = tool.get("name") if isinstance(tool, dict) else None
-                schema = tool.get("schema", {}) if isinstance(tool, dict) else None
-                description = tool.get("description", "") if isinstance(tool, dict) else None
-                if (
-                    not isinstance(name, str) or not name
-                    or not isinstance(schema, dict) or not isinstance(description, str)
-                    or any(name == seen for seen, *_ in records)
-                ):
-                    return _rejected("malformed_catalog")
-                records.append((name, schema, description, tool))
-            routes = getattr(self, "_mcp_clients_by_tool", {})
-            owned = {name for name, owner in routes.items() if owner is client}
-            foreign = sorted(
-                name for name, *_ in records
-                if name not in owned and (
-                    name in self._intrinsics or name in OFFICIAL_TOOL_PLUGIN_NAMES
-                    or name in self._tool_handlers or name in routes
-                )
-            )
-            if foreign:
-                return _rejected("tool_name_collision", tools=foreign)
-
-            listed = {name for name, *_ in records}
-            for name in owned - listed:
-                self._tool_handlers.pop(name, None)
-                self._mcp_tool_metadata.pop(name, None)
-                self._mcp_tool_names.discard(name)
-                routes.pop(name, None)
-                getattr(self, "_mcp_tool_collisions", set()).discard(name)
-            schemas = {s.name: s for s in self._tool_schemas}
-            for name, schema, description, tool in records:
-                schemas[name] = FunctionSchema(name=name, description=description, parameters=schema)
-                self._tool_handlers[name] = _make_mcp_tool_handler(client, name, schema, mcp_service)
-                self._mcp_tool_metadata[name] = mcp_service.tool_metadata(tool)
-                self._mcp_tool_names.add(name)
-                self._record_mcp_tool_owner(name, client)
-            # Rebind rather than mutate so a concurrent schema build sees a snapshot.
-            self._tool_schemas = [s for s in schemas.values() if s.name not in owned - listed]
-            self._token_decomp_dirty = True
-            try:
-                if self._chat is not None:
-                    self._chat.update_tools(self._build_tool_schemas())
-            except Exception:
-                pass
-            self._log("mcp_catalog_reconciled", client=label, tools=sorted(listed))
-            return {"status": "ok", "tools": sorted(listed)}
 
     def _record_mcp_tool_owner(self, name: str, client: Any) -> None:
         """Map one MCP tool name while retaining same-surface collision provenance."""
@@ -1900,7 +1831,7 @@ class Agent(BaseAgent):
         routes = getattr(self, "_mcp_clients_by_tool", None)
         if not isinstance(routes, dict):
             return
-        owned = {name for name, owner in routes.items() if owner is client}
+        owned = [name for name, owner in routes.items() if owner is client]
         metadata = getattr(self, "_mcp_tool_metadata", None)
         collisions = getattr(self, "_mcp_tool_collisions", None)
         for name in owned:
@@ -1912,13 +1843,6 @@ class Agent(BaseAgent):
             # a live pair, so drop it with the rest of the client's state.
             if isinstance(collisions, set):
                 collisions.discard(name)
-            # The surface is live-mutable now (catalog reconcile), so a torn-down
-            # client's handlers/schemas go with its routes instead of lingering.
-            self._tool_handlers.pop(name, None)
-            getattr(self, "_mcp_tool_names", set()).discard(name)
-        if owned:
-            self._tool_schemas = [s for s in self._tool_schemas if s.name not in owned]
-            self._token_decomp_dirty = True
 
     def mcp_tool_metadata(self, name: str) -> dict | None:
         """Return advertised MCP metadata for one registered tool, or ``None``.
@@ -2011,19 +1935,14 @@ class Agent(BaseAgent):
             except Exception:
                 pass
 
-        # Under the tool-surface lock so a catalog reconcile in flight either
-        # finishes first or sees the closed client and rejects itself.
-        from .services.session_mcp import _surface_lock
-
-        with _surface_lock(self):
-            for client in getattr(self, "_mcp_clients", []):
-                try:
-                    client.close()
-                except Exception:
-                    pass
-            # Advertised metadata describes those now-closed clients; drop it so
-            # a stopped agent cannot report a live-looking MCP tool surface.
-            self._mcp_tool_metadata = {}
+        for client in getattr(self, "_mcp_clients", []):
+            try:
+                client.close()
+            except Exception:
+                pass
+        # Advertised metadata describes those now-closed clients; drop it so a
+        # stopped agent cannot report a live-looking MCP tool surface.
+        self._mcp_tool_metadata = {}
 
     def has_capability(self, name: str) -> bool:
         """Check if a capability is registered."""
@@ -2223,30 +2142,25 @@ class Agent(BaseAgent):
         if self._session.chat is not None:
             saved_interface = self._session.chat.interface
 
-        # Tear down (under the tool-surface lock, like stop's teardown, so a
-        # catalog reconcile in flight cannot interleave with the clear below).
-        from .services.session_mcp import _surface_lock
+        # Tear down
+        for client in getattr(self, "_mcp_clients", []):
+            try:
+                client.close()
+            except Exception:
+                pass
+        self._mcp_clients = []
+        # Reverse routes belong to the closed clients above. Rebuild this mapping
+        # only from successfully connected clients during the following MCP load;
+        # a retained Task Card controller must never select a prior runtime route.
+        self._mcp_clients_by_tool = {}
+        self._mcp_tool_collisions = set()
+        # Advertised metadata belongs to those same closed clients. Drop it with
+        # them so a rebuilt surface never exposes a prior runtime's metadata.
+        self._mcp_tool_metadata = {}
 
-        with _surface_lock(self):
-            for client in getattr(self, "_mcp_clients", []):
-                try:
-                    client.close()
-                except Exception:
-                    pass
-            self._mcp_clients = []
-            # Reverse routes belong to the closed clients above. Rebuild this
-            # mapping only from successfully connected clients during the following
-            # MCP load; a retained Task Card controller must never select a prior
-            # runtime route.
-            self._mcp_clients_by_tool = {}
-            self._mcp_tool_collisions = set()
-            # Advertised metadata belongs to those same closed clients. Drop it with
-            # them so a rebuilt surface never exposes a prior runtime's metadata.
-            self._mcp_tool_metadata = {}
-
-            self._sealed = False
-            self._tool_handlers.clear()
-            self._tool_schemas.clear()
+        self._sealed = False
+        self._tool_handlers.clear()
+        self._tool_schemas.clear()
         # The official claim map describes the live tool surface being cleared
         # one line above, so it is cleared with it: a capability dropped on this
         # refresh (``manifest.disable``) must not leave a claim behind for a

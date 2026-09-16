@@ -77,12 +77,6 @@ Owned by LingTai:
 * **Timeouts** are float seconds, not `timedelta`.
 * **Pagination.** Every `list_*` result carries `next_cursor`; the tool catalog
   is paged to exhaustion before it is returned.
-* **Catalog changes.** Both clients honour the standard
-  `notifications/tools/list_changed` — via `subscriptions/listen` on
-  2026-07-28, via the direct notification on earlier versions — by refetching
-  the full catalog (SDK cache bypassed) and handing it to the host's
-  channel-neutral reconcile, which swaps exactly that client's tools. Nothing
-  in the host knows which server changed or why.
 * **Results.** `preserve_tool_result` keeps the complete typed result. The
   single legacy value handed to kernel tool handlers is an explicit
   compatibility projection, documented as such at the call site.
@@ -129,13 +123,8 @@ All eight bundled servers are low-level `Server` instances over stdio:
   `async (ctx, params) -> <full typed result>`.
 * Advertised capabilities follow the registered handlers. A server with no
   resource handler does not claim `resources`, and none of them advertises
-  prompts, completion, or multi-round-trip. That subset is the product
-  surface, deliberately, not an unfinished migration. The six communication
-  servers (`telegram`, `imap`, `feishu`, `wechat`, `whatsapp`, `cloud_mail`)
-  also register `on_subscriptions_listen` and advertise
-  `tools.listChanged`: they list a compact manual-only schema until a served
-  `manual` call or a real inbound event, then announce the full one with
-  `tools/list_changed` (`mcp_servers/_disclosure.py`).
+  prompts, completion, subscriptions, or multi-round-trip. That subset is the
+  product surface, deliberately, not an unfinished migration.
 * **The SDK validates the typed MCP request envelope; it does not validate the
   advertised per-tool JSON Schema.** The v2 runner surface-checks the method and
   Pydantic-validates the registered request params before your handler runs, so

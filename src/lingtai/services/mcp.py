@@ -24,8 +24,6 @@ import json
 import os
 import threading
 import time
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -265,239 +263,21 @@ def tool_metadata(record: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-async def _list_all_tools(
-    client: Any, *, cache_mode: str | None = None
-) -> list[dict[str, Any]]:
+async def _list_all_tools(client: Any) -> list[dict[str, Any]]:
     """Page through ``tools/list`` until the server stops handing back a cursor.
 
     Every SDK v2 ``list_*`` result carries ``next_cursor``; a single call is
     only the first page. Looping here is what makes the returned catalog the
-    server's whole tool surface. ``cache_mode`` is forwarded only when given:
-    a change-driven refetch passes ``"refresh"`` so the SDK response cache
-    cannot serve a listing the server just announced as changed.
+    server's whole tool surface.
     """
     tools: list[dict[str, Any]] = []
     cursor: str | None = None
     while True:
-        kwargs: dict[str, Any] = {"cursor": cursor}
-        if cache_mode is not None:
-            kwargs["cache_mode"] = cache_mode
-        result = await client.list_tools(**kwargs)
+        result = await client.list_tools(cursor=cursor)
         tools.extend(_tool_record(tool) for tool in result.tools)
         cursor = getattr(result, "next_cursor", None)
         if cursor is None:
             return tools
-
-
-#: Standard MCP method for a server-announced tool-list change. Spontaneous
-#: through 2025-11-25; delivered on ``subscriptions/listen`` streams from
-#: 2026-07-28. Negotiation itself stays the SDK's.
-_TOOLS_LIST_CHANGED_METHOD = "notifications/tools/list_changed"
-
-#: Startup waits at most this long for the listen route to resolve before
-#: publishing the client as ready (well inside ``start()``'s 30 s wait).
-_CATALOG_LISTEN_ACK_TIMEOUT = 5.0
-
-
-class _ToolCatalogWatch:
-    """Standard MCP ``tools/list_changed`` tracking shared by both clients.
-
-    Owns nothing about *what* a catalog contains. After the handshake it opens
-    a ``subscriptions/listen`` stream for ``tools_list_changed`` when the SDK
-    exposes ``Client.listen`` and the server advertises ``tools.listChanged``;
-    on an earlier negotiated version the SDK hands the spontaneous
-    notification to ``message_handler`` instead. Either signal is a level
-    trigger: the watch refetches the complete paginated ``tools/list``
-    (bypassing the SDK response cache) on the client's own loop and hands the
-    fresh records to the registered listener on a single delivery thread —
-    never on the loop, so the listener may block or take locks. Bursts
-    coalesce into one refetch in flight plus one pending; a failed refetch
-    delivers nothing and the next signal retries.
-
-    Readiness: the connect path awaits the listen route's resolution (bounded)
-    before ``_ready.set()``, because listen events are not replayed and a
-    change announced by the very first tool call must not be missed.
-    """
-
-    def _init_catalog_watch(self) -> None:
-        self._catalog_listener: Callable[[list[dict[str, Any]]], None] | None = None
-        self._catalog_refetch_pending = False
-        self._catalog_refetch_task: Any = None
-        self._catalog_listen_task: Any = None
-        self._catalog_listen_ready: Any = None
-        # unarmed | arming | listening | legacy | unsupported | closed | failed
-        self._catalog_listen_state = "unarmed"
-        self._catalog_deliver_pool: ThreadPoolExecutor | None = None
-        self._catalog_pool_lock = threading.Lock()
-        # Bumped per restart(); a refetch stamped with an older epoch is dropped.
-        self._restart_epoch = 0
-
-    def watch_tools_changed(self, listener: Callable[[list[dict[str, Any]]], None]) -> None:
-        """Register the one consumer of refetched catalogs (``listener(records)``)."""
-        self._catalog_listener = listener
-
-    @property
-    def catalog_listen_state(self) -> str:
-        return self._catalog_listen_state
-
-    def request_tool_catalog_refetch(self, reason: str = "requested") -> bool:
-        """Ask the loop to refetch and deliver the catalog (thread-safe)."""
-        loop = getattr(self, "_loop", None)
-        if (
-            self._catalog_listener is None
-            or loop is None
-            or not loop.is_running()
-            or getattr(self, "_closed", False)
-        ):
-            return False
-        loop.call_soon_threadsafe(self._schedule_catalog_refetch, reason)
-        return True
-
-    # -- loop thread ------------------------------------------------------
-
-    def _catalog_label(self) -> str:
-        return str(getattr(self, "_name", None) or getattr(self, "_url", "?"))
-
-    async def _on_server_message(self, message: Any) -> None:
-        """SDK ``message_handler``: the direct (pre-2026-07-28) change route."""
-        if getattr(message, "method", None) == _TOOLS_LIST_CHANGED_METHOD:
-            self._schedule_catalog_refetch("notification")
-
-    def _mark_catalog_listen(self, state: str) -> None:
-        self._catalog_listen_state = state
-        if self._catalog_listen_ready is not None:
-            self._catalog_listen_ready.set()
-
-    async def _arm_catalog_listen_and_wait(self) -> None:
-        import asyncio
-
-        self._catalog_listen_ready = asyncio.Event()
-        self._catalog_listen_state = "arming"
-        self._catalog_listen_task = asyncio.ensure_future(self._catalog_listen_loop())
-        try:
-            await asyncio.wait_for(
-                self._catalog_listen_ready.wait(), timeout=_CATALOG_LISTEN_ACK_TIMEOUT
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "MCP %s: tools/list_changed listen not acknowledged within %.1fs; "
-                "publishing the client as ready without it",
-                self._catalog_label(), _CATALOG_LISTEN_ACK_TIMEOUT,
-            )
-
-    async def _catalog_listen_loop(self) -> None:
-        import asyncio
-
-        listen = getattr(getattr(self, "_client", None), "listen", None)
-        caps = getattr(getattr(self, "_session", None), "server_capabilities", None)
-        if not callable(listen):
-            self._mark_catalog_listen("legacy")
-            return
-        if not getattr(getattr(caps, "tools", None), "list_changed", False):
-            self._mark_catalog_listen("unsupported")
-            return
-        try:
-            async with listen(tools_list_changed=True) as subscription:
-                # Entering returns only after the server's acknowledgment.
-                self._mark_catalog_listen("listening")
-                async for event in subscription:
-                    if type(event).__name__ == "ToolsListChanged":
-                        self._schedule_catalog_refetch("listen")
-            # Graceful close: no replay exists, so refetch once.
-            self._mark_catalog_listen("closed")
-            self._schedule_catalog_refetch("listen-closed")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            # ListenNotSupportedError: the negotiated version predates listen and
-            # the SDK delivers the direct notification instead. Anything else
-            # (e.g. a lost stream) also falls back to the direct route.
-            self._mark_catalog_listen(
-                "legacy" if type(exc).__name__ == "ListenNotSupportedError" else "failed"
-            )
-
-    def _schedule_catalog_refetch(self, reason: str) -> None:
-        """Coalesce change signals into one refetch in flight (loop thread)."""
-        import asyncio
-
-        if getattr(self, "_closed", False) or self._catalog_listener is None:
-            return
-        self._catalog_refetch_pending = True
-        if self._catalog_refetch_task is None or self._catalog_refetch_task.done():
-            self._catalog_refetch_task = asyncio.ensure_future(
-                self._catalog_refetch_loop(reason)
-            )
-
-    async def _catalog_refetch_loop(self, reason: str) -> None:
-        while self._catalog_refetch_pending and not getattr(self, "_closed", False):
-            self._catalog_refetch_pending = False
-            epoch = self._restart_epoch
-            try:
-                records = await _list_all_tools(self._session, cache_mode="refresh")
-            except Exception as exc:
-                logger.warning(
-                    "MCP %s: tools/list refetch after %s failed (%s); keeping the "
-                    "last good catalog",
-                    self._catalog_label(), reason, MCPClient._format_exception(exc),
-                )
-                continue
-            with self._catalog_pool_lock:
-                if getattr(self, "_closed", False):
-                    return
-                if self._catalog_deliver_pool is None:
-                    self._catalog_deliver_pool = ThreadPoolExecutor(
-                        max_workers=1, thread_name_prefix="mcp-catalog"
-                    )
-                pool = self._catalog_deliver_pool
-            try:
-                pool.submit(self._deliver_catalog, records, epoch)
-            except RuntimeError:
-                pass  # pool shut down by a concurrent close(); the catalog is stale
-
-    # -- delivery thread --------------------------------------------------
-
-    def _deliver_catalog(self, records: list[dict[str, Any]], epoch: int) -> None:
-        listener = self._catalog_listener
-        if (
-            listener is None
-            or getattr(self, "_closed", False)
-            or epoch != self._restart_epoch  # fetched under a connection since restarted
-        ):
-            return
-        try:
-            listener(records)
-        except Exception:
-            logger.exception("MCP %s: tool catalog listener raised", self._catalog_label())
-
-    # -- teardown ---------------------------------------------------------
-
-    async def _teardown_catalog_watch(self) -> None:
-        """Cancel loop-side listen/refetch tasks (runs on the loop at cleanup)."""
-        for attr in ("_catalog_listen_task", "_catalog_refetch_task"):
-            task = getattr(self, attr, None)
-            setattr(self, attr, None)
-            if task is not None and not task.done():
-                task.cancel()
-                try:
-                    await task
-                except BaseException:
-                    pass
-        self._catalog_refetch_pending = False
-
-    def _shutdown_catalog_delivery(self) -> None:
-        """Stop delivering catalogs (any thread; called from ``close()``)."""
-        with self._catalog_pool_lock:
-            pool, self._catalog_deliver_pool = self._catalog_deliver_pool, None
-        if pool is not None:
-            pool.shutdown(wait=False)
-
-    def _reset_catalog_watch_for_restart(self) -> None:
-        self._restart_epoch += 1
-        self._catalog_listen_task = None
-        self._catalog_refetch_task = None
-        self._catalog_refetch_pending = False
-        self._catalog_listen_ready = None
-        self._catalog_listen_state = "unarmed"
 
 
 # A stale stdio response has an unknowable remote commit point. Replay is
@@ -722,7 +502,7 @@ def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
         return False
 
 
-class MCPClient(_ToolCatalogWatch):
+class MCPClient:
     """Async-to-sync bridge for any MCP stdio server.
 
     Args:
@@ -764,7 +544,6 @@ class MCPClient(_ToolCatalogWatch):
         # call/list paths talk to so the lifecycle code below is unchanged.
         self._client: Any = None
         self._last_result: dict[str, Any] | None = None
-        self._init_catalog_watch()
 
         # Activity log for debugging — last 50 calls
         self._activity_log: list[dict[str, Any]] = []
@@ -906,7 +685,6 @@ class MCPClient(_ToolCatalogWatch):
         if self._closed:
             return
         self._closed = True
-        self._shutdown_catalog_delivery()
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread:
@@ -935,10 +713,7 @@ class MCPClient(_ToolCatalogWatch):
         self._stdio_cm = None
         self._session_cm = None
         self._client = None
-        self._reset_catalog_watch_for_restart()
         self.start()
-        # A fresh server process may advertise a different catalog.
-        self.request_tool_catalog_refetch("restart")
 
     def is_connected(self) -> bool:
         """Check if the client has an active session."""
@@ -1218,19 +993,13 @@ class MCPClient(_ToolCatalogWatch):
             env=self._env,
         )
 
-        # ``message_handler`` receives spontaneous (pre-2026-07-28) server
-        # notifications; the modern listen stream is armed after the handshake.
-        self._client = Client(
-            stdio_client(server_params), message_handler=self._on_server_message
-        )
+        self._client = Client(stdio_client(server_params))
         self._session = await self._client.__aenter__()
 
-        await self._arm_catalog_listen_and_wait()
         self._ready.set()
 
     async def _async_cleanup(self) -> None:
         """Clean up the MCP client and its stdio transport."""
-        await self._teardown_catalog_watch()
         if self._client:
             try:
                 await self._client.__aexit__(None, None, None)
@@ -1238,7 +1007,7 @@ class MCPClient(_ToolCatalogWatch):
                 pass
 
 
-class HTTPMCPClient(_ToolCatalogWatch):
+class HTTPMCPClient:
     """Async-to-sync bridge for remote HTTP MCP servers.
 
     Connects to a remote MCP server via streamable HTTP transport.
@@ -1269,7 +1038,6 @@ class HTTPMCPClient(_ToolCatalogWatch):
         self._client: Any = None
         self._http_client: Any = None
         self._last_result: dict[str, Any] | None = None
-        self._init_catalog_watch()
 
         self._activity_log: list[dict[str, Any]] = []
         self._activity_lock = threading.Lock()
@@ -1298,7 +1066,6 @@ class HTTPMCPClient(_ToolCatalogWatch):
         if self._closed:
             return
         self._closed = True
-        self._shutdown_catalog_delivery()
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread:
@@ -1327,9 +1094,7 @@ class HTTPMCPClient(_ToolCatalogWatch):
         self._http_client = None
         self._transport_cm = None
         self._session_cm = None
-        self._reset_catalog_watch_for_restart()
         self.start()
-        self.request_tool_catalog_refetch("restart")
 
     def is_connected(self) -> bool:
         return (
@@ -1536,15 +1301,12 @@ class HTTPMCPClient(_ToolCatalogWatch):
         await self._http_client.__aenter__()
 
         self._client = Client(
-            streamable_http_client(url=self._url, http_client=self._http_client),
-            message_handler=self._on_server_message,
+            streamable_http_client(url=self._url, http_client=self._http_client)
         )
         self._session = await self._client.__aenter__()
-        await self._arm_catalog_listen_and_wait()
         self._ready.set()
 
     async def _async_cleanup(self) -> None:
-        await self._teardown_catalog_watch()
         if self._client:
             try:
                 await self._client.__aexit__(None, None, None)

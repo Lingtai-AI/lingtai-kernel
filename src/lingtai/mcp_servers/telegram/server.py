@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import NotificationOptions, Server, ServerRequestContext
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 
 from .._results import json_tool_result as _tool_result
@@ -50,7 +50,6 @@ from .._results import unknown_tool_error as _unknown_tool
 from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
 
 from .. import _config
-from .._disclosure import ToolDisclosure
 from .licc import push_inbox_event
 from .manager import TelegramManager, SCHEMA, DESCRIPTION
 from ._family import handle_telegram
@@ -636,7 +635,7 @@ def _accounts_from_config(cfg: dict) -> list[dict]:
 # Manager construction
 # ---------------------------------------------------------------------------
 
-def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[TelegramManager, Path]:
+def build_manager() -> tuple[TelegramManager, Path]:
     """Construct manager + service from env + config. Returns (manager, working_dir)."""
     cfg, config_path = _load_config_with_source()
     accounts = _accounts_from_config(cfg)
@@ -646,9 +645,6 @@ def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[TelegramMan
     working_dir.mkdir(parents=True, exist_ok=True)
 
     def _on_inbound(event: dict) -> bool:
-        # Disclose the full schema before the LICC write that wakes the host.
-        if disclosure is not None:
-            disclosure.expand("inbound")
         return push_inbox_event(
             sender=event["from"],
             subject=event["subject"],
@@ -683,18 +679,13 @@ def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[TelegramMan
 # MCP server
 # ---------------------------------------------------------------------------
 
-def build_server(
-    manager: TelegramManager | None, *, disclosure: ToolDisclosure | None = None,
-) -> Server:
+def build_server(manager: TelegramManager | None) -> Server:
     """Construct the MCP server.
 
     ``manager`` is None when eager start failed; in that case every tool call
-    returns an error explaining why. ``disclosure`` is the compact→full
-    ``tools/list`` state shared with the inbound path (``serve()`` supplies it).
-    """
-    if disclosure is None:
-        disclosure = ToolDisclosure(TELEGRAM_PLUGIN, _full_tool())
+    returns an error explaining why.
 
+    """
     async def _list_resources(
         _ctx: ServerRequestContext,
         _params: types.PaginatedRequestParams | None,
@@ -723,23 +714,29 @@ def build_server(
         return _resource_result(resource_uri, text, mime)
 
     async def _list_tools(
-        ctx: ServerRequestContext,
+        _ctx: ServerRequestContext,
         _params: types.PaginatedRequestParams | None,
     ) -> types.ListToolsResult:
-        disclosure.observe(ctx)
-        # Stable single-tool order is part of the raw MCP contract.
-        return types.ListToolsResult(tools=disclosure.tools())
+        # Stable order is part of the raw MCP contract.
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name=TELEGRAM_PLUGIN.name,
+                    description=DESCRIPTION,
+                    input_schema=SCHEMA,
+                ),
+            ],
+        )
 
     # The SDK has already validated the typed request envelope (``params.name``
     # is a ``str``, ``params.arguments`` a ``dict | None``), but it never applies
     # the advertised per-tool ``input_schema``. The listed family therefore
     # arrives here without per-tool argument checking, and this handler owns the
-    # routing decision (the full family is dispatchable before disclosure too).
+    # routing decision.
     async def _call_tool(
-        ctx: ServerRequestContext,
+        _ctx: ServerRequestContext,
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
-        disclosure.observe(ctx)
         arguments = params.arguments or {}
         if params.name != TELEGRAM_PLUGIN.name:
             # A lookup miss is a caller-fixable parameter error (-32602), never
@@ -771,7 +768,6 @@ def build_server(
                 "error": str(e),
                 "error_type": type(e).__name__,
             }
-        await disclosure.after_call(arguments, result)
         return _tool_result(result)
 
     server: Server = Server(
@@ -781,13 +777,8 @@ def build_server(
         on_call_tool=_call_tool,
         on_list_resources=_list_resources,
         on_read_resource=_read_resource,
-        on_subscriptions_listen=disclosure.listen_handler,
     )
     return server
-
-
-def _full_tool() -> types.Tool:
-    return types.Tool(name=TELEGRAM_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA)
 
 
 # ---------------------------------------------------------------------------
@@ -797,12 +788,10 @@ def _full_tool() -> types.Tool:
 async def serve() -> None:
     """Run the MCP server over stdio. Eagerly starts the polling listeners
     so inbound messages flow before the host expects them."""
-    disclosure = ToolDisclosure(TELEGRAM_PLUGIN, _full_tool())
-    disclosure.bind_loop()  # before the poll threads start
     manager: TelegramManager | None = None
     service_started = False
     try:
-        manager, _wd = build_manager(disclosure)
+        manager, _wd = build_manager()
         # Starts the per-account poll threads and the automatic Task Card
         # event-tail worker together as one lifecycle.
         manager.start()
@@ -814,15 +803,13 @@ async def serve() -> None:
         )
         manager = None
 
-    server = build_server(manager, disclosure=disclosure)
+    server = build_server(manager)
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(
                 read_stream,
                 write_stream,
-                # Handshake-era capabilities are era-honest: this server does
-                # emit the direct tools/list_changed on that wire.
-                server.create_initialization_options(NotificationOptions(tools_changed=True)),
+                server.create_initialization_options(),
             )
     finally:
         if manager is not None and service_started:
@@ -830,4 +817,3 @@ async def serve() -> None:
                 manager.stop()
             except Exception:
                 pass
-        disclosure.unbind()

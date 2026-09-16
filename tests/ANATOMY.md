@@ -243,7 +243,6 @@ related_files:
   - tests/test_mcp_client_close_kills_subprocess.py
   - tests/test_mcp_closed_resource_restart.py
   - tests/test_mcp_config_helper.py
-  - tests/test_mcp_dynamic_tool_catalog.py
   - tests/test_mcp_identity_discovery.py
   - tests/test_mcp_inbox.py
   - tests/test_mcp_licc_client.py

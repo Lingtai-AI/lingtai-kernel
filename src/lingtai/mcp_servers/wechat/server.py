@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import NotificationOptions, Server, ServerRequestContext
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 
 from .._results import json_tool_result as _tool_result
@@ -53,7 +53,6 @@ from .._results import unknown_resource_error as _unknown_resource
 from .._results import unknown_tool_error as _unknown_tool
 
 from . import api
-from .._disclosure import ToolDisclosure
 from ._family import handle_wechat
 from .licc import push_inbox_event
 from .manager import WechatManager, SCHEMA, DESCRIPTION
@@ -785,7 +784,7 @@ def load_config_and_credentials() -> tuple[dict, dict, Path]:
 # Manager construction
 # ---------------------------------------------------------------------------
 
-def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[WechatManager, Path]:
+def build_manager() -> tuple[WechatManager, Path]:
     """Construct manager from env + config.json + credentials.json."""
     file_cfg, creds, config_path = load_config_and_credentials()
     config_dir = config_path.parent
@@ -811,9 +810,6 @@ def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[WechatManag
     working_dir.mkdir(parents=True, exist_ok=True)
 
     def _on_inbound(event: dict) -> bool | None:
-        # Disclose the full schema before the LICC write that wakes the host.
-        if disclosure is not None:
-            disclosure.expand("inbound")
         metadata = event.get("metadata") or {}
         local_id = metadata.get("message_id")
         event_id = (
@@ -855,13 +851,7 @@ def build_server(
     *,
     startup_error: str | None = None,
     startup_error_type: str | None = None,
-    disclosure: ToolDisclosure | None = None,
 ) -> Server:
-    """``disclosure`` is the compact→full ``tools/list`` state shared with the
-    inbound path (``serve()`` supplies it)."""
-    if disclosure is None:
-        disclosure = ToolDisclosure(WECHAT_PLUGIN, _full_tool())
-
     async def _list_resources(
         _ctx: ServerRequestContext,
         _params: types.PaginatedRequestParams | None,
@@ -894,17 +884,23 @@ def build_server(
         return _resource_result(resource_uri, text, mime)
 
     async def _list_tools(
-        ctx: ServerRequestContext,
+        _ctx: ServerRequestContext,
         _params: types.PaginatedRequestParams | None,
     ) -> types.ListToolsResult:
-        disclosure.observe(ctx)
-        return types.ListToolsResult(tools=disclosure.tools())
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name=WECHAT_PLUGIN.name,
+                    description=DESCRIPTION,
+                    input_schema=SCHEMA,
+                ),
+            ],
+        )
 
     async def _call_tool(
-        ctx: ServerRequestContext,
+        _ctx: ServerRequestContext,
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
-        disclosure.observe(ctx)
         if params.name != WECHAT_PLUGIN.name:
             raise _unknown_tool(params.name)
         arguments = params.arguments or {}
@@ -947,7 +943,6 @@ def build_server(
                 "error": str(e),
                 "error_type": type(e).__name__,
             }
-        await disclosure.after_call(arguments, result)
         return _tool_result(result)
 
     server: Server = Server(
@@ -957,13 +952,8 @@ def build_server(
         on_call_tool=_call_tool,
         on_list_resources=_list_resources,
         on_read_resource=_read_resource,
-        on_subscriptions_listen=disclosure.listen_handler,
     )
     return server
-
-
-def _full_tool() -> types.Tool:
-    return types.Tool(name=WECHAT_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA)
 
 
 # ---------------------------------------------------------------------------
@@ -973,14 +963,12 @@ def _full_tool() -> types.Tool:
 async def serve() -> None:
     """Run the MCP server over stdio. Eagerly starts the iLink long-poll
     so inbound messages flow before the host expects them."""
-    disclosure = ToolDisclosure(WECHAT_PLUGIN, _full_tool())
-    disclosure.bind_loop()  # before the long-poll starts
     manager: WechatManager | None = None
     started = False
     startup_error: str | None = None
     startup_error_type: str | None = None
     try:
-        manager, _wd = build_manager(disclosure)
+        manager, _wd = build_manager()
         manager.start()
         started = True
         log.info("WeChat listener running")
@@ -996,14 +984,13 @@ async def serve() -> None:
         manager,
         startup_error=startup_error,
         startup_error_type=startup_error_type,
-        disclosure=disclosure,
     )
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(
                 read_stream,
                 write_stream,
-                server.create_initialization_options(NotificationOptions(tools_changed=True)),
+                server.create_initialization_options(),
             )
     finally:
         if manager is not None and started:
@@ -1011,4 +998,3 @@ async def serve() -> None:
                 manager.stop()
             except Exception:
                 pass
-        disclosure.unbind()

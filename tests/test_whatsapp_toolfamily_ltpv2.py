@@ -372,9 +372,7 @@ async def test_server_lists_exactly_one_whatsapp_tool_with_the_new_schema():
     from lingtai.mcp_servers.whatsapp.server import build_server
 
     async with Client(build_server(None)) as client:
-        # Compact until a served ``manual`` discloses the full schema.
-        await client.call_tool("whatsapp", {"action": "manual", "input": {}, "reasoning": "r"})
-        result = await client.list_tools(cache_mode="bypass")
+        result = await client.list_tools()
         assert [tool.name for tool in result.tools] == ["whatsapp"]
         schema = result.tools[0].input_schema
         assert schema["required"] == ["action", "input", "reasoning"]
