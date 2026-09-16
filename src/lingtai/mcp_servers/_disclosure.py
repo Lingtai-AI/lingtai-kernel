@@ -1,6 +1,7 @@
-"""Compact-until-disclosed ``tools/list`` for the co-shipped messaging servers.
+"""Compact-until-disclosed ``tools/list`` for the co-shipped communication servers.
 
-A curated server's tool (``telegram``/``feishu``/``wechat``) first advertises
+Each curated channel's tool (``telegram``, ``imap``, ``feishu``, ``wechat``,
+``whatsapp``, ``cloud_mail``) first advertises
 a same-name strict LTP-v2 schema whose only action is the family's reserved
 ``manual``, built from the package's own manual child so it cannot drift. The
 full handler stays callable throughout; only what ``tools/list`` shows changes.

@@ -18,9 +18,10 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import Server, ServerRequestContext
+from mcp.server import NotificationOptions, Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 
+from .._disclosure import ToolDisclosure
 from .._results import json_tool_result as _tool_result
 from .._results import text_resource_result as _resource_result
 from .._results import unknown_resource_error as _unknown_resource
@@ -104,7 +105,9 @@ def load_config() -> tuple[dict[str, Any], Path]:
     return _load()
 
 
-def build_manager(config: dict[str, Any] | None = None) -> WhatsAppManager:
+def build_manager(
+    config: dict[str, Any] | None = None, disclosure: ToolDisclosure | None = None,
+) -> WhatsAppManager:
     config_path: Path | None = None
     if config is None:
         try:
@@ -121,7 +124,9 @@ def build_manager(config: dict[str, Any] | None = None) -> WhatsAppManager:
             # error, unlike an unreadable/invalid one (which still propagates).
             log.info("LINGTAI_WHATSAPP_CONFIG not set; using personal-mode defaults")
             config = {}
-    return WhatsAppManager(config, config_path=config_path)
+    # The manager writes LICC itself; disclose the full schema just before it does.
+    before_inbound = (lambda: disclosure.expand("inbound")) if disclosure is not None else None
+    return WhatsAppManager(config, config_path=config_path, before_inbound=before_inbound)
 
 
 def _status_payload(manager: WhatsAppManager | None) -> dict[str, Any]:
@@ -141,14 +146,19 @@ def _status_payload(manager: WhatsAppManager | None) -> dict[str, Any]:
     return payload
 
 
-def build_server(manager: WhatsAppManager | None = None) -> Server:
+def build_server(
+    manager: WhatsAppManager | None = None, *, disclosure: ToolDisclosure | None = None,
+) -> Server:
     """Construct the MCP server.
 
     ``manager`` is None when eager start failed (or when a caller only wants
     the schema surface); in that case ``manual`` still answers, ``settings``
     reports unavailable startup facts, and business actions return a readable
-    error explaining why.
+    error explaining why. ``disclosure`` is the compact→full ``tools/list``
+    state shared with the inbound path (``serve()`` supplies it).
     """
+    if disclosure is None:
+        disclosure = ToolDisclosure(WHATSAPP_PLUGIN, _full_tool())
 
     async def _list_resources(
         _ctx: ServerRequestContext,
@@ -178,27 +188,20 @@ def build_server(manager: WhatsAppManager | None = None) -> Server:
         return _resource_result(resource_uri, text, mime)
 
     async def _list_tools(
-        _ctx: ServerRequestContext,
+        ctx: ServerRequestContext,
         _params: types.PaginatedRequestParams | None,
     ) -> types.ListToolsResult:
-        # Stable order is part of the raw MCP contract.
-        return types.ListToolsResult(
-            tools=[
-                types.Tool(
-                    name=WHATSAPP_PLUGIN.name,
-                    description=DESCRIPTION,
-                    input_schema=SCHEMA,
-                ),
-            ],
-        )
+        disclosure.observe(ctx)
+        return types.ListToolsResult(tools=disclosure.tools())
 
     # The SDK validates the typed request envelope but never applies the
     # advertised per-tool ``input_schema``; ``handle_whatsapp`` is the actual
     # LTP-v2 validation boundary and owns the routing decision.
     async def _call_tool(
-        _ctx: ServerRequestContext,
+        ctx: ServerRequestContext,
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
+        disclosure.observe(ctx)
         arguments = params.arguments or {}
         if params.name != WHATSAPP_PLUGIN.name:
             # A lookup miss is a caller-fixable parameter error (-32602), never
@@ -230,6 +233,7 @@ def build_server(manager: WhatsAppManager | None = None) -> Server:
                 "error": str(e),
                 "error_type": type(e).__name__,
             }
+        await disclosure.after_call(arguments, result)
         return _tool_result(result)
 
     server: Server = Server(
@@ -239,8 +243,13 @@ def build_server(manager: WhatsAppManager | None = None) -> Server:
         on_call_tool=_call_tool,
         on_list_resources=_list_resources,
         on_read_resource=_read_resource,
+        on_subscriptions_listen=disclosure.listen_handler,
     )
     return server
+
+
+def _full_tool() -> types.Tool:
+    return types.Tool(name=WHATSAPP_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA)
 
 
 # ---------------------------------------------------------------------------
@@ -253,9 +262,11 @@ async def serve() -> None:
     The manager is built eagerly so the Node bridge starts (and inbound
     messages reach the agent inbox) without waiting for an unrelated tool call.
     """
+    disclosure = ToolDisclosure(WHATSAPP_PLUGIN, _full_tool())
+    disclosure.bind_loop()  # before the bridge starts
     manager: WhatsAppManager | None = None
     try:
-        manager = build_manager()
+        manager = build_manager(disclosure=disclosure)
         log.info("WhatsApp manager ready (bridge_alive=%s)", manager.bridge.alive)
     except Exception as e:
         log.error(
@@ -263,13 +274,13 @@ async def serve() -> None:
         )
         manager = None
 
-    server = build_server(manager)
+    server = build_server(manager, disclosure=disclosure)
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(
                 read_stream,
                 write_stream,
-                server.create_initialization_options(),
+                server.create_initialization_options(NotificationOptions(tools_changed=True)),
             )
     finally:
         if manager is not None:
@@ -277,3 +288,4 @@ async def serve() -> None:
                 manager.close()
             except Exception:
                 pass
+        disclosure.unbind()

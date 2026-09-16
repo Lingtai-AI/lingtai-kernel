@@ -14,6 +14,7 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
@@ -172,9 +173,13 @@ class WhatsAppManager:
         working_dir: str | Path | None = None,
         *,
         config_path: str | Path | None = None,
+        before_inbound: Callable[[], None] | None = None,
     ) -> None:
         self.config = dict(config or {})
         self.config_path = Path(config_path) if config_path is not None else None
+        # Runs on the bridge reader thread right before an accepted inbound
+        # message is written to LICC (the server's schema-disclosure hook).
+        self._before_inbound = before_inbound
         self.working_dir = Path(working_dir or os.environ.get("LINGTAI_AGENT_DIR", os.getcwd()))
         self.store_dir = Path(self.config.get("store_dir") or self.working_dir / DEFAULT_STORE)
         self.session_dir = Path(self.config.get("session_dir") or self.working_dir / ".wwebjs_auth")
@@ -501,6 +506,8 @@ class WhatsAppManager:
             f"wa_id=\"{from_id}\" to recover the complete message)_"
             if newest_truncated else ""
         )
+        if self._before_inbound is not None:
+            self._before_inbound()
         push_inbox_event(
             sender="whatsapp",
             subject=f"whatsapp message from {from_id}",

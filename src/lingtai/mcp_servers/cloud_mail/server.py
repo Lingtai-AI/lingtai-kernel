@@ -41,13 +41,14 @@ import os
 from pathlib import Path
 
 import mcp.types as types
-from mcp.server import Server, ServerRequestContext
+from mcp.server import NotificationOptions, Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 
 from .._results import json_tool_result as _tool_result
 from .._results import unknown_tool_error as _unknown_tool
 
 from .. import _config
+from .._disclosure import ToolDisclosure
 from .licc import push_inbox_event
 from .manager import CloudMailManager, DESCRIPTION, SCHEMA
 from ._family import handle_cloud_mail
@@ -114,7 +115,7 @@ def accounts_from_config(cfg: dict) -> list[dict]:
 # Manager construction
 # ---------------------------------------------------------------------------
 
-def build_manager() -> tuple[CloudMailManager, Path]:
+def build_manager(disclosure: ToolDisclosure | None = None) -> tuple[CloudMailManager, Path]:
     """Construct the Cloud Mail manager from env + config.
 
     Returns (manager, working_dir). Inbound rows discovered by polling are
@@ -128,6 +129,9 @@ def build_manager() -> tuple[CloudMailManager, Path]:
     working_dir.mkdir(parents=True, exist_ok=True)
 
     def _on_inbound(event: dict) -> bool:
+        # Disclose the full schema before the LICC write that wakes the host.
+        if disclosure is not None:
+            disclosure.expand("inbound")
         return push_inbox_event(
             sender=event["from"],
             subject=event["subject"],
@@ -149,29 +153,29 @@ def build_manager() -> tuple[CloudMailManager, Path]:
 # MCP server
 # ---------------------------------------------------------------------------
 
-def build_server(manager: CloudMailManager | None) -> Server:
+def build_server(
+    manager: CloudMailManager | None, *, disclosure: ToolDisclosure | None = None,
+) -> Server:
     """Construct the MCP server. ``manager`` is None when eager start failed;
-    operational calls and settings fail closed while manual remains usable."""
+    operational calls and settings fail closed while manual remains usable.
+    ``disclosure`` is the compact→full ``tools/list`` state shared with the
+    inbound path (``serve()`` supplies it)."""
+    if disclosure is None:
+        disclosure = ToolDisclosure(CLOUD_MAIL_PLUGIN, _full_tool())
     settings_provider = CloudMailSettingsProvider(manager)
 
     async def _list_tools(
-        _ctx: ServerRequestContext,
+        ctx: ServerRequestContext,
         _params: types.PaginatedRequestParams | None,
     ) -> types.ListToolsResult:
-        return types.ListToolsResult(
-            tools=[
-                types.Tool(
-                    name=CLOUD_MAIL_PLUGIN.name,
-                    description=DESCRIPTION,
-                    input_schema=SCHEMA,
-                ),
-            ],
-        )
+        disclosure.observe(ctx)
+        return types.ListToolsResult(tools=disclosure.tools())
 
     async def _call_tool(
-        _ctx: ServerRequestContext,
+        ctx: ServerRequestContext,
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
+        disclosure.observe(ctx)
         if params.name != CLOUD_MAIL_PLUGIN.name:
             raise _unknown_tool(params.name)
         arguments = params.arguments or {}
@@ -191,6 +195,7 @@ def build_server(manager: CloudMailManager | None) -> Server:
                     "error": str(e),
                     "error_type": type(e).__name__,
                 }
+        await disclosure.after_call(arguments, result)
         return _tool_result(result)
 
     server: Server = Server(
@@ -198,8 +203,13 @@ def build_server(manager: CloudMailManager | None) -> Server:
         instructions=_SERVER_INSTRUCTIONS,
         on_list_tools=_list_tools,
         on_call_tool=_call_tool,
+        on_subscriptions_listen=disclosure.listen_handler,
     )
     return server
+
+
+def _full_tool() -> types.Tool:
+    return types.Tool(name=CLOUD_MAIL_PLUGIN.name, description=DESCRIPTION, input_schema=SCHEMA)
 
 
 # ---------------------------------------------------------------------------
@@ -209,9 +219,11 @@ def build_server(manager: CloudMailManager | None) -> Server:
 async def serve() -> None:
     """Run the MCP server over stdio. Eagerly starts the manager so the
     polling loop is up before the host expects mail."""
+    disclosure = ToolDisclosure(CLOUD_MAIL_PLUGIN, _full_tool())
+    disclosure.bind_loop()  # before the poller starts
     manager: CloudMailManager | None = None
     try:
-        manager, _wd = build_manager()
+        manager, _wd = build_manager(disclosure)
         manager.start()
         log.info("Cloud Mail polling running")
     except Exception as e:
@@ -222,13 +234,13 @@ async def serve() -> None:
         )
         manager = None
 
-    server = build_server(manager)
+    server = build_server(manager, disclosure=disclosure)
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(
                 read_stream,
                 write_stream,
-                server.create_initialization_options(),
+                server.create_initialization_options(NotificationOptions(tools_changed=True)),
             )
     finally:
         if manager is not None:
@@ -236,3 +248,4 @@ async def serve() -> None:
                 manager.stop()
             except Exception:
                 pass
+        disclosure.unbind()

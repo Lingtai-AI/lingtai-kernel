@@ -1,6 +1,6 @@
 """Compact provider tool disclosure over the standard MCP ``tools/list_changed``.
 
-One end-to-end case per co-shipped messaging server: the real ``python -m``
+One end-to-end case per co-shipped communication server: the real ``python -m``
 entrypoint mounts through ``Agent.connect_mcp`` with a manual-only schema, a
 served ``manual`` call makes the server announce a change, and the host's
 channel-neutral reconcile swaps in the full schema. A second in-memory case
@@ -19,7 +19,7 @@ from lingtai.agent import Agent
 from lingtai.kernel.llm import ToolCall
 from tests._service_helpers import make_gemini_mock_service
 
-PROVIDERS = ["telegram", "feishu", "wechat"]
+PROVIDERS = ["telegram", "imap", "feishu", "wechat", "whatsapp", "cloud_mail"]
 
 
 def _full_schema(provider: str) -> dict:
@@ -61,9 +61,10 @@ def test_manual_call_discloses_full_schema_through_host_reconcile(tmp_path, prov
             time.sleep(0.05)
         schema = next(s for s in agent._tool_schemas if s.name == provider)
         assert schema.parameters == _full_schema(provider)
-        assert agent._dispatch_tool(ToolCall(
-            name=provider, args={"action": "status", "input": {}, "_reasoning": "r"}, id="c2",
-        ))["status"] in ("ok", "error")  # full action set is now routable
+        first_action = _actions(agent, provider)[0]  # a real (non-manual) action is now routable
+        assert "status" in agent._dispatch_tool(ToolCall(
+            name=provider, args={"action": first_action, "input": {}, "_reasoning": "r"}, id="c2",
+        ))
 
         # A catalog that reaches for a name it does not own leaves the surface alone.
         before = list(agent._tool_schemas)

@@ -130,8 +130,9 @@ All eight bundled servers are low-level `Server` instances over stdio:
 * Advertised capabilities follow the registered handlers. A server with no
   resource handler does not claim `resources`, and none of them advertises
   prompts, completion, or multi-round-trip. That subset is the product
-  surface, deliberately, not an unfinished migration. `telegram`, `feishu`,
-  and `wechat` also register `on_subscriptions_listen` and advertise
+  surface, deliberately, not an unfinished migration. The six communication
+  servers (`telegram`, `imap`, `feishu`, `wechat`, `whatsapp`, `cloud_mail`)
+  also register `on_subscriptions_listen` and advertise
   `tools.listChanged`: they list a compact manual-only schema until a served
   `manual` call or a real inbound event, then announce the full one with
   `tools/list_changed` (`mcp_servers/_disclosure.py`).
