@@ -1687,6 +1687,8 @@ class Agent(BaseAgent):
         This is deliberately narrower than a process-wide transaction: it
         protects one connection and preserves earlier live clients unchanged.
         """
+        from .services.mcp_inbox import notification_channel
+
         # The caller appends the just-started client before preflight; it is
         # intentionally absent from the pre-connection snapshot restored below.
         clients_before = [
@@ -1720,11 +1722,21 @@ class Agent(BaseAgent):
                     return handler
 
                 metadata[name] = mcp_service.tool_metadata(tool)
+                description = tool.get("description", "")
+                # Deferred provider disclosure for the curated messaging
+                # channels: the kernel advertises this compact stub until the
+                # tool is called or its LICC channel delivers a notification.
+                # The handler and full schema are registered now regardless.
+                stub = mcp_service.deferred_tool_stub(name, schema, description)
                 self.add_tool(
                     name,
                     schema=schema,
                     handler=_make_handler(client, name, schema),
-                    description=tool.get("description", ""),
+                    description=description,
+                    stub=stub,
+                    disclosure_sources=(
+                        (notification_channel(name),) if stub is not None else ()
+                    ),
                 )
                 registered.append(name)
 

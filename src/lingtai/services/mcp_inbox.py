@@ -61,6 +61,17 @@ POLL_INTERVAL = 0.5  # seconds; matches FilesystemMailService poll cadence
 MAX_EVENTS_PER_CYCLE = 100
 _MAX_SUBJECT_LEN = 200
 
+
+def notification_channel(mcp_name: str) -> str:
+    """The ``.notification/`` channel one MCP's LICC events are published under.
+
+    ``_dispatch_summary`` writes ``.notification/<channel>.json`` with this
+    name; ``Agent._mount_mcp_tools`` declares the same name as the channel whose
+    delivery discloses that MCP's deferred tool schema. One definition keeps
+    producer and consumer in agreement.
+    """
+    return f"mcp.{mcp_name}"
+
 # Notification preview cap. The preview is the first N chars of the message
 # body — the content-bearing snippet that lets the agent triage what arrived
 # without calling read() on every event. The full body still stays behind the
@@ -420,7 +431,7 @@ def _dispatch_summary(
 
     publish_notification(
         agent,
-        f"mcp.{mcp_name}",
+        notification_channel(mcp_name),
         header=header,
         icon="💬",
         priority=priority,
