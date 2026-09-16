@@ -858,7 +858,7 @@ def test_create_venv_preserves_platform_specific_pip_path(
 
     def fake_run(args: list[str], **kwargs):
         calls.append(args)
-        assert kwargs == {"check": True}
+        assert kwargs == {"check": True, "stdout": venv_resolve.sys.stderr}
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr(venv_resolve.subprocess, "run", fake_run)
@@ -970,7 +970,7 @@ def test_create_venv_pins_running_version(
 
     def fake_run(args: list[str], **kwargs):
         calls.append(args)
-        assert kwargs == {"check": True}
+        assert kwargs == {"check": True, "stdout": venv_resolve.sys.stderr}
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr(venv_resolve.subprocess, "run", fake_run)
@@ -983,7 +983,7 @@ def test_create_venv_pins_running_version(
     ]
 
 
-def test_create_venv_falls_back_to_unpinned_when_pin_unavailable(
+def test_create_venv_rejects_unavailable_pin_without_version_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1002,16 +1002,13 @@ def test_create_venv_falls_back_to_unpinned_when_pin_unavailable(
 
     monkeypatch.setattr(venv_resolve.subprocess, "run", fake_run)
 
-    venv_resolve._create_venv(venv)
+    with pytest.raises(subprocess.CalledProcessError):
+        venv_resolve._create_venv(venv)
 
     assert calls[1:] == [
         [str(venv / "bin" / "pip"), "install", "lingtai==0.4.2"],
-        [str(venv / "bin" / "pip"), "install", "lingtai"],
     ]
-    assert (
-        "warning: install of lingtai==0.4.2 failed; trying fallback"
-        in capsys.readouterr().err
-    )
+    assert "trying fallback" not in capsys.readouterr().err
 
 
 def test_create_venv_skips_pin_for_dev_version(
@@ -1057,7 +1054,7 @@ def test_create_venv_repropagates_when_all_installs_fail(
 
     with pytest.raises(subprocess.CalledProcessError):
         venv_resolve._create_venv(venv)
-    assert calls[-1] == [str(venv / "bin" / "pip"), "install", "lingtai"]
+    assert calls[-1] == [str(venv / "bin" / "pip"), "install", "lingtai==0.4.2"]
 
 
 def test_env_marker_records_lingtai_version(
@@ -1159,3 +1156,21 @@ def test_env_marker_check_reports_version_skew_detail(
     assert payload["status"] == "match"
     assert "lingtai version skew" in payload["detail"]
     assert "0.6.0" in payload["detail"] and "0.4.2" in payload["detail"]
+
+
+def test_bootstrap_child_output_never_reaches_protocol_stdout(tmp_path, monkeypatch, capfd):
+    import sys
+
+    real_run = subprocess.run
+    monkeypatch.setattr(venv_resolve, "_find_python", lambda: sys.executable)
+    monkeypatch.setattr(venv_resolve, "_running_lingtai_version", lambda: "1.0.7")
+    monkeypatch.setattr(venv_resolve, "_write_env_marker_best_effort", lambda _path: None)
+
+    def noisy_child(_args, **kwargs):
+        return real_run([sys.executable, "-c", "print('bootstrap child diagnostic')"], **kwargs)
+
+    monkeypatch.setattr(venv_resolve.subprocess, "run", noisy_child)
+    venv_resolve._create_venv(tmp_path / "venv")
+    captured = capfd.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("bootstrap child diagnostic") == 2

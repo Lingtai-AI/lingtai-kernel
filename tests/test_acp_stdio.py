@@ -1208,8 +1208,9 @@ def test_serve_uses_newline_delimited_strict_json_and_clean_eof():
     assert output.getvalue().endswith("\n")
 
 
+@pytest.mark.parametrize("configured,active_venv", [(False, True), (True, True), (False, False)])
 def test_cli_composition_quarantines_application_stdout_and_stops_agent(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, configured, active_venv
 ):
     import lingtai.adapters.acp as acp_package
     import lingtai.cli as cli
@@ -1248,11 +1249,19 @@ def test_cli_composition_quarantines_application_stdout_and_stops_agent(
 
     monkeypatch.setattr(cli, "_check_duplicate_process", lambda _path: None)
     monkeypatch.setattr(cli, "_clean_signal_files", lambda _path: None)
-    monkeypatch.setattr(cli, "load_init", lambda _path: {})
+    original_config = {"venv_path": str(tmp_path / "explicit")} if configured else {}
+    monkeypatch.setattr(cli, "load_init", lambda _path: dict(original_config))
+    monkeypatch.setattr(cli_acp.sys, "prefix", str(tmp_path / "active"))
+    monkeypatch.setattr(cli_acp.sys, "base_prefix", str(tmp_path / ("base" if active_venv else "active")))
     monkeypatch.setattr(cli, "build_agent", lambda _data, _path: fake_agent)
     monkeypatch.setattr(cli, "_force_exit_if_worker_poisoned", lambda _agent: None)
     monkeypatch.setattr(kernel_logging, "setup_logging", lambda **_kw: None)
-    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda _data: tmp_path / "venv")
+    def resolve_checked(data):
+        expected = original_config if configured or not active_venv else {"venv_path": str(tmp_path / "active")}
+        assert data == expected
+        return tmp_path / "venv"
+
+    monkeypatch.setattr(venv_resolve, "resolve_venv", resolve_checked)
     monkeypatch.setattr(acp_package, "AcpStdioServer", FakeServer)
 
     wire = io.StringIO()

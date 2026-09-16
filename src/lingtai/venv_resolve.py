@@ -256,35 +256,24 @@ def _create_venv(venv_dir: Path) -> None:
     subprocess.run(
         [python, "-m", "venv", str(venv_dir)],
         check=True,
+        stdout=sys.stderr,
     )
 
     # Install lingtai, pinned to the running kernel's version so a child agent
     # launched through CPR or cli.run provisions the same kernel that spawned it
-    # instead of whatever is newest on PyPI (issue #758). Fall back to an
-    # unpinned install for local/dev versions that were never published, and if
-    # a published pin is temporarily unavailable (index lag, yank).
+    # instead of whatever is newest on PyPI (issue #758). An unavailable
+    # published pin must fail rather than silently selecting another version.
+    # Local/dev versions retain the existing unpinned provisioning behavior.
     pip = str(venv_dir / "bin" / "pip")
     if sys.platform == "win32":
         pip = str(venv_dir / "Scripts" / "pip.exe")
 
     version = _running_lingtai_version()
-    specs = []
-    if version and not _is_local_dev_version(version):
-        specs.append(f"lingtai=={version}")
-    specs.append("lingtai")
+    spec = f"lingtai=={version}" if version and not _is_local_dev_version(version) else "lingtai"
 
     print("Installing lingtai...", file=sys.stderr)
-    for spec in specs:
-        try:
-            subprocess.run([pip, "install", spec], check=True)
-            break
-        except subprocess.CalledProcessError:
-            if spec == specs[-1]:
-                raise
-            print(
-                f"warning: install of {spec} failed; trying fallback",
-                file=sys.stderr,
-            )
+    # Python stdout quarantine does not affect inherited subprocess fd 1.
+    subprocess.run([pip, "install", spec], check=True, stdout=sys.stderr)
     _write_env_marker_best_effort(venv_dir)
     print("Runtime ready.", file=sys.stderr)
 

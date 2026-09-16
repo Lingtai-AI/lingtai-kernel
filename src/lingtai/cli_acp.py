@@ -155,7 +155,13 @@ def run_acp(
             log_dir=agent_dir / "logs",
         )
         data = load_init(agent_dir)
-        venv_dir = resolve_venv(data)
+        # An installed ACP executable already selects a runtime. Preserve an
+        # explicit project override, otherwise reuse its active virtualenv
+        # rather than bootstrapping another kernel from a different index.
+        venv_config = dict(data)
+        if not venv_config.get("venv_path") and sys.prefix != sys.base_prefix:
+            venv_config["venv_path"] = sys.prefix
+        venv_dir = resolve_venv(venv_config)
         os.environ["LINGTAI_RUNTIME_PYTHON"] = sys.executable
         os.environ["LINGTAI_RUNTIME_VENV"] = str(venv_dir)
         data["venv_path"] = str(venv_dir)

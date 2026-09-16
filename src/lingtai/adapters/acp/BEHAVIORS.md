@@ -46,7 +46,7 @@ maintenance: |
 - **estimate**: ≈ 5 minutes
 
 ### Steps
-1. From `<repo>`, run `python -m pytest -q -x tests/test_turn_events.py tests/test_turn_permissions.py tests/test_tool_executor.py tests/test_correlated_turns.py tests/test_execution_workspace.py tests/test_session_mcp.py tests/test_acp_stdio.py` with the project Python.
+1. From `<repo>`, run `python -m pytest -q -x tests/test_turn_events.py tests/test_turn_permissions.py tests/test_tool_executor.py tests/test_correlated_turns.py tests/test_execution_workspace.py tests/test_session_mcp.py tests/test_acp_stdio.py tests/test_venv_resolve.py` with the project Python.
 2. Inspect the captured normal-turn frames in the passing wire test: initialize result, session/new result, one `session/update` with `sessionUpdate=agent_message_chunk` and Text content, then the original prompt result with `stopReason=end_turn`; inspect the ResourceLink case and confirm validated link metadata reaches the Core text boundary.
 3. Inspect lifecycle tests: serial, parallel, denied, and failed tools emit minimal ordered `tool_call`/`tool_call_update` status frames before terminal response; collector-owned future exceptions, timeout boundaries after worker return, and cancellation each produce one FAILED terminal with no late completion; arguments/results/raw payloads are absent; observer exceptions, late terminal events, and close do not leak or alter Core execution.
 4. Inspect permission tests: every otherwise-allowed known tool emits pending and
@@ -68,7 +68,11 @@ maintenance: |
    `-32010`/`-32011`, not ACP's predefined authentication/resource errors
    `-32000`/`-32002` or the Adapter's established session-not-found `-32001`.
 7. Inspect every Adapter-authored stdout line with `json.loads`; confirm there is one complete JSON-RPC object per physical line and Python boot/runtime/stop `print` output is captured only on stderr. Confirm docs prohibit native fd 1, pre-captured stdout, and child stdout rather than claiming to quarantine them.
-8. Inspect explicit-scope/lifecycle tests: malformed cwd/MCP, a second session, concurrent prompt, invalid ResourceLink, and failed Core turn each produce the named error path. Confirm canonical outside-agent workspace rooting, parent/symlink refusal, parallel propagation without later leakage, atomic stdio MCP publication/rollback/collision refusal, and lease teardown on close/EOF. Confirm the existing blocked-write and typed-stop lifecycle evidence remains intact.
+8. Check runtime startup: absent `venv_path` reuses the active virtualenv,
+   explicit configuration wins, and non-virtualenv launches retain managed
+   resolution. Native bootstrap subprocess diagnostics must reach stderr only;
+   an unavailable published version pin must fail without an unpinned retry.
+9. Inspect explicit-scope/lifecycle tests: malformed cwd/MCP, a second session, concurrent prompt, invalid ResourceLink, and failed Core turn each produce the named error path. Confirm canonical outside-agent workspace rooting, parent/symlink refusal, parallel propagation without later leakage, atomic stdio MCP publication/rollback/collision refusal, and lease teardown on close/EOF. Confirm the existing blocked-write and typed-stop lifecycle evidence remains intact.
 
 ### Expected evidence
 - [ ] Step 1 reports all focused tests passing with no network/provider call.

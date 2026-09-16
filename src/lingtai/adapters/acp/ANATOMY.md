@@ -11,6 +11,8 @@ related_files:
   - src/lingtai/adapters/acp/puffo_v1.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
+  - src/lingtai/venv_resolve.py
+  - tests/test_venv_resolve.py
   - src/lingtai/cli_puffo_v0.py
   - src/lingtai/cli.py
   - src/lingtai/kernel/turns.py
@@ -113,6 +115,10 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   the service or form a security boundary.
 - `../../cli_acp.py` — outer composition root. Captures the original stdout wire,
   quarantines Python application stdout to stderr before Agent construction,
+  reuses the active virtualenv when no explicit source override is present,
+  and delegates validation to `../../venv_resolve.py`. Its bootstrap subprocesses
+  route stdout to stderr and fail on an unavailable published version pin
+  (startup coverage in ACP001 and `tests/test_venv_resolve.py`),
   composes the existing Agent, consumes the typed bounded stop proof, and hard-
   exits on incomplete quiescence so no later Python state write can race teardown.
   For both Puffo profiles, it consumes the one launcher-injected Driver authority
