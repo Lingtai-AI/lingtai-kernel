@@ -10,6 +10,7 @@ related_files:
 - pyproject.toml
 - tests/test_mcp_sdk_v2_contract.py
 - tests/test_mcp_capability.py
+- tests/test_mcp_catalog_reconcile.py
 - tests/test_mcp_v2_adapter_metadata.py
 maintenance: |
   Tracks the officially supported MCP SDK range, the negotiated protocol
@@ -77,6 +78,28 @@ Owned by LingTai:
 * **Timeouts** are float seconds, not `timedelta`.
 * **Pagination.** Every `list_*` result carries `next_cursor`; the tool catalog
   is paged to exhaustion before it is returned.
+* **Catalog changes.** A connected server may change its `tools/list` and
+  announce it with the standard `notifications/tools/list_changed`. Both
+  clients accept that signal on whichever route the negotiated version uses —
+  the SDK `message_handler` for spontaneous pre-2026-07-28 notifications, and a
+  `Client.listen(tools_list_changed=True)` stream (`subscriptions/listen`) when
+  the SDK exposes `listen` and the server advertises `tools.listChanged`;
+  `ListenNotSupportedError` simply leaves the direct route in charge. On a
+  signal the client refetches the complete catalog with `cache_mode="refresh"`
+  (the SDK response cache is installed by default and must not serve a
+  just-changed listing) on its own loop and delivers the newest generation to
+  its `watch_tools_changed` listener on a separate thread. Because listen
+  events are never replayed, a client is not published as connected until its
+  listen route is acknowledged or has conclusively resolved (bounded wait; a
+  server that never acknowledges cannot hang startup). No protocol-version
+  literal is involved: feature detection and negotiation stay the SDK's.
+  Agent-side, the delivered catalog is applied under a shared per-agent lock
+  (`src/lingtai/services/session_mcp._surface_lock`) that also serializes
+  `connect_mcp*` publication/dedup, `_retry_failed_mcps`'s dead-client and
+  disconnected-replacement cleanup, preflight-failure discard, and stop/refresh
+  teardown — never held across the client's own network/subprocess work — so a
+  `tools/list_changed` reconciliation can never interleave with any of them;
+  see `src/lingtai/ANATOMY.md`.
 * **Results.** `preserve_tool_result` keeps the complete typed result. The
   single legacy value handed to kernel tool handlers is an explicit
   compatibility projection, documented as such at the call site.
@@ -167,6 +190,14 @@ boundary, not an oversight.
 Registry validation is owned by `src/lingtai/services/mcp_registry.py`
 (`validate_record`): launch-configuration schema, not MCP wire schema, so a
 record can be registry-valid and still fail at connect.
+
+* `tests/test_mcp_catalog_reconcile.py` — dynamic catalogs: a real stdio SDK
+  server (`tests/_mcp_catalog_server.py`, `ListenHandler`-backed) changes its
+  `tools/list` after a call and publishes the standard event, and the Agent's
+  surface reconciles; the client watch on both transports (direct notification,
+  coalescing, `cache_mode="refresh"`, failure keeps last good, listen feature
+  detection, teardown); the Agent reconcile with fake clients (per-owner
+  add/replace/remove, handler identity, rejections, stale delivery).
 
 ## Outside this contract
 

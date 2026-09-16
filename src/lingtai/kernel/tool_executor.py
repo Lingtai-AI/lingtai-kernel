@@ -107,7 +107,7 @@ class ToolExecutor:
         self._dispatch_fn = dispatch_fn
         self._make_tool_result_fn = make_tool_result_fn
         self._guard = guard
-        self._known_tools = known_tools or set()
+        self._known_tools = set() if known_tools is None else known_tools
         self._parallel_safe_tools = parallel_safe_tools or set()
         self._logger_fn = logger_fn
         self._max_result_bytes = max_result_bytes
