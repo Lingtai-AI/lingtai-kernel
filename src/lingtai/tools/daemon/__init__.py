@@ -6352,8 +6352,6 @@ class DaemonManager:
         mirroring the in-process followup_buffer mechanism across the process
         boundary.
         """
-        from lingtai.kernel.daemon_supervisor import control
-
         run_dir = entry.get("run_dir")
         if run_dir is None:
             return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
@@ -6370,9 +6368,29 @@ class DaemonManager:
                 pid, state.get("supervisor_start_identity")
             ):
                 return {"status": "error", "message": "detached supervisor identity is not live"}
-            control.submit_request(run_dir.path, "ask", {"message": message})
-            self._log("daemon_ask_detached", em_id=em_id, message_length=len(message))
-            return {"status": "sent", "id": em_id}
+            try:
+                message_id = run_dir.enqueue_checkpoint_message(message)
+            except (ValueError, RuntimeError) as exc:
+                return {"status": "error", "id": em_id, "message": str(exc)}
+            if not message_id:
+                state = self._read_run_dir_state_from_disk(run_dir)
+                return {
+                    "status": "error",
+                    "id": em_id,
+                    "message": f"not running (state={state.get('state')!r})",
+                }
+            self._log(
+                "daemon_ask_detached_queued",
+                em_id=em_id,
+                message_id=message_id,
+                message_length=len(message),
+            )
+            return {
+                "status": "queued",
+                "id": em_id,
+                "delivery": "checkpoint_or_text_boundary",
+                "message_id": message_id,
+            }
         if spec is None:
             return {"status": "error", "id": em_id,
                     "message": f"unknown backend {backend!r}"}
@@ -8945,6 +8963,25 @@ class DaemonManager:
             "last_output": state.get("last_output"),
             "last_output_at": state.get("last_output_at"),
             "latest_checkpoint": state.get("latest_checkpoint"),
+            "pending_message_ids": [
+                item["id"]
+                for item in (
+                    state.get("pending_checkpoint_messages")
+                    if isinstance(state.get("pending_checkpoint_messages"), list)
+                    else []
+                )
+                if isinstance(item, dict)
+                and isinstance(item.get("id"), str)
+                and item.get("id")
+            ],
+            "delivered_message_ids": state.get("delivered_message_ids", []),
+            "delivered_messages_total": state.get("delivered_messages_total", 0),
+            "last_message_delivery": state.get("last_message_delivery"),
+            "pending_followups": len(
+                state.get("pending_followups")
+                if isinstance(state.get("pending_followups"), list)
+                else []
+            ),
             "pending_checkpoint_messages": len(
                 state.get("pending_checkpoint_messages")
                 if isinstance(state.get("pending_checkpoint_messages"), list)

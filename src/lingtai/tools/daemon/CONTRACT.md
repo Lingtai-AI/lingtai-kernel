@@ -174,8 +174,11 @@ ownership -> §Process and Terminal Boundaries.
   `oh-my-pi`, `omp`, `kimicode`, `kimi`, `cursor`, `deepseek`. Aliases collapse via
   `_normalize_backend`: `mimo→mimocode`, `qwen→qwen-code`, `omp→oh-my-pi`,
   `kimi→kimicode`; `claude-code` is a compatibility alias for `claude-p`.
-  `claude` / `claude-interactive` are hidden (not schema-advertised). Active
-  external CLI runs whose launch path really mounts `daemon_common`
+  `claude` / `claude-interactive` are hidden (not schema-advertised). A live
+  detached native LingTai `ask` is durably admitted to the shared ID-bearing
+  parent-message inbox and returns `queued`; either its next `daemon_common`
+  checkpoint or the native loop's legal text-only boundary atomically claims it.
+  Active external CLI runs whose launch path really mounts `daemon_common`
   (`claude-p`/`claude-code`, Codex, OpenCode, Qwen, and Kimi) accept `ask` as a
   queued next-checkpoint message. This does not add a terminal resume contract:
   Qwen and Kimi still return explicit unsupported messages after terminal state,
@@ -400,8 +403,8 @@ continues on full history and never falls back to a different wire).
 |---|---|---|---|---|
 | `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `prompt` (LingTai only), `skills`/`mcp`/`preset`/`backend_options`/`context_token_limit`/`plugin`/`task_files` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; for large concurrent batches it strongly recommends `notification(action='delay')` on `daemon` to reduce wake frequency while preserving daemon truth; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — obsolete `system_prompt` migration, CLI `prompt`, bad limits, or tool-surface/preset failure |
 | `list` | — | `contains`, `status`, `include_done` (default true), `last` (default newest 1000; explicit positive values, including values above 1000, are accepted) | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
-| `ask` | `id`, `message` | — | `{status: "sent", id, output}` (resume-capable CLI ask returns immediately as `{status: "sent", id, async: true, ...}`); an active common-MCP CLI returns `{status: "queued", id, delivery: "checkpoint", message_id}` | `{status: "error", id, message}` — unknown/absent id or terminal backend resume unsupported; an active backend without common MCP remains `{status: "busy", ...}` |
-| `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, latest_checkpoint, pending_checkpoint_messages, events: [...]}`; pending is a count, never message content | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
+| `ask` | `id`, `message` | — | a live detached native run returns `{status: "queued", id, delivery: "checkpoint_or_text_boundary", message_id}` only after durable admission; an active common-MCP CLI returns `{status: "queued", id, delivery: "checkpoint", message_id}`; resume-capable terminal CLI asks return immediately as `{status: "sent", id, async: true, ...}` | `{status: "error", id, message}` — unknown/absent id, failed admission, or unsupported terminal resume; an active backend without common MCP remains `{status: "busy", ...}` |
+| `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, latest_checkpoint, pending_checkpoint_messages, pending_message_ids, pending_followups, delivered_message_ids, delivered_messages_total, last_message_delivery, events: [...]}`; pending message content is never projected and delivered IDs are bounded cumulative evidence | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
 | `reclaim` | — | — | `{status: "reclaimed", cancelled: <n>}` (or `{status: "shutdown", ...}` on lifecycle shutdown) | — |
 
 For `list`, omitted or null `last` is resolved by `DaemonManager` to a newest-
@@ -486,9 +489,15 @@ required `reasoning` field. The server attaches only to the exact run named by
 invalid payloads, and terminal runs before mutation.
 
 A valid live checkpoint performs one RunDir state transaction: increment
-`checkpoint_sequence`, store `latest_checkpoint`, and drain bounded/redacted
-ID-bearing `pending_checkpoint_messages` exactly once in the durable state write;
-then append a `daemon_checkpoint` event and refresh heartbeat. It next publishes
+`checkpoint_sequence`, store `latest_checkpoint`, and atomically claim the
+bounded/redacted ID-bearing parent-message inbox. The same inbox is claimed by
+the detached native loop only at its legal text-only boundary; the RunDir lock
+chooses one carrier, so no ID can reach both. The claim clears the pending row,
+appends bounded cumulative `delivered_message_ids`, increments
+`delivered_messages_total`, and stores `last_message_delivery` in the same
+durable write. Valid pre-upgrade `pending_followups` strings are assigned legacy
+IDs and folded into that claim before newer rows. Then checkpoint appends a
+`daemon_checkpoint` event and refreshes heartbeat. It next publishes
 a stable-key `source="daemon"`, `kind="daemon_checkpoint"`, `terminal=false`
 event on the singular built-in `daemon` channel so the parent wakes without
 consuming the exactly-once terminal notification. Checkpoints use the same
@@ -858,7 +867,7 @@ All paths are relative to the parent agent working directory (`<parent>/`):
 
 ```text
 <parent>/daemons/<handle>-<YYYYMMDD-HHMMSS>-<hash6>/   # one dir per run (run_id)
-  daemon.json                  # identity/live status + checkpoint sequence/latest/pending count
+  daemon.json                  # identity/live status + parent-message pending IDs/delivery evidence + checkpoint state
   .prompt                      # system prompt verbatim
   .heartbeat                   # mtime-touched on activity
   history/chat_history.jsonl   # session transcript
@@ -1087,12 +1096,15 @@ change must prove all applicable items:
    LingTai task-scoped calls additionally prove that undeclared host-private
    arguments do not cross the provider boundary, without filtering unknown
    business arguments or weakening strict LTP-v2 restoration.
-6. `daemon_common` is available only on source-proven loaders. Its live
-   checkpoint durably stores sequence/latest state and drains an ID-bound bounded
-   inbox exactly once before appending an event, refreshing heartbeat, and
-   publishing a unique nonterminal wake. Any failure after that durable write
-   returns `checkpoint_recorded=true` and the drained messages without redelivery.
-   Terminal success remains separately gated by valid `finish(status="done")`.
+6. `daemon_common` is available only on source-proven loaders. Live native
+   LingTai asks and supported common-MCP CLI asks report `queued` only after an
+   ID-bound bounded inbox write. A checkpoint or the native text-only boundary
+   atomically claims each ID once, preserves cumulative delivered-ID/total/route
+   evidence, and never lets the losing carrier redeliver it. Checkpoint then
+   appends an event, refreshes heartbeat, and publishes one nonterminal wake;
+   any post-record failure returns `checkpoint_recorded=true` and the drained
+   messages without redelivery. Terminal success remains separately gated by
+   valid `finish(status="done")`.
 7. Unsupported backends remain documented as prompt-catalog-only or fail
    explicitly; they must not imply tool availability from prompt text alone.
 8. `.prompt`, `daemon.json`, native config files/env/argv/settings,
@@ -1144,7 +1156,7 @@ Re-check this contract when touching:
 | Backend schema enum matches the ordered alias contract | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_backend_options.py::test_backend_schema_enum_matches_ordered_contract`, `::test_backend_metadata_consistency_keeps_hidden_legacy_claude` |
 | `check` returns state + events, honors `last`/`truncate`, validates inputs | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_check.py` |
 | CLI-backend terminal `ask` returns immediately and enforces its own timeout | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs`, `::test_ask_codex_silent_subprocess_enforces_timeout` |
-| Active common-MCP CLI `ask` queues an ID-bound next-checkpoint message; checkpoint records/drains/wakes without terminal mutation and old live RunDirs backfill fields | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/run_dir.py`, `src/lingtai/mcp_servers/daemon_common/server.py` | `tests/test_daemon_checkpoint.py`, `tests/test_daemon_run_dir.py::test_checkpoint_inbox_backfills_pre_checkpoint_live_state` |
+| Live native LingTai and active common-MCP CLI `ask` report durable ID-bound queue admission; checkpoint versus native text-boundary claims are exactly once, cumulative delivery evidence survives later empty checkpoints, deterministic legacy-control IDs prevent replay duplication, and old live RunDirs backfill/migrate fields | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/run_dir.py`, `src/lingtai/tools/daemon/supervisor_runtime.py`, `src/lingtai/mcp_servers/daemon_common/server.py` | `tests/test_daemon_checkpoint.py`, `tests/test_daemon_detached_supervisor.py`, `tests/test_daemon_run_dir.py` |
 | Token rows are written to both the daemon and parent ledgers, tagged | `src/lingtai/tools/daemon/run_dir.py` | `tests/test_daemon_run_dir.py::test_append_tokens_writes_daemon_ledger`, `::test_append_tokens_writes_parent_ledger_tagged` |
 | `context_token_limit` is validated, reaches Codex and native `mimo`, and is inert for every other provider and every external CLI backend | `src/lingtai/tools/daemon/__init__.py` | `tests/test_codex_standalone_compaction.py`, `tests/test_mimo_responses_compaction.py` |
 | `tasks[].plugin` renders the `## Parent-selected plugins` section into the durable `.prompt` the detached child reads; plugin skills and mcp.json servers are merged/mounted; missing plugin paths resolve to nothing; non-list fails preflight | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_task_plugin_context_renders_catalog_and_flattens_skills_mcp`, `::test_task_plugin_context_rejects_bad_plugin_path`, `::test_task_plugin_context_rejects_non_list`, `::test_handle_emanate_writes_plugin_section_to_prompt_before_detach` |

@@ -246,6 +246,98 @@ async def test_active_cli_ask_is_delivered_once_at_checkpoint_without_terminal_m
     assert _disk_state(local_run)["latest_checkpoint"]["summary"] == "local parity works"
 
 
+async def test_active_native_ask_is_queued_and_delivered_once_at_checkpoint(
+    tmp_path, monkeypatch,
+):
+    """Native ask reports queue admission and leaves durable delivery evidence."""
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-native-checkpoint",
+        backend="lingtai",
+        task="long native implementation",
+        tools=["shell"],
+        call_parameters={"task": "long native implementation", "tools": ["shell"]},
+    )
+    run_dir.update_state(
+        backend="lingtai",
+        owner="supervisor",
+        state="active",
+        supervisor_pid=os.getpid(),
+        supervisor_start_identity="test-native-supervisor",
+    )
+    manager._emanations[run_dir.run_id] = {
+        "detached": True,
+        "task": "long native implementation",
+        "start_time": time.time(),
+        "timeout_s": 1200.0,
+        "run_dir": run_dir,
+        "backend": "lingtai",
+    }
+    monkeypatch.setattr(
+        manager,
+        "_pid_identity_matches",
+        lambda pid, identity: pid == os.getpid() and identity == "test-native-supervisor",
+    )
+
+    correction = "HOLD before the next expensive tool call."
+    ask = manager.handle(
+        {"action": "ask", "id": run_dir.run_id, "message": correction}
+    )
+    assert ask == {
+        "status": "queued",
+        "id": run_dir.run_id,
+        "delivery": "checkpoint_or_text_boundary",
+        "message_id": ask.get("message_id"),
+    }
+    assert isinstance(ask["message_id"], str) and ask["message_id"].startswith("msg-")
+
+    queued = manager.handle({"action": "check", "id": run_dir.run_id})
+    assert queued["pending_followups"] == 0
+    assert queued["pending_checkpoint_messages"] == 1
+    assert queued["pending_message_ids"] == [ask["message_id"]]
+    assert queued["delivered_message_ids"] == []
+    assert queued["delivered_messages_total"] == 0
+    assert queued["last_message_delivery"] is None
+
+    monkeypatch.setenv("LINGTAI_DAEMON_RUN_DIR", str(run_dir.path))
+    monkeypatch.setenv("LINGTAI_DAEMON_RUN_ID", run_dir.run_id)
+    async with Client(build_server()) as client:
+        first = await client.call_tool(
+            "checkpoint",
+            {
+                "action": "checkpoint",
+                "input": {"state": "holding", "summary": "preserved evidence"},
+                "reasoning": "admit queued parent control",
+            },
+        )
+        second = await client.call_tool(
+            "checkpoint",
+            {
+                "action": "checkpoint",
+                "input": {"state": "holding", "summary": "still contained"},
+                "reasoning": "prove exactly-once delivery",
+            },
+        )
+
+    first_payload = json.loads(first.content[0].text)
+    second_payload = json.loads(second.content[0].text)
+    assert first_payload["messages"] == [
+        {"id": ask["message_id"], "message": correction}
+    ]
+    assert second_payload["messages"] == []
+
+    checked = manager.handle({"action": "check", "id": run_dir.run_id})
+    assert checked["pending_followups"] == 0
+    assert checked["pending_checkpoint_messages"] == 0
+    assert checked["pending_message_ids"] == []
+    assert checked["delivered_message_ids"] == [ask["message_id"]]
+    assert checked["delivered_messages_total"] == 1
+    assert checked["last_message_delivery"]["via"] == "checkpoint"
+    assert checked["last_message_delivery"]["message_ids"] == [ask["message_id"]]
+
+
 @pytest.mark.parametrize(
     "backend,checkpoint_supported",
     [

@@ -977,7 +977,8 @@ def test_checkpoint_inbox_backfills_pre_checkpoint_live_state(tmp_path):
     """An already-running pre-upgrade run can queue and drain one correction."""
     rd = _make_run_dir(tmp_path, backend="opencode")
     for field in (
-        "checkpoint_sequence", "latest_checkpoint", "pending_checkpoint_messages"
+        "checkpoint_sequence", "latest_checkpoint", "pending_checkpoint_messages",
+        "delivered_message_ids", "last_message_delivery",
     ):
         rd._state.pop(field)
     rd._atomic_write_json(rd.daemon_json_path, rd._state)
@@ -994,6 +995,103 @@ def test_checkpoint_inbox_backfills_pre_checkpoint_live_state(tmp_path):
     assert state["checkpoint_sequence"] == 1
     assert state["latest_checkpoint"]["summary"] == "old live run upgraded in place"
     assert state["pending_checkpoint_messages"] == []
+    assert state["delivered_message_ids"] == [message_id]
+    assert state["last_message_delivery"]["via"] == "checkpoint"
+
+
+def test_checkpoint_and_text_boundary_race_delivers_one_message_once(tmp_path):
+    """Checkpoint and text-boundary drains share one exactly-once inbox."""
+    rd = _make_run_dir(tmp_path, backend="lingtai")
+    message_id = rd.enqueue_checkpoint_message("HOLD at the next safe boundary")
+    assert isinstance(message_id, str) and message_id.startswith("msg-")
+
+    barrier = threading.Barrier(3)
+    results = {}
+
+    def checkpoint():
+        barrier.wait()
+        results["checkpoint"] = rd.record_checkpoint(
+            {"state": "working", "summary": "cooperative boundary"}
+        )
+
+    def text_boundary():
+        barrier.wait()
+        results["text_boundary"] = rd.drain_parent_messages(
+            via="native_text_boundary"
+        )
+
+    threads = [
+        threading.Thread(target=checkpoint),
+        threading.Thread(target=text_boundary),
+    ]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=5.0)
+        assert not thread.is_alive()
+
+    checkpoint_messages = results["checkpoint"]["messages"]
+    boundary_messages = results["text_boundary"]
+    delivered = checkpoint_messages + boundary_messages
+    assert delivered == [
+        {"id": message_id, "message": "HOLD at the next safe boundary"}
+    ]
+
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["pending_followups"] == []
+    assert state["pending_checkpoint_messages"] == []
+    assert state["delivered_message_ids"] == [message_id]
+    assert state["delivered_messages_total"] == 1
+    assert state["last_message_delivery"]["message_ids"] == [message_id]
+    assert state["last_message_delivery"]["via"] in {
+        "checkpoint", "native_text_boundary"
+    }
+    assert rd.drain_parent_messages(via="native_text_boundary") == []
+
+
+def test_explicit_message_id_is_idempotent_pending_and_delivered(tmp_path):
+    """Legacy control replay cannot duplicate an admitted or delivered ID."""
+    rd = _make_run_dir(tmp_path, backend="lingtai")
+    message_id = "msg-control-0123456789abcdef0123456789abcdef"
+    assert rd.enqueue_checkpoint_message("HOLD", message_id=message_id) == message_id
+    assert rd.enqueue_checkpoint_message("HOLD", message_id=message_id) == message_id
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert [item["id"] for item in state["pending_checkpoint_messages"]] == [message_id]
+
+    delivered = rd.drain_parent_messages(via="native_text_boundary")
+    assert delivered == [{"id": message_id, "message": "HOLD"}]
+    assert rd.enqueue_checkpoint_message("HOLD", message_id=message_id) == message_id
+
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["pending_checkpoint_messages"] == []
+    assert state["delivered_message_ids"] == [message_id]
+    assert state["delivered_messages_total"] == 1
+
+
+def test_legacy_followup_is_id_bound_and_delivered_at_checkpoint(tmp_path):
+    """A pre-upgrade native pending_followups string is not stranded."""
+    rd = _make_run_dir(tmp_path, backend="lingtai")
+    rd._state["pending_followups"] = ["STOP after preserving evidence"]
+    rd._state.pop("delivered_message_ids", None)
+    rd._state.pop("last_message_delivery", None)
+    rd._atomic_write_json(rd.daemon_json_path, rd._state)
+
+    recorded = rd.record_checkpoint(
+        {"state": "working", "summary": "legacy queue recovery"}
+    )
+    assert len(recorded["messages"]) == 1
+    delivered = recorded["messages"][0]
+    assert delivered["id"].startswith("legacy-msg-")
+    assert delivered["message"] == "STOP after preserving evidence"
+
+    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
+    assert state["pending_followups"] == []
+    assert state["pending_checkpoint_messages"] == []
+    assert state["delivered_message_ids"] == [delivered["id"]]
+    assert state["delivered_messages_total"] == 1
+    assert state["last_message_delivery"]["via"] == "checkpoint"
+    assert state["latest_checkpoint"]["delivered_message_ids"] == [delivered["id"]]
 
 
 def test_mark_failed_handles_pathological_str_exc(tmp_path):

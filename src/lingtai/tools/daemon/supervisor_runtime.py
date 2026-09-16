@@ -495,8 +495,30 @@ def _control_and_deadline_watcher(
                 return
             elif kind == "ask":
                 message = req.get("message", "")
-                if run_dir.enqueue_followup(message):
-                    control.mark_request_done(req_path, {"status": "queued"})
+                request_id = req.get("request_id")
+                legacy_message_id = (
+                    f"msg-control-{request_id}"
+                    if isinstance(request_id, str) and request_id
+                    else None
+                )
+                try:
+                    message_id = run_dir.enqueue_checkpoint_message(
+                        message, message_id=legacy_message_id
+                    )
+                except (ValueError, RuntimeError) as exc:
+                    control.mark_request_done(
+                        req_path, {"status": "error", "error": str(exc)}
+                    )
+                    continue
+                if message_id:
+                    control.mark_request_done(
+                        req_path,
+                        {
+                            "status": "queued",
+                            "delivery": "checkpoint_or_text_boundary",
+                            "message_id": message_id,
+                        },
+                    )
                 else:
                     control.mark_request_done(
                         req_path, {"status": "rejected", "error": "run is no longer active"}
