@@ -103,6 +103,16 @@ also attaches both files alongside the wheel/sdist.
 - Every other shape (default manual dispatch) stays dry-run, so re-running
   this workflow to sanity-check the manifest has no side effects.
 
+### Prerelease test packages
+
+Use a distinct PEP 440 version such as `1.0.6a1` and matching `v1.0.6a1`
+tag for test packages. Manual recovery accepts stable tags and `aN`, `bN`,
+or `rcN` suffixes. Create the GitHub release with `--prerelease --latest=false`
+and the exact candidate commit; preserve the existing stable release. The
+publisher applies those flags automatically when it creates a missing
+prerelease. A universal wheel tag describes package compatibility, not tested
+platform coverage: release notes must name the environments actually verified.
+
 ### Gitee is not part of the workflow
 
 No path in `wheels.yml` invokes Gitee synchronization or Gitee asset

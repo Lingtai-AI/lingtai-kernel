@@ -37,6 +37,7 @@ import urllib.error
 import warnings
 import urllib.request
 from pathlib import Path
+from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "lib"))
@@ -452,9 +453,13 @@ def main(argv: list[str] | None = None) -> int:
         if not gh_release_exists(manifest.kernel_tag, args.github_repo):
             print(f"  [github] release {manifest.kernel_tag} does not exist yet")
             if args.execute:
+                release_flags = ["--target", manifest.commit]
+                if Version(manifest.kernel_version).is_prerelease:
+                    release_flags += ["--prerelease", "--latest=false"]
                 subprocess.run(
                     ["gh", "release", "create", manifest.kernel_tag, "--repo", args.github_repo,
-                     "--title", manifest.kernel_tag, "--notes", f"Kernel release {manifest.kernel_tag}"],
+                     "--title", manifest.kernel_tag, "--notes", f"Kernel release {manifest.kernel_tag}",
+                     *release_flags],
                     check=True,
                 )
                 github_files = plan_github_uploads(manifest, args.assets_dir, args.manifest, args.github_repo, manifest.kernel_tag)

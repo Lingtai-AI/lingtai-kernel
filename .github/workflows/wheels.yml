@@ -54,8 +54,8 @@ jobs:
           if [[ -z "$RELEASE_TAG" ]]; then
             exit 0
           fi
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::release_tag must be a simple semantic-version tag such as v0.19.5."
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]]; then
+            echo "::error::release_tag must be a release tag such as v1.0.6 or v1.0.6a1."
             exit 1
           fi
           tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
@@ -146,8 +146,8 @@ jobs:
           if [[ -z "$RELEASE_TAG" ]]; then
             exit 0
           fi
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::release_tag must be a simple semantic-version tag such as v0.19.5."
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]]; then
+            echo "::error::release_tag must be a release tag such as v1.0.6 or v1.0.6a1."
             exit 1
           fi
           tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
@@ -208,8 +208,8 @@ jobs:
           if [[ -z "$RELEASE_TAG" ]]; then
             exit 0
           fi
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::release_tag must be a simple semantic-version tag such as v0.19.5."
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]]; then
+            echo "::error::release_tag must be a release tag such as v1.0.6 or v1.0.6a1."
             exit 1
           fi
           tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
