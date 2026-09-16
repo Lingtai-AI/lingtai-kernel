@@ -155,7 +155,6 @@ related_files:
   - tests/test_deep_refresh.py
   - tests/test_deepseek_adapter.py
   - tests/test_deepseek_reasoning_effort.py
-  - tests/test_deferred_tool_disclosure.py
   - tests/test_docs_governance.py
   - tests/test_eigen.py
   - tests/test_email_abs_reply_route.py

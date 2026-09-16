@@ -35,8 +35,6 @@ related_files:
   - tests/test_turn_permissions.py
   - tests/test_provider_admission.py
   - src/lingtai/adapters/acp/BEHAVIORS.md
-  - src/lingtai/kernel/base_agent/tools.py
-  - tests/test_deferred_tool_disclosure.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
@@ -221,25 +219,3 @@ Pass when the focused suite proves fresh fail-closed admission and the one-hop l
 
 ### Pass / Fail
 Pass when the suite is green and the inspection matches the Contract. Fail if the poisoned process retries, if a refresh-success request is sent while a redo is enqueued, if a `provider_started` record is replayed, if a `continuation` redo carries the original text, if a `tc_wake` hang is left to notification resync, or if replay text survives a terminal status; record the evidence trail in the task report.
-
-## Behavior BA007 — a stub-bearing tool stays collapsed until it is called or its channel delivers a notification, and the full schema is visible in that same provider round
-
-- **id**: BA007
-- **title**: a stub-bearing tool stays collapsed until it is called or its channel delivers a notification, and the full schema is visible in that same provider round
-- **guards**: `agent-runtime` § Contract rules, rule 14 (`agent-runtime.tool-disclosure.v1`) — see [CONTRACT.md](CONTRACT.md#contract-rules)
-- **pinned by**: `tests/test_deferred_tool_disclosure.py` (all tests)
-- **runner**: any LingTai coding agent with `shell` access to this repository
-- **prerequisites**: a clean checkout of `<repo>` and the project Python with pytest; no live agent sharing pytest scratch state
-- **estimate**: ≈ 5 minutes
-- **motivation**: the curated Telegram/Feishu/WeChat MCP families advertise ~70 KB (~18k tokens) of LTP-v2 schema that every fresh session paid for on every provider round even when no channel was in use (Jason, 2026-09-15, "delay load these communication channels").
-
-### Steps
-1. From `<repo>`, run `python -m pytest -q tests/test_deferred_tool_disclosure.py tests/test_notification_sync.py tests/test_meta_block.py tests/test_mcp_inbox.py`.
-2. Inspect `src/lingtai/kernel/base_agent/tools.py` (`_effective_tool_schema`, `_disclose_tool`, `_disclose_tools_for_sources`, the `_dispatch_tool` hook), the `_inject_notification_pair` and degraded-wake call sites in `src/lingtai/kernel/base_agent/__init__.py`, the `attach_active_notifications` call site in `src/lingtai/kernel/meta_block.py`, and `src/lingtai/agent.py::_mount_mcp_tools` with `src/lingtai/services/mcp.py::deferred_tool_stub`.
-
-### Expected evidence
-- [ ] Step 1: the group passes with no provider or network call. For each of telegram, feishu, and wechat a fresh Agent's `_build_tool_schemas()` carries only a manual-only stub (`action` enum `["manual"]`, strict-empty `input`, required `reasoning`) under 1.2 KB while `_tool_schemas` still holds the full family and the handler is registered; a non-target LTP-v2 family with `manual` and a flat third-party tool are advertised unchanged; dispatching `action='manual'` discloses exactly that tool for the next build and survives `_rebuild_session`; a LICC event for one channel discloses only that channel on the ACTIVE attach path and on the IDLE synthesized-pair path before the wake is queued; `remove_tool` forgets the disclosure.
-- [ ] Step 2: no Core Python module under `src/lingtai/kernel/` names a channel for this feature — selection lives in `DEFERRED_DISCLOSURE_TOOLS` and `notification_channel` in the wrapper's services; the kernel matches `disclosure_sources` by name only; disclosure precedes the wire append / carrier send on every delivery path; the stub is never the dispatch or reasoning-restoration schema.
-
-### Pass / Fail
-Pass when the suite is green and the inspection matches the Contract. Fail if a fresh session carries any full channel schema, if a call or a producing-channel notification leaves the tool collapsed on the next provider build, if a notification for one channel discloses another, if a non-stub tool changes shape, if disclosure is persisted across relaunch, or if `tools.py`, `meta_block.py`, or `base_agent/__init__.py` select tools by channel name; record the evidence trail in the task report.

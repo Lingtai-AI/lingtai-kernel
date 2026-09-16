@@ -226,14 +226,6 @@ class FunctionSchema:
     files.  The ``## tools`` renderer uses it to append a localized terminology
     body; it is never serialized into provider payloads (``to_dict`` excludes
     it alongside ``system_prompt``).
-
-    ``stub`` is an optional compact stand-in (itself a ``FunctionSchema`` with
-    the same ``name``) that the tool surface advertises to the provider
-    *instead of* this schema until the tool is disclosed — by a call to it, or
-    by delivery of a notification from one of ``disclosure_sources`` (the
-    ``.notification/`` channel names the registrant declares). Both are
-    registration metadata owned by ``base_agent/tools.py``; neither reaches
-    ``to_dict``. A schema without a ``stub`` is always fully visible.
     """
 
     name: str
@@ -241,8 +233,6 @@ class FunctionSchema:
     parameters: dict
     system_prompt: str = ""
     glossary_package: str | None = None
-    stub: "FunctionSchema | None" = None
-    disclosure_sources: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         return {"name": self.name, "description": self.description, "parameters": self.parameters}

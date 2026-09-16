@@ -25,8 +25,6 @@ related_files:
   - src/lingtai/tools/system/karma.py
   - tests/test_aed_recovery.py
   - tests/test_notification_sync.py
-  - tests/test_deferred_tool_disclosure.py
-  - src/lingtai/kernel/base_agent/tools.py
   - tests/test_cli_worker_poison_recovery.py
   - tests/test_worker_hang_aed_redo.py
   - tests/test_silence_kill.py
@@ -582,27 +580,6 @@ Clause IDs are stable; each rule composes the linked normative source.
    the private correlated-turn envelope is rejected before downstream request,
    continuation, state, or notice handlers execute. The envelope still needs
    its independent typed-origin check at the final inbox-to-provider boundary.
-14. `agent-runtime.tool-disclosure.v1` — Guarded by
-   [BA007](BEHAVIORS.md#behavior-ba007). A dynamic tool registered with a
-   compact same-name `FunctionSchema.stub` is advertised to the provider as
-   that stub until the tool is disclosed. Its handler and full schema are
-   registered and dispatchable from registration onward, so disclosure changes
-   only what the provider sees, never what can be called. Disclosure is
-   process-local and never persisted, and happens on exactly two triggers: a
-   dispatched call to that tool (the stub exposes only the family's reserved
-   `manual` action), and delivery of a `.notification/` channel named in the
-   tool's `disclosure_sources` — performed before the synthesized pair, the
-   degraded wake request, or the ACTIVE tool-result carrier that delivers it is
-   sent, so the full schema is visible in that same provider round. Core
-   matches channel names only. Which tools carry a stub, the stub's text, and
-   which channels reveal them are declared by the composition root at its
-   mount boundary (today: the wrapper's MCP mount for the curated messaging
-   channels). Tools without a stub are unaffected. `remove_tool` forgets a
-   disclosure, so an explicit remove followed by re-registration starts
-   collapsed; a same-name replacement through `add_tool` alone (for example a
-   health-retry remount of a dead MCP client) keeps the disclosure for the
-   rest of the process, and no path other than `remove_tool` or a relaunch
-   resets it.
 
 ## Contract tests
 
@@ -630,11 +607,9 @@ genuinely later notification change), `tests/test_cli_worker_poison_recovery.py`
 (hard exit after poison, and no refresh-success kick-start while a worker
 recovery is pending), `tests/test_silence_kill.py` (idempotent private producer),
 `tests/test_system.py` + `tests/test_system_declared_plugin.py` (direct and
-official self-sleep ordering), `tests/test_karma.py` +
+official self-sleep ordering), and `tests/test_karma.py` +
 `tests/test_perform_refresh_handshake.py` (signal-file and watcher-spawn
-producer ordering), and `tests/test_deferred_tool_disclosure.py` (stub
-visibility at a fresh session, call- and notification-triggered disclosure on
-the IDLE and ACTIVE delivery paths, untouched non-stub tools). The
+producer ordering). The
 Windows release CI lane (`.github/workflows/kernel-windows-pr.yml`) executes the
 platform-marked tiers natively on `release.published`; routine pull requests do
 not spend a Windows runner. The capability matrix cites which rows carry native
