@@ -522,7 +522,20 @@ if stdin remains open; the ACP connection is not preserved across refresh.
 The Adapter and Python `sys.stdout`/`print` path are protocol-only. Configure the
 client to capture stderr for boot reader outcomes, logs, and diagnostics. This
 slice does not redirect native fd 1, previously captured stdout objects, or child
-stdout: code launched in this host must not use those paths. Common explicit errors:
+stdout: code launched in this host must not use those paths. Runtime bootstrap
+is an explicit exception in implementation: its venv/pip child output is directed
+to stderr, never the protocol stream.
+
+Install and invoke the intended kernel's `lingtai-agent` from its virtualenv.
+Without `init.json` `venv_path`, ACP reuses that active virtualenv; an explicit
+project override still takes precedence and is validated. Startup does not write
+this selection into the source file. Without an active virtualenv, the managed
+runtime resolution remains available. If bootstrap cannot install the exact
+published kernel version, install that release into a virtualenv from its
+official distribution and invoke its executable, or explicitly configure a
+working environment. It will not fall back to another published version.
+
+Common explicit errors:
 
 - non-integer protocol version: invalid params (a different integer negotiates to
   this Agent's supported version `1`, which the client must accept or close);

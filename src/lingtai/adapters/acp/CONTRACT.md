@@ -11,6 +11,8 @@ related_files:
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
+  - src/lingtai/venv_resolve.py
+  - tests/test_venv_resolve.py
   - src/lingtai/cli_puffo_v0.py
   - src/lingtai/cli.py
   - ENVIRONMENT_VARIABLES.md
@@ -76,7 +78,16 @@ claim hard provider abort or running-tool preemption. Each Adapter-authored wire
 line is one compact UTF-8 JSON object. The composition root redirects Python
 `sys.stdout`/`print` diagnostics to stderr; native fd 1 writes, pre-captured stdout
 objects, and child-process stdout are not quarantined in this slice and are
-therefore prohibited while ACP owns the transport.
+therefore prohibited while ACP owns the transport. Runtime bootstrap explicitly
+routes venv/pip subprocess stdout to stderr.
+
+ACP respects an explicit `init.json` `venv_path`; when absent and the ACP process
+is already in a virtualenv, it validates and reuses that environment before the
+managed-runtime fallback. This selection changes only in-memory configuration,
+never the source `init.json`. When managed bootstrap is needed for a published
+kernel version, an unavailable exact version fails; it must not silently install
+a different version. Local/development versions retain unpinned provisioning.
+These startup guarantees are guarded by [ACP001](BEHAVIORS.md#behavior-acp001).
 
 ## Port
 
