@@ -818,12 +818,70 @@ def begin_admission_witness_scope(agent) -> None:
     """
     agent._puffo_admission_watermark = _current_last_entry_id(agent)
     agent._puffo_admission_emitted = set()
+    # 甲 (abandoned-fact diagnostic): receipt-bearing facts SEEN at a settle
+    # point but NOT delivered (namespacer raised / notify returned False). Keyed
+    # by kernel block id -> {"reason", "wire_id"} of the LAST non-delivery. A
+    # fact is added on each non-delivery and removed when a later settle point
+    # delivers it, so whatever REMAINS at scope close was never delivered this
+    # turn -- and, because a settled correlated turn is never redone, never will
+    # be. ``end_admission_witness_scope`` turns each remainder into one durable,
+    # countable event in the LIVE process, before the relaunch that the new
+    # process cannot reconstruct.
+    agent._puffo_admission_outstanding = {}
 
 
 def end_admission_witness_scope(agent) -> None:
-    """Close the turn-scoped state so scans outside a turn are no-ops."""
+    """Close the turn-scoped state so scans outside a turn are no-ops.
+
+    Before clearing, emit one ``puffo_admission_fact_abandoned`` event per fact
+    that was seen with a receipt but never delivered this turn (甲). This runs
+    in the live process on BOTH the no-hang normal completion and the
+    worker-hang ``break`` path, and reads ONLY the in-memory outstanding map --
+    never the (possibly poisoned) interface -- so it is safe on the hang path
+    and its record survives the relaunch. One event per fact keeps the loss
+    rate countable; the wire tool-call id (when known) is the key Puffo
+    correlates on, so both sides' logs join. It fires only on genuine loss: a
+    fact delivered on a later settle point is discarded from the map, so the
+    retry path never triggers a (cry-wolf) diagnostic. Narrow uncovered window,
+    by construction: a receipt committed but hung before its FIRST settle-point
+    scan never enters the map and so gets no diagnostic here.
+    """
+    outstanding = getattr(agent, "_puffo_admission_outstanding", None)
+    if outstanding:
+        for block_id, info in outstanding.items():
+            wire_id = info.get("wire_id")
+            try:
+                agent._log(
+                    "puffo_admission_fact_abandoned",
+                    tool_call_id=wire_id or block_id,
+                    wire_tool_call_id=wire_id,
+                    kernel_block_id=block_id,
+                    reason=info.get("reason"),
+                )
+            except Exception:
+                pass
+    agent._puffo_admission_outstanding = {}
     agent._puffo_admission_emitted = None
     agent._puffo_admission_watermark = -1
+
+
+def _mark_admission_outstanding(agent, block_id, *, reason, wire_id) -> None:
+    """Record a seen-but-not-delivered receipt-bearing fact (甲).
+
+    Idempotent per block id; the latest non-delivery reason/wire id wins. A
+    no-op unless the turn-scoped map is open, so scans outside a turn (and older
+    agent objects in tests) never accumulate state.
+    """
+    outstanding = getattr(agent, "_puffo_admission_outstanding", None)
+    if isinstance(outstanding, dict):
+        outstanding[block_id] = {"reason": reason, "wire_id": wire_id}
+
+
+def _clear_admission_outstanding(agent, block_id) -> None:
+    """Drop a fact from the outstanding map once it has been delivered."""
+    outstanding = getattr(agent, "_puffo_admission_outstanding", None)
+    if isinstance(outstanding, dict):
+        outstanding.pop(block_id, None)
 
 
 def scan_and_emit_committed_facts(agent) -> None:
@@ -913,6 +971,9 @@ def scan_and_emit_committed_facts(agent) -> None:
                         )
                     except Exception:
                         pass
+                    _mark_admission_outstanding(
+                        agent, block_id, reason="namespacer_failed", wire_id=None
+                    )
                     continue
             else:
                 # Observers without the mapping (non-ACP, unit fakes) bind over
@@ -928,6 +989,9 @@ def scan_and_emit_committed_facts(agent) -> None:
             if delivered:
                 # Only a delivered fact is retired from further settle points.
                 emitted.add(block_id)
+                # It reached an observer this turn, so it is not an abandoned
+                # loss even if an earlier settle point had failed to deliver it.
+                _clear_admission_outstanding(agent, block_id)
             else:
                 # Non-delivery must be visible, not silent — and NOT recorded in
                 # ``emitted``, so a later settle point retries (Puffo's own
@@ -941,6 +1005,14 @@ def scan_and_emit_committed_facts(agent) -> None:
                     )
                 except Exception:
                     pass
+                # Record it as outstanding so a turn that ends without a later
+                # (successful) settle point reports the permanent loss at scope
+                # close (甲). ``wire_id`` is known here (the namespacer, if any,
+                # returned), so the abandoned event can carry the id Puffo
+                # correlates on.
+                _mark_admission_outstanding(
+                    agent, block_id, reason="not_delivered", wire_id=wire_id
+                )
 
 
 def _restore_tool_results_after_continuation_failure(
