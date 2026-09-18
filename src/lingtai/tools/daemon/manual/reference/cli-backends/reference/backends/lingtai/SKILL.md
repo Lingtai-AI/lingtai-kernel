@@ -45,7 +45,12 @@ and source — route to the current authority instead of memorizing snapshots.
    `email` is daemon-eligible but opt-in via `tools`. Preset-supplied capabilities
    are resolved first; only requested File/Shell host tools can be filled from
    the parent. Provider-bound tools do not silently borrow parent services.
-4. **Completion contract** — the built-in `daemon_common` MCP is added
+4. **Live correction contract** — `daemon.ask` returns `queued` plus an opaque
+   ID only after durable RunDir admission. The next `daemon_common` checkpoint
+   or the native loop's legal text-only boundary atomically delivers it once;
+   `daemon.check` exposes pending IDs and bounded delivered-ID/total/route
+   evidence, never pending message text. Queue admission is not model obedience.
+5. **Completion contract** — the built-in `daemon_common` MCP is added
    automatically and `finish(status="done")` is the only terminal-success
    signal. The maintainer-facing architecture invariants are
    `src/lingtai/tools/daemon/CONTRACT.md`; the current tool schema

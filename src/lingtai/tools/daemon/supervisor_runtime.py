@@ -160,11 +160,16 @@ def _run_supervisor_owned(
         run_dir.mark_failed(ValueError("supervisor manifest/run directory identity mismatch"))
         _publish_terminal_notification_if_needed(run_dir, manifest)
         return
-    run_dir.update_state(
-        owner="supervisor", supervisor_pid=os.getpid(),
-        supervisor_start_identity=_process_start_identity(os.getpid()),
-        supervisor_manifest_path=str(canonical_manifest),
-    )
+    supervisor_state = {
+        "owner": "supervisor",
+        "supervisor_pid": os.getpid(),
+        "supervisor_start_identity": _process_start_identity(os.getpid()),
+        "supervisor_manifest_path": str(canonical_manifest),
+    }
+    if manifest.get("backend") == "lingtai":
+        from lingtai.tools.daemon.run_dir import NATIVE_PARENT_MESSAGE_PROTOCOL
+        supervisor_state["native_parent_message_protocol"] = NATIVE_PARENT_MESSAGE_PROTOCOL
+    run_dir.update_state(**supervisor_state)
 
     try:
         adopted_fd = wire.take_fd()
@@ -282,10 +287,19 @@ def _run_one_emanation_owned(run_dir, manifest: dict, wire) -> None:
     timeout_event = threading.Event()
     deadline = time.monotonic() + float(manifest["timeout_s"])
 
+    # This launch-time marker is written by the execution owner whose watcher
+    # and native loop actually know how to drain the shared parent-message
+    # inbox.  A refreshed parent must not infer support merely from its own
+    # code version while a pre-upgrade supervisor is still alive.
+    state_updates = {"execution_registration": "spawned"}
+    if backend == "lingtai":
+        from lingtai.tools.daemon.run_dir import NATIVE_PARENT_MESSAGE_PROTOCOL
+        state_updates["native_parent_message_protocol"] = NATIVE_PARENT_MESSAGE_PROTOCOL
+
     # Never fork after creating watcher threads.  The supervisor launches a
     # fresh interpreter child, which is the only process allowed to construct
     # the manager-shaped execution host and enter provider/CLI code.
-    run_dir.update_state(execution_registration="spawned")
+    run_dir.update_state(**state_updates)
     adapter = select_daemon_supervisor_adapter()
     spawn_kwargs = dict(
         python_executable=sys.executable,
@@ -495,8 +509,36 @@ def _control_and_deadline_watcher(
                 return
             elif kind == "ask":
                 message = req.get("message", "")
-                if run_dir.enqueue_followup(message):
-                    control.mark_request_done(req_path, {"status": "queued"})
+                if not isinstance(message, str) or not message.strip():
+                    control.mark_request_done(
+                        req_path,
+                        {"status": "error", "error": "ask message must be a non-blank string"},
+                    )
+                    continue
+                request_id = req.get("request_id")
+                legacy_message_id = (
+                    f"msg-control-{request_id}"
+                    if isinstance(request_id, str) and request_id
+                    else None
+                )
+                try:
+                    message_id = run_dir.enqueue_checkpoint_message(
+                        message, message_id=legacy_message_id
+                    )
+                except (OSError, ValueError, RuntimeError) as exc:
+                    control.mark_request_done(
+                        req_path, {"status": "error", "error": str(exc)}
+                    )
+                    continue
+                if message_id:
+                    control.mark_request_done(
+                        req_path,
+                        {
+                            "status": "queued",
+                            "delivery": "checkpoint_or_text_boundary",
+                            "message_id": message_id,
+                        },
+                    )
                 else:
                     control.mark_request_done(
                         req_path, {"status": "rejected", "error": "run is no longer active"}

@@ -67,7 +67,11 @@ from lingtai.adapters.posix.process_identity import (
     process_identity,
     process_identity_matches,
 )
-from .run_dir import DaemonRunDir
+from .run_dir import (
+    DaemonRunDir,
+    MAX_PARENT_MESSAGE_CHARS,
+    NATIVE_PARENT_MESSAGE_PROTOCOL,
+)
 from . import dispatch_ledger
 from .system_prompt import (
     DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
@@ -4352,34 +4356,34 @@ class DaemonManager:
                             # Recovery tool calls must complete before the
                             # buffered follow-up is drained or sent.
                             continue
-                    # Shell events are delivered only after the provider has
-                    # returned a text-only response, so the canonical interface
-                    # has no pending assistant tool-call pair. Drain only events
-                    # already durable now; never wait, auto-poll, or keep a
-                    # terminal daemon alive for a future Shell completion.
+                    # At each legal text-only boundary, Shell events retain
+                    # priority over parent messages. After a bounded follow-up
+                    # receives another text-only response, cross this boundary
+                    # again so a durable legacy/current tail cannot be stranded
+                    # by the terminal transition. Never wait for future input.
                     while not response.tool_calls:
-                        shell_event_response = _deliver_one_shell_prompt_event()
-                        if shell_event_response is None:
-                            break
-                        response = shell_event_response
-                        turns += 1
-                        run_dir.bump_turn(
-                            turn=turns + 1, response_text=response.text or ""
-                        )
-                        response = _recover_empty_response(
-                            response, in_tool_loop=False
-                        )
-                        if response is None:
+                        if cancel_event.is_set():
                             return _mark_cancelled_or_timeout(run_dir, timeout_event)
-                        recovery_tool_batch_pending = bool(response.tool_calls)
-                    if response.tool_calls:
-                        # A model-chosen poll (or any other tool) must complete
-                        # through the ordinary loop before another event/followup
-                        # can be inserted.
-                        continue
+                        shell_event_response = _deliver_one_shell_prompt_event()
+                        if shell_event_response is not None:
+                            response = shell_event_response
+                            turns += 1
+                            run_dir.bump_turn(
+                                turn=turns + 1, response_text=response.text or ""
+                            )
+                            response = _recover_empty_response(
+                                response, in_tool_loop=False
+                            )
+                            if response is None:
+                                return _mark_cancelled_or_timeout(
+                                    run_dir, timeout_event
+                                )
+                            recovery_tool_batch_pending = bool(response.tool_calls)
+                            continue
 
-                    followup = self._drain_followup(em_id)
-                    if followup:
+                        followup = self._drain_followup(em_id)
+                        if not followup:
+                            break
                         # A buffered follow-up is a new daemon request turn;
                         # reset only the empty-response recovery budget, not
                         # the normal tool-loop turn counter.
@@ -4390,10 +4394,19 @@ class DaemonManager:
                         daemon_meta_state.note_response(response, session)
                         _accum(response)
                         turns += 1
-                        run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
-                        response = _recover_empty_response(response, in_tool_loop=False)
+                        run_dir.bump_turn(
+                            turn=turns + 1, response_text=response.text or ""
+                        )
+                        response = _recover_empty_response(
+                            response, in_tool_loop=False
+                        )
                         if response is None:
                             return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                    if response.tool_calls:
+                        # A model-chosen poll (or any other tool) must complete
+                        # through the ordinary loop before another event/followup
+                        # can be inserted.
+                        continue
 
             if response.tool_calls and turns >= effective_max_turns:
                 raise RuntimeError(
@@ -6295,6 +6308,20 @@ class DaemonManager:
         }
 
     def _handle_ask(self, em_id: str, message: str) -> dict:
+        if not isinstance(message, str) or not message.strip():
+            return {
+                "status": "error",
+                "id": em_id,
+                "message": "ask message must be a non-blank string",
+            }
+        if len(message) > MAX_PARENT_MESSAGE_CHARS:
+            return {
+                "status": "error",
+                "id": em_id,
+                "message": (
+                    f"ask message exceeds {MAX_PARENT_MESSAGE_CHARS} characters"
+                ),
+            }
         entry = self._emanations.get(em_id)
         if not entry:
             entry = self._durable_detached_entry(em_id)
@@ -6343,17 +6370,15 @@ class DaemonManager:
         return {"status": "sent", "id": em_id}
 
     def _handle_ask_detached(self, em_id: str, entry: dict, message: str) -> dict:
-        """Follow-up for a detached lingtai run: submit via the control spool.
+        """Route one validated detached follow-up without adopting execution.
 
-        The facade has no in-process ``followup_buffer``/session to write
-        into — the supervisor process owns those. This writes a durable
-        ``ask`` control request the supervisor's control-and-deadline watcher
-        thread drains (see ``lingtai.tools.daemon.supervisor_runtime``),
-        mirroring the in-process followup_buffer mechanism across the process
-        boundary.
+        A live native owner that advertised the launch-time shared-inbox
+        protocol receives direct durable admission.  An unmarked native owner
+        may be a surviving pre-upgrade supervisor, so it receives only a
+        durable legacy control-spool request and the response does not claim
+        inbox admission.  Supported active CLI runs use their mounted common
+        MCP inbox; terminal resumable CLI runs launch a separate resume owner.
         """
-        from lingtai.kernel.daemon_supervisor import control
-
         run_dir = entry.get("run_dir")
         if run_dir is None:
             return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
@@ -6370,9 +6395,42 @@ class DaemonManager:
                 pid, state.get("supervisor_start_identity")
             ):
                 return {"status": "error", "message": "detached supervisor identity is not live"}
-            control.submit_request(run_dir.path, "ask", {"message": message})
-            self._log("daemon_ask_detached", em_id=em_id, message_length=len(message))
-            return {"status": "sent", "id": em_id}
+            if state.get("native_parent_message_protocol") != NATIVE_PARENT_MESSAGE_PROTOCOL:
+                from lingtai.kernel.daemon_supervisor import control
+
+                try:
+                    control.submit_request(run_dir.path, "ask", {"message": message})
+                except (OSError, ValueError) as exc:
+                    return {"status": "error", "id": em_id, "message": str(exc)}
+                self._log(
+                    "daemon_ask_detached_legacy_control",
+                    em_id=em_id,
+                    message_length=len(message),
+                )
+                return {"status": "sent", "id": em_id}
+            try:
+                message_id = run_dir.enqueue_checkpoint_message(message)
+            except (OSError, ValueError, RuntimeError) as exc:
+                return {"status": "error", "id": em_id, "message": str(exc)}
+            if not message_id:
+                state = self._read_run_dir_state_from_disk(run_dir)
+                return {
+                    "status": "error",
+                    "id": em_id,
+                    "message": f"not running (state={state.get('state')!r})",
+                }
+            self._log(
+                "daemon_ask_detached_queued",
+                em_id=em_id,
+                message_id=message_id,
+                message_length=len(message),
+            )
+            return {
+                "status": "queued",
+                "id": em_id,
+                "delivery": "checkpoint_or_text_boundary",
+                "message_id": message_id,
+            }
         if spec is None:
             return {"status": "error", "id": em_id,
                     "message": f"unknown backend {backend!r}"}
@@ -6381,7 +6439,7 @@ class DaemonManager:
             if _cli_backend_loads_common_mcp(backend):
                 try:
                     message_id = run_dir.enqueue_checkpoint_message(message)
-                except (ValueError, RuntimeError) as exc:
+                except (OSError, ValueError, RuntimeError) as exc:
                     return {"status": "error", "id": em_id, "message": str(exc)}
                 if message_id:
                     self._log(
@@ -8945,6 +9003,25 @@ class DaemonManager:
             "last_output": state.get("last_output"),
             "last_output_at": state.get("last_output_at"),
             "latest_checkpoint": state.get("latest_checkpoint"),
+            "pending_message_ids": [
+                item["id"]
+                for item in (
+                    state.get("pending_checkpoint_messages")
+                    if isinstance(state.get("pending_checkpoint_messages"), list)
+                    else []
+                )
+                if isinstance(item, dict)
+                and isinstance(item.get("id"), str)
+                and item.get("id")
+            ],
+            "delivered_message_ids": state.get("delivered_message_ids", []),
+            "delivered_messages_total": state.get("delivered_messages_total", 0),
+            "last_message_delivery": state.get("last_message_delivery"),
+            "pending_followups": len(
+                state.get("pending_followups")
+                if isinstance(state.get("pending_followups"), list)
+                else []
+            ),
             "pending_checkpoint_messages": len(
                 state.get("pending_checkpoint_messages")
                 if isinstance(state.get("pending_checkpoint_messages"), list)

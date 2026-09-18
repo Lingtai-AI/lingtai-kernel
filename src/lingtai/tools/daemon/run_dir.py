@@ -29,8 +29,10 @@ from lingtai.kernel.token_ledger import (
 from . import dispatch_ledger
 
 
-_MAX_CHECKPOINT_MESSAGE_CHARS = 50_000
-_MAX_PENDING_CHECKPOINT_MESSAGES = 20
+MAX_PARENT_MESSAGE_CHARS = 50_000
+PARENT_MESSAGE_INBOX_CAP = 20
+NATIVE_PARENT_MESSAGE_PROTOCOL = "shared-inbox-v1"
+_MAX_DELIVERED_MESSAGE_IDS = 128
 
 
 @contextmanager
@@ -223,6 +225,9 @@ class DaemonRunDir:
             "checkpoint_sequence": 0,
             "latest_checkpoint": None,
             "pending_checkpoint_messages": [],
+            "delivered_message_ids": [],
+            "delivered_messages_total": 0,
+            "last_message_delivery": None,
             "child_pid": None,
             "child_pgid": None,
             "child_start_identity": None,
@@ -685,15 +690,14 @@ class DaemonRunDir:
             return True
 
     def drain_followups(self) -> str | None:
-        """Atomically consume queued follow-ups at a safe text-only boundary."""
-        with self._state_transaction():
-            queue = self._state.get("pending_followups")
-            if not isinstance(queue, list) or not queue:
-                return None
-            messages = [item for item in queue if isinstance(item, str) and item]
-            self._state["pending_followups"] = []
-            self._persist_daemon_state()
-        return "\n\n".join(messages) or None
+        """Atomically deliver queued parent messages at a safe text boundary.
+
+        New messages use the same ID-bearing inbox as daemon_common checkpoints.
+        Legacy ``pending_followups`` strings are assigned IDs while draining so a
+        pre-upgrade live run also leaves unambiguous delivery evidence.
+        """
+        messages = self.drain_parent_messages(via="native_text_boundary")
+        return "\n\n".join(item["message"] for item in messages) or None
 
     def enqueue_shell_prompt_event(
         self, *, kind: str, ref_id: str, job_id: str,
@@ -806,14 +810,151 @@ class DaemonRunDir:
             self.heartbeat_path.touch()
             return [dict(event) for event in events]
 
-    def enqueue_checkpoint_message(self, message: str) -> str | None:
-        """Queue one ID-bound parent message for the worker's next checkpoint."""
+    def _claim_parent_messages_locked(self) -> list[dict]:
+        """Claim one bounded batch from legacy and current queues under lock.
+
+        Pre-checkpoint ``pending_followups`` had neither a row cap nor a message
+        size cap.  Migrate only what this delivery can safely expose, split an
+        oversized legacy row into bounded chunks, and leave the unclaimed tail
+        durable for a later checkpoint/text boundary.  Current inbox rows are
+        already admission-bounded; the defensive split below also keeps a
+        manually written or corrupt oversized row from escaping that bound.
+        """
+        messages: list[dict] = []
+        legacy = self._state.get("pending_followups")
+        legacy_rows = legacy if isinstance(legacy, list) else []
+        remaining_legacy: list = []
+        for index, item in enumerate(legacy_rows):
+            if len(messages) >= PARENT_MESSAGE_INBOX_CAP:
+                remaining_legacy.extend(legacy_rows[index:])
+                break
+            if not isinstance(item, str) or not item:
+                continue
+            remainder = item
+            while remainder and len(messages) < PARENT_MESSAGE_INBOX_CAP:
+                messages.append({
+                    "id": f"legacy-msg-{secrets.token_hex(8)}",
+                    "message": remainder[:MAX_PARENT_MESSAGE_CHARS],
+                })
+                remainder = remainder[MAX_PARENT_MESSAGE_CHARS:]
+            if remainder:
+                remaining_legacy.append(remainder)
+                remaining_legacy.extend(legacy_rows[index + 1:])
+                break
+        self._state["pending_followups"] = remaining_legacy
+
+        queue = self._state.get("pending_checkpoint_messages")
+        current_rows = queue if isinstance(queue, list) else []
+        remaining_current: list = []
+        seen_ids = {item["id"] for item in messages}
+        for index, item in enumerate(current_rows):
+            if len(messages) >= PARENT_MESSAGE_INBOX_CAP:
+                remaining_current.extend(current_rows[index:])
+                break
+            if not (
+                isinstance(item, dict)
+                and isinstance(item.get("id"), str)
+                and item.get("id")
+                and item.get("id") not in seen_ids
+                and isinstance(item.get("message"), str)
+                and item.get("message")
+            ):
+                continue
+            message = item["message"]
+            message_id = item["id"]
+            while message and len(messages) < PARENT_MESSAGE_INBOX_CAP:
+                messages.append({
+                    "id": message_id,
+                    "message": message[:MAX_PARENT_MESSAGE_CHARS],
+                })
+                seen_ids.add(message_id)
+                message = message[MAX_PARENT_MESSAGE_CHARS:]
+                if message:
+                    message_id = f"legacy-msg-{secrets.token_hex(8)}"
+            if message:
+                remaining_current.append({
+                    "id": message_id,
+                    "message": message,
+                    "queued_at": item.get("queued_at") or self._now_iso(),
+                })
+                remaining_current.extend(current_rows[index + 1:])
+                break
+        self._state["pending_checkpoint_messages"] = remaining_current
+        return messages
+
+    def _record_parent_message_delivery_locked(
+        self, messages: list[dict], *, via: str, at: str,
+    ) -> None:
+        """Commit bounded delivery evidence after queues were claimed under lock."""
+        message_ids = [item["id"] for item in messages]
+        if not message_ids:
+            return
+        delivered = self._state.get("delivered_message_ids")
+        if not isinstance(delivered, list):
+            delivered = []
+        delivered = [item for item in delivered if isinstance(item, str) and item]
+        delivered.extend(message_ids)
+        self._state["delivered_message_ids"] = delivered[-_MAX_DELIVERED_MESSAGE_IDS:]
+        delivered_total = self._state.get("delivered_messages_total", 0)
+        if not isinstance(delivered_total, int) or isinstance(delivered_total, bool):
+            delivered_total = 0
+        self._state["delivered_messages_total"] = delivered_total + len(message_ids)
+        self._state["last_message_delivery"] = {
+            "at": at,
+            "via": via,
+            "message_ids": message_ids,
+        }
+
+    def drain_parent_messages(self, *, via: str) -> list[dict]:
+        """Atomically drain parent messages for a non-checkpoint model boundary."""
+        if via != "native_text_boundary":
+            raise ValueError("parent message delivery via must be native_text_boundary")
+        with self._state_transaction():
+            if self._state.get("state") not in {"running", "active"}:
+                return []
+            messages = self._claim_parent_messages_locked()
+            if not messages:
+                return []
+            at = self._now_iso()
+            self._record_parent_message_delivery_locked(messages, via=via, at=at)
+            self._persist_daemon_state()
+        event = {
+            "event": "daemon_parent_messages_delivered",
+            "ts": at,
+            "via": via,
+            "message_ids": [item["id"] for item in messages],
+        }
+        self._safe(
+            "parent_message_delivery_event",
+            lambda: self._append_jsonl(self.events_path, event),
+        )
+        self._safe("parent_message_delivery_heartbeat", self.heartbeat_path.touch)
+        return [dict(item) for item in messages]
+
+    def enqueue_checkpoint_message(
+        self, message: str, *, message_id: str | None = None,
+    ) -> str | None:
+        """Durably admit one ID-bound parent message.
+
+        ``message_id`` is reserved for legacy control-spool recovery. Reusing a
+        pending or recently delivered ID is idempotent, so a supervisor crash
+        between inbox persistence and its ``.done`` receipt cannot duplicate a
+        control.
+        """
         if not isinstance(message, str) or not message.strip():
             return None
-        if len(message) > _MAX_CHECKPOINT_MESSAGE_CHARS:
+        if len(message) > MAX_PARENT_MESSAGE_CHARS:
             raise ValueError(
-                f"checkpoint message exceeds {_MAX_CHECKPOINT_MESSAGE_CHARS} characters"
+                f"checkpoint message exceeds {MAX_PARENT_MESSAGE_CHARS} characters"
             )
+        if message_id is None:
+            message_id = f"msg-{secrets.token_hex(8)}"
+        elif (
+            not isinstance(message_id, str)
+            or not message_id.startswith("msg-")
+            or len(message_id) > 128
+        ):
+            raise ValueError("checkpoint message_id must be a bounded msg-* string")
         from lingtai.kernel.daemon_supervisor.manifest import redact_durable_value
 
         safe_message = self._durable_value(
@@ -822,13 +963,20 @@ class DaemonRunDir:
         with self._state_transaction():
             if self._state.get("state") not in {"running", "active"}:
                 return None
+            delivered = self._state.get("delivered_message_ids")
+            if isinstance(delivered, list) and message_id in delivered:
+                return message_id
             queue = self._state.get("pending_checkpoint_messages")
             if not isinstance(queue, list):
                 queue = []
                 self._state["pending_checkpoint_messages"] = queue
-            if len(queue) >= _MAX_PENDING_CHECKPOINT_MESSAGES:
+            if any(
+                isinstance(item, dict) and item.get("id") == message_id
+                for item in queue
+            ):
+                return message_id
+            if len(queue) >= PARENT_MESSAGE_INBOX_CAP:
                 raise RuntimeError("checkpoint message inbox is full")
-            message_id = f"msg-{secrets.token_hex(8)}"
             queue.append({
                 "id": message_id,
                 "message": safe_message,
@@ -851,25 +999,19 @@ class DaemonRunDir:
                 )
             raw_sequence = self._state.get("checkpoint_sequence", 0)
             sequence = raw_sequence + 1 if isinstance(raw_sequence, int) else 1
-            queue = self._state.get("pending_checkpoint_messages")
-            valid_messages = [
-                {"id": item["id"], "message": item["message"]}
-                for item in (queue if isinstance(queue, list) else [])
-                if isinstance(item, dict)
-                and isinstance(item.get("id"), str)
-                and item.get("id")
-                and isinstance(item.get("message"), str)
-                and item.get("message")
-            ]
+            at = self._now_iso()
+            valid_messages = self._claim_parent_messages_locked()
             checkpoint = {
                 "sequence": sequence,
-                "at": self._now_iso(),
+                "at": at,
                 **safe_payload,
                 "delivered_message_ids": [item["id"] for item in valid_messages],
             }
             self._state["checkpoint_sequence"] = sequence
             self._state["latest_checkpoint"] = checkpoint
-            self._state["pending_checkpoint_messages"] = []
+            self._record_parent_message_delivery_locked(
+                valid_messages, via="checkpoint", at=at
+            )
             self._persist_daemon_state()
             recorded = {"checkpoint": checkpoint, "messages": valid_messages}
             try:
