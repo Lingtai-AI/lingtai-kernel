@@ -97,8 +97,8 @@ handler I/O. The child canonical name equals the public action value equals the
 dispatch key — there is no mapping layer.
 
 `action` has no default — it is required both by the schema and at runtime,
-matching the established action-tool convention already used by `knowledge`,
-`mcp`, `skills`, `notification`, `system`, and `daemon`. Omitting
+matching the established action-family convention used by current public
+roots such as `mcp`, `notification`, `system`, and `daemon`. Omitting
 `action` fails deterministically with avatar's own pinned unknown-action
 envelope; it never falls through to `spawn`.
 

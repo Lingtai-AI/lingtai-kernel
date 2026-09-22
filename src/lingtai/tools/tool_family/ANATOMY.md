@@ -25,6 +25,7 @@ related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/_tool_family.py
   - src/lingtai/tools/context/ANATOMY.md
+  - src/lingtai/tools/task_card/ANATOMY.md
   - src/lingtai/tools/pad/ANATOMY.md
   - src/lingtai/tools/lingtai/ANATOMY.md
   - src/lingtai/tools/tool_family/glossary-en.md
@@ -121,7 +122,8 @@ provider wire. See `CONTRACT.md` "Diagnostics sidecar" for the full rules and
   strict-empty input literal it registers is exported as `MANUAL_INPUT_SCHEMA`
   so a family composing a schema-only `ToolFamily` alongside its dispatching
   one reuses the same object instead of hand-copying it and drifting (`mcp`,
-  `knowledge`, `vision`, and `system` all do; `manual.py:1-89`) — and a
+  `vision`, `system`, `psyche`, `plugin`, `email`, `context`, `notification`,
+  `task_card`, `daemon`, `shell`, and `avatar` all do; `manual.py:1-89`) — and a
   family supplying its own `manual` child entirely, like `avatar`, can
   reference it the same way instead of restating the literal. `web` predates
   the export and still declares its own local `_MANUAL_INPUT_SCHEMA`, which
@@ -131,7 +133,15 @@ provider wire. See `CONTRACT.md` "Diagnostics sidecar" for the full rules and
 
 ## Connections
 
-`web_search/__init__.py` is the first real consumer: `get_schema()` composes
+The current direct production consumers are `web_search`, `mcp`, `vision`,
+`avatar`, retained `bash` (`shell`), `notification`, `system`, `daemon`,
+`context`, `plugin`, `psyche`, `email`, and `task_card` (see their package
+builders and the corresponding paired anatomies listed above). The private
+`knowledge` and `skills` capabilities are not consumers: their lifecycle
+composers remain private, and their read-only manuals are reached through
+`psyche`.
+
+`web_search/__init__.py` is a production consumer: `get_schema()` composes
 the model-facing schema from a module-level schema-only `ToolFamily`, and each
 `WebManager` instance builds its own per-instance `ToolFamily` with handlers
 bound to that instance — search/browse close over instance state;
@@ -172,21 +182,8 @@ the missing-action empty-string default and unhashable `action` values that
 generic dispatcher's canonical error shape is never changed to accommodate a
 consumer.
 
-`knowledge/__init__.py` is the third real consumer
-(`src/lingtai/tools/knowledge/ANATOMY.md`): one `_build_family(agent | None)`
-is the single builder — `_FAMILY = _build_family(None)` backs `get_schema()`
-with non-dispatching handlers, and `_build_family(agent)` binds the
-`info`/`manual` operations named in `_CHILD_SPECS` per agent. Both children declare the canonical strict-empty
-`input_schema`, so every `input` key is a cross-branch/unknown key rejected
-before handler I/O. It registers its own `manual` child rather than
-`build_manual_child`, because knowledge's public manual result is keyed
-`knowledge_manual` — the child's canonical result is returned verbatim, so no
-Host-layer flattening is needed. Its outer `handle()` normalizes only the
-generic `ACTION_REQUIRED` envelope failure back to knowledge's exact
-pre-migration unknown-action result.
-
-`avatar/__init__.py` ([`../avatar/ANATOMY.md`](../avatar/ANATOMY.md)) is the
-sixth real consumer, and shows partial adoption is conforming: it reuses
+`avatar/__init__.py` ([`../avatar/ANATOMY.md`](../avatar/ANATOMY.md)) is a
+current consumer, and shows partial adoption is conforming: it reuses
 `ChildTool`/`ToolFamily` and the exported `MANUAL_INPUT_SCHEMA` for
 `spawn`/`settings`/`manual` schema composition and dispatch (the former
 `rules` child was removed, not relocated — see avatar CONTRACT.md
@@ -211,23 +208,7 @@ longer exists. Its module-level division (a schema-only family built at
 import, an agent-bound family built per call, `_tc_id` dropped at the Host
 boundary) survives in the remaining intrinsic consumers below.
 
-`skills/__init__.py` ([`../skills/ANATOMY.md`](../skills/ANATOMY.md)) is the
-ninth consumer and uses the same division with no shared code beyond this
-package, and differs from `web` in declaring its child registry exactly once:
-a single `_build_family(agent, paths)` builder registers the `info` child and
-`manual.build_manual_child(agent, "skills")` directly, and both `get_schema()`
-(via an import-time `agent=None` instance whose handlers are unreachable) and
-`setup()` obtain their `ToolFamily` from it — so the advertised input schemas
-are by construction the ones dispatch registers. Both of its children declare
-the canonical strict-empty `input` schema, so `handle()`'s allowed-key check
-rejects every `input` key for either action. Its
-`handle_skills` wrapper adapts only the dispatched `manual` child result to
-the capability's public `skills_manual`/`library_manual`/`manual_path` shape
-and, unlike `web`, keeps this package's canonical envelope-failure result
-verbatim — it has no family-specific diagnostic block to stamp on.
-
-`system/__init__.py` ([`../system/ANATOMY.md`](../system/ANATOMY.md)) is the
-eleventh consumer and the third *intrinsic* one, reusing the intrinsic module-level
+`system/__init__.py` ([`../system/ANATOMY.md`](../system/ANATOMY.md)) is a current consumer and an intrinsic one, reusing the intrinsic module-level
 division verbatim: a schema-only family built at import (which is also the
 registry's collision check) behind `get_schema()`, an agent-bound family per
 `handle(agent, args)` call, `build_manual_child(agent, "system-manual")`
@@ -239,8 +220,7 @@ the most safety work — `system`'s privilege classes are per action, so an
 `input` key outside the selected child's schema is refused before any
 lifecycle handler runs.
 
-`daemon/_tool_family.py` ([`../daemon/ANATOMY.md`](../daemon/ANATOMY.md)) is the
-twelfth consumer and repeats `shell`'s structural division rather than `web`'s:
+`daemon/_tool_family.py` ([`../daemon/ANATOMY.md`](../daemon/ANATOMY.md)) is a current consumer and repeats `shell`'s structural division rather than `web`'s:
 the family module is a separate file from the engine, owning the package's one
 public `get_schema`/`get_description` pair and a `DaemonFamilyDispatcher` whose
 six child handlers each flatten their own validated `input` (injecting the

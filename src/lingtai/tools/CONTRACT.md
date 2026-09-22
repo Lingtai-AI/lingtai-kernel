@@ -704,11 +704,12 @@ this contract: its final model-facing root is exactly `action`, `input`,
 `reasoning`, and `summarize`; its `search` action resolves
 `LINGTAI_WEB_ENGINE` before the action-owned `settings/web.search.json` (see
 `src/lingtai/tools/web_search/CONTRACT.md`).
-`knowledge` (`info | manual`) is the third: the migration is envelope-only —
-its public tool name and both public action values are unchanged, both children
-take the canonical strict-empty `input`, and it supports no settings file (see
-`src/lingtai/tools/knowledge/CONTRACT.md`). It remains a signpost capability
-with no authoring, search, or edit action.
+`knowledge` is not a model-facing ToolFamily. Its private capability remains
+registered as a builtin capability for setup/refresh catalog composition and
+legacy migration, but the former standalone `knowledge` root and its `info` /
+`manual` actions are retired. Read-only guidance is served by
+`psyche(action="knowledge")`; see `src/lingtai/tools/knowledge/CONTRACT.md` and
+`src/lingtai/tools/psyche/CONTRACT.md`.
 
 `mcp` (`info | settings | manual`) is the first family declared under
 `### Tool-to-MCP Plugin Contract`: the reserved settings action is the sole
@@ -803,13 +804,13 @@ interface. Its declaration opts into the generic reserved, read-only SHOW child
 immediately before `manual`; Shell owns no settings file at either LTP level
 (see `src/lingtai/tools/bash/CONTRACT.md`).
 
-`skills` (`info | manual`) is the ninth: it keeps its public tool name and both
-public action values, adopts the same closed root, declares the canonical
-strict-empty `input` object for both actions, and supports no settings file at
-all — its manual says so explicitly (see
-`src/lingtai/tools/skills/CONTRACT.md`). Family boundaries here follow the
-shared-domain rule above: `info` and `manual` are two actions of one skill-
-catalogue authority, not two related tools grouped for convenience.
+Historically, `skills` (`info | manual`) was the ninth family migrated to
+this envelope. That public surface was later retired with the Psyche
+consolidation: the `skills` package now remains only as a private catalog
+capability, registers no model-facing root or ToolFamily, and serves its
+read-only manual through `psyche(action="skills")` (see
+`src/lingtai/tools/skills/CONTRACT.md`). The old `info`/`manual` action pair is
+therefore migration history, not a current public surface.
 
 `notification` (`check | dismiss_channel | dismiss_event | dismiss_ref | add |
 drop | edit | list | delay | settings | manual`) is the tenth: its final model-facing root
@@ -994,37 +995,17 @@ than widening the shared envelope's admitted root fields.
 infrastructure implementing this envelope (schema composition from a
 `ChildTool` registry, dispatch-validation boilerplate, and a reusable
 ManualTool builder) that a family MAY adopt instead of hand-writing the
-equivalent code; `web` is its first consumer, using it for schema composition
-and dispatch while retaining its own outer `handle()` for family-specific
-diagnostics, `mcp` is its second, retaining its own outer `handle_mcp()`
-for its exact pre-migration unknown-action envelope, `knowledge` is its
-third, using it the same way with its own outer `handle()` preserving that
-family's exact pre-migration unknown-action result, the removed `file` family
-was its fourth, `vision` is its fifth, using it the same way while retaining
-its own outer `handle()` for the family's flat manual/error result shapes,
-`avatar` is its sixth, restoring its own pinned unknown-action error
-envelope the same way, the removed `soul` was its seventh (the first to
-compose `get_schema()` from a module-level schema-only family and build an
-agent-bound one per `handle(agent, args)` call because an intrinsic module
-has no per-Agent manager instance to hold one — the shape every remaining
-intrinsic family still uses), `shell` is its eighth, using it the same
-way while retaining a thin outer `handle()` that narrows the generic
-unknown-action message to its own five actions, `skills` is its ninth,
-using it the same way but returning its canonical envelope failures
-verbatim, having no such diagnostics, `notification` is its tenth, binding an
-agent-hosted family through its static declared Host ports; generic composition
-injects its reserved `settings` child immediately before `manual`, and its outer
-adapter flattens the reserved `manual` child's canonical result to the pinned
-public shape and preserves Notification's own unknown-action result, while `context`
-is its eleventh, using the intrinsic module-level composition shape while threading the
-`_tc_id` it actually consumes to its `molt` child out-of-band rather
-than widening the shared envelope. `avatar` reuses
-`ToolFamily` but not `build_manual_child`, because its manual ships inside
-its own package rather than the agent's installed `.library` catalog —
-adopting part of the infrastructure is conforming. Using it is never
-required — see its own
-`src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
-binding on it exactly as it is on every family.
+equivalent code. Current source consumers are `web`, `mcp`, `vision`, `avatar`,
+`shell` (the retained `bash` implementation), `notification`, `system`,
+`daemon`, `context`, `plugin`, `psyche`, `email`, and `task_card`. Each consumer
+owns any family-specific adapter, diagnostics, lifecycle, and manual result
+shape; the generic package does not impose a universal implementation model.
+The private `knowledge` and `skills` capabilities intentionally do not build a
+ToolFamily: their setup/reconciliation lifecycles remain private and their
+read-only manuals are routed through `psyche`. The removed `file` and `soul`
+packages are historical migration entries only and are not current consumers.
+See `src/lingtai/tools/tool_family/CONTRACT.md` for the implementation-
+independence rule.
 
 ## Contract tests
 
