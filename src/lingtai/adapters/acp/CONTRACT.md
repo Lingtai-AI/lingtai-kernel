@@ -597,8 +597,10 @@ constructs, starts, stops, or leases another Agent. It is not a Puffo profile.
 Guarded by [ACP003](BEHAVIORS.md#behavior-acp003).
 
 `lingtai-agent run --acp-socket <dir>` opts a resident POSIX Agent into a
-same-UID, local-only ACP endpoint. `LINGTAI_ACP_SOCKET=1` is equivalent and
-survives the refresh watcher's environment handoff. The read-only
+same-UID, local-only ACP endpoint. The CLI stores the canonical target directory
+in `LINGTAI_ACP_SOCKET_AGENT_DIR`, which survives the refresh watcher's
+environment handoff but enables only that directory and is removed from Avatar
+launches. The read-only
 `lingtai-agent acp-socket-path <dir>` command prints the deterministic short
 path. The endpoint lives in a user-owned `0700` directory beneath `/tmp`, and
 the socket is `0600`. A non-owned, non-socket, or active colliding path is never
@@ -633,7 +635,9 @@ Agent-stop-with-open-stdin, Windows duplicate-before-cleanup, typed quiescence,
 and CLI Python-stdout quarantine/hard-exit ownership.
 `tests/test_resident_acp_socket.py` pins owner-only short-path binding,
 same-UID admission, reconnect without Agent shutdown, collision/stale handling,
-empty-only session MCP, and read-only endpoint discovery.
+empty-only session MCP, read-only endpoint discovery, and Agent-directory-scoped
+refresh opt-in. `tests/test_avatar_launcher.py` pins stripping that marker from
+ordinary and derived Avatar launches.
 `tests/test_puffo_v0_profile.py` pins opaque-id provisioning/resolution,
 tamper/revocation rejection, full-tool composition, fixed-workspace and
 empty-session-MCP rejection, authenticated-adapter admission, profile CLI

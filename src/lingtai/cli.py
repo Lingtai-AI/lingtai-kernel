@@ -429,7 +429,10 @@ def run(working_dir: Path, *, acp_socket: bool = False) -> None:
     resident_acp = None
     try:
         agent.start()
-        if acp_socket or os.environ.get("LINGTAI_ACP_SOCKET") == "1":
+        if (
+            acp_socket
+            or os.environ.get("LINGTAI_ACP_SOCKET_AGENT_DIR") == str(working_dir.resolve())
+        ):
             from lingtai.adapters.acp.resident_socket import ResidentAcpSocket
 
             resident_acp = ResidentAcpSocket(agent, working_dir)
@@ -728,8 +731,10 @@ def main() -> None:
         if getattr(args, "verbose", False):
             os.environ["LINGTAI_VERBOSE"] = "1"
         if args.acp_socket:
-            # Refresh watcher inherits the environment, not CLI flags.
-            os.environ["LINGTAI_ACP_SOCKET"] = "1"
+            # Refresh watcher inherits the environment, not CLI flags. Bind
+            # this opt-in to one Agent directory so unrelated run children
+            # cannot enable their own endpoints by inheriting the marker.
+            os.environ["LINGTAI_ACP_SOCKET_AGENT_DIR"] = str(working_dir.resolve())
         run(working_dir, acp_socket=args.acp_socket)
     elif args.command == "acp-socket-path":
         from lingtai.adapters.acp.resident_socket import resident_acp_socket_path

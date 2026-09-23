@@ -208,13 +208,13 @@ def test_run_flag_survives_refresh_environment(tmp_path, monkeypatch):
 
     run = Mock()
     monkeypatch.setattr(cli, "run", run)
-    monkeypatch.setenv("LINGTAI_ACP_SOCKET", "0")
+    monkeypatch.setenv("LINGTAI_ACP_SOCKET_AGENT_DIR", "disabled")
     monkeypatch.setattr(sys, "argv", [
         "lingtai-agent", "run", str(tmp_path), "--acp-socket",
     ])
     cli.main()
     run.assert_called_once_with(tmp_path.resolve(), acp_socket=True)
-    assert os.environ["LINGTAI_ACP_SOCKET"] == "1"
+    assert os.environ["LINGTAI_ACP_SOCKET_AGENT_DIR"] == str(tmp_path.resolve())
 
 
 def test_run_owns_socket_inside_agent_lifetime(tmp_path, monkeypatch):
@@ -253,7 +253,7 @@ def test_run_owns_socket_inside_agent_lifetime(tmp_path, monkeypatch):
         def close(self):
             events.append("socket-close")
 
-    monkeypatch.setenv("LINGTAI_ACP_SOCKET", "0")
+    monkeypatch.delenv("LINGTAI_ACP_SOCKET_AGENT_DIR", raising=False)
     monkeypatch.setattr(cli, "_check_duplicate_process", lambda _path: None)
     monkeypatch.setattr(cli, "_clean_signal_files", lambda _path: None)
     monkeypatch.setattr(cli, "_install_signal_handlers", lambda _path, _agent: None)
@@ -264,3 +264,55 @@ def test_run_owns_socket_inside_agent_lifetime(tmp_path, monkeypatch):
 
     cli.run(tmp_path, acp_socket=True)
     assert events == ["agent-start", "socket-start", "wait", "socket-close", "agent-stop"]
+
+
+@pytest.mark.parametrize("same_agent", [False, True])
+def test_refresh_marker_only_enables_its_own_agent(tmp_path, monkeypatch, same_agent):
+    """A parent opt-in survives its refresh, never an independent child run."""
+    from lingtai import cli, venv_resolve
+    from lingtai.adapters.acp import resident_socket
+
+    parent = tmp_path / "parent"
+    child = tmp_path / "child"
+    target = parent if same_agent else child
+    target.mkdir()
+    monkeypatch.setenv("LINGTAI_ACP_SOCKET_AGENT_DIR", str(parent.resolve()))
+    events = []
+
+    class _Shutdown:
+        def wait(self):
+            events.append("wait")
+
+    class _Agent:
+        _shutdown = _Shutdown()
+        _asleep = type("_Flag", (), {"set": lambda self: None})()
+
+        def start(self):
+            events.append("agent-start")
+
+        def stop(self, timeout=10.0):
+            events.append("agent-stop")
+
+    class _Socket:
+        def __init__(self, agent, path):
+            assert path == target
+
+        def start(self):
+            events.append("socket-start")
+
+        def close(self):
+            events.append("socket-close")
+
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda _path: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda _path: None)
+    monkeypatch.setattr(cli, "_install_signal_handlers", lambda _path, _agent: None)
+    monkeypatch.setattr(cli, "load_init", lambda _path: {})
+    monkeypatch.setattr(cli, "build_agent", lambda _data, _path, **_kw: _Agent())
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda _data: target)
+    monkeypatch.setattr(resident_socket, "ResidentAcpSocket", _Socket)
+
+    cli.run(target)
+    if same_agent:
+        assert events == ["agent-start", "socket-start", "wait", "socket-close", "agent-stop"]
+    else:
+        assert events == ["agent-start", "wait", "agent-stop"]

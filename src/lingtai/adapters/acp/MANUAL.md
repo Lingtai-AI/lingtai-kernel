@@ -90,8 +90,10 @@ newline-delimited ACP v1 JSON-RPC frames shown below. Each connection owns one
 session, and the resident host admits only one connection at a time. Closing
 the client cancels its active ACP turn but leaves the LingTai Agent, its other
 ingresses, and `.agent.lock` running. A later client reconnects to the same
-host. `--acp-socket` sets `LINGTAI_ACP_SOCKET=1`, which the normal refresh
-watcher inherits so the endpoint is restored after refresh. An unsupported
+host. `--acp-socket` sets `LINGTAI_ACP_SOCKET_AGENT_DIR` to this Agent's
+canonical directory; the normal refresh watcher inherits that scoped marker
+so the endpoint is restored after refresh, while Avatar launches remove it.
+An unsupported
 platform or unsafe socket-path collision fails explicitly.
 
 This is **generic same-user local ACP**, not Puffo attach. `session/new` must
