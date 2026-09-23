@@ -626,10 +626,17 @@ The optional connection-first `puffo.attach/1` line carries exactly
 `type`, `runtime_id`, `registry`, and `launch_id`, together with exactly one
 `SCM_RIGHTS` descriptor. The line is bounded to 8192 bytes. Before ACP begins,
 the adapter resolves the runtime through the existing secure operator registry,
+whose path is fixed by the resident server's operator configuration at startup
+(`LINGTAI_PUFFO_V0_REGISTRY` or the profile default). The untrusted preface's
+`registry` must exactly match that path and cannot select a different valid
+registry, including after the authoritative runtime has been revoked. The adapter
 requires its canonical `agent_dir` to equal the resident process's directory,
 fixes ACP `session/new.cwd` to that runtime's provisioned workspace,
 consumes the descriptor as a root `DriverAuthorityClient`, and requires the
-Driver hello's `launch_id` to equal the preface. Invalid/missing descriptors,
+Driver hello's `launch_id` to equal the preface and its `runtime_id` to equal
+both the preface and resolved registry entry. The optional hello `runtime_id`
+remains optional for the older spawn profile, but is mandatory for attach.
+Invalid/missing descriptors,
 unknown/revoked/mismatched bindings, or a wrong Driver role/id produce a
 bounded `{"ok":false,"reason":"attach_rejected"}` line and close. A valid
 preface receives `{"ok":true,"kernel_version":"..."}`; the same socket then

@@ -81,11 +81,11 @@ def _wait_for_idle(transport):
 def test_attach_fd_is_connection_scoped_and_provider_decision_is_not_local(tmp_path, monkeypatch, grant):
     monkeypatch.setattr(
         "lingtai.adapters.acp.resident_socket.resolve_runtime",
-        lambda runtime_id, *, registry_path: SimpleNamespace(agent_dir=tmp_path, workspace=tmp_path),
+        lambda runtime_id, *, registry_path: SimpleNamespace(runtime_id=runtime_id, agent_dir=tmp_path, workspace=tmp_path),
     )
     (tmp_path / "registry.json").touch()
     agent = _Agent()
-    transport = ResidentAcpSocket(agent, tmp_path)
+    transport = ResidentAcpSocket(agent, tmp_path, registry_path=tmp_path / "registry.json")
     transport.start()
     authority_end, driver_end = socket.socketpair()
     decisions = []
@@ -102,7 +102,7 @@ def test_attach_fd_is_connection_scoped_and_provider_decision_is_not_local(tmp_p
             decisions.append(request)
             response = {"version": 1, "call_id": request["call_id"]}
             if expected_op == "hello":
-                response.update(role="root", launch_id="attach-launch", capability=None)
+                response.update(role="root", launch_id="attach-launch", capability=None, runtime_id="runtime-1")
             else:
                 response.update(state="granted" if grant else "denied", reason_code="allowed" if grant else "endpoint_binding_mismatch")
             encoded = json.dumps(response).encode()
@@ -152,10 +152,10 @@ def test_attach_fd_is_connection_scoped_and_provider_decision_is_not_local(tmp_p
 def test_attach_without_authority_fd_is_rejected_before_acp(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(
         "lingtai.adapters.acp.resident_socket.resolve_runtime",
-        lambda runtime_id, *, registry_path: SimpleNamespace(agent_dir=tmp_path, workspace=tmp_path),
+        lambda runtime_id, *, registry_path: SimpleNamespace(runtime_id=runtime_id, agent_dir=tmp_path, workspace=tmp_path),
     )
     agent = _Agent()
-    transport = ResidentAcpSocket(agent, tmp_path)
+    transport = ResidentAcpSocket(agent, tmp_path, registry_path=tmp_path / "registry.json")
     transport.start()
     client, reader, writer = _connect(transport.path)
     try:
@@ -186,7 +186,7 @@ def test_attach_rejects_registry_identity_mismatch_and_closes_received_fd(tmp_pa
     other.mkdir()
     monkeypatch.setattr(
         "lingtai.adapters.acp.resident_socket.resolve_runtime",
-        lambda runtime_id, *, registry_path: SimpleNamespace(agent_dir=other, workspace=tmp_path),
+        lambda runtime_id, *, registry_path: SimpleNamespace(runtime_id=runtime_id, agent_dir=other, workspace=tmp_path),
     )
     received, driver = socket.socketpair()
     fd = received.detach()
@@ -196,7 +196,7 @@ def test_attach_rejects_registry_identity_mismatch_and_closes_received_fd(tmp_pa
     }).encode() + b"\n"
     try:
         with pytest.raises(ValueError, match="runtime_agent_mismatch"):
-            _attach_authority(frame, [fd], tmp_path)
+            _attach_authority(frame, [fd], tmp_path, registry_path=registry)
         driver.settimeout(2)
         assert driver.recv(1) == b""
     finally:
@@ -204,14 +204,59 @@ def test_attach_rejects_registry_identity_mismatch_and_closes_received_fd(tmp_pa
 
 
 @pytest.mark.skipif(os.name != "posix", reason="SCM_RIGHTS attach requires POSIX")
-def test_attach_rejects_driver_hello_launch_id_mismatch(tmp_path, monkeypatch):
+def test_attach_cannot_replace_revoked_operator_registry_with_active_secondary(tmp_path):
+    from lingtai.adapters.acp.puffo_v0 import (
+        PuffoV0RegistryError, provision_runtime, revoke_runtime,
+    )
+    from lingtai.adapters.acp.resident_socket import _attach_authority
+
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "init.json").write_text("{}", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    official = tmp_path / "official.json"
+    secondary = tmp_path / "secondary.json"
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=official)
+    provision_runtime("runtime-a", agent_dir, workspace, registry_path=secondary)
+    revoke_runtime("runtime-a", registry_path=official)
+
+    for named_registry, expected_error in (
+        (secondary, "runtime_registry_mismatch"),
+        (official, "revoked"),
+    ):
+        received, driver = socket.socketpair()
+        fd = received.detach()
+        frame = json.dumps({
+            "type": "puffo.attach/1", "runtime_id": "runtime-a",
+            "registry": str(named_registry), "launch_id": "attach-launch",
+        }).encode() + b"\n"
+        try:
+            error_type = ValueError if named_registry == secondary else PuffoV0RegistryError
+            with pytest.raises(error_type, match=expected_error):
+                _attach_authority(frame, [fd], agent_dir, registry_path=official)
+            driver.settimeout(2)
+            assert driver.recv(1) == b""
+        finally:
+            driver.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SCM_RIGHTS attach requires POSIX")
+@pytest.mark.parametrize("driver_launch_id,driver_runtime_id", [
+    ("another-launch", "runtime-1"),
+    ("attach-launch", None),
+    ("attach-launch", "runtime-other"),
+])
+def test_attach_rejects_driver_hello_binding_mismatch(
+    tmp_path, monkeypatch, driver_launch_id, driver_runtime_id,
+):
     from lingtai.adapters.acp.resident_socket import _attach_authority
 
     registry = tmp_path / "registry.json"
     registry.touch()
     monkeypatch.setattr(
         "lingtai.adapters.acp.resident_socket.resolve_runtime",
-        lambda runtime_id, *, registry_path: SimpleNamespace(agent_dir=tmp_path, workspace=tmp_path),
+        lambda runtime_id, *, registry_path: SimpleNamespace(runtime_id=runtime_id, agent_dir=tmp_path, workspace=tmp_path),
     )
     received, driver = socket.socketpair()
     fd = received.detach()
@@ -221,8 +266,10 @@ def test_attach_rejects_driver_hello_launch_id_mismatch(tmp_path, monkeypatch):
         request = json.loads(driver.recv(size))
         response = {
             "version": 1, "call_id": request["call_id"], "role": "root",
-            "launch_id": "another-launch", "capability": None,
+            "launch_id": driver_launch_id, "capability": None,
         }
+        if driver_runtime_id is not None:
+            response["runtime_id"] = driver_runtime_id
         body = json.dumps(response).encode()
         driver.sendall(struct.pack("!I", len(body)) + body)
 
@@ -234,7 +281,7 @@ def test_attach_rejects_driver_hello_launch_id_mismatch(tmp_path, monkeypatch):
     }).encode() + b"\n"
     try:
         with pytest.raises(ValueError, match="authority_binding_mismatch"):
-            _attach_authority(frame, [fd], tmp_path)
+            _attach_authority(frame, [fd], tmp_path, registry_path=registry)
         worker.join(2)
         assert not worker.is_alive()
         driver.settimeout(2)

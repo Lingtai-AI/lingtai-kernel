@@ -109,9 +109,14 @@ After connecting to the same socket, send one UTF-8 newline JSON frame of
 the exact shape
 `{"type":"puffo.attach/1","runtime_id":"...","registry":"/absolute/...","launch_id":"..."}`
 with exactly one `SCM_RIGHTS` FD from the Puffo Driver root authority endpoint.
-The runtime must already be provisioned in that registry for this running
-Agent directory; `session/new.cwd` must equal its provisioned workspace, and
-the endpoint's Driver hello must name the same launch id.
+The `registry` path must exactly equal the resident server's operator registry
+(`LINGTAI_PUFFO_V0_REGISTRY` at server start, or the profile default); the
+client cannot select another registry. The runtime must already be provisioned
+there for this running Agent directory; `session/new.cwd` must equal its
+provisioned workspace. The endpoint's Driver hello must name both the same
+launch id and the same runtime id. A Driver root FD issued without a runtime
+binding is rejected on this attach path, though older spawn paths can still
+use such endpoints.
 Wait for `{"ok":true,"kernel_version":"..."}`; rejection returns
 `{"ok":false,"reason":"attach_rejected"}` and closes. Only after success send
 the ordinary ACP `initialize`, then `session/new` and prompts over that same

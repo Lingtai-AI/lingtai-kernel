@@ -22,7 +22,11 @@ from lingtai.adapters.acp.driver_authority import (
     DriverAuthorityClient,
     DriverDerivedLaunchAdmissionAdapter,
 )
-from lingtai.adapters.acp.puffo_v0 import PuffoV0RegistryError, resolve_runtime
+from lingtai.adapters.acp.puffo_v0 import (
+    PuffoV0RegistryError,
+    default_registry_path,
+    resolve_runtime,
+)
 from lingtai.adapters.acp.server import AcpStdioServer
 from lingtai.kernel.execution_workspace import ExecutionWorkspace
 from lingtai.kernel.provider_admission import ConnectionScopedProviderAdmissionPort
@@ -36,6 +40,7 @@ _ATTACH_REJECTION_CODES = frozenset({
     "authority_fd_missing",
     "authority_fd_count_invalid",
     "runtime_registry_unavailable",
+    "runtime_registry_mismatch",
     "runtime_agent_mismatch",
     "authority_binding_mismatch",
     "attach_frame_too_large",
@@ -112,7 +117,9 @@ def _first_frame(client: socket.socket) -> tuple[bytes, bytes, list[int]]:
             pass
 
 
-def _attach_authority(frame: bytes, fds: list[int], agent_dir: Path):
+def _attach_authority(
+    frame: bytes, fds: list[int], agent_dir: Path, *, registry_path: Path
+):
     """Resolve durable identity and consume exactly one connection authority."""
     authority = None
     try:
@@ -131,7 +138,8 @@ def _attach_authority(frame: bytes, fds: list[int], agent_dir: Path):
             raise ValueError("authority_fd_missing")
         if len(fds) != 1:
             raise ValueError("authority_fd_count_invalid")
-        registry_path = Path(payload["registry"])
+        if Path(payload["registry"]) != registry_path:
+            raise ValueError("runtime_registry_mismatch")
         if not registry_path.is_file():
             raise ValueError("runtime_registry_unavailable")
         runtime = resolve_runtime(payload["runtime_id"], registry_path=registry_path)
@@ -142,6 +150,7 @@ def _attach_authority(frame: bytes, fds: list[int], agent_dir: Path):
         if (
             authority.identity.role != "root"
             or authority.identity.launch_id != payload["launch_id"]
+            or authority.identity.runtime_id != runtime.runtime_id
         ):
             raise ValueError("authority_binding_mismatch")
         return authority, ExecutionWorkspace(runtime.workspace)
@@ -166,9 +175,14 @@ def resident_acp_socket_path(agent_dir: Path) -> Path:
 class ResidentAcpSocket:
     """Serve one local ACP session at a time without owning Agent lifecycle."""
 
-    def __init__(self, agent, agent_dir: Path):
+    def __init__(
+        self, agent, agent_dir: Path, *, registry_path: Path | None = None
+    ):
         self._agent = agent
         self._agent_dir = agent_dir.resolve()
+        # This is operator configuration, captured before accepting clients.
+        # The untrusted attach preface may name it but cannot choose it.
+        self._registry_path = registry_path or default_registry_path()
         self.path = resident_acp_socket_path(agent_dir)
         self._closed = threading.Event()
         self._lock = threading.Lock()
@@ -313,7 +327,8 @@ class ResidentAcpSocket:
                             os.close(fd)
                         raise ValueError("resident_provider_gate_unavailable")
                     authority, fixed_workspace = _attach_authority(
-                        first, fds, self._agent_dir
+                        first, fds, self._agent_dir,
+                        registry_path=self._registry_path,
                     )
                 except Exception as exc:
                     _log.warning("resident ACP attach rejected: %s", _attach_rejection_code(exc))
