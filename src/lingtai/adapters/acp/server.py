@@ -682,7 +682,10 @@ class AcpStdioServer:
         lease = None
         try:
             try:
-                lease = self._agent.mount_session_mcp_stdio(configs) if configs else None
+                if configs and self._connection_provider_port is not None:
+                    lease = self._agent.open_connection_mcp_stdio(configs)
+                else:
+                    lease = self._agent.mount_session_mcp_stdio(configs) if configs else None
             except ValueError as exc:
                 raise _RpcError(INVALID_PARAMS, str(exc)) from exc
             except Exception as exc:
@@ -810,6 +813,7 @@ class AcpStdioServer:
                     connection_options = {
                         "connection_provider_port": self._connection_provider_port,
                         "connection_derived_port": self._connection_derived_port,
+                        "connection_tool_overlay": self._session_mcp_lease,
                     }
                 handle = self._agent.submit_turn(
                     content,

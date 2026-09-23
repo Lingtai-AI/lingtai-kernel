@@ -87,6 +87,7 @@ class _TurnControl:
     permission_broker: TurnPermissionBroker | None = None
     connection_provider_port: object | None = None
     connection_derived_port: object | None = None
+    connection_tool_overlay: object | None = None
     cancel_requested: threading.Event = field(default_factory=threading.Event)
     future: Future[TurnResult] = field(default_factory=Future)
     cancel_callback: Callable[[str], bool] | None = None
@@ -208,6 +209,7 @@ def submit_turn(
     origin: TurnOrigin = TurnOrigin.LEGACY,
     connection_provider_port=None,
     connection_derived_port=None,
+    connection_tool_overlay=None,
 ) -> TurnHandle:
     """Queue one text turn and return its correlated terminal handle."""
 
@@ -236,6 +238,12 @@ def submit_turn(
         or not callable(getattr(connection_derived_port, "authorize_derived_launch", None))
     ):
         raise TypeError("connection admission ports are invalid")
+    if connection_tool_overlay is not None and (
+        connection_provider_port is None
+        or connection_tool_overlay.owner is not agent
+        or connection_tool_overlay.closed
+    ):
+        raise ValueError("connection tool overlay requires live connection authority")
 
     shutdown = getattr(agent, "_shutdown", None)
     if shutdown is not None and shutdown.is_set():
@@ -258,6 +266,7 @@ def submit_turn(
         permission_broker=permission_broker,
         connection_provider_port=connection_provider_port,
         connection_derived_port=connection_derived_port,
+        connection_tool_overlay=connection_tool_overlay,
     )
     control.cancel_callback = lambda requested_id: cancel_turn(agent, requested_id)
     with lock:

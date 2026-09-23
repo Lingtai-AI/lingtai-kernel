@@ -14,6 +14,7 @@ related_files:
   - src/lingtai/cli_acp.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/turn_tool_overlay.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
@@ -51,12 +52,14 @@ maintenance: |
 1. Run `python -m pytest -q -x tests/test_resident_acp_socket.py tests/test_provider_admission.py`.
 2. Confirm the attach first frame carries one Driver FD, registry identity matches the running directory, and the Driver hello launch id matches the first frame before any ACP request is accepted.
 3. Confirm a granted connection Port permits a provider call and records that Port's decision; a denied or missing connection Port prevents the underlying provider call despite the resident local path remaining permissive.
-4. Confirm a missing descriptor rejects before ACP and connection close does not stop the Agent.
+4. Confirm a valid fixed Puffo Core descriptor creates only a connection-owned MCP view, and an attached correlated turn sees its tools while ordinary ingress does not. Invalid non-empty descriptors, duplicate/colliding catalogs, and a closed lease fail closed.
+5. Confirm a missing descriptor rejects before ACP and connection close does not stop the Agent or leave an MCP child open.
 
 ### Expected evidence
 - [ ] Both focused files pass and no external provider is called.
 - [ ] Attached turns never use the resident local grant in place of connection authority.
-- [ ] Session MCP remains empty-only; this is not a production Puffo-v1 connector.
+- [ ] Generic resident ACP remains empty-MCP only; attached non-empty MCP is fixed to Puffo Core and remains turn-local.
+- [ ] No production claim until real Agent/model and Puffo Core cross-repository acceptance.
 
 ### Pass / Fail
 Pass only if the connection owns the admission Port and deny prevents provider

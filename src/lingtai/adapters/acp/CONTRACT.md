@@ -18,6 +18,7 @@ related_files:
   - src/lingtai/cli.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/turn_tool_overlay.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
@@ -608,8 +609,9 @@ unlinked; a stale refused socket may be replaced only after inode recheck.
 
 Only one client/session is admitted at a time. The server checks peer UID before
 reading ACP frames; a second or unverified client is closed. Each connection
-receives the existing ACP v1 one-session state machine, but session MCP is
-empty-only because the current Agent tool overlay is process-global. Disconnect,
+receives the existing ACP v1 one-session state machine. Generic local clients
+remain empty-MCP only; authenticated attaches may provide the fixed Puffo Core
+stdio descriptor described below. Disconnect,
 cancel, shutdown, and refresh close only the connection/endpoint; they do not
 call `Agent.stop()` or release `.agent.lock` independently. The `run` host alone
 retains ordinary lifecycle ownership and removes only the socket inode it
@@ -617,8 +619,7 @@ created. Unsupported platforms fail explicitly when opted in.
 
 Without an attach preface this remains generic local ACP and has no Puffo
 authority. An explicit attach preface is governed separately below; same UID
-alone is not proof of Puffo Driver identity. Session MCP remains empty-only, so
-the endpoint is not yet a complete Puffo production connector.
+alone is not proof of Puffo Driver identity.
 
 ## Puffo resident attach
 
@@ -649,9 +650,17 @@ binds both Ports to its run-loop context; the resident provider-service wrapper
 asks the connection Port before **each** attached provider call. A missing,
 denied, malformed, or disconnected connection authority cannot reach provider
 I/O. Ordinary local ingress retains its existing behavior. Disconnect closes
-the authority and ACP session, not the Agent or workdir lease. Session MCP is
-still empty-only because the shared tool table cannot safely host a concurrent
-session overlay; attach is therefore not a production Puffo-v1 replacement yet.
+the authority and ACP session, not the Agent or workdir lease. Attach accepts
+`mcpServers: []` for transport tests or exactly the Puffo-v1 fixed Core stdio
+descriptor (name `puffo`, exact module arguments, non-empty local-service token).
+The latter starts a connection-owned MCP lease whose catalog is bound only to
+that connection's correlated turns: it never publishes handlers or schemas to
+the resident Agent's global tool table. A later global name collision fails
+the attached turn closed rather than creating duplicate model-facing tools.
+Lease teardown closes the MCP child without changing ordinary Agent ingress.
+This implementation does not itself establish a production connector: real
+Agent/model and Puffo Core MCP turns still need cross-repository acceptance,
+and `session/load` remains unadvertised.
 
 ## Contract tests
 

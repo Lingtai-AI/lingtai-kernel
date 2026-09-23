@@ -11,6 +11,7 @@ related_files:
   - src/lingtai/cli_puffo_v0.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/turn_tool_overlay.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
@@ -97,11 +98,11 @@ An unsupported
 platform or unsafe socket-path collision fails explicitly.
 
 Without the special preface this is generic same-user local ACP, not Puffo
-attach. `session/new` must pass `mcpServers: []`: the current session-MCP
-implementation modifies the Agent's global tool table and is unsafe to mount
-concurrently with its normal ingress. The separate attach handshake below
-adds connection-level authority but does not yet make this a production
-Puffo-v1 connector.
+attach. Generic local `session/new` must pass `mcpServers: []`. Only an
+authenticated Puffo attach may pass the single fixed Puffo Core stdio server;
+its tools are private to that connection's turns and do not mutate the Agent's
+global tool table. Production use still requires real Agent/model and Puffo
+Core MCP cross-repository validation.
 
 ### Connection-authorized Puffo attach (integration testing only)
 
@@ -124,9 +125,13 @@ socket. Closing it retires its authority, not the resident Agent.
 
 The attach turn's model requests use that connection's Driver admission. A
 deny or lost connection prevents the model call, even though the resident
-Agent's ordinary local ingress is permissive. Non-empty session MCP remains
-rejected, so Puffo's production connector must stay on its controlled process
-profile until concurrent MCP isolation and cross-repository acceptance pass.
+Agent's ordinary local ingress is permissive. Attach `session/new` may use
+`mcpServers: []` for transport testing or the same one-service Puffo Core shape
+as the `puffo-v1` process profile below. Other non-empty MCP input is rejected.
+The private MCP child closes with the connection; only attached correlated
+turns see its tool schemas or handlers. `session/load` is not advertised, so
+reconnect must create a new ACP session. Keep production cutover gated on a
+real Agent/model turn through the real Puffo Core service.
 
 ### Separate stdio host
 

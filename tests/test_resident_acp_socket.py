@@ -15,7 +15,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from lingtai.adapters.acp.resident_socket import ResidentAcpSocket, resident_acp_socket_path
+from lingtai.adapters.acp.resident_socket import (
+    ResidentAcpSocket, _validate_attached_mcp_servers, resident_acp_socket_path,
+)
+from lingtai.adapters.acp.server import _RpcError
 from lingtai.kernel.turns import TurnOutcome, TurnResult
 from lingtai.kernel.provider_admission import (
     ConnectionScopedProviderAdmissionPort, ProviderAdmissionState,
@@ -27,6 +30,7 @@ class _Agent:
     def __init__(self):
         self._shutdown = threading.Event()
         self.mcp_mounts = 0
+        self.connection_mcp_mounts = []
         self.submissions = []
         self.submission_options = []
         self._provider_call_admission_port = ConnectionScopedProviderAdmissionPort()
@@ -34,6 +38,12 @@ class _Agent:
     def mount_session_mcp_stdio(self, _configs):
         self.mcp_mounts += 1
         raise AssertionError("resident local ACP must not mount session MCP")
+
+    def open_connection_mcp_stdio(self, configs):
+        lease = SimpleNamespace(owner=self, configs=configs, closed=False)
+        lease.close = lambda: setattr(lease, "closed", True)
+        self.connection_mcp_mounts.append(lease)
+        return lease
 
     def submit_turn(self, content, *, correlation_id, **_kwargs):
         self.submissions.append(content)
@@ -76,9 +86,20 @@ def _wait_for_idle(transport):
     assert transport._client is None
 
 
+def test_attached_mcp_validator_keeps_empty_transport_mode_but_rejects_other_services():
+    assert _validate_attached_mcp_servers([]) == ()
+    with pytest.raises(_RpcError, match="named puffo"):
+        _validate_attached_mcp_servers([{
+            "name": "other", "command": sys.executable,
+            "args": ["-m", "puffo_agent.mcp.puffo_core_server"],
+            "env": [{"name": "PUFFO_LOCAL_SERVICE_TOKEN", "value": "test-token"}],
+        }])
+
+
 @pytest.mark.skipif(os.name != "posix", reason="SCM_RIGHTS attach requires POSIX")
 @pytest.mark.parametrize("grant", [True, False])
-def test_attach_fd_is_connection_scoped_and_provider_decision_is_not_local(tmp_path, monkeypatch, grant):
+@pytest.mark.parametrize("with_mcp", [True, False])
+def test_attach_fd_is_connection_scoped_and_provider_decision_is_not_local(tmp_path, monkeypatch, grant, with_mcp):
     monkeypatch.setattr(
         "lingtai.adapters.acp.resident_socket.resolve_runtime",
         lambda runtime_id, *, registry_path: SimpleNamespace(runtime_id=runtime_id, agent_dir=tmp_path, workspace=tmp_path),
@@ -121,8 +142,13 @@ def test_attach_fd_is_connection_scoped_and_provider_decision_is_not_local(tmp_p
         authority_end.close()
         assert json.loads(reader.readline())["ok"] is True
         assert _request(reader, writer, 1, "initialize", {"protocolVersion": 1})["result"]["protocolVersion"] == 1
+        mcp_servers = ([{
+            "name": "puffo", "command": sys.executable,
+            "args": ["-m", "puffo_agent.mcp.puffo_core_server"],
+            "env": [{"name": "PUFFO_LOCAL_SERVICE_TOKEN", "value": "test-token"}],
+        }] if with_mcp else [])
         session_id = _request(reader, writer, 2, "session/new", {
-            "cwd": str(tmp_path), "mcpServers": [],
+            "cwd": str(tmp_path), "mcpServers": mcp_servers,
         })["result"]["sessionId"]
         writer.write(json.dumps({
             "jsonrpc": "2.0", "id": 3, "method": "session/prompt",
@@ -132,6 +158,10 @@ def test_attach_fd_is_connection_scoped_and_provider_decision_is_not_local(tmp_p
         assert json.loads(reader.readline())["method"] == "session/update"
         assert json.loads(reader.readline())["id"] == 3
         port = agent.submission_options[-1]["connection_provider_port"]
+        assert len(agent.connection_mcp_mounts) == int(with_mcp)
+        assert agent.submission_options[-1]["connection_tool_overlay"] is (
+            agent.connection_mcp_mounts[0] if with_mcp else None
+        )
         decision = port.authorize_provider_call(
             RootProviderAdmission("attached-turn", "attach-v1", True), ProviderCallClass.ROOT,
         )
@@ -146,6 +176,7 @@ def test_attach_fd_is_connection_scoped_and_provider_decision_is_not_local(tmp_p
         writer.close()
         worker.join(2)
         transport.close()
+        assert all(lease.closed for lease in agent.connection_mcp_mounts)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="SCM_RIGHTS attach requires POSIX")

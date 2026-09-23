@@ -2828,6 +2828,7 @@ class BaseAgent:
         origin: TurnOrigin = TurnOrigin.LEGACY,
         connection_provider_port=None,
         connection_derived_port=None,
+        connection_tool_overlay=None,
     ) -> TurnHandle:
         """Queue one text turn and return its protocol-neutral terminal handle."""
         from ..turns import submit_turn
@@ -2842,6 +2843,7 @@ class BaseAgent:
             origin=origin,
             connection_provider_port=connection_provider_port,
             connection_derived_port=connection_derived_port,
+            connection_tool_overlay=connection_tool_overlay,
         )
 
     def cancel_turn(self, correlation_id: str) -> bool:

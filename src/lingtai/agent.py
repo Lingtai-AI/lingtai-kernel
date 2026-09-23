@@ -1677,6 +1677,11 @@ class Agent(BaseAgent):
         from .services.session_mcp import mount_session_mcp_stdio
         return mount_session_mcp_stdio(self, tuple(configs))
 
+    def open_connection_mcp_stdio(self, configs):
+        """Open a private MCP lease without changing this Agent's tool table."""
+        from .services.session_mcp import open_connection_mcp_stdio
+        return open_connection_mcp_stdio(self, tuple(configs))
+
     def _mount_mcp_tools(self, client: Any, tools: list[dict], mcp_service: Any) -> list[str]:
         """Mount one fully preflighted MCP catalog atomically for this client.
 

@@ -1,8 +1,8 @@
 """Owner-only ACP transport for an already running Agent.
 
 Ordinary clients get generic same-user ACP. A connection-first Puffo attach
-preface may bind Driver authority to that connection's turns, but session MCP
-remains disabled until a concurrency-safe overlay exists.
+    preface may bind Driver authority and a private Puffo Core MCP tool view to
+    that connection's turns; ordinary local ACP remains empty-MCP only.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from lingtai.adapters.acp.puffo_v0 import (
     default_registry_path,
     resolve_runtime,
 )
+from lingtai.adapters.acp.puffo_v1 import validate_puffo_v1_mcp_servers
 from lingtai.adapters.acp.server import AcpStdioServer
 from lingtai.kernel.execution_workspace import ExecutionWorkspace
 from lingtai.kernel.provider_admission import ConnectionScopedProviderAdmissionPort
@@ -46,6 +47,14 @@ _ATTACH_REJECTION_CODES = frozenset({
     "attach_frame_too_large",
     "resident_provider_gate_unavailable",
 })
+
+
+def _validate_attached_mcp_servers(value):
+    # Empty-only remains useful for the transport/authority integration profile;
+    # a non-empty attach gets precisely the existing Puffo v1 fixed ingress.
+    if value == []:
+        return ()
+    return validate_puffo_v1_mcp_servers(value)
 
 
 def _attach_rejection_code(exc: Exception) -> str:
@@ -356,6 +365,10 @@ class ResidentAcpSocket:
                 _PrefixedLines(prefix, reader),
                 writer,
                 allow_session_mcp=False,
+                session_mcp_validator=(
+                    _validate_attached_mcp_servers
+                    if authority is not None else None
+                ),
                 fixed_execution_workspace=fixed_workspace,
                 connection_provider_port=authority,
                 connection_derived_port=(

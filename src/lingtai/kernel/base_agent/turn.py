@@ -1122,6 +1122,8 @@ def _run_loop(agent) -> None:
         clear_turn_tool_observer()
         clear_turn_permission_broker()
         clear_current_provider_admission()
+        from ..turn_tool_overlay import clear_turn_tool_overlay
+        clear_turn_tool_overlay()
 
 
 def _run_loop_body(agent) -> None:
@@ -1229,6 +1231,7 @@ def _run_loop_body(agent) -> None:
             permission_broker_token = None
             provider_admission_token = None
             connection_admission_tokens = None
+            tool_overlay_token = None
             if turn_control is not None:
                 # Admission was checked synchronously before publication. Check
                 # again at the final inbox-to-provider boundary so a forged or
@@ -1302,6 +1305,11 @@ def _run_loop_body(agent) -> None:
                     connection_admission_tokens = bind_connection_admission_ports(
                         turn_control.connection_provider_port,
                         turn_control.connection_derived_port,
+                    )
+                if turn_control.connection_tool_overlay is not None:
+                    from ..turn_tool_overlay import bind_turn_tool_overlay
+                    tool_overlay_token = bind_turn_tool_overlay(
+                        turn_control.connection_tool_overlay
                     )
                 msg = correlated_message_text(msg)
             elif msg.type == MSG_CORRELATED_TURN:
@@ -1947,6 +1955,23 @@ def _run_loop_body(agent) -> None:
             if connection_admission_tokens is not None:
                 from ..provider_admission import clear_connection_admission_ports
                 clear_connection_admission_ports(connection_admission_tokens)
+            if tool_overlay_token is not None:
+                from ..turn_tool_overlay import reset_turn_tool_overlay
+                reset_turn_tool_overlay(tool_overlay_token)
+                # SessionManager refreshes tools on every send, but its shared
+                # chat object can otherwise retain the attached catalog while
+                # the Agent idles. Restore the ordinary view immediately.
+                chat = getattr(agent, "_chat", None)
+                build_tools = getattr(agent, "_build_tool_schemas", None)
+                if (
+                    chat is not None
+                    and callable(build_tools)
+                    and callable(getattr(chat, "update_tools", None))
+                ):
+                    try:
+                        chat.update_tools(build_tools())
+                    except Exception:
+                        agent._log("connection_tool_overlay_reset_failed")
             _settle_correlated_after_turn(
                 agent,
                 turn_control,
@@ -2461,13 +2486,18 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
     (e.g. ``dup_free_passes`` 3 for fresh requests vs 2 for tc-wake
     continuations), so the caller supplies it.
     """
+    from ..turn_tool_overlay import current_turn_tool_overlay
+    overlay = current_turn_tool_overlay(agent)
     return ToolExecutor(
         dispatch_fn=agent._dispatch_tool,
         make_tool_result_fn=lambda name, result, **kw: agent.service.make_tool_result(
             name, result, provider=agent._config.provider, **kw
         ),
         guard=guard,
-        known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
+        known_tools=(
+            set(agent._intrinsics) | set(agent._tool_handlers)
+            | (set(overlay.handlers) if overlay is not None else set())
+        ),
         parallel_safe_tools=agent._PARALLEL_SAFE_TOOLS,
         logger_fn=agent._log,
         meta_fn=lambda: build_meta(agent),
