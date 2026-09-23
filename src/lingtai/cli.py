@@ -371,7 +371,7 @@ def _derived_avatar_requires_admission(working_dir: Path) -> bool:
     return probe_derived_avatar_state(working_dir) is not DerivedAvatarState.ABSENT
 
 
-def run(working_dir: Path) -> None:
+def run(working_dir: Path, *, acp_socket: bool = False) -> None:
     """Boot agent into ASLEEP — wakes on external messages (mail/imap/telegram)."""
     _refuse_incomplete_name_change(working_dir)
     _check_duplicate_process(working_dir)
@@ -426,8 +426,14 @@ def run(working_dir: Path) -> None:
     if is_refresh:
         taken_file.unlink()
 
+    resident_acp = None
     try:
         agent.start()
+        if acp_socket or os.environ.get("LINGTAI_ACP_SOCKET") == "1":
+            from lingtai.adapters.acp.resident_socket import ResidentAcpSocket
+
+            resident_acp = ResidentAcpSocket(agent, working_dir)
+            resident_acp.start()
 
         # A WorkerStillRunning poison recovery leaves an open artifact whose
         # `redo` block is redriven here, on every boot, once per boot: the
@@ -459,6 +465,8 @@ def run(working_dir: Path) -> None:
 
         agent._shutdown.wait()
     finally:
+        if resident_acp is not None:
+            resident_acp.close()
         try:
             agent.stop(timeout=10.0)
         except Exception:
@@ -626,10 +634,20 @@ def main() -> None:
     run_parser = sub.add_parser("run", help="Boot agent into sleep — wakes on external messages")
     run_parser.add_argument("working_dir", type=Path, help="Agent working directory containing init.json")
     run_parser.add_argument(
+        "--acp-socket",
+        action="store_true",
+        help="Serve owner-only local ACP on a short Unix socket (not a Puffo profile)",
+    )
+    run_parser.add_argument(
         "--verbose",
         action="store_true",
         help="DEBUG-level console logging (equivalent to LINGTAI_VERBOSE=1)",
     )
+
+    acp_path_parser = sub.add_parser(
+        "acp-socket-path", help="Print the local resident ACP socket path"
+    )
+    acp_path_parser.add_argument("working_dir", type=Path)
 
     sub.add_parser("check-caps", help="Output capability provider metadata as JSON")
 
@@ -709,7 +727,14 @@ def main() -> None:
             sys.exit(1)
         if getattr(args, "verbose", False):
             os.environ["LINGTAI_VERBOSE"] = "1"
-        run(working_dir)
+        if args.acp_socket:
+            # Refresh watcher inherits the environment, not CLI flags.
+            os.environ["LINGTAI_ACP_SOCKET"] = "1"
+        run(working_dir, acp_socket=args.acp_socket)
+    elif args.command == "acp-socket-path":
+        from lingtai.adapters.acp.resident_socket import resident_acp_socket_path
+
+        print(resident_acp_socket_path(args.working_dir))
     elif args.command == "check-caps":
         from lingtai.tools.registry import get_all_providers
         print(json.dumps(get_all_providers()))

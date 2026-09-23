@@ -41,6 +41,7 @@ related_files:
   - tests/opencode
   - tests/test_activate_preset.py
   - tests/test_acp_stdio.py
+  - tests/test_resident_acp_socket.py
   - tests/test_puffo_v0_profile.py
   - tests/test_provider_admission.py
   - tests/test_execution_workspace.py

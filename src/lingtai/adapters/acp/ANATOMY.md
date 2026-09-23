@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/__init__.py
   - src/lingtai/adapters/acp/driver_authority.py
+  - src/lingtai/adapters/acp/resident_socket.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/puffo_v1.py
   - src/lingtai/adapters/acp/server.py
@@ -28,6 +29,7 @@ related_files:
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - tests/test_acp_stdio.py
+  - tests/test_resident_acp_socket.py
   - tests/test_puffo_v0_profile.py
   - tests/test_puffo_admission_witness.py
   - tests/test_driver_authority_adapter.py
@@ -48,7 +50,7 @@ maintenance: |
   behavior task, manual, adapter, composition root, Core turn boundary, and tests
   whenever structure or ownership changes. See lingtai-dev-guide for details.
 ---
-# ACP local stdio adapter
+# ACP local driving adapters
 
 Local Agent Client Protocol v1 driving Adapter. This is a governed component
 because it owns a real ecosystem wire promise; its normative owner is the
@@ -74,6 +76,11 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   the same genuine-teardown guard (`_closing`, superseded `_generation`,
   claimed/replaced active prompt) as the only legitimate non-delivery.
 - `__init__.py` — small public package export for the protocol version and server.
+- `resident_socket.py` — opt-in, owner-only POSIX Unix socket around the same
+  one-session ACP server and the already-started `run` Agent. Its short stable
+  path, peer-UID gate, single-client ownership, stale-socket check, and teardown
+  belong to the outer Adapter; it neither acquires a second workdir lease nor
+  accepts Puffo profile MCP. Implements [ACP003](BEHAVIORS.md#behavior-acp003).
 - `puffo_v0.py` — local operator registry and typed ACP-only turn-origin policy
   for the identity/workspace-bound full-tool `puffo-v0`
   profile. It resolves an opaque runtime id to one canonical persistent identity
@@ -154,7 +161,10 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
 ## Connections
 
 Inbound: a local ACP client launches `lingtai-agent acp --agent-dir <dir>` and
-exchanges one JSON-RPC object per stdio line. The constrained Puffo profiles
+exchanges one JSON-RPC object per stdio line. Alternatively, the existing
+`lingtai-agent run --acp-socket` host accepts same-UID local ACP clients without
+starting another Agent; each connection owns one ACP session and closes without
+stopping the host. The constrained Puffo profiles
 instead launch `lingtai-agent acp --profile puffo-v0|puffo-v1 --runtime-id
 <opaque-id>` and share the same registry-bound identity/workspace. `puffo-v0`
 denies every session MCP; `puffo-v1` accepts only its one fixed Puffo Core stdio
@@ -196,6 +206,9 @@ Driver authority environment locator is removed at composition and is not
 retained as process state. Closing requests active cancellation
 and suppresses prompt frames that have not crossed the writer start check; typed
 Agent stop retains services/heartbeat/lease until execution quiescence is proven.
+The opt-in resident transport additionally owns one short Unix socket path in
+an owner-only `/tmp/lingtai-acp-<uid>/` directory, a listener thread, and at
+most one client; it removes only the socket inode it created on close.
 
 ## Notes
 
@@ -209,6 +222,9 @@ scope.
 Both Puffo profiles are a second gate on their controlled entrypoint, not host isolation:
 the same OS identity can still alter the registry or bypass it by launching the
 generic `--agent-dir` ACP command. That is an explicit host trust boundary.
+The resident socket is likewise generic local ACP, not an attach implementation
+for either Puffo profile; it disables session MCP rather than publishing a
+global tool overlay into the concurrently running Agent.
 
 `driver_authority.py` is process-local protocol state: one authenticated
 AF_UNIX stream, a bounded receive buffer, one request lock, endpoint identity,

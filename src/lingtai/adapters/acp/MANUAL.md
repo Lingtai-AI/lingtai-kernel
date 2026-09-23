@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/adapters/acp/ANATOMY.md
   - src/lingtai/adapters/acp/BEHAVIORS.md
   - src/lingtai/adapters/acp/driver_authority.py
+  - src/lingtai/adapters/acp/resident_socket.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
@@ -17,6 +18,7 @@ related_files:
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - tests/test_acp_stdio.py
+  - tests/test_resident_acp_socket.py
   - tests/test_puffo_v0_profile.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
@@ -31,22 +33,23 @@ maintenance: |
   composition, governed twins, and tests. This manual must remain reachable from
   both ACP CONTRACT.md and ANATOMY.md; update all three when behavior changes.
 ---
-# LingTai local ACP v1 stdio manual
+# LingTai local ACP v1 manual
 
 ## What this capability is
 
 `lingtai-agent acp` lets one local ACP client drive one existing LingTai agent
-over standard input/output. It is intended for an editor, terminal UI, or other
-local process that can launch an ACP subprocess. The implementation speaks ACP
-protocol version 1 directly with the standard library; no ACP SDK or optional
-package is required.
+over standard input/output. An opt-in socket on `lingtai-agent run` instead
+lets a same-user client connect to the Agent already running in that process.
+Both are intended for local editors or terminal clients and speak ACP protocol
+version 1 with the standard library; no ACP SDK is required.
 
 This slice supports exactly:
 
 - `initialize` negotiation that returns this Agent's supported `protocolVersion: 1`;
-- one `session/new` per process;
+- one `session/new` per stdio process or resident socket connection;
 - one canonical execution workspace from `session/new.cwd`;
-- zero or more session-scoped stdio MCP servers mounted all-or-nothing;
+- zero or more session-scoped stdio MCP servers mounted all-or-nothing in the
+  separate stdio host; the resident socket accepts only zero;
 - one active `session/prompt` at a time;
 - baseline Text and ResourceLink prompt blocks;
 - one-shot fail-closed tool permission and minimal lifecycle projection;
@@ -60,13 +63,45 @@ capability-gated image/audio/embedded-resource content, message/usage streaming,
 tool arguments/results/content, remote transport,
 authentication, or ACP v2.
 
-Stable ACP v1 requires stdio session MCP and applying `cwd`. This slice implements
-both: cwd is canonicalized once and scopes execution-facing File, Shell, guard,
-and parallel tool work; stdio servers use stable v1's `name`, absolute `command`,
-string `args`, and `{name,value}` env-array shape. It remains a narrow local flow,
-not complete general-purpose ACP v1 conformance.
+The separate stdio host implements stable ACP v1's session MCP and `cwd` rules:
+cwd is canonicalized once and scopes execution-facing File, Shell, guard, and
+parallel tool work; stdio servers use stable v1's `name`, absolute `command`,
+string `args`, and `{name,value}` env-array shape. The resident socket retains
+the workspace behavior but rejects non-empty MCP while per-turn isolation is
+unavailable. Neither mode claims complete general-purpose ACP v1 conformance.
 
 ## Launch
+
+### Attach to an already-running local Agent
+
+On POSIX, start the ordinary resident Agent with an optional owner-only local
+ACP socket:
+
+```bash
+lingtai-agent run /absolute/path/to/agent --acp-socket
+lingtai-agent acp-socket-path /absolute/path/to/agent
+```
+
+The second command prints the short socket path, deterministically derived
+from the canonical Agent directory. The socket is `0600` inside a per-user
+`0700` directory under `/tmp`; the server also checks the connecting process's
+UID. A client connects to that Unix socket and exchanges the same UTF-8
+newline-delimited ACP v1 JSON-RPC frames shown below. Each connection owns one
+session, and the resident host admits only one connection at a time. Closing
+the client cancels its active ACP turn but leaves the LingTai Agent, its other
+ingresses, and `.agent.lock` running. A later client reconnects to the same
+host. `--acp-socket` sets `LINGTAI_ACP_SOCKET=1`, which the normal refresh
+watcher inherits so the endpoint is restored after refresh. An unsupported
+platform or unsafe socket-path collision fails explicitly.
+
+This is **generic same-user local ACP**, not Puffo attach. `session/new` must
+pass `mcpServers: []`: the current session-MCP implementation modifies the
+Agent's global tool table and is unsafe to mount concurrently with its normal
+ingress. The endpoint neither accepts a Puffo runtime id nor authenticates a
+Puffo Driver. Puffo must continue using the controlled `acp --profile puffo-v1`
+process until a separate authenticated attach/turn-policy contract is built.
+
+### Separate stdio host
 
 Use an already initialized agent directory containing a valid `init.json`:
 

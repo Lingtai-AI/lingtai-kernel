@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/adapters/acp/ANATOMY.md
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/driver_authority.py
+  - src/lingtai/adapters/acp/resident_socket.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
   - ENVIRONMENT_VARIABLES.md
@@ -20,6 +21,7 @@ related_files:
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - tests/test_acp_stdio.py
+  - tests/test_resident_acp_socket.py
   - tests/test_driver_authority_adapter.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
@@ -33,7 +35,33 @@ maintenance: |
   evidence, supported scope, commands, and pass criteria whenever the v1 stdio
   behavior changes; do not turn an omitted capability into an implied promise.
 ---
-# ACP Local Stdio Behavior Tests
+# ACP Local Driving Adapter Behavior Tests
+
+## Behavior ACP003 — resident local ACP reconnects without becoming a Puffo profile
+
+- **id**: ACP003
+- **title**: resident local ACP reconnects without becoming a Puffo profile
+- **guards**: `acp-local-stdio` § Resident socket transport — see [CONTRACT.md](CONTRACT.md#resident-socket-transport)
+- **supersedes**: `tests/test_resident_acp_socket.py` (retained as bottom asserts)
+- **runner**: a LingTai coding agent on POSIX with shell access
+- **prerequisites**: project Python and pytest; no live Agent sharing the test directory
+- **estimate**: ≈ 1 minute
+
+### Steps
+1. Run `python -m pytest -q -x tests/test_resident_acp_socket.py`.
+2. Confirm the socket is owner-only, same-UID clients can initialize and create one empty-MCP session, and disconnect/reconnect keeps the Agent alive.
+3. Confirm non-empty MCP is rejected without mounting, a second listener cannot replace the live socket, stale refused sockets recover, and a non-socket collision remains untouched.
+4. Confirm `acp-socket-path` is read-only and `run --acp-socket` carries its opt-in across the refresh environment.
+
+### Expected evidence
+- [ ] All focused tests pass without a provider or another Agent process.
+- [ ] Close removes only the socket, not Agent state or `.agent.lock`.
+- [ ] No test treats same-UID access as Puffo Driver authentication.
+
+### Pass / Fail
+Pass only if reconnect uses the same Agent and every unsafe collision or MCP
+request fails closed. Fail if disconnect stops the Agent, a second Agent is
+started, or the generic socket admits Puffo session MCP.
 
 ## Behavior ACP001 — one local ACP v1 baseline turn settles normally or cooperatively cancelled without corrupting stdout
 
