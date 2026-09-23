@@ -615,13 +615,36 @@ call `Agent.stop()` or release `.agent.lock` independently. The `run` host alone
 retains ordinary lifecycle ownership and removes only the socket inode it
 created. Unsupported platforms fail explicitly when opted in.
 
-This endpoint does **not** accept Puffo runtime IDs, claim Driver authentication,
-or install Puffo provider/derived-launch admission. Existing `puffo-v0/v1`
-profiles still require their controlled launched process and inherited Driver
-authority. Using this generic local socket as a Puffo production connector is
-unsupported until a distinct authenticated attach contract and per-turn MCP/
-admission isolation are implemented; same UID is not proof of Puffo Driver
-identity.
+Without an attach preface this remains generic local ACP and has no Puffo
+authority. An explicit attach preface is governed separately below; same UID
+alone is not proof of Puffo Driver identity. Session MCP remains empty-only, so
+the endpoint is not yet a complete Puffo production connector.
+
+## Puffo resident attach
+
+The optional connection-first `puffo.attach/1` line carries exactly
+`type`, `runtime_id`, `registry`, and `launch_id`, together with exactly one
+`SCM_RIGHTS` descriptor. The line is bounded to 8192 bytes. Before ACP begins,
+the adapter resolves the runtime through the existing secure operator registry,
+requires its canonical `agent_dir` to equal the resident process's directory,
+fixes ACP `session/new.cwd` to that runtime's provisioned workspace,
+consumes the descriptor as a root `DriverAuthorityClient`, and requires the
+Driver hello's `launch_id` to equal the preface. Invalid/missing descriptors,
+unknown/revoked/mismatched bindings, or a wrong Driver role/id produce a
+bounded `{"ok":false,"reason":"attach_rejected"}` line and close. A valid
+preface receives `{"ok":true,"kernel_version":"..."}`; the same socket then
+speaks ordinary ACP v1, including `initialize` and `session/new`. See
+[ACP004](BEHAVIORS.md#behavior-acp004).
+
+The consumed authority and derived-launch adapter belong to that connection,
+not to the resident Agent's global permissive policy. The ACP correlated turn
+binds both Ports to its run-loop context; the resident provider-service wrapper
+asks the connection Port before **each** attached provider call. A missing,
+denied, malformed, or disconnected connection authority cannot reach provider
+I/O. Ordinary local ingress retains its existing behavior. Disconnect closes
+the authority and ACP session, not the Agent or workdir lease. Session MCP is
+still empty-only because the shared tool table cannot safely host a concurrent
+session overlay; attach is therefore not a production Puffo-v1 replacement yet.
 
 ## Contract tests
 

@@ -338,7 +338,13 @@ class AcpStdioServer:
         fixed_execution_workspace: ExecutionWorkspace | None = None,
         allow_session_mcp: bool = True,
         session_mcp_validator: Callable[[Any], tuple[StdioMCPServerConfig, ...]] | None = None,
+        connection_provider_port=None,
+        connection_derived_port=None,
     ):
+        if (connection_provider_port is None) != (connection_derived_port is None):
+            raise ValueError("connection admission requires both ports")
+        if connection_provider_port is not None and allow_session_mcp:
+            raise ValueError("connection-authorized ACP cannot mount session MCP")
         self._agent = agent
         self._input = input_stream
         self._output = output_stream
@@ -350,6 +356,8 @@ class AcpStdioServer:
         self._fixed_execution_workspace = fixed_execution_workspace
         self._allow_session_mcp = allow_session_mcp
         self._session_mcp_validator = session_mcp_validator
+        self._connection_provider_port = connection_provider_port
+        self._connection_derived_port = connection_derived_port
         self._session_mcp_lease = None
         self._active: _ActivePrompt | None = None
         self._closing = False
@@ -797,6 +805,12 @@ class AcpStdioServer:
             try:
                 from lingtai.kernel.turns import TurnOrigin
 
+                connection_options = {}
+                if self._connection_provider_port is not None:
+                    connection_options = {
+                        "connection_provider_port": self._connection_provider_port,
+                        "connection_derived_port": self._connection_derived_port,
+                    }
                 handle = self._agent.submit_turn(
                     content,
                     sender="user",
@@ -805,6 +819,7 @@ class AcpStdioServer:
                     tool_observer=observer,
                     permission_broker=observer,
                     origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+                    **connection_options,
                 )
             except (TypeError, ValueError) as exc:
                 raise _RpcError(INVALID_PARAMS, str(exc)) from exc

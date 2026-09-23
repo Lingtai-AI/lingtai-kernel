@@ -1228,6 +1228,7 @@ def _run_loop_body(agent) -> None:
             tool_observer_token = None
             permission_broker_token = None
             provider_admission_token = None
+            connection_admission_tokens = None
             if turn_control is not None:
                 # Admission was checked synchronously before publication. Check
                 # again at the final inbox-to-provider boundary so a forged or
@@ -1281,6 +1282,7 @@ def _run_loop_body(agent) -> None:
                 from ..provider_admission import (
                     RootProviderAdmission,
                     bind_provider_admission,
+                    bind_connection_admission_ports,
                 )
 
                 # The typed origin is checked immediately above.  Keep its
@@ -1291,8 +1293,16 @@ def _run_loop_body(agent) -> None:
                     RootProviderAdmission(
                         correlation_id=turn_control.correlation_id,
                         policy_version=admission_decision.policy_version,
+                        connection_authority_required=(
+                            turn_control.connection_provider_port is not None
+                        ),
                     )
                 )
+                if turn_control.connection_provider_port is not None:
+                    connection_admission_tokens = bind_connection_admission_ports(
+                        turn_control.connection_provider_port,
+                        turn_control.connection_derived_port,
+                    )
                 msg = correlated_message_text(msg)
             elif msg.type == MSG_CORRELATED_TURN:
                 # Lifecycle stop may claim a control after the post-dequeue
@@ -1934,6 +1944,9 @@ def _run_loop_body(agent) -> None:
             if provider_admission_token is not None:
                 from ..provider_admission import clear_provider_admission
                 clear_provider_admission(provider_admission_token)
+            if connection_admission_tokens is not None:
+                from ..provider_admission import clear_connection_admission_ports
+                clear_connection_admission_ports(connection_admission_tokens)
             _settle_correlated_after_turn(
                 agent,
                 turn_control,

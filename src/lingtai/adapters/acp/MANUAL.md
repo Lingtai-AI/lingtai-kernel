@@ -96,12 +96,32 @@ so the endpoint is restored after refresh, while Avatar launches remove it.
 An unsupported
 platform or unsafe socket-path collision fails explicitly.
 
-This is **generic same-user local ACP**, not Puffo attach. `session/new` must
-pass `mcpServers: []`: the current session-MCP implementation modifies the
-Agent's global tool table and is unsafe to mount concurrently with its normal
-ingress. The endpoint neither accepts a Puffo runtime id nor authenticates a
-Puffo Driver. Puffo must continue using the controlled `acp --profile puffo-v1`
-process until a separate authenticated attach/turn-policy contract is built.
+Without the special preface this is generic same-user local ACP, not Puffo
+attach. `session/new` must pass `mcpServers: []`: the current session-MCP
+implementation modifies the Agent's global tool table and is unsafe to mount
+concurrently with its normal ingress. The separate attach handshake below
+adds connection-level authority but does not yet make this a production
+Puffo-v1 connector.
+
+### Connection-authorized Puffo attach (integration testing only)
+
+After connecting to the same socket, send one UTF-8 newline JSON frame of
+the exact shape
+`{"type":"puffo.attach/1","runtime_id":"...","registry":"/absolute/...","launch_id":"..."}`
+with exactly one `SCM_RIGHTS` FD from the Puffo Driver root authority endpoint.
+The runtime must already be provisioned in that registry for this running
+Agent directory; `session/new.cwd` must equal its provisioned workspace, and
+the endpoint's Driver hello must name the same launch id.
+Wait for `{"ok":true,"kernel_version":"..."}`; rejection returns
+`{"ok":false,"reason":"attach_rejected"}` and closes. Only after success send
+the ordinary ACP `initialize`, then `session/new` and prompts over that same
+socket. Closing it retires its authority, not the resident Agent.
+
+The attach turn's model requests use that connection's Driver admission. A
+deny or lost connection prevents the model call, even though the resident
+Agent's ordinary local ingress is permissive. Non-empty session MCP remains
+rejected, so Puffo's production connector must stay on its controlled process
+profile until concurrent MCP isolation and cross-repository acceptance pass.
 
 ### Separate stdio host
 

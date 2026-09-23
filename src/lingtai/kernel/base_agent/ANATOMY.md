@@ -91,6 +91,9 @@ Generic agent kernel. Single class `BaseAgent` with methods distributed across 6
   service so every `send`, `send_stream`, and direct `generate` checks this
   Port immediately before provider I/O. `turn.py` binds a root parent only
   after its final origin admission and resets it on turn/loop teardown.
+  Resident ACP composition uses a connection-scoped router: an attached
+  correlated turn binds its own provider/derived-launch Ports alongside the
+  root parent, while generic local turns retain their existing route.
   Adapters own authentication and transport; Core does not encode ACP, sockets,
   paths, or a serializable bearer token here. The operator procedure and
   failure modes are in [`docs/references/provider-admission.md`](../../../../docs/references/provider-admission.md).

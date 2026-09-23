@@ -37,6 +37,32 @@ maintenance: |
 ---
 # ACP Local Driving Adapter Behavior Tests
 
+## Behavior ACP004 — resident attach binds Driver authority to one connection
+
+- **id**: ACP004
+- **title**: resident attach binds Driver authority to one connection
+- **guards**: `acp-local-stdio` § Puffo resident attach — see [CONTRACT.md](CONTRACT.md#puffo-resident-attach)
+- **supersedes**: `tests/test_resident_acp_socket.py`, `tests/test_provider_admission.py` (retained as bottom asserts)
+- **runner**: a LingTai coding agent on POSIX with shell access
+- **prerequisites**: project Python and pytest; no live Agent sharing the test directory
+- **estimate**: ≈ 1 minute
+
+### Steps
+1. Run `python -m pytest -q -x tests/test_resident_acp_socket.py tests/test_provider_admission.py`.
+2. Confirm the attach first frame carries one Driver FD, registry identity matches the running directory, and the Driver hello launch id matches the first frame before any ACP request is accepted.
+3. Confirm a granted connection Port permits a provider call and records that Port's decision; a denied or missing connection Port prevents the underlying provider call despite the resident local path remaining permissive.
+4. Confirm a missing descriptor rejects before ACP and connection close does not stop the Agent.
+
+### Expected evidence
+- [ ] Both focused files pass and no external provider is called.
+- [ ] Attached turns never use the resident local grant in place of connection authority.
+- [ ] Session MCP remains empty-only; this is not a production Puffo-v1 connector.
+
+### Pass / Fail
+Pass only if the connection owns the admission Port and deny prevents provider
+I/O. Fail if a missing FD enters ACP or if local admission overrides Driver
+denial.
+
 ## Behavior ACP003 — resident local ACP reconnects without becoming a Puffo profile
 
 - **id**: ACP003

@@ -1,22 +1,133 @@
-"""Owner-only local ACP transport for an already running Agent.
+"""Owner-only ACP transport for an already running Agent.
 
-This is a generic same-user transport, not the Puffo profile.  In particular it
-does not accept a Puffo runtime id or mount session MCP tools: those require a
-separate authenticated, per-turn policy boundary before they can be shared with
-a resident Agent.
+Ordinary clients get generic same-user ACP. A connection-first Puffo attach
+preface may bind Driver authority to that connection's turns, but session MCP
+remains disabled until a concurrency-safe overlay exists.
 """
 from __future__ import annotations
 
 import errno
 import hashlib
+import json
 import os
 import socket
 import stat
 import struct
 import threading
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from lingtai.adapters.acp.driver_authority import (
+    DriverAuthorityClient,
+    DriverDerivedLaunchAdmissionAdapter,
+)
+from lingtai.adapters.acp.puffo_v0 import PuffoV0RegistryError, resolve_runtime
 from lingtai.adapters.acp.server import AcpStdioServer
+from lingtai.kernel.execution_workspace import ExecutionWorkspace
+from lingtai.kernel.provider_admission import ConnectionScopedProviderAdmissionPort
+
+
+_ATTACH_FRAME_LIMIT = 8192
+_FIRST_FRAME_LIMIT = 64 * 1024
+
+
+class _PrefixedLines:
+    """Return bytes consumed while sniffing the first frame to ACP unchanged."""
+
+    def __init__(self, prefix: bytes, stream):
+        self._prefix = prefix
+        self._stream = stream
+
+    def __iter__(self):
+        pending = self._prefix
+        while pending:
+            before, sep, after = pending.partition(b"\n")
+            if sep:
+                yield (before + sep).decode("utf-8", errors="strict")
+                pending = after
+            else:
+                chunk = self._stream.readline()
+                if not chunk:
+                    yield pending.decode("utf-8", errors="strict")
+                    return
+                pending += chunk
+        for line in self._stream:
+            yield line.decode("utf-8", errors="strict")
+
+
+def _first_frame(client: socket.socket) -> tuple[bytes, bytes, list[int]]:
+    """Read one bounded line while retaining any ancillary descriptors."""
+    import array
+
+    received = bytearray()
+    descriptors: list[int] = []
+    itemsize = array.array("i").itemsize
+    try:
+        client.settimeout(2.0)
+        while b"\n" not in received:
+            data, ancillary, flags, _ = client.recvmsg(
+                _FIRST_FRAME_LIMIT + 1, socket.CMSG_SPACE(itemsize * 2)
+            )
+            for level, kind, payload in ancillary:
+                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                    fds = array.array("i")
+                    fds.frombytes(payload[: len(payload) - len(payload) % itemsize])
+                    descriptors.extend(fds)
+            if not data or flags & socket.MSG_CTRUNC:
+                raise ValueError("attach frame or ancillary data incomplete")
+            received.extend(data)
+            if len(received) > _FIRST_FRAME_LIMIT:
+                raise ValueError("first ACP frame too large")
+        first, remaining = bytes(received).split(b"\n", 1)
+        return first + b"\n", remaining, descriptors
+    except BaseException:
+        for fd in descriptors:
+            os.close(fd)
+        raise
+    finally:
+        try:
+            client.settimeout(None)
+        except OSError:
+            pass
+
+
+def _attach_authority(frame: bytes, fds: list[int], agent_dir: Path):
+    """Resolve durable identity and consume exactly one connection authority."""
+    authority = None
+    try:
+        payload = json.loads(frame.decode("utf-8"))
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"type", "runtime_id", "registry", "launch_id"}
+            or payload["type"] != "puffo.attach/1"
+            or any(
+                not isinstance(payload[key], str) or not payload[key]
+                for key in ("runtime_id", "registry", "launch_id")
+            )
+            or len(fds) != 1
+        ):
+            raise ValueError("invalid_attach_frame")
+        registry_path = Path(payload["registry"])
+        if not registry_path.is_file():
+            raise ValueError("runtime_registry_unavailable")
+        runtime = resolve_runtime(payload["runtime_id"], registry_path=registry_path)
+        if runtime.agent_dir.resolve() != agent_dir.resolve():
+            raise ValueError("runtime_agent_mismatch")
+        fd = fds.pop()
+        authority = DriverAuthorityClient.from_inherited_fd(fd)
+        if (
+            authority.identity.role != "root"
+            or authority.identity.launch_id != payload["launch_id"]
+        ):
+            raise ValueError("authority_binding_mismatch")
+        return authority, ExecutionWorkspace(runtime.workspace)
+    except (ValueError, TypeError, UnicodeError, PuffoV0RegistryError, OSError):
+        if authority is not None:
+            authority.close()
+        raise
+    finally:
+        for fd in fds:
+            os.close(fd)
 
 
 def resident_acp_socket_path(agent_dir: Path) -> Path:
@@ -33,6 +144,7 @@ class ResidentAcpSocket:
 
     def __init__(self, agent, agent_dir: Path):
         self._agent = agent
+        self._agent_dir = agent_dir.resolve()
         self.path = resident_acp_socket_path(agent_dir)
         self._closed = threading.Event()
         self._lock = threading.Lock()
@@ -149,22 +261,80 @@ class ResidentAcpSocket:
         reader = None
         writer = None
         session = None
+        authority = None
+        fixed_workspace = None
         try:
             if self._closed.is_set():
                 return
-            reader = client.makefile("r", encoding="utf-8", errors="strict")
+            first, remainder, fds = _first_frame(client)
+            try:
+                candidate = json.loads(first.decode("utf-8"))
+            except (ValueError, UnicodeError):
+                candidate = None
+            is_attach = (
+                isinstance(candidate, dict)
+                and candidate.get("type") == "puffo.attach/1"
+            )
+            if is_attach:
+                try:
+                    if len(first) > _ATTACH_FRAME_LIMIT:
+                        for fd in fds:
+                            os.close(fd)
+                        raise ValueError("attach frame too large")
+                    if not isinstance(
+                        getattr(self._agent, "_provider_call_admission_port", None),
+                        ConnectionScopedProviderAdmissionPort,
+                    ):
+                        for fd in fds:
+                            os.close(fd)
+                        raise ValueError("resident provider gate is not connection-scoped")
+                    authority, fixed_workspace = _attach_authority(
+                        first, fds, self._agent_dir
+                    )
+                except Exception:
+                    client.sendall(b'{"ok":false,"reason":"attach_rejected"}\n')
+                    return
+                try:
+                    kernel_version = version("lingtai")
+                except PackageNotFoundError:
+                    kernel_version = "0+unknown"
+                client.sendall(
+                    (json.dumps({"ok": True, "kernel_version": kernel_version}) + "\n")
+                    .encode("utf-8")
+                )
+                prefix = remainder
+            else:
+                for fd in fds:
+                    os.close(fd)
+                if fds:
+                    return
+                prefix = first + remainder
+            reader = client.makefile("rb")
             writer = client.makefile("w", encoding="utf-8", errors="strict", newline="\n")
-            session = AcpStdioServer(self._agent, reader, writer, allow_session_mcp=False)
+            session = AcpStdioServer(
+                self._agent,
+                _PrefixedLines(prefix, reader),
+                writer,
+                allow_session_mcp=False,
+                fixed_execution_workspace=fixed_workspace,
+                connection_provider_port=authority,
+                connection_derived_port=(
+                    DriverDerivedLaunchAdmissionAdapter(authority)
+                    if authority is not None else None
+                ),
+            )
             with self._lock:
                 if self._closed.is_set():
                     return
                 self._session = session
             session.serve()
-        except (OSError, UnicodeError):
+        except (OSError, UnicodeError, ValueError):
             pass
         finally:
             if session is not None:
                 session.close()
+            if authority is not None:
+                authority.close()
             try:
                 client.shutdown(socket.SHUT_RDWR)
             except OSError:

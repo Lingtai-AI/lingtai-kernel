@@ -2,18 +2,25 @@
 from __future__ import annotations
 
 import json
+import array
 import os
 import socket
 import stat
 import sys
 import threading
 import time
+import struct
 from contextlib import suppress
+from types import SimpleNamespace
 
 import pytest
 
 from lingtai.adapters.acp.resident_socket import ResidentAcpSocket, resident_acp_socket_path
 from lingtai.kernel.turns import TurnOutcome, TurnResult
+from lingtai.kernel.provider_admission import (
+    ConnectionScopedProviderAdmissionPort, ProviderAdmissionState,
+    ProviderCallClass, RootProviderAdmission,
+)
 
 
 class _Agent:
@@ -21,6 +28,8 @@ class _Agent:
         self._shutdown = threading.Event()
         self.mcp_mounts = 0
         self.submissions = []
+        self.submission_options = []
+        self._provider_call_admission_port = ConnectionScopedProviderAdmissionPort()
 
     def mount_session_mcp_stdio(self, _configs):
         self.mcp_mounts += 1
@@ -28,6 +37,7 @@ class _Agent:
 
     def submit_turn(self, content, *, correlation_id, **_kwargs):
         self.submissions.append(content)
+        self.submission_options.append(_kwargs)
 
         class _Handle:
             def __init__(self):
@@ -64,6 +74,171 @@ def _wait_for_idle(transport):
     while transport._client is not None and time.monotonic() < deadline:
         time.sleep(0.01)
     assert transport._client is None
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SCM_RIGHTS attach requires POSIX")
+@pytest.mark.parametrize("grant", [True, False])
+def test_attach_fd_is_connection_scoped_and_provider_decision_is_not_local(tmp_path, monkeypatch, grant):
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.resident_socket.resolve_runtime",
+        lambda runtime_id, *, registry_path: SimpleNamespace(agent_dir=tmp_path, workspace=tmp_path),
+    )
+    (tmp_path / "registry.json").touch()
+    agent = _Agent()
+    transport = ResidentAcpSocket(agent, tmp_path)
+    transport.start()
+    authority_end, driver_end = socket.socketpair()
+    decisions = []
+
+    def driver():
+        for expected_op in ("hello", "authorize_provider_call"):
+            header = driver_end.recv(4)
+            size = struct.unpack("!I", header)[0]
+            body = bytearray()
+            while len(body) < size:
+                body.extend(driver_end.recv(size - len(body)))
+            request = json.loads(body)
+            assert request["op"] == expected_op
+            decisions.append(request)
+            response = {"version": 1, "call_id": request["call_id"]}
+            if expected_op == "hello":
+                response.update(role="root", launch_id="attach-launch", capability=None)
+            else:
+                response.update(state="granted" if grant else "denied", reason_code="allowed" if grant else "endpoint_binding_mismatch")
+            encoded = json.dumps(response).encode()
+            driver_end.sendall(struct.pack("!I", len(encoded)) + encoded)
+        driver_end.close()
+
+    worker = threading.Thread(target=driver)
+    worker.start()
+    client, reader, writer = _connect(transport.path)
+    try:
+        attach = json.dumps({
+            "type": "puffo.attach/1", "runtime_id": "runtime-1",
+            "registry": str(tmp_path / "registry.json"), "launch_id": "attach-launch",
+        }).encode() + b"\n"
+        client.sendmsg([attach], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [authority_end.fileno()]))])
+        authority_end.close()
+        assert json.loads(reader.readline())["ok"] is True
+        assert _request(reader, writer, 1, "initialize", {"protocolVersion": 1})["result"]["protocolVersion"] == 1
+        session_id = _request(reader, writer, 2, "session/new", {
+            "cwd": str(tmp_path), "mcpServers": [],
+        })["result"]["sessionId"]
+        writer.write(json.dumps({
+            "jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session_id, "prompt": [{"type": "text", "text": "hello"}]},
+        }) + "\n")
+        writer.flush()
+        assert json.loads(reader.readline())["method"] == "session/update"
+        assert json.loads(reader.readline())["id"] == 3
+        port = agent.submission_options[-1]["connection_provider_port"]
+        decision = port.authorize_provider_call(
+            RootProviderAdmission("attached-turn", "attach-v1", True), ProviderCallClass.ROOT,
+        )
+        assert decision.state is (
+            ProviderAdmissionState.GRANTED if grant else ProviderAdmissionState.DENIED
+        )
+        assert len(decisions) == 2
+        assert decisions[-1]["launch_id"] == "attach-launch"
+    finally:
+        client.close()
+        reader.close()
+        writer.close()
+        worker.join(2)
+        transport.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SCM_RIGHTS attach requires POSIX")
+def test_attach_without_authority_fd_is_rejected_before_acp(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.resident_socket.resolve_runtime",
+        lambda runtime_id, *, registry_path: SimpleNamespace(agent_dir=tmp_path, workspace=tmp_path),
+    )
+    agent = _Agent()
+    transport = ResidentAcpSocket(agent, tmp_path)
+    transport.start()
+    client, reader, writer = _connect(transport.path)
+    try:
+        writer.write(json.dumps({
+            "type": "puffo.attach/1", "runtime_id": "runtime-1",
+            "registry": str(tmp_path / "registry.json"), "launch_id": "attach-launch",
+        }) + "\n")
+        writer.flush()
+        assert json.loads(reader.readline()) == {"ok": False, "reason": "attach_rejected"}
+        assert reader.readline() == ""
+        assert agent.submissions == []
+    finally:
+        client.close()
+        reader.close()
+        writer.close()
+        transport.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SCM_RIGHTS attach requires POSIX")
+def test_attach_rejects_registry_identity_mismatch_and_closes_received_fd(tmp_path, monkeypatch):
+    from lingtai.adapters.acp.resident_socket import _attach_authority
+
+    registry = tmp_path / "registry.json"
+    registry.touch()
+    other = tmp_path / "other-agent"
+    other.mkdir()
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.resident_socket.resolve_runtime",
+        lambda runtime_id, *, registry_path: SimpleNamespace(agent_dir=other, workspace=tmp_path),
+    )
+    received, driver = socket.socketpair()
+    fd = received.detach()
+    frame = json.dumps({
+        "type": "puffo.attach/1", "runtime_id": "runtime-1",
+        "registry": str(registry), "launch_id": "attach-launch",
+    }).encode() + b"\n"
+    try:
+        with pytest.raises(ValueError, match="runtime_agent_mismatch"):
+            _attach_authority(frame, [fd], tmp_path)
+        driver.settimeout(2)
+        assert driver.recv(1) == b""
+    finally:
+        driver.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SCM_RIGHTS attach requires POSIX")
+def test_attach_rejects_driver_hello_launch_id_mismatch(tmp_path, monkeypatch):
+    from lingtai.adapters.acp.resident_socket import _attach_authority
+
+    registry = tmp_path / "registry.json"
+    registry.touch()
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.resident_socket.resolve_runtime",
+        lambda runtime_id, *, registry_path: SimpleNamespace(agent_dir=tmp_path, workspace=tmp_path),
+    )
+    received, driver = socket.socketpair()
+    fd = received.detach()
+
+    def hello():
+        size = struct.unpack("!I", driver.recv(4))[0]
+        request = json.loads(driver.recv(size))
+        response = {
+            "version": 1, "call_id": request["call_id"], "role": "root",
+            "launch_id": "another-launch", "capability": None,
+        }
+        body = json.dumps(response).encode()
+        driver.sendall(struct.pack("!I", len(body)) + body)
+
+    worker = threading.Thread(target=hello)
+    worker.start()
+    frame = json.dumps({
+        "type": "puffo.attach/1", "runtime_id": "runtime-1",
+        "registry": str(registry), "launch_id": "attach-launch",
+    }).encode() + b"\n"
+    try:
+        with pytest.raises(ValueError, match="authority_binding_mismatch"):
+            _attach_authority(frame, [fd], tmp_path)
+        worker.join(2)
+        assert not worker.is_alive()
+        driver.settimeout(2)
+        assert driver.recv(1) == b""
+    finally:
+        driver.close()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="owner-only POSIX socket")
@@ -258,7 +433,13 @@ def test_run_owns_socket_inside_agent_lifetime(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_clean_signal_files", lambda _path: None)
     monkeypatch.setattr(cli, "_install_signal_handlers", lambda _path, _agent: None)
     monkeypatch.setattr(cli, "load_init", lambda _path: {})
-    monkeypatch.setattr(cli, "build_agent", lambda _data, _path, **_kw: _FakeAgent())
+    def build(_data, _path, **options):
+        assert isinstance(
+            options["_provider_call_admission_port"], ConnectionScopedProviderAdmissionPort
+        )
+        return _FakeAgent()
+
+    monkeypatch.setattr(cli, "build_agent", build)
     monkeypatch.setattr(venv_resolve, "resolve_venv", lambda _data: tmp_path)
     monkeypatch.setattr(resident_socket, "ResidentAcpSocket", _Socket)
 
