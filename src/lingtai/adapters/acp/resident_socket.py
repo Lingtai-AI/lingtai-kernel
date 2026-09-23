@@ -9,6 +9,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import logging
 import os
 import socket
 import stat
@@ -29,6 +30,26 @@ from lingtai.kernel.provider_admission import ConnectionScopedProviderAdmissionP
 
 _ATTACH_FRAME_LIMIT = 8192
 _FIRST_FRAME_LIMIT = 64 * 1024
+_log = logging.getLogger(__name__)
+_ATTACH_REJECTION_CODES = frozenset({
+    "invalid_attach_frame",
+    "authority_fd_missing",
+    "authority_fd_count_invalid",
+    "runtime_registry_unavailable",
+    "runtime_agent_mismatch",
+    "authority_binding_mismatch",
+    "attach_frame_too_large",
+    "resident_provider_gate_unavailable",
+})
+
+
+def _attach_rejection_code(exc: Exception) -> str:
+    """Log only fixed codes; exception text may contain private paths or IDs."""
+    if isinstance(exc, PuffoV0RegistryError):
+        return "runtime_resolution_failed"
+    if isinstance(exc, ValueError) and str(exc) in _ATTACH_REJECTION_CODES:
+        return str(exc)
+    return "authority_handshake_failed"
 
 
 class _PrefixedLines:
@@ -104,9 +125,12 @@ def _attach_authority(frame: bytes, fds: list[int], agent_dir: Path):
                 not isinstance(payload[key], str) or not payload[key]
                 for key in ("runtime_id", "registry", "launch_id")
             )
-            or len(fds) != 1
         ):
             raise ValueError("invalid_attach_frame")
+        if not fds:
+            raise ValueError("authority_fd_missing")
+        if len(fds) != 1:
+            raise ValueError("authority_fd_count_invalid")
         registry_path = Path(payload["registry"])
         if not registry_path.is_file():
             raise ValueError("runtime_registry_unavailable")
@@ -280,18 +304,19 @@ class ResidentAcpSocket:
                     if len(first) > _ATTACH_FRAME_LIMIT:
                         for fd in fds:
                             os.close(fd)
-                        raise ValueError("attach frame too large")
+                        raise ValueError("attach_frame_too_large")
                     if not isinstance(
                         getattr(self._agent, "_provider_call_admission_port", None),
                         ConnectionScopedProviderAdmissionPort,
                     ):
                         for fd in fds:
                             os.close(fd)
-                        raise ValueError("resident provider gate is not connection-scoped")
+                        raise ValueError("resident_provider_gate_unavailable")
                     authority, fixed_workspace = _attach_authority(
                         first, fds, self._agent_dir
                     )
-                except Exception:
+                except Exception as exc:
+                    _log.warning("resident ACP attach rejected: %s", _attach_rejection_code(exc))
                     client.sendall(b'{"ok":false,"reason":"attach_rejected"}\n')
                     return
                 try:

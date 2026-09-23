@@ -149,7 +149,7 @@ def test_attach_fd_is_connection_scoped_and_provider_decision_is_not_local(tmp_p
 
 
 @pytest.mark.skipif(os.name != "posix", reason="SCM_RIGHTS attach requires POSIX")
-def test_attach_without_authority_fd_is_rejected_before_acp(tmp_path, monkeypatch):
+def test_attach_without_authority_fd_is_rejected_before_acp(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(
         "lingtai.adapters.acp.resident_socket.resolve_runtime",
         lambda runtime_id, *, registry_path: SimpleNamespace(agent_dir=tmp_path, workspace=tmp_path),
@@ -167,6 +167,8 @@ def test_attach_without_authority_fd_is_rejected_before_acp(tmp_path, monkeypatc
         assert json.loads(reader.readline()) == {"ok": False, "reason": "attach_rejected"}
         assert reader.readline() == ""
         assert agent.submissions == []
+        assert "resident ACP attach rejected: authority_fd_missing" in caplog.text
+        assert str(tmp_path) not in caplog.text
     finally:
         client.close()
         reader.close()
