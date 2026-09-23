@@ -369,7 +369,9 @@ Each spawn appends a ledger record (`event: "avatar"`, `name`, `working_dir`,
 - POSIX (`src/lingtai/adapters/posix/avatar_launcher.py`) uses
   `start_new_session=True`; `terminate()` is one-process TERM and
   `force_terminate()` is one-process KILL. Neither operation claims tree
-  management.
+  management. It strips the parent-only `LINGTAI_ACP_SOCKET_AGENT_DIR` refresh
+  marker from both inherited and explicit Avatar environment overrides; an
+  Avatar never gains a generic resident ACP endpoint from its parent opt-in.
 - Windows (`src/lingtai/adapters/windows/avatar_launcher.py`,
   `WindowsAvatarLauncherAdapter`) uses
   `creationflags=_win32.DETACHED_CREATIONFLAGS` (new process group + no window,

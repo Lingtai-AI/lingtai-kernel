@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/__init__.py
   - src/lingtai/adapters/acp/driver_authority.py
+  - src/lingtai/adapters/acp/resident_socket.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
@@ -29,6 +30,7 @@ related_files:
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - pyproject.toml
   - tests/test_acp_stdio.py
+  - tests/test_resident_acp_socket.py
   - tests/test_puffo_v0_profile.py
   - tests/test_puffo_admission_witness.py
   - tests/test_driver_authority_adapter.py
@@ -46,16 +48,18 @@ related_files:
 maintenance: |
   Keep this contract reciprocal with its Anatomy and root CONTRACT.md. Update
   ACP translation, the Core turn boundary, composition, manual, and settlement/
-  wire tests together. This is the v1 local-stdio slice only; widening sessions,
+  wire tests together. The resident local-socket slice is generic, not a Puffo
+  profile; widening sessions,
   content, MCP, workspace, permissions, or transport requires an explicit
   contract change rather than an undocumented fallback.
 ---
-# ACP local stdio
+# ACP local driving adapters
 
 ## Purpose
 
-Expose one existing LingTai agent to a local Agent Client Protocol v1 client
-through newline-delimited JSON-RPC on stdio. ACP is a driving Adapter: it
+Expose one LingTai agent to a local Agent Client Protocol v1 client through
+newline-delimited JSON-RPC on either a separate stdio host or an opt-in socket
+owned by the already-running Agent. ACP is a driving Adapter: it
 translates protocol messages into the protocol-neutral correlated inbound-turn
 API owned by Core and never reaches into provider/session/tool internals.
 
@@ -67,7 +71,8 @@ multi-session persistence are not advertised.
 ## Behavior
 
 Guarded by: [ACP001](BEHAVIORS.md#behavior-acp001) and
-[ACP002](BEHAVIORS.md#behavior-acp002).
+[ACP002](BEHAVIORS.md#behavior-acp002); the resident transport is guarded by
+[ACP003](BEHAVIORS.md#behavior-acp003).
 
 A successful process negotiates ACP protocol version `1`, creates exactly one
 opaque session, accepts baseline Text and ResourceLink prompt blocks, emits the
@@ -118,6 +123,10 @@ operator locally provisions an existing persistent identity and canonical
 execution workspace under an opaque runtime id. The profile data plane receives
 only that id; it never accepts an agent directory, workspace path, executable,
 argv, environment, or MCP command from the remote caller.
+
+`ResidentAcpSocket` is a separate opt-in local transport owned by the existing
+`lingtai-agent run` process. It wraps one ACP server per connection but never
+constructs, starts, stops, or leases another Agent. It is not a Puffo profile.
 
 ## Contract rules
 
@@ -583,6 +592,37 @@ argv, environment, or MCP command from the remote caller.
     means *all* tools exported by that one Puffo service are available; it does
     not mean arbitrary MCP ingress. `puffo-v0` remains strictly `mcpServers: []`.
 
+## Resident socket transport
+
+Guarded by [ACP003](BEHAVIORS.md#behavior-acp003).
+
+`lingtai-agent run --acp-socket <dir>` opts a resident POSIX Agent into a
+same-UID, local-only ACP endpoint. The CLI stores the canonical target directory
+in `LINGTAI_ACP_SOCKET_AGENT_DIR`, which survives the refresh watcher's
+environment handoff but enables only that directory and is removed from Avatar
+launches. The read-only
+`lingtai-agent acp-socket-path <dir>` command prints the deterministic short
+path. The endpoint lives in a user-owned `0700` directory beneath `/tmp`, and
+the socket is `0600`. A non-owned, non-socket, or active colliding path is never
+unlinked; a stale refused socket may be replaced only after inode recheck.
+
+Only one client/session is admitted at a time. The server checks peer UID before
+reading ACP frames; a second or unverified client is closed. Each connection
+receives the existing ACP v1 one-session state machine, but session MCP is
+empty-only because the current Agent tool overlay is process-global. Disconnect,
+cancel, shutdown, and refresh close only the connection/endpoint; they do not
+call `Agent.stop()` or release `.agent.lock` independently. The `run` host alone
+retains ordinary lifecycle ownership and removes only the socket inode it
+created. Unsupported platforms fail explicitly when opted in.
+
+This endpoint does **not** accept Puffo runtime IDs, claim Driver authentication,
+or install Puffo provider/derived-launch admission. Existing `puffo-v0/v1`
+profiles still require their controlled launched process and inherited Driver
+authority. Using this generic local socket as a Puffo production connector is
+unsupported until a distinct authenticated attach contract and per-turn MCP/
+admission isolation are implemented; same UID is not proof of Puffo Driver
+identity.
+
 ## Contract tests
 
 `tests/test_acp_stdio.py` pins request-id and error-taxonomy conformance,
@@ -593,6 +633,11 @@ session/busy/unsupported errors, strict JSON line framing, invalid UTF-8, EOF,
 blocked coordinator/prompt output, FIFO/generation/queue-full/write-failure paths,
 Agent-stop-with-open-stdin, Windows duplicate-before-cleanup, typed quiescence,
 and CLI Python-stdout quarantine/hard-exit ownership.
+`tests/test_resident_acp_socket.py` pins owner-only short-path binding,
+same-UID admission, reconnect without Agent shutdown, collision/stale handling,
+empty-only session MCP, read-only endpoint discovery, and Agent-directory-scoped
+refresh opt-in. `tests/test_avatar_launcher.py` pins stripping that marker from
+ordinary and derived Avatar launches.
 `tests/test_puffo_v0_profile.py` pins opaque-id provisioning/resolution,
 tamper/revocation rejection, full-tool composition, fixed-workspace and
 empty-session-MCP rejection, authenticated-adapter admission, profile CLI
