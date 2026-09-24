@@ -608,7 +608,12 @@ the socket is `0600`. A non-owned, non-socket, or active colliding path is never
 unlinked; a stale refused socket may be replaced only after inode recheck.
 
 Only one client/session is admitted at a time. The server checks peer UID before
-reading ACP frames; a second or unverified client is closed. Each connection
+reading ACP frames; an unverified client is closed. A second client arriving
+while the current session is still active is closed. During close, the server
+waits a bounded interval for the previous session's private MCP lease to finish
+teardown before admitting the next client, so immediate close/reopen does not
+lose the attach handshake. A cleanup that exceeds the bound still fails closed.
+Each connection
 receives the existing ACP v1 one-session state machine. Generic local clients
 remain empty-MCP only; authenticated attaches may provide the fixed Puffo Core
 stdio descriptor described below. Disconnect,
@@ -658,9 +663,10 @@ that connection's correlated turns: it never publishes handlers or schemas to
 the resident Agent's global tool table. A later global name collision fails
 the attached turn closed rather than creating duplicate model-facing tools.
 Lease teardown closes the MCP child without changing ordinary Agent ingress.
-This implementation does not itself establish a production connector: real
-Agent/model and Puffo Core MCP turns still need cross-repository acceptance,
-and `session/load` remains unadvertised.
+This implementation does not itself establish a production connector: the
+manually constructed cross-repository Driver, real Agent/model, and Puffo Core
+MCP turns have passed, but Puffo RuntimeManager auto-attach wiring is not yet
+included. `session/load` remains unadvertised.
 
 ## Contract tests
 

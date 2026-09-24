@@ -88,8 +88,10 @@ from the canonical Agent directory. The socket is `0600` inside a per-user
 `0700` directory under `/tmp`; the server also checks the connecting process's
 UID. A client connects to that Unix socket and exchanges the same UTF-8
 newline-delimited ACP v1 JSON-RPC frames shown below. Each connection owns one
-session, and the resident host admits only one connection at a time. Closing
-the client cancels its active ACP turn but leaves the LingTai Agent, its other
+session, and the resident host admits only one connection at a time. An
+immediate reconnect waits for bounded previous-session MCP cleanup; a second
+client while the first remains active is still refused. Closing the client
+cancels its active ACP turn but leaves the LingTai Agent, its other
 ingresses, and `.agent.lock` running. A later client reconnects to the same
 host. `--acp-socket` sets `LINGTAI_ACP_SOCKET_AGENT_DIR` to this Agent's
 canonical directory; the normal refresh watcher inherits that scoped marker
@@ -101,8 +103,9 @@ Without the special preface this is generic same-user local ACP, not Puffo
 attach. Generic local `session/new` must pass `mcpServers: []`. Only an
 authenticated Puffo attach may pass the single fixed Puffo Core stdio server;
 its tools are private to that connection's turns and do not mutate the Agent's
-global tool table. Production use still requires real Agent/model and Puffo
-Core MCP cross-repository validation.
+global tool table. Real Agent/model and Puffo Core MCP have passed manual
+cross-repository attach tests; Puffo RuntimeManager auto-attach wiring remains
+the production cutover gate.
 
 ### Connection-authorized Puffo attach (integration testing only)
 
@@ -130,8 +133,8 @@ Agent's ordinary local ingress is permissive. Attach `session/new` may use
 as the `puffo-v1` process profile below. Other non-empty MCP input is rejected.
 The private MCP child closes with the connection; only attached correlated
 turns see its tool schemas or handlers. `session/load` is not advertised, so
-reconnect must create a new ACP session. Keep production cutover gated on a
-real Agent/model turn through the real Puffo Core service.
+reconnect must create a new ACP session. Keep production cutover gated on
+Puffo RuntimeManager auto-attach wiring and end-to-end acceptance.
 
 ### Separate stdio host
 

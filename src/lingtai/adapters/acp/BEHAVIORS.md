@@ -53,12 +53,14 @@ maintenance: |
 2. Confirm the attach first frame carries one Driver FD, registry identity matches the running directory, and the Driver hello launch id matches the first frame before any ACP request is accepted.
 3. Confirm a granted connection Port permits a provider call and records that Port's decision; a denied or missing connection Port prevents the underlying provider call despite the resident local path remaining permissive.
 4. Confirm a valid fixed Puffo Core descriptor creates only a connection-owned MCP view, and an attached correlated turn sees its tools while ordinary ingress does not. Invalid non-empty descriptors, duplicate/colliding catalogs, and a closed lease fail closed.
+5. Close an attached MCP session and immediately reconnect while its lease is still cleaning up: the next attach receives a handshake after teardown, while a genuinely active first session still excludes a second client.
 5. Confirm a missing descriptor rejects before ACP and connection close does not stop the Agent or leave an MCP child open.
 
 ### Expected evidence
 - [ ] Both focused files pass and no external provider is called.
 - [ ] Attached turns never use the resident local grant in place of connection authority.
 - [ ] Generic resident ACP remains empty-MCP only; attached non-empty MCP is fixed to Puffo Core and remains turn-local.
+- [ ] Immediate close/reopen does not lose a new attach during the previous MCP lease teardown.
 - [ ] No production claim until real Agent/model and Puffo Core cross-repository acceptance.
 
 ### Pass / Fail

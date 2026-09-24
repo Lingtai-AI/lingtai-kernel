@@ -15,6 +15,7 @@ import socket
 import stat
 import struct
 import threading
+import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -35,6 +36,8 @@ from lingtai.kernel.provider_admission import ConnectionScopedProviderAdmissionP
 
 _ATTACH_FRAME_LIMIT = 8192
 _FIRST_FRAME_LIMIT = 64 * 1024
+_CLOSE_START_GRACE = 0.1
+_MCP_TEARDOWN_GRACE = 5.5
 _log = logging.getLogger(__name__)
 _ATTACH_REJECTION_CODES = frozenset({
     "invalid_attach_frame",
@@ -195,6 +198,7 @@ class ResidentAcpSocket:
         self.path = resident_acp_socket_path(agent_dir)
         self._closed = threading.Event()
         self._lock = threading.Lock()
+        self._idle = threading.Condition(self._lock)
         self._listener: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._client: socket.socket | None = None
@@ -290,7 +294,25 @@ class ResidentAcpSocket:
                 allowed = self._check_peer(client)
             except Exception:
                 allowed = False
-            with self._lock:
+            with self._idle:
+                if allowed and self._client is not None:
+                    # A client that has just closed its socket may still own
+                    # this slot while its private MCP subprocess shuts down.
+                    # Give serve() a brief chance to observe EOF, then wait
+                    # for bounded teardown only if it is actually closing.
+                    deadline = time.monotonic() + _CLOSE_START_GRACE
+                    teardown_deadline = None
+                    while self._client is not None and not self._closed.is_set():
+                        closing = self._session is not None and self._session.closing
+                        if closing and teardown_deadline is None:
+                            teardown_deadline = time.monotonic() + _MCP_TEARDOWN_GRACE
+                        remaining = (teardown_deadline or deadline) - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        self._idle.wait(
+                            remaining if teardown_deadline is not None
+                            else min(remaining, 0.02)
+                        )
                 busy = self._client is not None
                 if allowed and not busy and not self._closed.is_set():
                     self._client = client
@@ -397,10 +419,11 @@ class ResidentAcpSocket:
             if writer is not None:
                 writer.close()
             client.close()
-            with self._lock:
+            with self._idle:
                 if self._client is client:
                     self._client = None
                     self._session = None
+                    self._idle.notify_all()
 
     def _remove_owned_socket(self) -> None:
         if self._socket_inode is None:
@@ -413,6 +436,8 @@ class ResidentAcpSocket:
 
     def close(self) -> None:
         self._closed.set()
+        with self._idle:
+            self._idle.notify_all()
         listener = self._listener
         if listener is not None:
             listener.close()

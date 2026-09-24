@@ -214,7 +214,8 @@ and suppresses prompt frames that have not crossed the writer start check; typed
 Agent stop retains services/heartbeat/lease until execution quiescence is proven.
 The opt-in resident transport additionally owns one short Unix socket path in
 an owner-only `/tmp/lingtai-acp-<uid>/` directory, a listener thread, and at
-most one client; it removes only the socket inode it created on close.
+most one client; a waiting reconnect may take that slot only after bounded
+prior-session MCP cleanup. It removes only the socket inode it created on close.
 An attached client additionally owns one received Driver FD and its authenticated
 authority client until that connection ends; no authority is stored on Agent.
 

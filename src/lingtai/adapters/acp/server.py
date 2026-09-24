@@ -460,6 +460,11 @@ class AcpStdioServer:
         if lease is not None:
             lease.close()
 
+    @property
+    def closing(self) -> bool:
+        with self._state_lock:
+            return self._closing
+
     def _abort_transport(self) -> None:
         """Fail every queued batch closed after a fatal framing/write failure."""
 

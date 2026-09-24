@@ -367,6 +367,94 @@ def test_resident_socket_reconnects_without_stopping_agent(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="owner-only POSIX socket")
+@pytest.mark.parametrize("close_before_accept", [True, False])
+def test_attached_reconnect_waits_for_previous_mcp_cleanup(
+    tmp_path, monkeypatch, close_before_accept,
+):
+    """Close then open must not lose the next attach during MCP teardown."""
+    agent = _Agent()
+    lease_closing = threading.Event()
+    allow_lease_close = threading.Event()
+    second_accepted = threading.Event()
+    accepted = 0
+
+    def open_mcp(configs):
+        lease = SimpleNamespace(owner=agent, configs=configs, closed=False)
+
+        def close():
+            lease_closing.set()
+            assert allow_lease_close.wait(2)
+            lease.closed = True
+
+        lease.close = close
+        agent.connection_mcp_mounts.append(lease)
+        return lease
+
+    def check_peer(_client):
+        nonlocal accepted
+        accepted += 1
+        if accepted == 2:
+            second_accepted.set()
+        return True
+
+    agent.open_connection_mcp_stdio = open_mcp
+    monkeypatch.setattr(
+        "lingtai.adapters.acp.resident_socket._attach_authority",
+        lambda *_args, **_kwargs: (SimpleNamespace(close=lambda: None), None),
+    )
+    transport = ResidentAcpSocket(agent, tmp_path)
+    transport._check_peer = check_peer
+    transport.start()
+
+    def attach():
+        client, reader, writer = _connect(transport.path)
+        writer.write(json.dumps({"type": "puffo.attach/1"}) + "\n")
+        writer.flush()
+        return client, reader, writer
+
+    first = second = None
+    try:
+        first = attach()
+        assert json.loads(first[1].readline())["ok"] is True
+        _request(first[1], first[2], 1, "initialize", {"protocolVersion": 1})
+        response = _request(first[1], first[2], 2, "session/new", {
+            "cwd": str(tmp_path),
+            "mcpServers": [{
+                "name": "puffo", "command": sys.executable,
+                "args": ["-m", "puffo_agent.mcp.puffo_core_server"],
+                "env": [{"name": "PUFFO_LOCAL_SERVICE_TOKEN", "value": "test-token"}],
+            }],
+        })
+        assert response["result"]["sessionId"]
+        if close_before_accept:
+            first[0].shutdown(socket.SHUT_RDWR)
+        else:
+            second = attach()
+            assert second_accepted.wait(2)
+            first[0].shutdown(socket.SHUT_RDWR)
+        assert lease_closing.wait(2)
+        assert transport._client is not None
+        assert transport._session is not None and transport._session.closing
+
+        if second is None:
+            second = attach()
+            assert second_accepted.wait(2)
+        allow_lease_close.set()
+        assert json.loads(second[1].readline())["ok"] is True
+        assert _request(second[1], second[2], 3, "initialize", {
+            "protocolVersion": 1,
+        })["result"]["protocolVersion"] == 1
+    finally:
+        allow_lease_close.set()
+        for connection in (first, second):
+            if connection is not None:
+                connection[0].close()
+                connection[1].close()
+                connection[2].close()
+        transport.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="owner-only POSIX socket")
 def test_resident_socket_rejects_session_mcp_and_does_not_replace_live_socket(tmp_path):
     agent = _Agent()
     first = ResidentAcpSocket(agent, tmp_path)
