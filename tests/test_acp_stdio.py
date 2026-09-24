@@ -136,6 +136,15 @@ class _SessionMcpAgent(_Agent):
         return self.lease
 
 
+def test_connection_authorized_acp_refuses_process_global_session_mcp():
+    agent = _SessionMcpAgent(_Handle("placeholder"))
+    with pytest.raises(ValueError, match="cannot mount session MCP"):
+        AcpStdioServer(
+            agent, io.StringIO(), io.StringIO(),
+            connection_provider_port=object(), connection_derived_port=object(),
+        )
+
+
 def test_session_new_canonicalizes_existing_directory_and_mounts_stdio_mcp(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

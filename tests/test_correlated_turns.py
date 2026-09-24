@@ -36,8 +36,17 @@ from lingtai.kernel.turns import (
 )
 from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
 from lingtai.kernel.turn_events import current_turn_tool_observer
+from lingtai.kernel.turn_tool_overlay import current_turn_tool_overlay
+from lingtai.kernel.base_agent.tools import _build_tool_schemas
 from lingtai.kernel.turn_permissions import current_turn_permission_broker
-from lingtai.kernel.provider_admission import current_provider_admission
+from lingtai.kernel.provider_admission import (
+    ConnectionScopedProviderAdmissionPort,
+    ProviderAdmittedLLMService,
+    ProviderAdmissionError,
+    ProviderAdmissionState,
+    ProviderCallDecision,
+    current_provider_admission,
+)
 
 
 def test_canonical_message_type_inventory_is_complete():
@@ -135,6 +144,105 @@ def test_correlated_turn_settles_normal_with_collected_text(tmp_path, monkeypatc
 
     assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
     assert handle.result().text == "answer"
+
+
+@pytest.mark.parametrize("granted", [True, False])
+def test_attached_correlated_turn_binds_connection_port_on_real_loop(tmp_path, monkeypatch, granted):
+    agent = _agent(tmp_path)
+    calls = []
+    decisions = []
+
+    class ConnectionPort:
+        def authorize_provider_call(self, parent, call_class):
+            decisions.append((parent, call_class))
+            return ProviderCallDecision(
+                ProviderAdmissionState.GRANTED if granted else ProviderAdmissionState.DENIED,
+                "allowed" if granted else "denied_by_connection",
+            )
+
+    class DerivedPort:
+        def authorize_derived_launch(self, parent, capability):
+            raise AssertionError("not a derived turn")
+
+    class InnerSession:
+        def send(self, message):
+            calls.append(message)
+            return message
+
+    class InnerService:
+        def create_session(self):
+            return InnerSession()
+
+    service = ProviderAdmittedLLMService(InnerService(), ConnectionScopedProviderAdmissionPort())
+    handle = submit_turn(
+        agent, "attached", origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+        connection_provider_port=ConnectionPort(), connection_derived_port=DerivedPort(),
+    )
+
+    def fake_handle(current, msg):
+        try:
+            service.create_session().send(msg.content)
+        except ProviderAdmissionError:
+            pass
+        current._shutdown.set()
+        return {"text": "done", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+    assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
+    assert len(decisions) == 1
+    assert decisions[0][0].connection_authority_required is True
+    assert calls == (["attached"] if granted else [])
+
+
+def test_attached_tool_overlay_is_bound_for_only_its_correlated_turn(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    agent._intrinsics = {}
+    agent._tool_handlers = {}
+    agent._tool_schemas = []
+    overlay = SimpleNamespace(
+        owner=agent, closed=False, schemas=(), handlers={"puffo_read_inbox": lambda args: args},
+    )
+    tool_resets = []
+    agent._chat = SimpleNamespace(
+        interface=_Interface(), update_tools=lambda schemas: tool_resets.append(schemas),
+    )
+    agent._build_tool_schemas = lambda: _build_tool_schemas(agent)
+
+    class ConnectionPort:
+        def authorize_provider_call(self, parent, call_class):
+            return ProviderCallDecision(ProviderAdmissionState.GRANTED, "allowed")
+
+    class DerivedPort:
+        def authorize_derived_launch(self, parent, capability):
+            raise AssertionError("not a derived turn")
+
+    first = submit_turn(
+        agent, "attached", origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+        connection_provider_port=ConnectionPort(), connection_derived_port=DerivedPort(),
+        connection_tool_overlay=overlay,
+    )
+    entered = threading.Event()
+    seen = []
+
+    def fake_handle(current, msg):
+        seen.append((msg.content, current_turn_tool_overlay(current)))
+        if msg.content == "attached":
+            entered.set()
+        else:
+            current._shutdown.set()
+        return {"text": "done", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    worker = threading.Thread(target=turn._run_loop, args=(agent,))
+    worker.start()
+    assert entered.wait(timeout=5)
+    second = submit_turn(agent, "ordinary")
+    assert first.result(timeout=5).outcome is TurnOutcome.NORMAL
+    assert second.result(timeout=5).outcome is TurnOutcome.NORMAL
+    worker.join(timeout=5)
+    assert seen == [("attached", overlay), ("ordinary", None)]
+    assert tool_resets == [[]]
 
 
 def test_consecutive_correlated_turns_reset_execution_workspace(tmp_path, monkeypatch):

@@ -11,6 +11,10 @@ from lingtai.kernel.llm import FunctionSchema
 from lingtai.kernel.llm.interface import ChatInterface
 from lingtai.kernel.session import SessionManager
 from lingtai.services.session_mcp import StdioMCPServerConfig
+from lingtai.kernel.turn_tool_overlay import (
+    bind_turn_tool_overlay, current_turn_tool_overlay, reset_turn_tool_overlay,
+)
+from lingtai.kernel.base_agent.tools import _build_tool_schemas, _dispatch_tool
 
 
 class _Agent:
@@ -123,6 +127,59 @@ def test_session_mcp_publishes_all_tools_and_close_removes_only_owned():
     lease.close()
     assert set(agent._tool_handlers) == {"existing"}
     assert _Client.made[0].closed
+
+
+def test_connection_mcp_tool_view_is_turn_local_and_never_published_globally():
+    agent = _Agent()
+    _Client.plans = [[{
+        "name": "puffo_read_inbox", "schema": {"type": "object", "properties": {}},
+        "description": "read Puffo inbox",
+    }]]
+    lease = session_mcp.open_connection_mcp_stdio(agent, (_config("puffo"),))
+    assert set(agent._tool_handlers) == {"existing"}
+    assert agent._tool_schemas == []
+    assert current_turn_tool_overlay(agent) is None
+    assert "puffo_read_inbox" not in {s.name for s in _build_tool_schemas(agent)}
+
+    token = bind_turn_tool_overlay(lease)
+    try:
+        assert current_turn_tool_overlay(agent) is lease
+        assert "puffo_read_inbox" in {s.name for s in _build_tool_schemas(agent)}
+        result = _dispatch_tool(agent, SimpleNamespace(
+            name="puffo_read_inbox", args={"_reasoning": "check"}, id="call-1",
+        ))
+        assert result == {"name": "puffo_read_inbox", "args": {}}
+    finally:
+        reset_turn_tool_overlay(token)
+    assert "puffo_read_inbox" not in {s.name for s in _build_tool_schemas(agent)}
+    lease.close()
+    assert _Client.made[0].closed
+
+
+def test_connection_mcp_rejects_collisions_and_closes_partial_start():
+    agent = _Agent()
+    _Client.plans = [[{"name": "first", "schema": {}}], [{"name": "existing", "schema": {}}]]
+    with pytest.raises(ValueError, match="collision"):
+        session_mcp.open_connection_mcp_stdio(agent, (_config("one"), _config("two")))
+    assert all(client.closed for client in _Client.made)
+    assert set(agent._tool_handlers) == {"existing"}
+
+
+def test_connection_mcp_closed_or_late_collision_fails_closed():
+    agent = _Agent()
+    _Client.plans = [[{"name": "puffo_read_inbox", "schema": {}}]]
+    lease = session_mcp.open_connection_mcp_stdio(agent, (_config(),))
+    token = bind_turn_tool_overlay(lease)
+    try:
+        agent._tool_handlers["puffo_read_inbox"] = lambda args: args
+        with pytest.raises(RuntimeError, match="collides"):
+            current_turn_tool_overlay(agent)
+        agent._tool_handlers.pop("puffo_read_inbox")
+        lease.close()
+        with pytest.raises(RuntimeError, match="unavailable"):
+            current_turn_tool_overlay(agent)
+    finally:
+        reset_turn_tool_overlay(token)
 
 
 def test_session_mcp_rebuilds_managed_noop_chat_on_mount_and_close():

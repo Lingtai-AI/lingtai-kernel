@@ -18,6 +18,7 @@ related_files:
   - src/lingtai/cli.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/turn_tool_overlay.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
@@ -607,21 +608,65 @@ the socket is `0600`. A non-owned, non-socket, or active colliding path is never
 unlinked; a stale refused socket may be replaced only after inode recheck.
 
 Only one client/session is admitted at a time. The server checks peer UID before
-reading ACP frames; a second or unverified client is closed. Each connection
-receives the existing ACP v1 one-session state machine, but session MCP is
-empty-only because the current Agent tool overlay is process-global. Disconnect,
+reading ACP frames; an unverified client is closed. A second client arriving
+while the current session is still active is closed. During close, the server
+waits a bounded interval for the previous session's private MCP lease to finish
+teardown before admitting the next client, so immediate close/reopen does not
+lose the attach handshake. A cleanup that exceeds the bound still fails closed.
+Each connection
+receives the existing ACP v1 one-session state machine. Generic local clients
+remain empty-MCP only; authenticated attaches may provide the fixed Puffo Core
+stdio descriptor described below. Disconnect,
 cancel, shutdown, and refresh close only the connection/endpoint; they do not
 call `Agent.stop()` or release `.agent.lock` independently. The `run` host alone
 retains ordinary lifecycle ownership and removes only the socket inode it
 created. Unsupported platforms fail explicitly when opted in.
 
-This endpoint does **not** accept Puffo runtime IDs, claim Driver authentication,
-or install Puffo provider/derived-launch admission. Existing `puffo-v0/v1`
-profiles still require their controlled launched process and inherited Driver
-authority. Using this generic local socket as a Puffo production connector is
-unsupported until a distinct authenticated attach contract and per-turn MCP/
-admission isolation are implemented; same UID is not proof of Puffo Driver
-identity.
+Without an attach preface this remains generic local ACP and has no Puffo
+authority. An explicit attach preface is governed separately below; same UID
+alone is not proof of Puffo Driver identity.
+
+## Puffo resident attach
+
+The optional connection-first `puffo.attach/1` line carries exactly
+`type`, `runtime_id`, `registry`, and `launch_id`, together with exactly one
+`SCM_RIGHTS` descriptor. The line is bounded to 8192 bytes. Before ACP begins,
+the adapter resolves the runtime through the existing secure operator registry,
+whose path is fixed by the resident server's operator configuration at startup
+(`LINGTAI_PUFFO_V0_REGISTRY` or the profile default). The untrusted preface's
+`registry` must exactly match that path and cannot select a different valid
+registry, including after the authoritative runtime has been revoked. The adapter
+requires its canonical `agent_dir` to equal the resident process's directory,
+fixes ACP `session/new.cwd` to that runtime's provisioned workspace,
+consumes the descriptor as a root `DriverAuthorityClient`, and requires the
+Driver hello's `launch_id` to equal the preface and its `runtime_id` to equal
+both the preface and resolved registry entry. The optional hello `runtime_id`
+remains optional for the older spawn profile, but is mandatory for attach.
+Invalid/missing descriptors,
+unknown/revoked/mismatched bindings, or a wrong Driver role/id produce a
+bounded `{"ok":false,"reason":"attach_rejected"}` line and close. A valid
+preface receives `{"ok":true,"kernel_version":"..."}`; the same socket then
+speaks ordinary ACP v1, including `initialize` and `session/new`. See
+[ACP004](BEHAVIORS.md#behavior-acp004).
+
+The consumed authority and derived-launch adapter belong to that connection,
+not to the resident Agent's global permissive policy. The ACP correlated turn
+binds both Ports to its run-loop context; the resident provider-service wrapper
+asks the connection Port before **each** attached provider call. A missing,
+denied, malformed, or disconnected connection authority cannot reach provider
+I/O. Ordinary local ingress retains its existing behavior. Disconnect closes
+the authority and ACP session, not the Agent or workdir lease. Attach accepts
+`mcpServers: []` for transport tests or exactly the Puffo-v1 fixed Core stdio
+descriptor (name `puffo`, exact module arguments, non-empty local-service token).
+The latter starts a connection-owned MCP lease whose catalog is bound only to
+that connection's correlated turns: it never publishes handlers or schemas to
+the resident Agent's global tool table. A later global name collision fails
+the attached turn closed rather than creating duplicate model-facing tools.
+Lease teardown closes the MCP child without changing ordinary Agent ingress.
+This implementation does not itself establish a production connector: the
+manually constructed cross-repository Driver, real Agent/model, and Puffo Core
+MCP turns have passed, but Puffo RuntimeManager auto-attach wiring is not yet
+included. `session/load` remains unadvertised.
 
 ## Contract tests
 

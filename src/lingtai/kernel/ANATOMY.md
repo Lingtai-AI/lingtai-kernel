@@ -61,6 +61,7 @@ related_files:
   - src/lingtai/kernel/maintenance/ANATOMY.md
   - src/lingtai/kernel/message.py
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/turn_tool_overlay.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py

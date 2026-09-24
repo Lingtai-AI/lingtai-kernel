@@ -407,6 +407,13 @@ def run(working_dir: Path, *, acp_socket: bool = False) -> None:
     from lingtai.tools.avatar._launcher import DERIVED_AVATAR_EXECUTION_ENV
 
     build_options = {}
+    resident_socket_enabled = (
+        acp_socket
+        or os.environ.get("LINGTAI_ACP_SOCKET_AGENT_DIR") == str(working_dir.resolve())
+    )
+    if resident_socket_enabled:
+        from lingtai.kernel.provider_admission import ConnectionScopedProviderAdmissionPort
+        build_options["_provider_call_admission_port"] = ConnectionScopedProviderAdmissionPort()
     if (
         _derived_avatar_requires_admission(working_dir)
         or os.environ.get(DERIVED_AVATAR_EXECUTION_ENV) == "1"
@@ -429,10 +436,7 @@ def run(working_dir: Path, *, acp_socket: bool = False) -> None:
     resident_acp = None
     try:
         agent.start()
-        if (
-            acp_socket
-            or os.environ.get("LINGTAI_ACP_SOCKET_AGENT_DIR") == str(working_dir.resolve())
-        ):
+        if resident_socket_enabled:
             from lingtai.adapters.acp.resident_socket import ResidentAcpSocket
 
             resident_acp = ResidentAcpSocket(agent, working_dir)

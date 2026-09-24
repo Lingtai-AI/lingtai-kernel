@@ -14,6 +14,7 @@ related_files:
   - src/lingtai/cli_acp.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/turn_tool_overlay.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
@@ -36,6 +37,36 @@ maintenance: |
   behavior changes; do not turn an omitted capability into an implied promise.
 ---
 # ACP Local Driving Adapter Behavior Tests
+
+## Behavior ACP004 — resident attach binds Driver authority to one connection
+
+- **id**: ACP004
+- **title**: resident attach binds Driver authority to one connection
+- **guards**: `acp-local-stdio` § Puffo resident attach — see [CONTRACT.md](CONTRACT.md#puffo-resident-attach)
+- **supersedes**: `tests/test_resident_acp_socket.py`, `tests/test_provider_admission.py` (retained as bottom asserts)
+- **runner**: a LingTai coding agent on POSIX with shell access
+- **prerequisites**: project Python and pytest; no live Agent sharing the test directory
+- **estimate**: ≈ 1 minute
+
+### Steps
+1. Run `python -m pytest -q -x tests/test_resident_acp_socket.py tests/test_provider_admission.py`.
+2. Confirm the attach first frame carries one Driver FD, registry identity matches the running directory, and the Driver hello launch id matches the first frame before any ACP request is accepted.
+3. Confirm a granted connection Port permits a provider call and records that Port's decision; a denied or missing connection Port prevents the underlying provider call despite the resident local path remaining permissive.
+4. Confirm a valid fixed Puffo Core descriptor creates only a connection-owned MCP view, and an attached correlated turn sees its tools while ordinary ingress does not. Invalid non-empty descriptors, duplicate/colliding catalogs, and a closed lease fail closed.
+5. Close an attached MCP session and immediately reconnect while its lease is still cleaning up: the next attach receives a handshake after teardown, while a genuinely active first session still excludes a second client.
+5. Confirm a missing descriptor rejects before ACP and connection close does not stop the Agent or leave an MCP child open.
+
+### Expected evidence
+- [ ] Both focused files pass and no external provider is called.
+- [ ] Attached turns never use the resident local grant in place of connection authority.
+- [ ] Generic resident ACP remains empty-MCP only; attached non-empty MCP is fixed to Puffo Core and remains turn-local.
+- [ ] Immediate close/reopen does not lose a new attach during the previous MCP lease teardown.
+- [ ] No production claim until real Agent/model and Puffo Core cross-repository acceptance.
+
+### Pass / Fail
+Pass only if the connection owns the admission Port and deny prevents provider
+I/O. Fail if a missing FD enters ACP or if local admission overrides Driver
+denial.
 
 ## Behavior ACP003 — resident local ACP reconnects without becoming a Puffo profile
 

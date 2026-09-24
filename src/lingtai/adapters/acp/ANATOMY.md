@@ -23,6 +23,7 @@ related_files:
   - src/lingtai/kernel/provider_admission.py
   - src/lingtai/kernel/puffo_admission_witness.py
   - src/lingtai/kernel/tool_executor.py
+  - src/lingtai/kernel/turn_tool_overlay.py
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/base_agent/lifecycle.py
@@ -79,8 +80,13 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
 - `resident_socket.py` — opt-in, owner-only POSIX Unix socket around the same
   one-session ACP server and the already-started `run` Agent. Its short stable
   path, peer-UID gate, single-client ownership, stale-socket check, and teardown
-  belong to the outer Adapter; it neither acquires a second workdir lease nor
-  accepts Puffo profile MCP. Implements [ACP003](BEHAVIORS.md#behavior-acp003).
+  belong to the outer Adapter; it does not acquire a second workdir lease, and
+  generic local connections accept no session MCP. An optional first-frame `puffo.attach/1` receives
+  one Driver FD, checks registry identity against the resident directory, and
+  injects connection-owned authority and a private fixed Puffo Core MCP view
+  into ACP turns. Implements
+  [ACP003](BEHAVIORS.md#behavior-acp003) and
+  [ACP004](BEHAVIORS.md#behavior-acp004).
 - `puffo_v0.py` — local operator registry and typed ACP-only turn-origin policy
   for the identity/workspace-bound full-tool `puffo-v0`
   profile. It resolves an opaque runtime id to one canonical persistent identity
@@ -208,7 +214,10 @@ and suppresses prompt frames that have not crossed the writer start check; typed
 Agent stop retains services/heartbeat/lease until execution quiescence is proven.
 The opt-in resident transport additionally owns one short Unix socket path in
 an owner-only `/tmp/lingtai-acp-<uid>/` directory, a listener thread, and at
-most one client; it removes only the socket inode it created on close.
+most one client; a waiting reconnect may take that slot only after bounded
+prior-session MCP cleanup. It removes only the socket inode it created on close.
+An attached client additionally owns one received Driver FD and its authenticated
+authority client until that connection ends; no authority is stored on Agent.
 
 ## Notes
 
@@ -222,9 +231,11 @@ scope.
 Both Puffo profiles are a second gate on their controlled entrypoint, not host isolation:
 the same OS identity can still alter the registry or bypass it by launching the
 generic `--agent-dir` ACP command. That is an explicit host trust boundary.
-The resident socket is likewise generic local ACP, not an attach implementation
-for either Puffo profile; it disables session MCP rather than publishing a
-global tool overlay into the concurrently running Agent.
+The resident socket's ordinary path is generic local ACP. Its explicit Puffo
+attach path binds Driver authority and fixed Puffo Core MCP tools to its
+correlated turns without publishing a global tool overlay into the concurrently
+running Agent. It still needs real Agent/model and Puffo Core cross-repository
+acceptance before production use.
 
 `driver_authority.py` is process-local protocol state: one authenticated
 AF_UNIX stream, a bounded receive buffer, one request lock, endpoint identity,

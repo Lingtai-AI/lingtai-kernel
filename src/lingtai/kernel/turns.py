@@ -85,6 +85,9 @@ class _TurnControl:
     execution_workspace: ExecutionWorkspace | None = None
     tool_observer: TurnToolObserver | None = None
     permission_broker: TurnPermissionBroker | None = None
+    connection_provider_port: object | None = None
+    connection_derived_port: object | None = None
+    connection_tool_overlay: object | None = None
     cancel_requested: threading.Event = field(default_factory=threading.Event)
     future: Future[TurnResult] = field(default_factory=Future)
     cancel_callback: Callable[[str], bool] | None = None
@@ -204,6 +207,9 @@ def submit_turn(
     tool_observer: TurnToolObserver | None = None,
     permission_broker: TurnPermissionBroker | None = None,
     origin: TurnOrigin = TurnOrigin.LEGACY,
+    connection_provider_port=None,
+    connection_derived_port=None,
+    connection_tool_overlay=None,
 ) -> TurnHandle:
     """Queue one text turn and return its correlated terminal handle."""
 
@@ -225,6 +231,19 @@ def submit_turn(
         getattr(permission_broker, "request_permission", None)
     ):
         raise TypeError("permission_broker must define request_permission(request)")
+    if (connection_provider_port is None) != (connection_derived_port is None):
+        raise ValueError("connection admission requires both ports")
+    if connection_provider_port is not None and (
+        not callable(getattr(connection_provider_port, "authorize_provider_call", None))
+        or not callable(getattr(connection_derived_port, "authorize_derived_launch", None))
+    ):
+        raise TypeError("connection admission ports are invalid")
+    if connection_tool_overlay is not None and (
+        connection_provider_port is None
+        or connection_tool_overlay.owner is not agent
+        or connection_tool_overlay.closed
+    ):
+        raise ValueError("connection tool overlay requires live connection authority")
 
     shutdown = getattr(agent, "_shutdown", None)
     if shutdown is not None and shutdown.is_set():
@@ -245,6 +264,9 @@ def submit_turn(
         execution_workspace=execution_workspace,
         tool_observer=tool_observer,
         permission_broker=permission_broker,
+        connection_provider_port=connection_provider_port,
+        connection_derived_port=connection_derived_port,
+        connection_tool_overlay=connection_tool_overlay,
     )
     control.cancel_callback = lambda requested_id: cancel_turn(agent, requested_id)
     with lock:

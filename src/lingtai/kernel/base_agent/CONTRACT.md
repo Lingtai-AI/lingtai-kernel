@@ -440,7 +440,15 @@ Clause IDs are stable; each rule composes the linked normative source.
    `GRANTED`, `DENIED`, or `INDETERMINATE`; only `GRANTED` may reach the
    provider. No bound parent, a malformed Port response, a Port exception, an
    explicit denial, or indeterminate authority MUST prevent the underlying
-   provider request. The parent is a Core-private in-memory object;
+   provider request.
+   a resident ACP composition may instead inject a connection-scoped router:
+   ordinary local ingress retains historical provider behavior, while a
+   correlated attach turn binds its connection Ports for the whole logical
+   turn and must ask that Port for each provider call. A marked attach parent
+   without a bound connection Port fails closed; the resident local grant must
+   never substitute for it. This route is also guarded by
+   [ACP004](../../adapters/acp/BEHAVIORS.md#behavior-acp004).
+   The parent is a Core-private in-memory object;
    correlation ids, paths, registry digests, prompt content, and tool output
    are not credentials. A derived daemon/avatar call uses a typed parent with
    an internal non-serializable handle and crosses the Port again for each

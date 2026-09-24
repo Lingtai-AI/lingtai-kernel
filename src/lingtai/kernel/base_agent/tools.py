@@ -8,6 +8,7 @@ from ..config import tool_prose_section_enabled
 from ..llm import FunctionSchema
 from ..tool_glossary import append_tool_glossary
 from ..types import UnknownToolError
+from ..turn_tool_overlay import current_turn_tool_overlay
 
 # Canonical English reasoning-property description — language-independent.
 # Formerly ``t(lang, "tool.reasoning_description")`` in the kernel i18n catalog;
@@ -26,6 +27,9 @@ def _dispatch_tool(agent, tc) -> dict:
 
     Raises UnknownToolError if the tool name is not found.
     """
+    overlay = current_turn_tool_overlay(agent)
+    if overlay is not None and tc.name in overlay.handlers:
+        return overlay.handlers[tc.name](tc.args or {})
     if tc.name in agent._intrinsics:
         # Inject the wire tool_use_id so intrinsics that need to locate
         # their own ToolCallBlock in the live interface (notably
@@ -84,7 +88,8 @@ def _refresh_tool_inventory_section(agent) -> None:
             pkg = getattr(module, "__package__", None)
             rendered = append_tool_glossary(base, tool_package=pkg, language=lang)
             lines.append(f"### {name}\n{rendered}")
-    for s in agent._tool_schemas:
+    overlay = current_turn_tool_overlay(agent)
+    for s in (*agent._tool_schemas, *(overlay.schemas if overlay else ())):
         if s.description:
             rendered = append_tool_glossary(
                 s.description, tool_package=s.glossary_package, language=lang
@@ -131,7 +136,8 @@ def _build_tool_schemas(agent) -> list[FunctionSchema]:
             )
 
     # Capability + MCP schemas — inject reasoning into each
-    for s in agent._tool_schemas:
+    overlay = current_turn_tool_overlay(agent)
+    for s in (*agent._tool_schemas, *(overlay.schemas if overlay else ())):
         params = dict(s.parameters)
         props = dict(params.get("properties", {}))
         props.update(reasoning_prop)
