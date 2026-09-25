@@ -618,7 +618,7 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 ### Context overflow auto-recovery
 
 `OpenAIChatSession._run_with_overflow_recovery()` is inherited from `ChatSession` (`lingtai/kernel/llm/base.py:384`) and wraps any API call in a retry loop:
-- Detects overflow via `_is_context_overflow_error()` (`adapter.py:1324`): canonical OpenAI `BadRequestError` code `context_length_exceeded`, retained compatible-vendor `BadRequestError` message heuristics, and the observed generic `openai.APIError` only when its text contains the strong phrase `input exceeds the context window` (case-insensitive). RuntimeError and broad generic `context window` text are not overflow signals.
+- Detects overflow via `_is_context_overflow_error()` (`adapter.py:1324`): canonical OpenAI `BadRequestError` code `context_length_exceeded`, retained compatible-vendor `BadRequestError` message heuristics, and the shared case-insensitive `is_strong_input_token_limit_phrase` predicate (`lingtai/kernel/llm/base.py:59`) that requires both contiguous clauses `input tokens exceed` and `configured limit`. Generic `openai.APIError` remains narrowly allowlisted for either that two-clause predicate or the older strong phrase `input exceeds the context window`; `RuntimeError`, broad generic `context window` text, and either clause alone are not overflow signals.
 - `_trim_context_one_round()` (`lingtai/kernel/llm/base.py:303`) drops ~10% of non-system entries from the FRONT of the interface. Snaps cut point to never split `assistant[ToolCallBlock]` from `user[ToolResultBlock]`.
 - Max 10 rounds (`lingtai/kernel/llm/base.py:291`). On successful recovery, injects a `[kernel]` molt notice via `_inject_overflow_notice()` (`lingtai/kernel/llm/base.py:363`).
 
