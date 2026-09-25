@@ -2,8 +2,11 @@
 
 One daemon thread per account runs the getUpdates long-poll loop.
 Constructor stores config only — no threads, no API calls.
-start() calls getMe and spawns the polling thread.
-stop() signals the thread to stop and joins it.
+start() calls getMe and spawns the polling thread plus a poll-liveness
+watchdog (see ``_watchdog_loop``) that rebuilds the thread when it stops
+completing successful ``getUpdates`` calls; every poll request also carries a
+hard deadline so a wedged call raises instead of hanging forever.
+stop() signals the thread and the watchdog to stop and joins them.
 """
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ import logging
 import os
 import tempfile
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -34,6 +38,29 @@ httpx: Any = None
 
 _API_BASE = "https://api.telegram.org/bot{token}/{method}"
 _FILE_BASE = "https://api.telegram.org/file/bot{token}/{file_path}"
+
+# -- Poll liveness -----------------------------------------------------------
+# A wedged long poll (e.g. a name-resolution or connect step no httpx timeout
+# bounds) used to silence the channel permanently: the retry chain simply
+# stopped and nothing watched the thread.  The watchdog below samples "time
+# since the last successful getUpdates" and reports/restarts when it goes stale.
+_POLL_WATCHDOG_INTERVAL = 30.0
+_POLL_WATCHDOG_TIMEOUT_DEFAULT = 300.0
+# Hard deadline for one getUpdates call.  Telegram long-polls for 30s and the
+# shared client allows a 60s read timeout, so 90s is far above any healthy
+# request yet still finite: a wedged call raises TelegramPollTimeoutError and
+# rejoins the loop's existing backoff/retry path.
+_POLL_REQUEST_TIMEOUT_DEFAULT = 90.0
+
+
+class TelegramPollTimeoutError(TimeoutError):
+    """One Telegram request outlived its hard deadline.
+
+    Raised by the bounded call path when a request that httpx timeouts cannot
+    interrupt (notably ``getaddrinfo``) never returns.  It is deliberately an
+    ordinary exception: the poll loop's existing ``except Exception`` then logs
+    it and backs off, instead of the thread hanging silently forever.
+    """
 
 
 class TelegramRateLimitError(RuntimeError):
@@ -177,6 +204,8 @@ class TelegramAccount:
         taskcard_locale: Callable[[], str] | None = None,
         set_taskcard_locale: Callable[[str], None] | None = None,
         local_command_core: LocalCommandCore | None = None,
+        poll_watchdog_timeout: float | None = None,
+        poll_request_timeout: float | None = None,
     ) -> None:
         self.alias = alias
         self._bot_token = bot_token
@@ -200,6 +229,31 @@ class TelegramAccount:
 
         self._poll_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        # Poll-liveness state. ``_last_poll_success`` is a monotonic timestamp
+        # (never wall clock: a clock step must neither fake nor mask a stall),
+        # refreshed the moment a getUpdates response arrives. ``_poll_generation``
+        # is bumped by every (re)spawn so an abandoned thread that eventually
+        # wakes retires itself instead of polling alongside its successor.
+        # ``poll_watchdog_timeout`` overrides the default stall threshold;
+        # ``poll_request_timeout`` overrides the hard deadline of one poll
+        # request.
+        self._last_poll_success: float | None = None
+        self._poll_generation = 0
+        self._poll_lock = threading.Lock()
+        self._abandoned_poll_threads: list[threading.Thread] = []
+        self._watchdog_thread: threading.Thread | None = None
+        self._watchdog_stop = threading.Event()
+        self._watchdog_interval = _POLL_WATCHDOG_INTERVAL
+        self._watchdog_timeout = (
+            _POLL_WATCHDOG_TIMEOUT_DEFAULT
+            if poll_watchdog_timeout is None
+            else float(poll_watchdog_timeout)
+        )
+        self._poll_request_timeout = (
+            _POLL_REQUEST_TIMEOUT_DEFAULT
+            if poll_request_timeout is None
+            else float(poll_request_timeout)
+        )
         self._last_update_id: int = 0
         self._bot_info: dict | None = None
         self._last_verified_at: str | None = None
@@ -247,8 +301,69 @@ class TelegramAccount:
         if self._client is None:
             self._client = httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0))
 
-    def _request(self, method: str, **kwargs: Any) -> dict:
-        """Make one Bot API request. Returns the result or raises immediately."""
+    def _request(
+        self,
+        method: str,
+        *,
+        hard_timeout: float | None = None,
+        **kwargs: Any,
+    ) -> dict:
+        """Make one Bot API request. Returns the result or raises immediately.
+
+        ``hard_timeout`` adds an outer wall-clock deadline around the *whole*
+        call, including DNS resolution and connection setup, which the httpx
+        timeouts do not cover.  It defaults to ``None`` (unbounded) so every
+        existing caller keeps its current semantics; the poll loop passes its
+        own bound.  ``hard_timeout`` is keyword-only and consumed here: all
+        other keywords are forwarded verbatim to ``httpx.Client.post``.
+        """
+        if hard_timeout is None:
+            return self._request_once(method, **kwargs)
+        return self._call_with_deadline(
+            lambda: self._request_once(method, **kwargs), hard_timeout, method,
+        )
+
+    def _call_with_deadline(
+        self,
+        call: Callable[[], dict],
+        timeout: float,
+        label: str,
+    ) -> dict:
+        """Run ``call`` in a daemon thread; raise if it outlives ``timeout``.
+
+        Not ``concurrent.futures`` on purpose: its worker threads are
+        non-daemon and are joined at interpreter exit, so a request wedged for
+        good would hang process shutdown rather than just its own call.  An
+        abandoned daemon thread here can never block exit, and the caller (the
+        poll loop, or the watchdog behind it) always regains control.  The
+        price is that the abandoned call keeps running until it returns; it
+        cannot be cancelled, and it is not retried by this helper.
+        """
+        done = threading.Event()
+        box: dict[str, Any] = {}
+
+        def _run() -> None:
+            try:
+                box["value"] = call()
+            except BaseException as exc:  # re-raised in the calling thread
+                box["error"] = exc
+            finally:
+                done.set()
+
+        worker = threading.Thread(
+            target=_run, daemon=True, name=f"telegram-{label}-{self.alias}",
+        )
+        worker.start()
+        if not done.wait(timeout=timeout):
+            raise TelegramPollTimeoutError(
+                f"{label} exceeded its hard deadline of {timeout:g}s"
+            )
+        if "error" in box:
+            raise box["error"]
+        return box["value"]
+
+    def _request_once(self, method: str, **kwargs: Any) -> dict:
+        """The unbounded request body used by ``_request``."""
         self._ensure_client()
         resp = self._client.post(self._api_url(method), **kwargs)
         if resp.status_code == 429:
@@ -273,7 +388,7 @@ class TelegramAccount:
     # -- Lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
-        """Call getMe, register slash commands, start polling thread."""
+        """Call getMe, register slash commands, start polling thread + watchdog."""
         if self._poll_thread is not None:
             return
         self._ensure_client()
@@ -282,11 +397,13 @@ class TelegramAccount:
         self._save_state()
         self._register_commands()
         self._stop_event.clear()
-        self._poll_thread = threading.Thread(
-            target=self._poll_loop, daemon=True,
-            name=f"telegram-poll-{self.alias}",
+        self._watchdog_stop.clear()
+        self._spawn_poll_thread()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop, daemon=True,
+            name=f"telegram-poll-watchdog-{self.alias}",
         )
-        self._poll_thread.start()
+        self._watchdog_thread.start()
         logger.info("Telegram account '%s' started (@%s)",
                      self.alias, self._bot_info.get("username", "?"))
 
@@ -312,8 +429,14 @@ class TelegramAccount:
             )
 
     def stop(self) -> None:
-        """Signal polling thread to stop and join it."""
+        """Signal polling thread + watchdog to stop and join both."""
         self._stop_event.set()
+        # Retire the watchdog first: it must never respawn the poll thread
+        # during or after shutdown.
+        self._watchdog_stop.set()
+        watchdog, self._watchdog_thread = self._watchdog_thread, None
+        if watchdog is not None:
+            watchdog.join(timeout=5.0)
         if self._poll_thread is not None:
             self._poll_thread.join(timeout=5.0)
             self._poll_thread = None
@@ -323,12 +446,104 @@ class TelegramAccount:
 
     # -- Polling -------------------------------------------------------------
 
+    def _spawn_poll_thread(self, reason: str | None = None) -> None:
+        """Start the poll thread, retiring a wedged predecessor.
+
+        ``reason`` is set only by the watchdog.  A thread blocked inside a
+        syscall cannot be killed, so it is recorded as abandoned (and named in
+        the log) and left to retire itself through the generation check in
+        ``_poll_loop``.  The fresh timestamp gives the successor the whole
+        threshold to prove itself before the watchdog may act again, so a
+        restart cannot become a spin.
+        """
+        with self._poll_lock:
+            if self._stop_event.is_set():
+                return
+            old = self._poll_thread
+            if old is not None and old.is_alive():
+                if reason is None:
+                    return
+                self._abandoned_poll_threads.append(old)
+                logger.warning(
+                    "Telegram account '%s': abandoning poll thread '%s' (%s)",
+                    self.alias, old.name, reason,
+                )
+            self._poll_generation += 1
+            self._last_poll_success = time.monotonic()
+            thread = threading.Thread(
+                target=self._poll_loop, daemon=True,
+                name=f"telegram-poll-{self.alias}",
+            )
+            self._poll_thread = thread
+            thread.start()
+
+    def _watchdog_loop(self) -> None:
+        """Observe poll liveness and rebuild the poll thread when it wedges.
+
+        Runs on its own daemon thread precisely because it is the only thing
+        still running when the poll thread is stuck inside a call that never
+        returns.
+        """
+        while not self._watchdog_stop.wait(timeout=self._watchdog_interval):
+            self._watchdog_tick()
+
+    def _watchdog_tick(self) -> None:
+        """One watchdog observation: restart the poll thread if it looks dead."""
+        if self._stop_event.is_set():
+            return
+        reason = self._poll_stall_reason()
+        if reason is None:
+            return
+        logger.error(
+            "Telegram poll watchdog (%s): %s; restarting poll thread",
+            self.alias, reason,
+        )
+        self._spawn_poll_thread(reason=reason)
+
+    def _poll_stall_reason(self) -> str | None:
+        """Describe why polling looks dead, or ``None`` when it looks healthy."""
+        if self._stop_event.is_set():
+            return None
+        thread = self._poll_thread
+        if thread is None:
+            return "no poll thread is running"
+        if not thread.is_alive():
+            return f"poll thread '{thread.name}' exited"
+        if self._last_poll_success is None:
+            return None
+        stale_for = time.monotonic() - self._last_poll_success
+        if stale_for > self._watchdog_timeout:
+            return (
+                f"no successful getUpdates for {stale_for:.0f}s "
+                f"(threshold {self._watchdog_timeout:g}s)"
+            )
+        return None
+
+    def _retire_if_superseded(self, generation: int) -> bool:
+        """True when this poll thread was replaced and must retire.
+
+        The watchdog abandons (it cannot kill) a wedged poll thread and starts a
+        successor, so the old one must notice and stop instead of competing for
+        the same getUpdates offset.
+        """
+        if generation == self._poll_generation:
+            return False
+        logger.info(
+            "Telegram account '%s': poll thread '%s' retired (superseded)",
+            self.alias, threading.current_thread().name,
+        )
+        return True
+
     def _poll_loop(self) -> None:
         """Main loop — getUpdates with long poll, dispatch to on_message."""
+        generation = self._poll_generation
         while not self._stop_event.is_set():
+            if self._retire_if_superseded(generation):
+                return
             try:
                 updates = self._request(
                     "getUpdates",
+                    hard_timeout=self._poll_request_timeout,
                     json={
                         "offset": self._last_update_id + 1,
                         "timeout": 30,
@@ -345,6 +560,15 @@ class TelegramAccount:
                         "allowed_updates": list(tg_updates.KNOWN_UPDATE_BRANCHES),
                     },
                 )
+                # Liveness evidence: a full getUpdates round trip completed.
+                # Recorded before dispatch so a wedged handler still counts as a
+                # live channel (the watchdog guards the transport, not handlers).
+                self._last_poll_success = time.monotonic()
+                if self._retire_if_superseded(generation):
+                    # Superseded mid-flight: the successor re-fetches from the
+                    # same offset, so dropping this batch loses nothing and
+                    # avoids handing the agent the same update twice.
+                    return
                 for update in updates:
                     self._process_update(update)
             except Exception as e:
