@@ -389,51 +389,69 @@ child grown past 90 lines — the submanual must route agents to the installed
 CLI's live help (`qwen --version`, `qwen --help`, no subcommand), never become
 a maintained flag catalog.
 
-## Behavior D008 — active common-MCP CLI checkpoint and parent correction
+## Behavior D008 — live parent correction is durably admitted or compatibility-spooled and delivered once
 
 - **id**: D008
-- **title**: a live common-MCP CLI run records a cooperative checkpoint and
-  drains one parent correction without changing terminal truth
+- **title**: a marked/current native or common-MCP CLI run distinguishes durable
+  queue admission from exactly-once model delivery, while an unmarked/pre-upgrade
+  native owner honestly reports only legacy control-spool submission
 - **guards**: `daemon-contract` § daemon_common provides cooperative
   checkpoints and terminal completion
   ([CONTRACT.md](CONTRACT.md#3-daemon_common-provides-cooperative-checkpoints-and-terminal-completion))
-- **supersedes**: `tests/test_daemon_checkpoint.py` and
-  `tests/test_daemon_run_dir.py::test_checkpoint_inbox_backfills_pre_checkpoint_live_state`
-- **runner**: any LingTai agent with the `daemon` tool and a common-MCP CLI backend
-- **prerequisites**: a live detached CLI run whose launch path mounts
-  `daemon_common` (`claude-p`/`claude-code`, Codex, OpenCode, Qwen, or Kimi)
+- **supersedes**: `tests/test_daemon_checkpoint.py`,
+  `tests/test_daemon_detached_supervisor.py`, and the parent-message cases in
+  `tests/test_daemon_run_dir.py`
+- **runner**: any LingTai agent with the `daemon` tool
+- **prerequisites**: a marked/current or unmarked/pre-upgrade live detached
+  native LingTai run, or a detached CLI run whose launch path mounts
+  `daemon_common`
 - **estimate**: 5 min
 
 ### Steps
-1. Emanate a long-running task on a backend that mounts `daemon_common` and
-   record its daemon id.
-2. While it is live, call `daemon.ask` with one correction and retain the
-   returned delivery fields.
-3. Have the daemon call the strict `checkpoint` tool at a useful boundary.
-4. Inspect the checkpoint response, `daemon.check`, the daemon notification
-   mini-channel, and the run's terminal fields.
+1. Emanate a long-running supported run and record its daemon id.
+2. While it is live, call `daemon.ask` with one correction on a marked/current
+   owner and on an unmarked/pre-upgrade native compatibility fixture; retain the
+   exact response fields. Exercise a supported common-MCP CLI as well.
+3. For marked/current native LingTai, race or order the next `checkpoint`
+   against its legal text-only boundary. For the unmarked owner, inspect the
+   durable legacy control request and let its watcher stage it for the native
+   text-only boundary. For the supported CLI, use its next checkpoint.
+4. Inspect the model-visible carrier, `daemon.check`, the daemon notification
+   mini-channel, and terminal fields; then cross another empty checkpoint.
 
 ### Expected evidence
-- [ ] The parent call returns `status="queued"`, `delivery="checkpoint"`, and
-      an opaque `message_id`.
-- [ ] One RunDir transaction increments and stores the checkpoint, drains that
-      ID-bearing correction once, appends an event, and touches heartbeat.
-- [ ] The checkpoint response returns the message, while `daemon.check`
-      projects the latest checkpoint plus only a pending count.
-- [ ] One unique nonterminal event on the built-in `daemon` channel wakes the
-      parent and advances durable batch state.
-- [ ] Terminal state, result, receipt, and `finish` requirements are unchanged;
-      unsupported backends remain `busy` while active.
-- [ ] A wake-publication failure reports that the checkpoint was recorded and
-      still returns the drained message.
+- [ ] Marked/current native and supported common-MCP CLI queue admission returns
+      `status="queued"` and an opaque `message_id`; native uses
+      `delivery="checkpoint_or_text_boundary"`, while the CLI uses
+      `delivery="checkpoint"`. Neither result claims model delivery.
+- [ ] Unmarked/pre-upgrade live native submission returns exactly
+      `{status:"sent",id}` only after a durable legacy control-spool write. It
+      has no `delivery` or `message_id`, and `sent` is not described as
+      shared-inbox admission or model delivery.
+- [ ] One RunDir transaction lets exactly one current carrier remove an ID,
+      records a bounded cumulative delivered-ID list/total/route, and clears
+      pending state.
+- [ ] The winning current carrier returns or sends the message once; the losing
+      carrier sees none, and a later empty checkpoint does not erase cumulative
+      evidence.
+- [ ] `daemon.check` shows pending IDs/counts and delivered correlation fields
+      without exposing pending message text.
+- [ ] Legacy control-spool replay reuses a deterministic ID; pre-upgrade
+      `pending_followups` is migrated and delivered once.
+- [ ] Terminal state, result, receipt, and `finish` requirements remain
+      unchanged; unsupported active backends remain `busy`.
+- [ ] A post-record wake/event failure still reports the durable checkpoint and
+      drained message without redelivery.
 
 ### Pass / Fail
-Pass when the supported/unsupported matrix, drain-once acknowledgement,
-nonterminal wake, trust/bounds/live gates, old-state compatibility, local
-LingTai surface, and unchanged terminal fields all hold. Fail on chat-style or
-preemptive delivery, message redelivery/loss, a terminal checkpoint, a false
-backend capability claim, or any checkpoint that satisfies or mutates the
-terminal completion receipt.
+Pass when marked/current native and supported-CLI admission, the honest
+unmarked-native spool receipt, both current native carrier orders, the true race,
+cumulative evidence, legacy compatibility, bounds/redaction/live gates,
+nonterminal wake, and unchanged terminal fields all hold. Fail on a `sent`
+result for marked/current native admission, `queued` or shared-inbox claims for
+an unmarked owner, dual-carrier delivery, message loss or redelivery, an
+invisible pending control, a terminal checkpoint, or any checkpoint that
+satisfies or mutates the terminal completion receipt.
 
 ## Behavior D009 — a follow-up result never retires its run
 

@@ -21,7 +21,10 @@ from lingtai.kernel.daemon_supervisor.manifest import build_manifest
 from lingtai.kernel.notifications import DAEMON_CHANNEL, daemon_batch_state
 from lingtai.mcp_servers.daemon_common.server import build_server
 from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
-from lingtai.tools.daemon.run_dir import DaemonRunDir
+from lingtai.tools.daemon.run_dir import (
+    DaemonRunDir,
+    NATIVE_PARENT_MESSAGE_PROTOCOL,
+)
 from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir
 
 pytestmark = pytest.mark.anyio
@@ -244,6 +247,266 @@ async def test_active_cli_ask_is_delivered_once_at_checkpoint_without_terminal_m
     assert local_result["status"] == "ok"
     assert local_result["checkpoint_sequence"] == 1
     assert _disk_state(local_run)["latest_checkpoint"]["summary"] == "local parity works"
+
+
+async def test_active_native_ask_is_queued_and_delivered_once_at_checkpoint(
+    tmp_path, monkeypatch,
+):
+    """Native ask reports queue admission and leaves durable delivery evidence."""
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-native-checkpoint",
+        backend="lingtai",
+        task="long native implementation",
+        tools=["shell"],
+        call_parameters={"task": "long native implementation", "tools": ["shell"]},
+    )
+    run_dir.update_state(
+        backend="lingtai",
+        owner="supervisor",
+        state="active",
+        supervisor_pid=os.getpid(),
+        supervisor_start_identity="test-native-supervisor",
+        native_parent_message_protocol=NATIVE_PARENT_MESSAGE_PROTOCOL,
+    )
+    manager._emanations[run_dir.run_id] = {
+        "detached": True,
+        "task": "long native implementation",
+        "start_time": time.time(),
+        "timeout_s": 1200.0,
+        "run_dir": run_dir,
+        "backend": "lingtai",
+    }
+    monkeypatch.setattr(
+        manager,
+        "_pid_identity_matches",
+        lambda pid, identity: pid == os.getpid() and identity == "test-native-supervisor",
+    )
+
+    correction = "HOLD before the next expensive tool call."
+    ask = manager.handle(
+        {"action": "ask", "id": run_dir.run_id, "message": correction}
+    )
+    assert ask == {
+        "status": "queued",
+        "id": run_dir.run_id,
+        "delivery": "checkpoint_or_text_boundary",
+        "message_id": ask.get("message_id"),
+    }
+    assert isinstance(ask["message_id"], str) and ask["message_id"].startswith("msg-")
+
+    queued = manager.handle({"action": "check", "id": run_dir.run_id})
+    assert queued["pending_followups"] == 0
+    assert queued["pending_checkpoint_messages"] == 1
+    assert queued["pending_message_ids"] == [ask["message_id"]]
+    assert queued["delivered_message_ids"] == []
+    assert queued["delivered_messages_total"] == 0
+    assert queued["last_message_delivery"] is None
+
+    monkeypatch.setenv("LINGTAI_DAEMON_RUN_DIR", str(run_dir.path))
+    monkeypatch.setenv("LINGTAI_DAEMON_RUN_ID", run_dir.run_id)
+    async with Client(build_server()) as client:
+        first = await client.call_tool(
+            "checkpoint",
+            {
+                "action": "checkpoint",
+                "input": {"state": "holding", "summary": "preserved evidence"},
+                "reasoning": "admit queued parent control",
+            },
+        )
+        second = await client.call_tool(
+            "checkpoint",
+            {
+                "action": "checkpoint",
+                "input": {"state": "holding", "summary": "still contained"},
+                "reasoning": "prove exactly-once delivery",
+            },
+        )
+
+    first_payload = json.loads(first.content[0].text)
+    second_payload = json.loads(second.content[0].text)
+    assert first_payload["messages"] == [
+        {"id": ask["message_id"], "message": correction}
+    ]
+    assert second_payload["messages"] == []
+
+    checked = manager.handle({"action": "check", "id": run_dir.run_id})
+    assert checked["pending_followups"] == 0
+    assert checked["pending_checkpoint_messages"] == 0
+    assert checked["pending_message_ids"] == []
+    assert checked["delivered_message_ids"] == [ask["message_id"]]
+    assert checked["delivered_messages_total"] == 1
+    assert checked["last_message_delivery"]["via"] == "checkpoint"
+    assert checked["last_message_delivery"]["message_ids"] == [ask["message_id"]]
+
+
+async def test_refreshed_parent_uses_legacy_control_for_unmarked_native_supervisor(
+    tmp_path, monkeypatch,
+):
+    """A base-style live loop gets the ask at text boundary without checkpoint."""
+    from lingtai.kernel.daemon_supervisor import control
+    from lingtai.tools.daemon import DaemonManager
+
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-pre-upgrade-native",
+        backend="lingtai",
+        task="survive parent refresh",
+        tools=[],
+    )
+    run_dir.update_state(
+        backend="lingtai",
+        owner="supervisor",
+        state="active",
+        supervisor_pid=os.getpid(),
+        supervisor_start_identity="pre-upgrade-supervisor",
+    )
+    # A refreshed manager has no in-memory entry and must judge protocol support
+    # from durable launch-time state written by the surviving supervisor.
+    fresh = DaemonManager(agent)
+    monkeypatch.setattr(
+        fresh,
+        "_pid_identity_matches",
+        lambda pid, identity: (
+            pid == os.getpid() and identity == "pre-upgrade-supervisor"
+        ),
+    )
+
+    result = fresh.handle({
+        "action": "ask",
+        "id": run_dir.run_id,
+        "message": "deliver at the old text boundary",
+    })
+    assert result == {"status": "sent", "id": run_dir.run_id}
+    assert "delivery" not in result
+    assert "message_id" not in result
+    state = _disk_state(run_dir)
+    assert state["pending_checkpoint_messages"] == []
+
+    requests = control.pending_requests(run_dir.path)
+    assert len(requests) == 1
+    request = control.read_request(requests[0])
+    assert request["message"] == "deliver at the old text boundary"
+
+    # Model the exact base supervisor watcher and base RunDir text-boundary
+    # implementation: control -> pending_followups -> joined follow-up, with no
+    # daemon_common checkpoint involved.
+    assert run_dir.enqueue_followup(request["message"]) is True
+    control.mark_request_done(requests[0], {"status": "queued"})
+    with run_dir._state_transaction():
+        queue = run_dir._state.get("pending_followups")
+        messages = [item for item in queue if isinstance(item, str) and item]
+        run_dir._state["pending_followups"] = []
+        run_dir._persist_daemon_state()
+    delivered = "\n\n".join(messages) or None
+
+    assert delivered == "deliver at the old text boundary"
+    state = _disk_state(run_dir)
+    assert state["pending_followups"] == []
+    assert state["pending_checkpoint_messages"] == []
+    receipt = json.loads(control.done_path(requests[0]).read_text(encoding="utf-8"))
+    assert receipt["status"] == "queued"
+
+
+@pytest.mark.parametrize("protocol", [NATIVE_PARENT_MESSAGE_PROTOCOL, None])
+@pytest.mark.parametrize("message", [None, 7, "", "  \n\t"])
+async def test_native_ask_rejects_invalid_message_before_direct_or_legacy_admission(
+    tmp_path, monkeypatch, protocol, message,
+):
+    """Marked and version-skew native routes share one stable invalid-input error."""
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-invalid-native-ask",
+        backend="lingtai",
+        task="stay active",
+        tools=[],
+    )
+    updates = {
+        "backend": "lingtai",
+        "owner": "supervisor",
+        "state": "active",
+        "supervisor_pid": os.getpid(),
+        "supervisor_start_identity": "invalid-message-supervisor",
+    }
+    if protocol is not None:
+        updates["native_parent_message_protocol"] = protocol
+    run_dir.update_state(**updates)
+    manager._emanations[run_dir.run_id] = {
+        "detached": True,
+        "task": "stay active",
+        "start_time": time.time(),
+        "timeout_s": 1200.0,
+        "run_dir": run_dir,
+        "backend": "lingtai",
+    }
+    monkeypatch.setattr(manager, "_pid_identity_matches", lambda *_args: True)
+
+    result = manager.handle(
+        {"action": "ask", "id": run_dir.run_id, "message": message}
+    )
+    assert result == {
+        "status": "error",
+        "id": run_dir.run_id,
+        "message": "ask message must be a non-blank string",
+    }
+    state = _disk_state(run_dir)
+    assert state["state"] == "active"
+    assert state["pending_checkpoint_messages"] == []
+    assert not (run_dir.path / "control").exists()
+
+
+async def test_native_ask_atomic_write_failure_is_structured_failed_admission(
+    tmp_path, monkeypatch,
+):
+    """A durable inbox write failure never escapes or returns queued."""
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-native-write-failure",
+        backend="lingtai",
+        task="stay active",
+        tools=[],
+    )
+    run_dir.update_state(
+        backend="lingtai",
+        owner="supervisor",
+        state="active",
+        supervisor_pid=os.getpid(),
+        supervisor_start_identity="write-failure-supervisor",
+        native_parent_message_protocol=NATIVE_PARENT_MESSAGE_PROTOCOL,
+    )
+    manager._emanations[run_dir.run_id] = {
+        "detached": True,
+        "task": "stay active",
+        "start_time": time.time(),
+        "timeout_s": 1200.0,
+        "run_dir": run_dir,
+        "backend": "lingtai",
+    }
+    monkeypatch.setattr(manager, "_pid_identity_matches", lambda *_args: True)
+
+    def fail_atomic_write(_path, _payload):
+        raise PermissionError("simulated daemon.json admission denial")
+
+    monkeypatch.setattr(run_dir, "_atomic_write_json", fail_atomic_write)
+    result = manager.handle({
+        "action": "ask",
+        "id": run_dir.run_id,
+        "message": "must be durable before success",
+    })
+
+    assert result == {
+        "status": "error",
+        "id": run_dir.run_id,
+        "message": "simulated daemon.json admission denial",
+    }
+    assert _disk_state(run_dir)["pending_checkpoint_messages"] == []
 
 
 @pytest.mark.parametrize(
