@@ -504,15 +504,14 @@ class TestSchemaInvariance:
         """Glossary lookup cannot change names, properties, enums, required."""
         from lingtai.tools.bash._tool_family import get_schema
 
+        from tests._tool_family_schema_helpers import action_input_schema
+
         base = get_schema()
         assert base["properties"]["action"]["enum"] == [
             "run", "poll", "cancel", "settings", "manual",
         ]
         assert base["required"] == ["action", "input", "reasoning"]
-        run_props = next(
-            branch for branch in base["properties"]["input"]["anyOf"]
-            if branch["title"] == "run input"
-        )["properties"]
+        run_props = action_input_schema(base, "run")["properties"]
         assert "command" in run_props
         assert "timeout" in run_props
         assert "working_dir" in run_props

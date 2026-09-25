@@ -60,11 +60,11 @@ maintenance).
 - [ ] **send**: requires `receive_id` with **text XOR content** (body); a payload with both or neither is rejected.
 - [ ] **remove_contact**: accepts **exactly one** of `alias` / `open_id`; both or neither is rejected.
 - [ ] **manual**: echoes the input verbatim or returns `{status: ok, skill: "feishu-mcp-manual", manual: <str>}`.
-- [ ] **Child schemas**: `input` uses `anyOf` (not `oneOf`); `reasoning`/`summarize` never appear in child schemas or handlers; scrub preserves `required`, the `action` enum, `anyOf`/`allOf`, an `allOf` length of 14, and `additionalProperties: false`.
+- [ ] **Child schemas**: the composed schema is one root `oneOf` with 14 branches, each pairing an `action` const with that action's exact closed `input` schema, and the root `input` property embeds no branch list; `reasoning`/`summarize` never appear in child schemas or handlers; the Responses scrub preserves `required`, the `action` enum, the root `oneOf` (14 branches), and `additionalProperties: false`, rewriting only nested `oneOf` to `anyOf`.
 - [ ] **Empty-input branches**: exactly `{check, contacts, accounts, settings, manual}` accept an empty payload;
   successful `settings` additionally needs a bound service (otherwise a no-row
   `SETTINGS_UNAVAILABLE`), not a recording manager without that owner.
 
 ### Pass / Fail
 
-PASS when validation short-circuits before manager I/O, flat==ltpv2 for accounts, and child schemas match the scrub rules; FAIL on any manager call for invalid input, any schema drift (`oneOf`, leaked `reasoning`/`summarize`), or a wrong action count.
+PASS when validation short-circuits before manager I/O, flat==ltpv2 for accounts, and child schemas match the scrub rules; FAIL on any manager call for invalid input, any schema drift (a root `allOf`, a branch list under `input`, leaked `reasoning`/`summarize`), or a wrong action count.

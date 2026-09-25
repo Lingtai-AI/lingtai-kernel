@@ -16,6 +16,7 @@ import pytest
 from lingtai.mcp_servers.telegram.account import TelegramAccount
 from lingtai.mcp_servers.telegram.manager import SCHEMA, TelegramManager
 from tests._notification_store_helpers import FakeNotificationStore
+from tests._tool_family_schema_helpers import action_input_schema
 
 
 class FakeAccount:
@@ -101,10 +102,7 @@ def _manager(tmp_path):
 
 
 def _send_schema():
-    return next(
-        branch for branch in SCHEMA["properties"]["input"].get("oneOf", SCHEMA["properties"]["input"]["anyOf"])
-        if branch.get("title") == "send input"
-    )
+    return action_input_schema(SCHEMA, "send")
 
 
 def _schema_enum(schema):

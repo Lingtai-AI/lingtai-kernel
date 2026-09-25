@@ -11,10 +11,16 @@ from lingtai.mcp_servers.telegram._family import (
     TELEGRAM_ACTIONS,
     TELEGRAM_SCHEMA,
     _basic_validate,
+    _telegram_input_schemas,
     handle_telegram,
 )
 from lingtai.mcp_servers.telegram.service import TelegramService
 from lingtai.tools.task_card import TaskCardManager, get_schema as task_card_schema
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 from .test_task_card_controller import _FakeAgent, _OK_BODY, _manager, _write_renderer
 
@@ -29,9 +35,8 @@ class _CountingManager:
 
 
 def _branches(schema: dict) -> dict[str, dict]:
-    inputs = schema["properties"]["input"]
-    branches = inputs.get("oneOf") or inputs.get("anyOf")
-    return {branch["title"].removesuffix(" input"): branch for branch in branches}
+    """Map each action to the ``input`` schema its root ``oneOf`` branch carries."""
+    return action_input_schemas(schema)
 
 
 def test_family_dispatch_rejects_root_and_cross_branch_before_manager_io():
@@ -193,7 +198,6 @@ def test_taskcard_refresh_setting_positive_value_round_trips(tmp_path):
 def test_intrinsic_task_card_schema_is_a_strict_ltp_v2_family():
     schema = task_card_schema()
     names = schema["properties"]["action"]["enum"]
-    branches = schema["properties"]["input"]["anyOf"]
 
     assert schema["required"] == ["action", "input", "reasoning"]
     assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
@@ -201,13 +205,15 @@ def test_intrinsic_task_card_schema_is_a_strict_ltp_v2_family():
     assert names == [
         "start", "inspect", "retry", "stop", "remove", "settings", "manual"
     ]
-    assert len(schema["allOf"]) == len(names) == len(branches)
-    for action, branch, condition in zip(names, branches, schema["allOf"]):
-        expected_title = (
-            "settings inventory input" if action == "settings" else f"{action} input"
-        )
-        assert branch["title"] == expected_title
-        assert condition["if"]["properties"]["action"]["const"] == action
+    # One root ``oneOf`` branch per action, in action order, each keyed by
+    # its ``action`` const (no titles, no root allOf/anyOf, no duplicate
+    # branch list under ``properties.input``).
+    assert_compact_envelope(schema, names)
+    assert branch_actions(schema) == names
+    for action, branch in action_input_schemas(schema).items():
+        assert branch["additionalProperties"] is False, action
+        assert "reasoning" not in branch["properties"], action
+        assert "summarize" not in branch["properties"], action
 
 
 def _start_with_ceiling(agent: _FakeAgent, ceiling: int, *, requested=None):
@@ -281,11 +287,49 @@ def test_intrinsic_refresh_limit_counts_later_attempts_and_notifies_once(body, t
 
 
 def test_openai_responses_scrub_preserves_telegram_family_root_and_action_branches():
+    """The root ``oneOf`` discriminated union survives the Responses scrub
+    as ``oneOf`` (only nested ``oneOf`` is rewritten), with the identical
+    per-action ``input`` correlation as the canonical schema."""
     from lingtai.llm.openai.adapter import _scrub_responses_schema
 
     wire = _scrub_responses_schema(copy.deepcopy(TELEGRAM_SCHEMA), is_root=True)
     assert wire["required"] == TELEGRAM_SCHEMA["required"]
     assert wire["properties"]["action"]["enum"] == list(TELEGRAM_ACTIONS)
-    assert wire["properties"]["input"]["anyOf"]
-    assert len(wire["allOf"]) == len(TELEGRAM_ACTIONS)
     assert wire["additionalProperties"] is False
+    assert "allOf" not in wire and "anyOf" not in wire
+    assert branch_actions(wire) == list(TELEGRAM_ACTIONS)
+    # The typed root ``input`` only gains an empty ``properties`` map on the
+    # Responses wire; it never regains a duplicate branch list.
+    root_input = wire["properties"]["input"]
+    assert root_input["properties"] == {}
+    assert "oneOf" not in root_input and "anyOf" not in root_input
+    # Identical per-action correlation on the wire: same order, same input
+    # fields and required lists, every branch still closed, and no nested
+    # ``oneOf`` left anywhere below the root.
+    wire_branches = action_input_schemas(wire)
+    canonical_branches = action_input_schemas(TELEGRAM_SCHEMA)
+    assert list(wire_branches) == list(canonical_branches) == list(TELEGRAM_ACTIONS)
+    canonical = _telegram_input_schemas()
+    for action in TELEGRAM_ACTIONS:
+        if action != "settings":
+            assert canonical_branches[action] == canonical[action], action
+        assert set(wire_branches[action]["properties"]) == set(
+            canonical_branches[action]["properties"]
+        ), action
+        assert wire_branches[action].get("required", []) == canonical_branches[action].get(
+            "required", []
+        ), action
+        assert wire_branches[action]["additionalProperties"] is False, action
+        assert "oneOf" not in wire_branches[action], action
+    # send/reply/edit content alternatives are already ``anyOf`` and pass
+    # through; only remove_contact's alias-XOR-chat_id is a nested ``oneOf``,
+    # rewritten to ``anyOf`` on this wire while the root ``oneOf`` survives.
+    nested_one_of = {a for a, b in canonical_branches.items() if "oneOf" in b}
+    assert nested_one_of == {"remove_contact"}
+    assert canonical_branches["remove_contact"]["oneOf"] == [
+        {"required": ["alias"]}, {"required": ["chat_id"]},
+    ]
+    assert wire_branches["remove_contact"]["anyOf"] == [
+        {"required": ["alias"]}, {"required": ["chat_id"]},
+    ]
+    assert wire_branches["send"]["anyOf"] == canonical_branches["send"]["anyOf"]

@@ -72,7 +72,7 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
     It never captures `_intrinsics` or routes through the official handler.
     The settings read returns the POSIX adapter's actual construction snapshot.
 
-- `_family_schema.py` — Canonical operational/manual action data for the composed schema: `ACTION_ORDER`, one strict closed `input_schema` per action in `INPUT_SCHEMAS`, and `ACTION_ENUM_DESCRIPTION`. The generic declaration seam inserts `settings` before `manual`, changing the disclosed input union to `anyOf` without hand-authoring a settings child. This module holds no composition logic and imports `mode_field` from `primitives` and `MANUAL_INPUT_SCHEMA` from `tool_family.manual` rather than restating them.
+- `_family_schema.py` — Canonical operational/manual action data for the composed schema: `ACTION_ORDER`, one strict closed `input_schema` per action in `INPUT_SCHEMAS`, and `ACTION_ENUM_DESCRIPTION`. The generic declaration seam inserts `settings` before `manual` as one more root `oneOf` branch without hand-authoring a settings child. This module holds no composition logic and imports `mode_field` from `primitives` and `MANUAL_INPUT_SCHEMA` from `tool_family.manual` rather than restating them.
 
 - `settings.py` — Email-owned read-only settings provider and single source for the fixed body, duplicate-loop, check-result, and unread-projection limits consumed by `manager.py`/`primitives.py`. `email_settings_rows()` adds the fully redacted `manifest.pseudo_agent_subscriptions` row from the effective mail-adapter construction snapshot. It raises when that snapshot is unavailable and defines no mutation type or handler.
 

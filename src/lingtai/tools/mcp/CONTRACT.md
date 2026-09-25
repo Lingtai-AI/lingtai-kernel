@@ -110,10 +110,10 @@ all use the canonical strict-empty `input`
 (`{type: object, properties: {}, additionalProperties: false}`) — the
 `MANUAL_INPUT_SCHEMA` literal exported by `tool_family.manual` and reused here
 as `_EMPTY_INPUT`, rather than hand-copied per action, so the schema-only and
-dispatching families cannot advertise different shapes. The root
-`allOf`/`if`/`then` correlates each `action` const with its own `input` branch,
-and `input.anyOf` discloses all branches with titles
-`info input` / `settings inventory input` / `manual input`.
+dispatching families cannot advertise different shapes. The root `oneOf`
+carries one branch per action (`info` / `settings` / `manual`), each pairing
+that `action` const with its own exact `input` schema; each child schema
+appears exactly once.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|

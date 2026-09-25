@@ -257,13 +257,9 @@ _SCHEMA_FAMILY = _schema_only_family()
 def imap_schema() -> dict[str, Any]:
     schema = _SCHEMA_FAMILY.build_schema()
     # IMAP has intentionally overlapping optional fields (for example every
-    # action accepts optional account). The root allOf discriminator still
-    # correlates each action to its exact closed branch; use anyOf for the
-    # model-discovery list so native JSON-Schema validators do not reject a
-    # valid input merely because another action's branch also fits.
-    input_schema = schema["properties"]["input"]
-    if "oneOf" in input_schema:
-        input_schema["anyOf"] = input_schema.pop("oneOf")
+    # action accepts optional account). The generic root ``oneOf`` is
+    # discriminated by each branch's ``action`` const, so overlapping input
+    # shapes never make it ambiguous; no rewrite is needed.
     schema["properties"]["action"]["description"] = (
         "Strict branches for real IMAP/SMTP. First read: check/search, then read "
         "the returned compound email_id. send/reply deliver real mail: verify "

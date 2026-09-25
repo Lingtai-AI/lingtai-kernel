@@ -55,6 +55,12 @@ from lingtai.kernel.notifications import (
     sync_hook_registry,
 )
 from tests._tool_plugin_helpers import dispatch_declared_tool
+from tests._tool_family_schema_helpers import (
+    action_input_schema,
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
 from tests._notification_store_helpers import (
     FakeNotificationStore,
@@ -109,11 +115,6 @@ _ACTIONS = [
     "check", "dismiss_channel", "dismiss_event", "dismiss_ref", "add", "drop",
     "edit", "list", "delay", "settings", "manual",
 ]
-_ACTION_TITLES = [
-    "settings inventory input" if action == "settings" else f"{action} input"
-    for action in _ACTIONS
-]
-
 
 def test_notification_schema_exposes_atomic_actions() -> None:
     """All action values survive migration, now as the family enum."""
@@ -167,13 +168,14 @@ def test_notification_root_is_the_closed_ltp_v2_envelope() -> None:
 def test_each_action_input_branch_is_strict_and_exact() -> None:
     """Root exposes every action's exact input shape before invocation.
 
-    Both disclosure surfaces are checked: the ``input.anyOf`` branches (for
-    model discoverability) and the ``allOf``/``if``/``then`` correlation (which
-    ties the ``action`` const to that action's own input schema).
+    The single root ``oneOf`` discriminated union is the one disclosure AND
+    correlation surface: exactly one branch per action, in order, whose
+    ``action`` const is tied to that action's own canonical input schema.
     """
     schema = notif_intrinsic.get_schema("en")
-    branches = schema["properties"]["input"]["anyOf"]
-    assert [branch["title"] for branch in branches] == _ACTION_TITLES
+    assert_compact_envelope(schema, _ACTIONS)
+    branches = action_input_schemas(schema)
+    assert list(branches) == _ACTIONS
 
     expected_props = {
         "add": {
@@ -206,22 +208,16 @@ def test_each_action_input_branch_is_strict_and_exact() -> None:
         "dismiss_ref": {"ref_id", "channel", "force", "reason"},
         "manual": set(),
     }
-    for action, branch in zip(_ACTIONS, branches):
+    for action, branch in branches.items():
         assert branch["additionalProperties"] is False, action
         assert set(branch["properties"]) == expected_props[action], action
         # Envelope controls never leak into an action's own input.
         for leaked in ("reasoning", "_reasoning", "summarize", "action"):
             assert leaked not in branch["properties"], (action, leaked)
-
-    # Schema-level correlation: one if/then per action, in the same order.
-    conditions = schema["allOf"]
-    assert [c["if"]["properties"]["action"]["const"] for c in conditions] == _ACTIONS
-    for action, condition, branch in zip(_ACTIONS, conditions, branches):
-        assert condition["if"]["required"] == ["action"]
-        then_input = condition["then"]["properties"]["input"]
-        # Same canonical child schema as the disclosure branch, minus the
-        # presentational title the branch adds.
-        assert then_input == {k: v for k, v in branch.items() if k != "title"}, action
+        # The branch IS the canonical child schema — no presentational title,
+        # no second copy anywhere else in the composed schema.
+        if action != "settings":
+            assert branch == notif_intrinsic.INPUT_SCHEMAS[action], action
 
 
 def test_manual_branch_matches_the_shared_manual_child_schema() -> None:
@@ -274,11 +270,7 @@ def test_notification_schema_is_canonical_english() -> None:
     assert "notification(action='manual'" in adesc
     assert "read-only" in adesc.casefold()
     # Per-action prose now lives on each action's own input branch.
-    dismiss_channel_branch = next(
-        branch
-        for branch in base_schema["properties"]["input"]["anyOf"]
-        if branch["title"] == "dismiss_channel input"
-    )
+    dismiss_channel_branch = action_input_schema(base_schema, "dismiss_channel")
     cdesc = dismiss_channel_branch["properties"]["channel"]["description"]
     assert cdesc and "channel" in cdesc.casefold()
 
@@ -927,8 +919,10 @@ def test_manual_takes_no_input_and_performs_no_io(tmp_path: Path) -> None:
 def test_family_schema_survives_chat_and_responses_wires() -> None:
     """Exact action↔input correlation reaches both provider wires.
 
-    Responses preserves the settings-enabled nested ``anyOf`` and root
-    ``allOf`` verbatim, so the correlation layer must be intact on both.
+    The root ``oneOf`` discriminated union survives as ``oneOf`` on Chat and
+    Responses alike (the Responses scrub only rewrites nested ``oneOf``) with
+    the identical per-action mapping; no ``allOf``/``anyOf`` appears at root
+    and the root ``input`` carries no duplicate branches.
     """
     from lingtai.kernel.llm.base import FunctionSchema
     from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
@@ -941,21 +935,20 @@ def test_family_schema_survives_chat_and_responses_wires() -> None:
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
-    for wire, combinator in ((chat, "anyOf"), (responses, "anyOf")):
+    for wire in (chat, responses):
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
         assert wire["properties"]["action"]["enum"] == _ACTIONS
-        branches = wire["properties"]["input"][combinator]
-        assert [branch["title"] for branch in branches] == _ACTION_TITLES
-        for branch in branches:
+        assert "allOf" not in wire and "anyOf" not in wire
+        for duplicate in ("oneOf", "anyOf", "allOf"):
+            assert duplicate not in wire["properties"]["input"], duplicate
+        assert branch_actions(wire) == _ACTIONS
+        for branch in action_input_schemas(wire).values():
             assert branch["additionalProperties"] is False
             for leaked in ("reasoning", "_reasoning", "summarize"):
                 assert leaked not in branch["properties"]
-        conditions = wire["allOf"]
-        assert [
-            c["if"]["properties"]["action"]["const"] for c in conditions
-        ] == _ACTIONS
+    assert action_input_schemas(chat) == action_input_schemas(responses)
 
 
 def test_every_action_dispatches_through_the_family(tmp_path: Path) -> None:

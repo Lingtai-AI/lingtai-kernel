@@ -263,10 +263,9 @@ class TestBashManager:
     def test_schema_documents_working_dir_sandbox_and_cd_workaround(self):
         # ``working_dir`` is a run-only field, so it lives in the ``run``
         # child's own input schema on the migrated envelope.
-        run_branch = next(
-            b for b in get_schema("en")["properties"]["input"]["anyOf"]
-            if b["title"] == "run input"
-        )
+        from tests._tool_family_schema_helpers import action_input_schema
+
+        run_branch = action_input_schema(get_schema("en"), "run")
         desc = run_branch["properties"]["working_dir"]["description"]
 
         assert "agent working directory sandbox" in desc

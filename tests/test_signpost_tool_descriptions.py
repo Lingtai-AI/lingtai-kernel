@@ -3,6 +3,7 @@ from __future__ import annotations
 from lingtai.tools.mcp import get_description as mcp_description
 from lingtai.tools.mcp import get_schema as mcp_schema
 from lingtai.tools.psyche import get_description as psyche_description
+from tests._tool_family_schema_helpers import branch_actions
 
 
 def test_psyche_description_is_an_explicit_signpost() -> None:
@@ -41,11 +42,8 @@ def test_mcp_description_and_actions_are_explicit_signposts() -> None:
     # The bounded SHOW child is inserted before the reserved manual child.
     assert prop["enum"] == ["info", "settings", "manual"]
     assert schema["required"] == ["action", "input", "reasoning"]
-    assert [b["title"] for b in schema["properties"]["input"]["anyOf"]] == [
-        "info input",
-        "settings inventory input",
-        "manual input",
-    ]
+    # One root ``oneOf`` branch per action, in the same order as the enum.
+    assert branch_actions(schema) == ["info", "settings", "manual"]
     action = prop["description"]
     assert "info: signpost-only action" in action
     assert "without the manual body" in action

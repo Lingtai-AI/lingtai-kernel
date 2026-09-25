@@ -17,6 +17,7 @@ from lingtai.mcp_servers.imap.manager import IMAPMailManager
 from lingtai.mcp_servers.imap.plugin import IMAP_PLUGIN
 from lingtai.mcp_servers.imap.service import IMAPMailService
 from lingtai.mcp_servers.imap.settings import IMAP_CONFIG_ENV, imap_setting_rows
+from tests._tool_family_schema_helpers import action_input_schema, branch_actions
 
 
 _ROW_KEYS = [
@@ -223,7 +224,9 @@ def test_family_opt_in_order_and_empty_input_are_exact(
     assert IMAP_PLUGIN.settings is True
     assert IMAP_ACTIONS[-2:] == ("settings", "manual")
     assert family.child_names == IMAP_ACTIONS
-    settings_schema = family.build_schema()["allOf"][-2]["then"]["properties"]["input"]
+    schema = family.build_schema()
+    assert branch_actions(schema)[-2:] == ["settings", "manual"]
+    settings_schema = action_input_schema(schema, "settings")
     assert settings_schema == {
         "type": "object",
         "properties": {},

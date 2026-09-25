@@ -162,11 +162,11 @@ storage; detached-process launch -> §Cross-platform invariants.
   (`spawn` | `settings` | `manual`) — schema-required, the same convention as
   `knowledge`, `mcp`, `skills`, `notification`, `system`, and `daemon`.
   Each action's own strict, closed `input` schema is exposed to the model
-  before invocation two ways, both generated from the one child registry: an
-  `input.anyOf` disclosure branch per action (required because `settings` and
-  `manual` both have strict empty input), and one root `allOf`/`if`/`then`
-  condition per action correlating that action's `const` with that exact input
-  shape. Dispatch re-validates independently and is always authoritative.
+  before invocation exactly once, generated from the one child registry: one
+  root `oneOf` branch per action correlating that action's `const` with that
+  exact input shape (the const keeps the union unambiguous even though
+  `settings` and `manual` both have strict empty input). Dispatch
+  re-validates independently and is always authoritative.
 - `name` (required for spawn) is enforced both by the child schema and again
   in the handler.
 - `action="spawn"` (must be passed explicitly — there is no default action)

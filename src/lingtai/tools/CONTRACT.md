@@ -1061,7 +1061,7 @@ to exist.
 
 `tests/test_tool_family_avatar_migration.py` is `avatar`'s own local evidence
 for the same rules, chosen for that family's risk: the closed root, per-action
-child inputs, root `allOf` correlation surviving both wires, cross-action and
+child inputs, root `oneOf` correlation surviving both wires, cross-action and
 unknown-root-field rejection *before* any handler I/O, `summarize` never
 reaching a child handler and `avatar` actually being on the kernel allowlist,
 the preserved unknown-action envelope, spawn's dry-run/mission-guard/identity
@@ -1080,7 +1080,7 @@ molt plus the record/apply pair that rewrites what the provider actually sees.
 It covers the exact four-action inventory (`molt | summarize | rebuild |
 manual`), the record-only-versus-applying split that replaced the former
 `rebuild` boolean, the proof that no `psyche` root survives anywhere, the
-closed root on both wires with the `allOf` correlation intact, per-action input
+closed root on both wires with the root `oneOf` correlation intact, per-action input
 isolation, envelope and cross-branch rejection before any file write or context
 shed, `_tc_id` isolation on the consume-rather-than-drop path, the molt
 journal gate refusing before any shed, a full successful molt lifecycle in a

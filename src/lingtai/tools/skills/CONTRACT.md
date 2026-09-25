@@ -82,9 +82,8 @@ false}`) — there is no field to pass on either action. Root `summarize` is an
 optional boolean (absent or false by default) and `reasoning` is required Host
 InvocationContext/audit metadata; neither is ever action input, and no `input`
 branch admits `reasoning`, `_reasoning`, or `summarize`. The root also carries
-one `allOf` `if`/`then` condition per action correlating the `action` const
-with that exact action's `input` schema, on both the Chat Completions and
-Responses wires.
+one `oneOf` branch per action correlating the `action` const with that exact
+action's `input` schema, on both the Chat Completions and Responses wires.
 
 The child registry is declared exactly once, in `_build_family`: both the
 advertised schema and runtime dispatch are built from it, so action names,

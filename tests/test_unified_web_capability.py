@@ -398,9 +398,11 @@ def test_schema_root_is_closed_action_input_reasoning_summarize(tmp_path):
     assert reasoning_prop["type"] == "string"
     summarize_prop = schema["properties"]["summarize"]
     assert summarize_prop["type"] == "boolean"
-    # No public `summary` alias, and no branch admits `reasoning`/`_reasoning`/
-    # `summarize` inside its own input.
-    for branch in schema["properties"]["input"]["anyOf"]:
+    # No public `summary` alias, and no root ``oneOf`` branch admits
+    # `reasoning`/`_reasoning`/`summarize` inside its own input.
+    from tests._tool_family_schema_helpers import action_input_schemas
+
+    for branch in action_input_schemas(schema).values():
         assert "summary" not in branch["properties"]
         assert "summarize" not in branch["properties"]
         assert "reasoning" not in branch["properties"]

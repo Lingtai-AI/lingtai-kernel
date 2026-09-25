@@ -11,9 +11,15 @@ import pytest
 from mcp import Client
 from mcp.shared.exceptions import MCPError
 
+from lingtai.mcp_servers.telegram._family import _telegram_input_schemas
 from lingtai.mcp_servers.telegram.manager import TelegramManager
 from lingtai.mcp_servers.telegram.server import build_server
 from tests._notification_store_helpers import FakeNotificationStore
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 
 class _FakeAccount:
@@ -159,20 +165,23 @@ def test_public_family_has_a_strict_root_and_action_owned_branches(tmp_path):
     tool = tools[0]
     schema = tool.input_schema
     actions = schema["properties"]["action"]["enum"]
-    branches = schema["properties"]["input"].get(
-        "oneOf", schema["properties"]["input"].get("anyOf")
-    )
     assert schema["required"] == ["action", "input", "reasoning"]
     assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
     assert schema["additionalProperties"] is False
-    assert len(schema["allOf"]) == len(actions) == len(branches)
-    for action, branch, condition in zip(actions, branches, schema["allOf"]):
-        expected_title = (
-            "settings inventory input" if action == "settings" else f"{action} input"
-        )
-        assert branch["title"] == expected_title
-        assert branch["additionalProperties"] is False
-        assert condition["if"]["properties"]["action"]["const"] == action
-        expected = dict(branch)
-        expected.pop("title")
-        assert condition["then"]["properties"]["input"] == expected
+    # Over the real MCP transport the schema is still one root ``oneOf``
+    # discriminated union: one branch per action in enum order, each pairing
+    # the action const with that action's own closed canonical input.
+    assert_compact_envelope(schema, actions)
+    assert branch_actions(schema) == actions
+    canonical = _telegram_input_schemas()
+    for action, branch in action_input_schemas(schema).items():
+        assert branch["additionalProperties"] is False, action
+        if action == "settings":
+            assert branch == {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            }
+            continue
+        assert branch == canonical[action], action

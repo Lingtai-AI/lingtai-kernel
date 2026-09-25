@@ -29,6 +29,11 @@ from lingtai.agent import Agent
 from lingtai.services.mcp_registry import REGISTRY_FILENAME
 from lingtai.tools.mcp import get_schema
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 _UNKNOWN_ACTION_HINT = "only 'info', 'settings', or 'manual' is supported"
 
@@ -74,10 +79,8 @@ def test_all_actions_declare_canonical_strict_empty_input():
     from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 
     schema = get_schema()
-    branches = schema["properties"]["input"]["anyOf"]
-    assert [b["title"] for b in branches] == [
-        "info input", "settings inventory input", "manual input",
-    ]
+    assert branch_actions(schema) == ["info", "settings", "manual"]
+    branches = action_input_schemas(schema).values()
     for branch in branches:
         assert branch["type"] == "object"
         assert branch["properties"] == {}
@@ -86,9 +89,10 @@ def test_all_actions_declare_canonical_strict_empty_input():
         # Root envelope fields never leak into a child input branch.
         for leaked in ("action", "reasoning", "_reasoning", "summarize"):
             assert leaked not in branch["properties"]
-    # Every public child uses the canonical strict-empty shape.
+    # Every public child uses the canonical strict-empty shape, embedded
+    # verbatim (no ``title`` or other presentational addition).
     for branch in branches:
-        assert {k: v for k, v in branch.items() if k != "title"} == MANUAL_INPUT_SCHEMA
+        assert branch == MANUAL_INPUT_SCHEMA
 
 
 def test_schema_only_and_dispatching_families_declare_identical_children(mcp_agent):
@@ -109,14 +113,17 @@ def test_schema_only_and_dispatching_families_declare_identical_children(mcp_age
 
 
 def test_schema_correlates_each_action_const_to_its_own_input():
+    """The root ``oneOf`` is the discriminated union: three branches, each
+    keyed by a distinct ``action`` const — which is exactly what keeps three
+    byte-identical strict-empty inputs unambiguous."""
     schema = get_schema()
-    conditions = schema["allOf"]
-    assert len(conditions) == 3
+    assert_compact_envelope(schema, ["info", "settings", "manual"])
+    assert len(schema["oneOf"]) == 3
     seen = {}
-    for condition in conditions:
-        action = condition["if"]["properties"]["action"]["const"]
-        assert condition["if"]["required"] == ["action"]
-        seen[action] = condition["then"]["properties"]["input"]
+    for action, branch in zip(["info", "settings", "manual"], schema["oneOf"]):
+        assert set(branch["properties"]) == {"action", "input"}
+        assert branch["properties"]["action"] == {"const": action}
+        seen[action] = branch["properties"]["input"]
     assert set(seen) == {"info", "settings", "manual"}
     for action_input in seen.values():
         assert action_input["additionalProperties"] is False
@@ -131,15 +138,22 @@ def test_schema_survives_chat_and_responses_wires():
     chat = _build_tools([fn])[0]["function"]["parameters"]
     responses = _build_responses_tools([fn])[0]["parameters"]
 
+    # Chat Completions passes the composed schema through byte-for-byte.
+    assert chat == get_schema()
     for wire in (chat, responses):
         assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert wire["properties"]["action"]["enum"] == ["info", "settings", "manual"]
-        branches = wire["properties"]["input"]["anyOf"]
-        assert [b["title"] for b in branches] == [
-            "info input", "settings inventory input", "manual input",
-        ]
+        # The root ``oneOf`` survives as ``oneOf`` on BOTH wires (the
+        # Responses scrub only rewrites nested ``oneOf``); nothing is
+        # duplicated under ``properties.input`` or a root ``allOf``.
+        assert "anyOf" not in wire and "allOf" not in wire
+        for duplicate in ("oneOf", "anyOf", "allOf"):
+            assert duplicate not in wire["properties"]["input"]
+        assert branch_actions(wire) == ["info", "settings", "manual"]
+    # Identical per-action mapping on both wires.
+    assert chat["oneOf"] == responses["oneOf"]
 
 
 def test_real_agent_registers_exactly_one_public_mcp_tool(mcp_agent):
