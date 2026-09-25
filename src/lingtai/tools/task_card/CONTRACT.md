@@ -11,6 +11,7 @@ related_files:
   - src/lingtai/tools/task_card/manual/reference/notifications.md
   - src/lingtai/tools/task_card/manual/reference/settings.md
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/registry.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/__init__.py

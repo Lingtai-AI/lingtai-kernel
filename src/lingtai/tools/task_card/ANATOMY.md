@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/task_card/manual/reference/notifications.md
   - src/lingtai/tools/task_card/manual/reference/settings.md
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/manager.py
