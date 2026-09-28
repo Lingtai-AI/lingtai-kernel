@@ -528,7 +528,9 @@ class BaseAgent:
         self._cancel_event = threading.Event()
         # Correlated inbound-turn state is process-local and protected separately
         # from the legacy process-global cooperative latch.
-        self._turn_controls_lock = threading.Lock()
+        # Active handle cancellation re-enters this lock through
+        # _request_turn_cancel -> request_cooperative_cancel.
+        self._turn_controls_lock = threading.RLock()
         self._turn_controls: dict[str, Any] = {}
         self._current_turn_control: Any | None = None
         self._state = AgentState.IDLE
@@ -1234,9 +1236,11 @@ class BaseAgent:
     def _close_agent_owned_services_after_quiescence(self) -> None:
         """Subclass hook run only after run-loop/provider quiescence is proven."""
 
-    def _request_turn_cancel(self) -> None:
+    def _request_turn_cancel(self, *, self_sleep: bool = False) -> None:
         """Latch cooperative cancellation for the current logical turn."""
-        self._cancel_event.set()
+        from ..turns import request_cooperative_cancel
+
+        request_cooperative_cancel(self, self_sleep=self_sleep)
 
     def _set_state(self, new_state: AgentState, reason: str = "") -> None:
         """Transition to a new state.

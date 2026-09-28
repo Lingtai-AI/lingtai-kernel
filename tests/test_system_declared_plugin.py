@@ -210,9 +210,9 @@ def test_system_declaration_is_static_and_the_real_agent_mounts_it_once(tmp_path
         original_request_cancel = agent._request_turn_cancel
         cancel_observations = []
 
-        def request_cancel():
+        def request_cancel(**kwargs):
             cancel_observations.append((agent.state, agent._asleep.is_set()))
-            original_request_cancel()
+            original_request_cancel(**kwargs)
 
         agent._request_turn_cancel = request_cancel
         slept = handler({

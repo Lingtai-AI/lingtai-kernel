@@ -80,7 +80,9 @@ opaque session, accepts baseline Text and ResourceLink prompt blocks, emits the
 completed LingTai response as one `agent_message_chunk` session update, and settles the original prompt with
 `end_turn`. `session/cancel` targets only the active handle and the original
 prompt eventually settles `cancelled`; cancellation is cooperative and does not
-claim hard provider abort or running-tool preemption. Each Adapter-authored wire
+claim hard provider abort or running-tool preemption. An Agent-initiated System self-sleep
+after completed tool results settles the original prompt with `end_turn`;
+external cancellation still settles `cancelled`. Each Adapter-authored wire
 line is one compact UTF-8 JSON object. The composition root redirects Python
 `sys.stdout`/`print` diagnostics to stderr; native fd 1 writes, pre-captured stdout
 objects, and child-process stdout are not quarantined in this slice and are
