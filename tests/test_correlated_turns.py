@@ -24,6 +24,9 @@ from lingtai.kernel.message import (
     _make_message,
 )
 from lingtai.kernel.state import AgentState
+from lingtai.kernel.base_agent import BaseAgent
+from lingtai.tools.system.karma import _DirectSleepPort
+from lingtai.adapters.tool_plugin_host import agent_system_runtime
 from lingtai.kernel.turns import (
     TurnOrigin,
     TurnOutcome,
@@ -112,8 +115,7 @@ class _LoopAgent:
     def _can_fallback_preset(self):
         return False
 
-    def _request_turn_cancel(self):
-        self._cancel_event.set()
+    _request_turn_cancel = BaseAgent._request_turn_cancel
 
     def _wake_nap(self, _reason):
         return None
@@ -144,6 +146,45 @@ def test_correlated_turn_settles_normal_with_collected_text(tmp_path, monkeypatc
 
     assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
     assert handle.result().text == "answer"
+
+
+@pytest.mark.parametrize("sleep_port", ["mounted", "direct"])
+def test_correlated_self_sleep_settles_normal_after_tool_returns(
+    tmp_path, monkeypatch, sleep_port,
+):
+    agent = _agent(tmp_path)
+    handle = submit_turn(agent, "reply then sleep", correlation_id="turn-self-sleep")
+
+    def fake_handle(current, _msg):
+        port = (
+            agent_system_runtime(current)
+            if sleep_port == "mounted"
+            else _DirectSleepPort(current)
+        )
+        port.transition_to_asleep()
+        current._shutdown.set()
+        return {"text": "", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+
+    assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
+
+
+def test_external_cancel_after_self_sleep_still_wins(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    handle = submit_turn(agent, "reply then sleep", correlation_id="turn-sleep-interrupted")
+
+    def fake_handle(current, _msg):
+        _DirectSleepPort(current).transition_to_asleep()
+        current._request_turn_cancel()
+        current._shutdown.set()
+        return {"text": "", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+
+    assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
 
 
 @pytest.mark.parametrize("granted", [True, False])

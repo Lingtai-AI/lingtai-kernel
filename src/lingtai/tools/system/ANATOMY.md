@@ -2,6 +2,8 @@
 related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/system/CONTRACT.md
+  - src/lingtai/kernel/base_agent/CONTRACT.md
+  - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/tools/system/BEHAVIORS.md
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/plugin.py
@@ -75,6 +77,10 @@ one-shot `delay` alarm ordering, and the ASLEEP transition through a narrow
 `arm_sleep_alarm`, `language`, `log`) and repeats no policy; the mounted bridge
 hands it to the use case as `_system_sleep_port`, and the direct route wraps
 its Agent-like subject in the translation-only `_DirectSleepPort`.
+Both transition adapters identify a successful self-sleep to the Core turn
+boundary while retaining the ordinary cooperative cancel latch. The marker
+lets that completed correlated turn settle normally; later external cancellation
+still wins (see `kernel/base_agent/CONTRACT.md`).
 `system` is registered with `official_plugin` in `tools/registry.py`, so
 `BaseAgent._boot_official_intrinsics()` calls this module's `boot(agent)` to
 claim/mount System once on construction and on every refresh.

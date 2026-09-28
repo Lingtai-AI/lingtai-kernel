@@ -1234,9 +1234,11 @@ class BaseAgent:
     def _close_agent_owned_services_after_quiescence(self) -> None:
         """Subclass hook run only after run-loop/provider quiescence is proven."""
 
-    def _request_turn_cancel(self) -> None:
+    def _request_turn_cancel(self, *, self_sleep: bool = False) -> None:
         """Latch cooperative cancellation for the current logical turn."""
-        self._cancel_event.set()
+        from ..turns import request_cooperative_cancel
+
+        request_cooperative_cancel(self, self_sleep=self_sleep)
 
     def _set_state(self, new_state: AgentState, reason: str = "") -> None:
         """Transition to a new state.

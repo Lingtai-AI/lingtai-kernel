@@ -204,9 +204,9 @@ def test_system_self_sleep(tmp_path):
     original_request_cancel = agent._request_turn_cancel
     cancel_observations = []
 
-    def request_cancel():
+    def request_cancel(**kwargs):
         cancel_observations.append((agent.state, agent._asleep.is_set()))
-        original_request_cancel()
+        original_request_cancel(**kwargs)
 
     agent._request_turn_cancel = request_cancel
     from lingtai.tools.system import handle

@@ -115,12 +115,12 @@ Pass when every failure before `spawn_detached` returns leaves the slot released
 ### Steps
 1. From `<repo>`, run `python -m pytest -q -x tests/test_tool_result_restore_after_continuation_failure.py tests/test_aed_recovery.py tests/test_notification_sync.py tests/test_silence_kill.py`.
 2. Run `python -m pytest -q -x tests/test_system.py tests/test_system_declared_plugin.py tests/test_karma.py tests/test_perform_refresh_handshake.py`.
-3. Inspect `BaseAgent._request_turn_cancel`, both `_run_loop` dequeue branches, `_sync_notifications`, and `_process_response`; confirm producer writes route through the helper, only the two post-shutdown fresh-dequeue sites clear, the awake clear precedes concatenation, and inner consumers never clear.
+3. Inspect `BaseAgent._request_turn_cancel`, `request_cooperative_cancel`, both `_run_loop` dequeue branches, `_sync_notifications`, and `_process_response`; confirm producer writes route through the helper, only the two post-shutdown fresh-dequeue sites clear, the awake clear precedes concatenation, and inner consumers never clear.
 
 ### Expected evidence
 - [ ] Step 1: a normal preset `threading.Event` prevents tool dispatch and continuation while remaining set; awake and ASLEEP fresh dequeues clear stale state; an event-barrier cancellation during concatenation survives; an ASLEEP notification wake preserves the latch; repeated helper calls are harmless.
 - [ ] Step 2: official and direct System self-sleep publish ASLEEP state/event before latching; heartbeat interrupt/sleep consume their signal file before latching; successful refresh spawns its watcher before latching and sets shutdown afterward; failed setup remains unsignaled.
-- [ ] Step 3: source inspection finds one direct `.set()` inside the helper and exactly two `.clear()` calls in fresh-dequeue ownership. No provider abort, running-tool preemption, request identity, stop-drain guarantee, or terminal cancellation result has been introduced.
+- [ ] Step 3: source inspection finds one direct `.set()` in the helper's Core delegation and exactly two `.clear()` calls in fresh-dequeue ownership. No provider abort, running-tool preemption, request identity, or stop-drain guarantee has been introduced.
 
 ### Pass / Fail
 Pass when both focused groups pass and source ownership matches the contract. Fail if an async notification wake or inner response consumer clears cancellation, if merge-time cancellation is lost, if a producer bypasses the helper, or if the cooperative latch is represented as hard/per-request cancellation; record the evidence trail in the task report.
@@ -153,10 +153,14 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
    cancellation during backoff prevents another provider call. Copied, settled,
    cancelled, cross-turn and policy-revoked controls cannot authorize retries,
    and a forged correlated message cannot reach provider dispatch.
+10. Inspect self-sleep tests: mounted and direct System transitions stop model
+    continuation yet settle their own completed correlated turn normally; a
+    later external cancellation still wins.
 
 ### Expected evidence
 - [ ] All focused tests pass without a provider or network call.
 - [ ] Active cancellation wins before settlement, emits no late text, and a later cancel returns false.
+- [ ] Mounted and direct self-sleep end their own completed correlated turn normally; an external cancellation after self-sleep still settles cancelled.
 - [ ] Pending cancellation leaves the process-global latch clear while the first turn is current; the first settles normal and only the second settles cancelled without provider dispatch.
 - [ ] Failure and shutdown each settle rather than leaving a waiter blocked; a terminal stale envelope never reaches provider work.
 - [ ] Pre-bind and post-provider unexpected exceptions both re-raise, leave no live control, and settle the affected waiter cancelled/failed respectively without requiring `Agent.stop()`.
@@ -166,8 +170,9 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
 ### Pass / Fail
 Pass when every handle settles exactly once with the expected correlation and the
 pending-cancel isolation assertion proves the turn ahead was untouched. Fail on
-a hanging/duplicate result, merged correlation, cancellation leaking to a later
-or earlier turn, failure represented as normal, or any hard provider-abort claim;
+a hanging/duplicate result, merged correlation, self-sleep represented as
+cancelled, cancellation leaking to a later or earlier turn, failure represented
+as normal, or any hard provider-abort claim;
 record the evidence trail in the task report.
 
 ## Behavior BA005 — every provider request is freshly admitted and a derived child cannot mint another child

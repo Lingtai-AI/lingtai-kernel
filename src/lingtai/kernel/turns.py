@@ -92,6 +92,7 @@ class _TurnControl:
     future: Future[TurnResult] = field(default_factory=Future)
     cancel_callback: Callable[[str], bool] | None = None
     settlement_claimed: bool = False
+    self_sleep_completed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +135,8 @@ def _ensure_turn_state(agent) -> tuple[threading.Lock, dict[str, _TurnControl]]:
 
     lock = getattr(agent, "_turn_controls_lock", None)
     if lock is None:
-        lock = threading.Lock()
+        # cancel_turn requests the cooperative latch while holding this lock.
+        lock = threading.RLock()
         agent._turn_controls_lock = lock
     controls = getattr(agent, "_turn_controls", None)
     if controls is None:
@@ -143,6 +145,28 @@ def _ensure_turn_state(agent) -> tuple[threading.Lock, dict[str, _TurnControl]]:
     if not hasattr(agent, "_current_turn_control"):
         agent._current_turn_control = None
     return lock, controls
+
+
+def request_cooperative_cancel(agent, *, self_sleep: bool = False) -> None:
+    """Latch cancellation and record whether the active turn ended itself.
+
+    Only a root tool running in this correlated turn can claim self-sleep.
+    A later external cancellation replaces that claim before settlement.
+    """
+
+    from .provider_admission import RootProviderAdmission, current_provider_admission
+
+    parent = current_provider_admission() if self_sleep else None
+    lock, _ = _ensure_turn_state(agent)
+    with lock:
+        control = agent._current_turn_control
+        if control is not None and not control.settlement_claimed:
+            control.self_sleep_completed = bool(
+                self_sleep
+                and isinstance(parent, RootProviderAdmission)
+                and parent.correlation_id == control.correlation_id
+            )
+        agent._cancel_event.set()
 
 
 def admit_turn_origin(agent, origin: TurnOrigin) -> TurnAdmissionDecision:
@@ -414,7 +438,10 @@ def settle_turn(
             return False
         control.settlement_claimed = True
         control.cancel_callback = None
-        cancelled = control.cancel_requested.is_set() or cooperative_cancelled
+        cancelled = control.cancel_requested.is_set() or (
+            cooperative_cancelled
+            and not (outcome is TurnOutcome.NORMAL and control.self_sleep_completed)
+        )
         if controls.get(control.correlation_id) is control:
             controls.pop(control.correlation_id, None)
         if getattr(agent, "_current_turn_control", None) is control:

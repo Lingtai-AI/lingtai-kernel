@@ -14,6 +14,8 @@ related_files:
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/tools/system/ANATOMY.md
+  - src/lingtai/kernel/base_agent/CONTRACT.md
+  - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/tools/system/BEHAVIORS.md
   - src/lingtai/tools/context/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
@@ -249,6 +251,10 @@ branch, receipt, or duplicate sleep policy, and no `runtime.sleep(reason,
 force)` callback exists. Mounted and direct refusal/force parity
 is guarded by [B008](BEHAVIORS.md#behavior-b008) and pinned by
 `tests/test_system_declared_plugin.py::test_system_sleep_direct_and_mounted_routes_have_refusal_force_parity`.
+Both transition adapters tag a successful self-sleep for the current correlated
+turn while still setting the cooperative cancel latch; Core owns the terminal
+classification and a later external cancellation still wins (see the
+correlated-turn rule in `kernel/base_agent/CONTRACT.md`).
 
 ## Routing Card
 
