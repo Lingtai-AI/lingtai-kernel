@@ -6,6 +6,7 @@ import threading
 import time
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -50,6 +51,11 @@ from lingtai.kernel.provider_admission import (
     ProviderCallDecision,
     current_provider_admission,
 )
+from tests._workdir_lease_helpers import make_test_lease
+from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
+from tests._notification_store_helpers import notification_store_for
+from tests._agent_presence_helpers import make_test_presence_store
 
 
 def test_canonical_message_type_inventory_is_complete():
@@ -185,6 +191,51 @@ def test_external_cancel_after_self_sleep_still_wins(tmp_path, monkeypatch):
     turn._run_loop(agent)
 
     assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
+
+
+def test_external_cancel_before_self_sleep_still_wins(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    handle = submit_turn(
+        agent, "cancel then sleep", correlation_id="turn-cancel-before-sleep"
+    )
+
+    def fake_handle(current, _msg):
+        current._request_turn_cancel()
+        _DirectSleepPort(current).transition_to_asleep()
+        current._shutdown.set()
+        return {"text": "", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+
+    assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
+
+
+def test_base_agent_active_handle_cancel_does_not_deadlock(tmp_path):
+    agent = BaseAgent(
+        intrinsics={},
+        service=MagicMock(),
+        agent_name="cancel-lock",
+        working_dir=tmp_path,
+        workdir_lease=make_test_lease(),
+        snapshot_port=make_test_snapshot_port(),
+        agent_presence=make_test_presence_store(),
+        lifecycle_clock=make_test_lifecycle_clock(),
+        source_revision_port=make_test_source_revision_port(),
+        notification_store=notification_store_for(tmp_path),
+    )
+    handle = submit_turn(agent, "cancel", correlation_id="turn-real-lock")
+    begin_turn(agent, agent.inbox.get_nowait())
+    receipts = []
+    canceller = threading.Thread(
+        target=lambda: receipts.append(handle.cancel()), daemon=True
+    )
+    canceller.start()
+    canceller.join(timeout=0.5)
+
+    assert not canceller.is_alive(), "active cancel deadlocked on BaseAgent's turn lock"
+    assert receipts == [True]
+    assert agent._cancel_event.is_set()
 
 
 @pytest.mark.parametrize("granted", [True, False])

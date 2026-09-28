@@ -528,7 +528,9 @@ class BaseAgent:
         self._cancel_event = threading.Event()
         # Correlated inbound-turn state is process-local and protected separately
         # from the legacy process-global cooperative latch.
-        self._turn_controls_lock = threading.Lock()
+        # Active handle cancellation re-enters this lock through
+        # _request_turn_cancel -> request_cooperative_cancel.
+        self._turn_controls_lock = threading.RLock()
         self._turn_controls: dict[str, Any] = {}
         self._current_turn_control: Any | None = None
         self._state = AgentState.IDLE

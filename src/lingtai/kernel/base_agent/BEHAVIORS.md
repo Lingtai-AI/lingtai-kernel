@@ -155,12 +155,13 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
    and a forged correlated message cannot reach provider dispatch.
 10. Inspect self-sleep tests: mounted and direct System transitions stop model
     continuation yet settle their own completed correlated turn normally; a
-    later external cancellation still wins.
+    external cancellation before or after self-sleep still wins. Verify that
+    active handle cancellation completes using the production BaseAgent lock.
 
 ### Expected evidence
 - [ ] All focused tests pass without a provider or network call.
 - [ ] Active cancellation wins before settlement, emits no late text, and a later cancel returns false.
-- [ ] Mounted and direct self-sleep end their own completed correlated turn normally; an external cancellation after self-sleep still settles cancelled.
+- [ ] Mounted and direct self-sleep end their own completed correlated turn normally; an external cancellation before or after self-sleep still settles cancelled. Active handle cancellation does not deadlock on the production BaseAgent lock.
 - [ ] Pending cancellation leaves the process-global latch clear while the first turn is current; the first settles normal and only the second settles cancelled without provider dispatch.
 - [ ] Failure and shutdown each settle rather than leaving a waiter blocked; a terminal stale envelope never reaches provider work.
 - [ ] Pre-bind and post-provider unexpected exceptions both re-raise, leave no live control, and settle the affected waiter cancelled/failed respectively without requiring `Agent.stop()`.

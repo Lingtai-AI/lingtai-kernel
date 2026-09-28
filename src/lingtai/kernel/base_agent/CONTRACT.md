@@ -389,8 +389,9 @@ Clause IDs are stable; each rule composes the linked normative source.
    provider, preempt a running tool, or by itself identify a request or create a
    terminal result. A successful System self-sleep marks only its own current
    correlated turn as completed while still setting this latch; a later external
-   cancellation supersedes that mark. The correlated inbound-turn boundary in
-   rule 12 composes on this cooperative mechanism. See the
+   cancellation before or after self-sleep supersedes that mark. The
+   correlated inbound-turn boundary in rule 12 composes on this cooperative
+   mechanism. See the
    paired [`ANATOMY.md`](ANATOMY.md) for ownership and code routes.
 12. `agent-runtime.correlated-turn.v1` — Guarded by
    [BA004](BEHAVIORS.md#behavior-ba004). `BaseAgent.submit_turn` accepts one text
@@ -415,8 +416,9 @@ Clause IDs are stable; each rule composes the linked normative source.
    false and cannot affect a later turn. A successful System self-sleep that
    completes the current correlated turn's tool results settles `normal` despite its cooperative
    stop-continuation latch; explicit handle cancellation, later external
-   cancellation, failure, and shutdown retain their terminal outcomes. A sleep
-   from another execution context cannot claim the current turn's completion.
+   cancellation before or after self-sleep, failure, and shutdown retain their
+   terminal outcomes. A sleep from another execution context cannot claim the
+   current turn's completion.
    Run-loop exit and Agent stop settle all
    live handles so waiters cannot hang across teardown. An unexpected run-loop
    exception after current ownership is published settles that exact control

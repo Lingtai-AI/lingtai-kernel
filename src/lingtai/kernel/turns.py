@@ -93,6 +93,7 @@ class _TurnControl:
     cancel_callback: Callable[[str], bool] | None = None
     settlement_claimed: bool = False
     self_sleep_completed: bool = False
+    external_cancel_requested: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +152,8 @@ def request_cooperative_cancel(agent, *, self_sleep: bool = False) -> None:
     """Latch cancellation and record whether the active turn ended itself.
 
     Only a root tool running in this correlated turn can claim self-sleep.
-    A later external cancellation replaces that claim before settlement.
+    External cancellation wins regardless of whether it precedes or follows
+    self-sleep, until settlement claims the turn.
     """
 
     from .provider_admission import RootProviderAdmission, current_provider_admission
@@ -161,11 +163,16 @@ def request_cooperative_cancel(agent, *, self_sleep: bool = False) -> None:
     with lock:
         control = agent._current_turn_control
         if control is not None and not control.settlement_claimed:
-            control.self_sleep_completed = bool(
-                self_sleep
-                and isinstance(parent, RootProviderAdmission)
-                and parent.correlation_id == control.correlation_id
-            )
+            if self_sleep:
+                if (
+                    not control.external_cancel_requested
+                    and isinstance(parent, RootProviderAdmission)
+                    and parent.correlation_id == control.correlation_id
+                ):
+                    control.self_sleep_completed = True
+            else:
+                control.external_cancel_requested = True
+                control.self_sleep_completed = False
         agent._cancel_event.set()
 
 
