@@ -385,7 +385,10 @@ Clause IDs are stable; each rule composes the linked normative source.
    exits, response/tool consumers may observe the latch but MUST NOT clear it;
    an ASLEEP notification synchronization wake likewise MUST NOT clear it. The
    latch suppresses undispatched tool calls and post-tool continuation while
-   preserving existing tool-result/history commits. It does not hard-abort a
+   preserving existing tool-result/history commits. When cancellation arrives
+   after a model proposes tool calls but before dispatch, the turn MUST persist
+   a paired synthetic result that states dispatch did not occur; a later turn
+   may retry only if the request remains active. It does not hard-abort a
    provider, preempt a running tool, or by itself identify a request or create a
    terminal result. A successful System self-sleep marks only its own current
    correlated turn as completed while still setting this latch; a later external
