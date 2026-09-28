@@ -382,6 +382,10 @@ def test_process_response_logs_cancel_before_tool_dispatch(tmp_path):
     assert "NOT dispatched" in synthetic.content
     assert "No side effects occurred" in synthetic.content
     assert "retry" in synthetic.content.lower()
+    restored = ChatInterface.from_dict(json.loads(json.dumps(agent._chat.interface.to_dict())))
+    restored.enforce_tool_pairing()
+    assert not restored.has_pending_tool_calls()
+    assert restored.entries[-1].content[0].content == synthetic.content
 
     names = [name for name, _ in agent.logs]
     assert names == ["tool_calls_not_dispatched"]
