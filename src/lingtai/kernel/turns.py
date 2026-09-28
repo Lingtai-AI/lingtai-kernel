@@ -445,9 +445,16 @@ def settle_turn(
             return False
         control.settlement_claimed = True
         control.cancel_callback = None
-        cancelled = control.cancel_requested.is_set() or (
-            cooperative_cancelled
-            and not (outcome is TurnOutcome.NORMAL and control.self_sleep_completed)
+        # The cooperative latch is sampled by the run loop before this lock.
+        # Recheck the per-turn external request here so a cancellation that
+        # wins the lock in that gap still wins terminal settlement.
+        cancelled = (
+            control.cancel_requested.is_set()
+            or control.external_cancel_requested
+            or (
+                cooperative_cancelled
+                and not (outcome is TurnOutcome.NORMAL and control.self_sleep_completed)
+            )
         )
         if controls.get(control.correlation_id) is control:
             controls.pop(control.correlation_id, None)

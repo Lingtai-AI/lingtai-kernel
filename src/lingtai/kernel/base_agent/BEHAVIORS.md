@@ -161,6 +161,7 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
 ### Expected evidence
 - [ ] All focused tests pass without a provider or network call.
 - [ ] Active cancellation wins before settlement, emits no late text, and a later cancel returns false.
+- [ ] External cancellation between the run loop's cooperative-latch snapshot and the settlement lock claim still wins.
 - [ ] Mounted and direct self-sleep end their own completed correlated turn normally; an external cancellation before or after self-sleep still settles cancelled. Active handle cancellation does not deadlock on the production BaseAgent lock.
 - [ ] Pending cancellation leaves the process-global latch clear while the first turn is current; the first settles normal and only the second settles cancelled without provider dispatch.
 - [ ] Failure and shutdown each settle rather than leaving a waiter blocked; a terminal stale envelope never reaches provider work.

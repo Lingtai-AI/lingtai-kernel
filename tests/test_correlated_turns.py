@@ -211,6 +211,26 @@ def test_external_cancel_before_self_sleep_still_wins(tmp_path, monkeypatch):
     assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
 
 
+def test_external_cancel_after_cooperative_snapshot_before_settlement_wins(tmp_path):
+    agent = _agent(tmp_path)
+    handle = submit_turn(agent, "race", correlation_id="turn-cancel-settle-gap")
+    control = begin_turn(agent, agent.inbox.get_nowait())
+    assert control is not None
+
+    # The run loop reads this before settle_turn takes the turn lock.
+    cooperative_snapshot = agent._cancel_event.is_set()
+    assert cooperative_snapshot is False
+    agent._request_turn_cancel()
+    assert control.external_cancel_requested is True
+
+    assert settle_turn(
+        agent, control, outcome=TurnOutcome.NORMAL, text="late answer",
+        cooperative_cancelled=cooperative_snapshot,
+    ) is True
+    assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
+    assert handle.result().text == ""
+
+
 def test_base_agent_active_handle_cancel_does_not_deadlock(tmp_path):
     agent = BaseAgent(
         intrinsics={},
