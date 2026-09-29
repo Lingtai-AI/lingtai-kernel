@@ -2829,6 +2829,17 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 reason="cancel_event",
                 **tool_call_fields,
             )
+            # The model response is already on the wire, but none of these
+            # calls reached the executor. Close the pair with that certainty
+            # before a restart can heal it as an ambiguous missing result.
+            iface = getattr(getattr(agent, "_chat", None), "interface", None)
+            if iface is not None and iface.has_pending_tool_calls():
+                iface.close_pending_tool_calls(
+                    reason="cancel_event before dispatch",
+                    tool_not_dispatched=True,
+                    tool_result_recovery_lookup=lambda _call: None,
+                )
+                agent._save_chat_history(ledger_source=ledger_source)
             return {"text": "", "failed": False, "errors": []}
 
         stop_reason = guard.check_limit(len(response.tool_calls))

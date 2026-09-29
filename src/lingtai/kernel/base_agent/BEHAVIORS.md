@@ -118,7 +118,7 @@ Pass when every failure before `spawn_detached` returns leaves the slot released
 3. Inspect `BaseAgent._request_turn_cancel`, `request_cooperative_cancel`, both `_run_loop` dequeue branches, `_sync_notifications`, and `_process_response`; confirm producer writes route through the helper, only the two post-shutdown fresh-dequeue sites clear, the awake clear precedes concatenation, and inner consumers never clear.
 
 ### Expected evidence
-- [ ] Step 1: a normal preset `threading.Event` prevents tool dispatch and continuation while remaining set; awake and ASLEEP fresh dequeues clear stale state; an event-barrier cancellation during concatenation survives; an ASLEEP notification wake preserves the latch; repeated helper calls are harmless.
+- [ ] Step 1: a normal preset `threading.Event` prevents tool dispatch and continuation while remaining set; a response cancelled after proposing a tool call persists a paired result that certifies no dispatch and permits a later retry only if the request remains active; awake and ASLEEP fresh dequeues clear stale state; an event-barrier cancellation during concatenation survives; an ASLEEP notification wake preserves the latch; repeated helper calls are harmless.
 - [ ] Step 2: official and direct System self-sleep publish ASLEEP state/event before latching; heartbeat interrupt/sleep consume their signal file before latching; successful refresh spawns its watcher before latching and sets shutdown afterward; failed setup remains unsignaled.
 - [ ] Step 3: source inspection finds one direct `.set()` in the helper's Core delegation and exactly two `.clear()` calls in fresh-dequeue ownership. No provider abort, running-tool preemption, request identity, or stop-drain guarantee has been introduced.
 
