@@ -36,6 +36,11 @@ from lingtai.mcp_servers.wechat.plugin import (
 )
 from lingtai.services import mcp_registry
 from lingtai.tools.tool_family import ChildTool
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -168,13 +173,22 @@ def test_public_schema_keeps_the_strict_action_family_shape():
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["additionalProperties"] is False
     assert schema["properties"]["action"]["enum"] == list(TELEGRAM_ACTIONS)
-    assert len(schema["allOf"]) == len(TELEGRAM_ACTIONS)
     assert "telegram-mcp-manual" in schema["properties"]["action"]["description"]
-    branch_titles = [b["title"] for b in schema["properties"]["input"]["anyOf"]]
-    assert branch_titles == [
-        "settings inventory input" if action == "settings" else f"{action} input"
-        for action in TELEGRAM_ACTIONS
-    ]
+    # One root ``oneOf`` branch per action in plugin order (settings
+    # immediately before manual), each discriminated by its action const.
+    assert_compact_envelope(schema, list(TELEGRAM_ACTIONS))
+    assert branch_actions(schema) == list(TELEGRAM_ACTIONS)
+    branches = action_input_schemas(schema)
+    canonical = _family._telegram_input_schemas()
+    for action in TELEGRAM_DECLARED_ACTIONS:
+        assert branches[action] == canonical[action], action
+    assert branches["manual"] == canonical["manual"]
+    assert branches["settings"] == {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
 
 
 def test_declared_actions_still_dispatch_flat_into_the_manager():
@@ -290,13 +304,20 @@ def test_wechat_public_schema_keeps_the_strict_action_family_shape():
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["additionalProperties"] is False
     assert schema["properties"]["action"]["enum"] == list(WECHAT_ACTIONS)
-    assert len(schema["allOf"]) == len(WECHAT_ACTIONS)
     assert "wechat-mcp-manual" in schema["properties"]["action"]["description"]
-    branch_titles = [b["title"] for b in schema["properties"]["input"]["anyOf"]]
-    assert branch_titles == [
-        "settings inventory input" if action == "settings" else f"{action} input"
-        for action in WECHAT_ACTIONS
-    ]
+    assert_compact_envelope(schema, list(WECHAT_ACTIONS))
+    assert branch_actions(schema) == list(WECHAT_ACTIONS)
+    branches = action_input_schemas(schema)
+    canonical = wechat_family._wechat_input_schemas()
+    for action in WECHAT_DECLARED_ACTIONS:
+        assert branches[action] == canonical[action], action
+    assert branches["manual"] == canonical["manual"]
+    assert branches["settings"] == {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
 
 
 def test_wechat_declared_actions_still_dispatch_flat_into_the_manager():

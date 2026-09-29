@@ -16,6 +16,11 @@ import pytest
 from lingtai.agent import Agent
 from lingtai.tools import psyche as psyche_tool
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 
 MANUAL_ACTIONS = ["pad", "lingtai", "knowledge", "skills", "manual"]
@@ -81,28 +86,26 @@ def test_root_is_the_closed_strict_ltp_v2_envelope():
 
 def test_every_child_input_is_the_canonical_strict_empty_object():
     schema = psyche_tool.get_schema()
-    branches = schema["properties"]["input"]["anyOf"]
-    assert [b["title"] for b in branches] == [
-        "pad input",
-        "lingtai input",
-        "knowledge input",
-        "skills input",
-        "settings inventory input",
-        "manual input",
-    ]
-    for branch in branches:
+    assert branch_actions(schema) == EXPECTED_ACTIONS
+    for branch in action_input_schemas(schema).values():
         assert branch["type"] == "object"
         assert branch["properties"] == {}
         assert branch["additionalProperties"] is False
 
 
-def test_root_allof_correlates_each_action_const_with_its_input_schema():
-    conditions = psyche_tool.get_schema()["allOf"]
-    assert len(conditions) == len(EXPECTED_ACTIONS)
-    for action, cond in zip(EXPECTED_ACTIONS, conditions):
-        assert cond["if"]["properties"]["action"]["const"] == action
-        assert cond["if"]["required"] == ["action"]
-        assert cond["then"]["properties"]["input"]["additionalProperties"] is False
+def test_root_oneof_correlates_each_action_const_with_its_input_schema():
+    """One root ``oneOf`` branch per action, in order, each closed.
+
+    Every psyche input is the identical strict-empty object, so the ``action``
+    const is the only thing that discriminates the branches — which is exactly
+    why a root ``oneOf`` (not ``anyOf``) stays unambiguous here.
+    """
+    schema = psyche_tool.get_schema()
+    assert_compact_envelope(schema, EXPECTED_ACTIONS)
+    assert len(schema["oneOf"]) == len(EXPECTED_ACTIONS)
+    for action, input_schema in action_input_schemas(schema).items():
+        assert action in EXPECTED_ACTIONS
+        assert input_schema["additionalProperties"] is False
 
 
 def test_registered_exactly_once_as_a_mandatory_official_plugin(tmp_path):

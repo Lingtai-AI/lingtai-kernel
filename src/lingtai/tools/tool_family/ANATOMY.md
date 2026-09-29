@@ -30,6 +30,7 @@ related_files:
   - src/lingtai/tools/tool_family/glossary-en.md
   - src/lingtai/tools/tool_family/glossary-wen.md
   - src/lingtai/tools/tool_family/glossary-zh.md
+  - tests/_tool_family_schema_helpers.py
   - tests/test_tool_settings_contract.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
@@ -61,8 +62,10 @@ that generic dispatch route.
 - `ChildTool` — a frozen descriptor pairing one child's canonical name,
   `input_schema`, `handler`, and an optional `diagnostics` sidecar; name
   doubles as the model `action` constant and dispatch key
-  (`__init__.py:143-170`, preceded by the `DiagnosticDescriptor` dataclass at
-  `__init__.py:125-140`). `diagnostics` maps a structural trigger name
+  (`__init__.py:146-179`, preceded by the `DiagnosticDescriptor` dataclass at
+  `__init__.py:128-142`). `title` and `branch_title()` are retained for source
+  compatibility but never emitted by `build_schema()`. `diagnostics` maps a
+  structural trigger name
   (today: only
   `TRIGGER_UNSUPPORTED_INPUT_FIELD`) to the static `DiagnosticDescriptor`
   (`code`/`expected_form`/`reason`/`fix`) that action owns for it — see
@@ -76,18 +79,20 @@ that generic dispatch route.
   and strips root `summarize`, rejects unknown root fields, and rejects
   `input` keys outside the selected child's own declared schema properties
   before calling that child's handler with only its `input`
-  (`__init__.py:173-472`). Two enforcement layers correlate `action` with
-  `input`, generated purely from the child registry with no name/schema
-  mapping table: (1) schema-level — a root `allOf` with one `if`/`then`
-  condition per child, each `if` testing `action` via `const` against that
-  child's own registry name, each `then` constraining `input` to that exact
-  child's canonical schema; (2) dispatch-level — `handle()`'s own `input`-key
-  check against the selected child's declared properties, which remains
-  always-authoritative and fail-closed regardless of whether a given
-  provider enforces `allOf`/`if`/`then` schema-side. Root-level `allOf`
-  correlation was adopted after a live non-strict Codex Responses probe on
-  2026-07-27 accepted a raw root `allOf`/`if`/`then` schema without error on
-  the current route (see `CONTRACT.md` "Contract rules").
+  (`__init__.py:182-469`). `build_schema()` (`__init__.py:252-339`) emits one
+  compact root `oneOf` discriminated union generated purely from the child
+  registry with no name/schema mapping table: one branch per child pairing
+  `properties.action.const` (that child's own registry name) with
+  `properties.input` (a deep copy of that exact child's canonical schema),
+  so each child schema appears exactly once — the root `input` property
+  keeps only `type: object` plus a description, and there is no root
+  `allOf` or second disclosure copy. Schema-level correlation is additive;
+  `handle()`'s own `input`-key check against the selected child's declared
+  properties remains always-authoritative and fail-closed regardless of
+  whether a given provider enforces the root `oneOf` schema-side. The union
+  sits at the root because the OpenAI Responses scrub preserves a root
+  `oneOf` verbatim while rewriting nested ones; live acceptance is validated
+  separately on the exact route (see `CONTRACT.md` "Behavior").
 - `settings.py` — owns the public `SettingRow`/`SettingsProvider` seam and the
   injected five-field SHOW projection with private redaction and incremental
   response bounding (`settings.py:1-137`, guarded by T011).
@@ -299,7 +304,8 @@ A fake `widget` family in `tests/test_tool_family_generic.py` and
 `tests/test_tool_family_wire_parity.py` proves this package is generic, not
 Web-specific; the intrinsic migrations (`system`, `notification`, `email`,
 `context`) prove it again against real intrinsics with a different composition
-shape. Building a family on
+shape. Family suites navigate the composed root `oneOf` through the shared
+`tests/_tool_family_schema_helpers.py` seam. Building a family on
 `ToolFamily` is optional: a family may hand-write an equivalent
 `handle()`/schema composition instead, exactly as `web` did before adopting
 this package.

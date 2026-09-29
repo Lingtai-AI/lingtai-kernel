@@ -15,6 +15,11 @@ from lingtai.mcp_servers.feishu._family import (
     handle_feishu,
 )
 from lingtai.mcp_servers.feishu.manager import FeishuManager
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 
 class _CountingManager:
@@ -27,9 +32,8 @@ class _CountingManager:
 
 
 def _branches(schema: dict) -> dict[str, dict]:
-    inputs = schema["properties"]["input"]
-    branches = inputs.get("oneOf") or inputs.get("anyOf")
-    return {branch["title"].removesuffix(" input"): branch for branch in branches}
+    """Map each action to the ``input`` schema its root ``oneOf`` branch carries."""
+    return action_input_schemas(schema)
 
 
 def test_family_dispatch_rejects_root_and_cross_branch_before_manager_io():
@@ -181,39 +185,76 @@ def test_manager_handle_accepts_both_flat_and_ltpv2_shapes_identically():
 
 
 def test_openai_responses_scrub_preserves_family_root_and_action_branches():
+    """The root ``oneOf`` discriminated union survives the Responses scrub
+    as ``oneOf`` with the same per-action mapping; only a ``oneOf`` nested
+    inside a child input (send/reply's text-XOR-content choice and the
+    ``content`` variants) is rewritten to ``anyOf`` on that wire."""
     from lingtai.llm.openai.adapter import _scrub_responses_schema
 
     wire = _scrub_responses_schema(copy.deepcopy(FEISHU_SCHEMA), is_root=True)
     assert wire["required"] == FEISHU_SCHEMA["required"]
     assert wire["properties"]["action"]["enum"] == list(FEISHU_ACTIONS)
-    assert wire["properties"]["input"]["anyOf"]
-    assert len(wire["allOf"]) == len(FEISHU_ACTIONS)
     assert wire["additionalProperties"] is False
+    assert "allOf" not in wire and "anyOf" not in wire
+    assert branch_actions(wire) == list(FEISHU_ACTIONS)
+    # The typed root ``input`` only gains an empty ``properties`` map on the
+    # Responses wire; it never regains a duplicate branch list.
+    root_input = wire["properties"]["input"]
+    assert root_input["properties"] == {}
+    assert "oneOf" not in root_input and "anyOf" not in root_input
+    # Identical per-action correlation on the wire: same order, same input
+    # fields and required lists, every branch still closed, and no nested
+    # ``oneOf`` left anywhere below the root.
+    wire_branches = action_input_schemas(wire)
+    canonical_branches = action_input_schemas(FEISHU_SCHEMA)
+    assert list(wire_branches) == list(canonical_branches) == list(FEISHU_ACTIONS)
+    for action in FEISHU_ACTIONS:
+        assert set(wire_branches[action]["properties"]) == set(
+            canonical_branches[action]["properties"]
+        ), action
+        assert wire_branches[action].get("required", []) == canonical_branches[action].get(
+            "required", []
+        ), action
+        assert wire_branches[action]["additionalProperties"] is False, action
+        assert "oneOf" not in wire_branches[action], action
+    # Exactly these children carry a nested ``oneOf`` (text-XOR-content,
+    # add-XOR-remove reaction fields, alias-XOR-open_id); each is rewritten
+    # to ``anyOf`` on this wire while the root ``oneOf`` survives.
+    nested_one_of = {a for a, b in canonical_branches.items() if "oneOf" in b}
+    assert nested_one_of == {"send", "reply", "react", "edit", "remove_contact"}
+    for action in sorted(nested_one_of):
+        assert "anyOf" not in canonical_branches[action], action
+        assert "anyOf" in wire_branches[action], action
+        assert len(wire_branches[action]["anyOf"]) == len(
+            canonical_branches[action]["oneOf"]
+        ), action
 
 
-def test_published_input_schema_uses_anyof_and_empty_actions_are_unambiguous():
-    """A conformant JSON-Schema oneOf rejects {} whenever more than one
-    branch matches it. check/contacts/accounts/settings/manual all have an
-    empty (or all-optional) input branch, so the published discovery schema
-    must use anyOf rather than oneOf, matching Telegram's ``_family.py``.
-    Strict action<->input correlation still lives in the allOf discriminator
-    and in dispatch (``_basic_validate``/``handle_feishu``), not in this branch
-    list's own combinator choice.
+def test_root_input_carries_no_discovery_list_and_empty_actions_are_unambiguous():
+    """A conformant JSON-Schema oneOf over bare inputs rejects {} whenever
+    more than one branch matches it. check/contacts/accounts/settings/manual
+    all have an empty (or all-optional) input, so the old ``input.anyOf``
+    discovery list existed only to dodge that collision. The compact shape
+    has no discovery list at all: the single root ``oneOf`` is keyed by the
+    ``action`` const, so a well-formed zero-input call matches exactly one
+    branch — strict correlation lives there and in dispatch
+    (``_basic_validate``/``handle_feishu``).
     """
     input_schema = FEISHU_SCHEMA["properties"]["input"]
     assert "oneOf" not in input_schema
-    assert "anyOf" in input_schema
+    assert "anyOf" not in input_schema
+    assert "properties" not in input_schema
+    assert "anyOf" not in FEISHU_SCHEMA and "allOf" not in FEISHU_SCHEMA
 
-    branches = input_schema["anyOf"]
-    matching_titles = {
-        branch["title"]
-        for branch in branches
-        if _basic_validate({}, branch)
+    branches = _branches(FEISHU_SCHEMA)
+    matching_actions = {
+        action for action, branch in branches.items() if _basic_validate({}, branch)
     }
-    assert matching_titles == {
-        "check input",
-        "contacts input",
-        "accounts input",
-        "settings inventory input",
-        "manual input",
-    }
+    assert matching_actions == {"check", "contacts", "accounts", "settings", "manual"}
+    for action in matching_actions:
+        matching = [
+            branch for branch in FEISHU_SCHEMA["oneOf"]
+            if branch["properties"]["action"]["const"] == action
+            and _basic_validate({}, branch["properties"]["input"])
+        ]
+        assert len(matching) == 1, action

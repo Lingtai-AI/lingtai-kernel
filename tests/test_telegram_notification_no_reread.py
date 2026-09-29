@@ -18,6 +18,7 @@ from lingtai.mcp_servers.telegram import manager as tg_manager
 from lingtai.mcp_servers.telegram import _family as tg_family
 from lingtai.mcp_servers.telegram.manager import DESCRIPTION, SCHEMA, TelegramManager
 from tests._notification_store_helpers import notification_store_for
+from tests._tool_family_schema_helpers import action_input_schemas
 
 
 class _FakeAccount:
@@ -141,7 +142,7 @@ def test_root_description_and_action_schema_agree_on_no_reread() -> None:
 
 def test_reply_branch_schema_names_notification_id_source() -> None:
     reply_branch = None
-    for branch in SCHEMA["properties"]["input"]["anyOf"]:
+    for branch in action_input_schemas(SCHEMA).values():
         if branch.get("description", "").lower().startswith("reply to one message"):
             reply_branch = branch
             break

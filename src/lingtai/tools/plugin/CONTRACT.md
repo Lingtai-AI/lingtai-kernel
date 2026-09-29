@@ -169,10 +169,10 @@ boolean and stripped before dispatch. All three actions take **no arguments**;
 (`{type: object, properties: {}, additionalProperties: false}`) — the
 `MANUAL_INPUT_SCHEMA` literal exported by `tool_family.manual` and reused here
 as `_EMPTY_INPUT`, rather than hand-copied per action. `settings` uses the
-merged generic contract's strict empty-object SHOW schema. The root
-`allOf`/`if`/`then` correlates each `action` const with its own `input` branch,
-and `input.anyOf` discloses all three branches with titles
-`info input` / `settings inventory input` / `manual input`.
+merged generic contract's strict empty-object SHOW schema. The root `oneOf`
+carries one branch per action (`info` / `settings` / `manual`), each pairing
+that `action` const with its own exact `input` schema; each child schema
+appears exactly once.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|

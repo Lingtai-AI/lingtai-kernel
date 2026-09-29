@@ -6,6 +6,7 @@ boilerplate in ``lingtai.tools.tool_family`` is generic, not Web-specific.
 """
 from __future__ import annotations
 
+import copy
 import json
 
 import pytest
@@ -17,6 +18,12 @@ from lingtai.tools.tool_family import (
     DiagnosticDescriptor,
     ToolFamily,
     ToolFamilyError,
+)
+from tests._tool_family_schema_helpers import (
+    action_input_schema,
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
 )
 
 
@@ -90,25 +97,30 @@ def test_empty_registry_fails_loudly():
 def test_schema_composes_action_input_reasoning_summarize_root():
     fam = _widget_family()
     schema = fam.build_schema()
-    assert schema["type"] == "object"
+    # Closed LTP v2 root, exactly four public fields, one discriminated
+    # ``oneOf`` branch per child in registration order, nothing duplicated.
+    assert_compact_envelope(schema, ["spin", "manual"])
     # ``reasoning`` is Host InvocationContext/audit metadata and is REQUIRED
     # — the family schema declares it itself so it is required even before
     # Agent schema composition re-injects the identical property text (that
     # injection only touches ``properties``, never ``required``).
     assert schema["required"] == ["action", "input", "reasoning"]
-    assert schema["additionalProperties"] is False
-    assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
-    assert schema["properties"]["action"]["enum"] == ["spin", "manual"]
-    assert schema["properties"]["input"]["type"] == "object"
     assert schema["properties"]["reasoning"]["type"] == "string"
     assert schema["properties"]["summarize"]["type"] == "boolean"
-    branches = schema["properties"]["input"]["oneOf"]
-    assert [b["title"] for b in branches] == ["spin input", "manual input"]
-    spin_branch, manual_branch = branches
-    assert spin_branch["required"] == ["speed"]
-    assert spin_branch["additionalProperties"] is False
-    assert manual_branch["properties"] == {}
-    for branch in branches:
+    # The root ``input`` keeps its type and its unchanged description only;
+    # the exact per-action shape lives solely in the matching ``oneOf`` branch.
+    assert schema["properties"]["input"] == {
+        "type": "object",
+        "description": (
+            "Strict action-specific input; the selected action is validated "
+            "again at dispatch."
+        ),
+    }
+    inputs = action_input_schemas(schema)
+    assert inputs["spin"]["required"] == ["speed"]
+    assert inputs["spin"]["additionalProperties"] is False
+    assert inputs["manual"]["properties"] == {}
+    for branch in inputs.values():
         assert branch["additionalProperties"] is False
         assert "reasoning" not in branch.get("properties", {})
         assert "_reasoning" not in branch.get("properties", {})
@@ -118,9 +130,64 @@ def test_schema_composes_action_input_reasoning_summarize_root():
 def test_schema_never_uses_generic_unconstrained_input_object():
     fam = _widget_family()
     schema = fam.build_schema()
-    for branch in schema["properties"]["input"]["oneOf"]:
+    for branch in action_input_schemas(schema).values():
         assert branch.get("type") == "object"
         assert "properties" in branch
+
+
+def test_each_child_schema_appears_exactly_once_in_the_composed_schema():
+    """The compact composition embeds every child schema exactly once — in
+    its own root ``oneOf`` branch — never a second time under
+    ``properties.input`` or a root ``allOf``. A distinctive marker planted
+    in one child's canonical schema must therefore serialize exactly once."""
+    marker = "widget-spin-unique-marker-4b1e"
+
+    def handler(input_):
+        return {"status": "ok"}
+
+    spin = ChildTool(
+        "spin",
+        {
+            "type": "object",
+            "properties": {"speed": {"type": "integer", "description": marker}},
+            "required": ["speed"],
+            "additionalProperties": False,
+        },
+        handler,
+    )
+    schema = ToolFamily("widget", [spin, _manual_child()]).build_schema()
+    assert json.dumps(schema).count(marker) == 1
+    assert "allOf" not in schema
+    assert set(schema["properties"]["input"]) == {"type", "description"}
+
+
+def test_schema_branches_carry_no_presentational_title():
+    """``ChildTool.title`` is accepted for source compatibility but never
+    emitted: the branch is identified by its ``action`` const alone, so a
+    title would only add provider-facing tokens."""
+    schema = _widget_family().build_schema()
+    assert "title" not in json.dumps(schema)
+    assert branch_actions(schema) == ["spin", "manual"]
+
+
+def test_identical_child_inputs_stay_unambiguous_under_root_one_of():
+    """Two children with byte-identical strict-empty inputs (the shape the
+    reserved ``settings`` and ``manual`` children share) no longer force an
+    ``anyOf`` fallback: the ``action`` const discriminates the branches, so
+    the root ``oneOf`` matches exactly one branch for either action."""
+    empty = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+
+    def handler(_input):
+        return {"status": "ok"}
+
+    fam = ToolFamily(
+        "widget",
+        [ChildTool("noop", dict(empty), handler), ChildTool(RESERVED_MANUAL_NAME, dict(empty), handler)],
+    )
+    schema = fam.build_schema()
+    assert "anyOf" not in schema and "anyOf" not in schema["properties"]["input"]
+    assert _minimal_evaluate_one_of(schema, "noop", {}) is True
+    assert _minimal_evaluate_one_of(schema, "manual", {}) is True
 
 
 def test_dispatch_selects_child_by_action_and_passes_only_input():
@@ -316,23 +383,17 @@ def test_manual_child_dispatch_returns_full_manual_shape():
     }
 
 
-def _minimal_evaluate_if_then(condition: dict, action: str, input_value: dict) -> bool | None:
-    """Tiny, dependency-free structural evaluator for exactly the ``if``/
-    ``then`` shape :meth:`ToolFamily.build_schema` generates — not a general
-    JSON Schema validator. No JSON Schema library is installed in this repo,
-    and the task authorizes a minimal local evaluator instead of adding one.
-
-    Returns ``True`` if ``action``/``input_value`` satisfy this condition's
-    ``then`` branch, ``False`` if ``if`` matches but ``then`` is violated,
-    and ``None`` if ``if`` does not match at all (condition inapplicable —
-    ``allOf`` treats a non-matching ``if`` as vacuously satisfied, mirroring
-    real JSON Schema ``if``/``then`` semantics without ``else``).
-    """
-    if_clause = condition["if"]
-    if action != if_clause["properties"]["action"]["const"]:
-        return None
-    then_clause = condition["then"]
-    input_schema = then_clause["properties"]["input"]
+def _minimal_evaluate_branch(branch: dict, action: str, input_value: dict) -> bool:
+    """Tiny, dependency-free structural evaluator for exactly the root
+    ``oneOf`` branch shape :meth:`ToolFamily.build_schema` generates — not a
+    general JSON Schema validator. No JSON Schema library is installed in
+    this repo, and the task authorizes a minimal local evaluator instead of
+    adding one. A branch matches when its ``action`` const equals ``action``
+    and ``input_value`` satisfies its ``input`` schema's ``required`` list
+    and closed ``additionalProperties``."""
+    if action != branch["properties"]["action"]["const"]:
+        return False
+    input_schema = branch["properties"]["input"]
     allowed = set(input_schema.get("properties", {}))
     required = set(input_schema.get("required", []))
     if not required.issubset(input_value):
@@ -342,45 +403,45 @@ def _minimal_evaluate_if_then(condition: dict, action: str, input_value: dict) -
     return True
 
 
-def test_schema_correlates_action_const_with_exact_child_input_via_root_all_of():
+def _minimal_evaluate_one_of(schema: dict, action: str, input_value: dict) -> bool:
+    """Root ``oneOf`` semantics over :func:`_minimal_evaluate_branch`: the
+    envelope is valid iff exactly one branch matches."""
+    return sum(_minimal_evaluate_branch(b, action, input_value) for b in schema["oneOf"]) == 1
+
+
+def test_schema_correlates_action_const_with_exact_child_input_via_root_one_of():
     """Real schema-level correlation, generated purely from the child
-    registry: one ``allOf`` condition per child, each ``if`` testing
-    ``action`` via ``const`` against exactly that child's own registry name,
-    each ``then`` constraining ``input`` to that exact child's canonical
-    ``input_schema`` — not a mapping table, not a second name list."""
+    registry: one root ``oneOf`` branch per child, each pairing
+    ``properties.action.const`` (exactly that child's own registry name)
+    with ``properties.input`` (that exact child's canonical ``input_schema``)
+    — not a mapping table, not a second name list."""
     fam = _widget_family()
     schema = fam.build_schema()
-    conditions = schema["allOf"]
-    assert [c["if"]["properties"]["action"]["const"] for c in conditions] == list(fam.child_names)
-    for child_name, condition in zip(fam.child_names, conditions):
-        assert condition["if"]["required"] == ["action"]
-        then_input = condition["then"]["properties"]["input"]
-        child = fam._children[child_name]
-        assert then_input == dict(child.input_schema)
+    assert branch_actions(schema) == list(fam.child_names)
+    for child_name, branch in zip(fam.child_names, schema["oneOf"]):
+        assert set(branch["properties"]) == {"action", "input"}
+        assert branch["properties"]["action"] == {"const": child_name}
+        assert branch["properties"]["input"] == dict(fam._children[child_name].input_schema)
 
 
-def test_schema_all_of_rejects_mismatched_action_input_pairing_structurally():
-    """Direct proof the schema *itself* now correlates ``action``/``input``:
-    using a minimal local ``if``/``then`` evaluator (no JSON Schema
-    dependency added), a spin-shaped ``input`` fails the ``manual`` action's
-    ``allOf`` condition, and an empty ``input`` fails the ``spin`` action's
-    condition — the mismatch is caught by schema structure, not only by
-    ``handle()`` at dispatch. ``handle()`` remains the always-authoritative,
-    fail-closed second layer regardless of what the schema alone proves."""
-    fam = _widget_family()
-    schema = fam.build_schema()
-    conditions = {c["if"]["properties"]["action"]["const"]: c for c in schema["allOf"]}
+def test_schema_one_of_rejects_mismatched_action_input_pairing_structurally():
+    """Direct proof the schema *itself* correlates ``action``/``input``:
+    using a minimal local ``oneOf`` evaluator (no JSON Schema dependency
+    added), a spin-shaped ``input`` under ``action="manual"`` matches no
+    branch, an empty ``input`` under ``action="spin"`` matches no branch,
+    and an action outside the registry matches none — each mismatch is
+    caught by schema structure, not only by ``handle()`` at dispatch.
+    ``handle()`` remains the always-authoritative, fail-closed second layer
+    regardless of what the schema alone proves."""
+    schema = _widget_family().build_schema()
 
-    manual_condition = conditions["manual"]
-    assert _minimal_evaluate_if_then(manual_condition, "manual", {"speed": 1}) is False
-    assert _minimal_evaluate_if_then(manual_condition, "manual", {}) is True
+    assert _minimal_evaluate_one_of(schema, "manual", {}) is True
+    assert _minimal_evaluate_one_of(schema, "spin", {"speed": 1}) is True
 
-    spin_condition = conditions["spin"]
-    assert _minimal_evaluate_if_then(spin_condition, "spin", {}) is False
-    assert _minimal_evaluate_if_then(spin_condition, "spin", {"speed": 1}) is True
-
-    # A condition for a different action does not apply at all (vacuous).
-    assert _minimal_evaluate_if_then(manual_condition, "spin", {"speed": 1}) is None
+    assert _minimal_evaluate_one_of(schema, "manual", {"speed": 1}) is False
+    assert _minimal_evaluate_one_of(schema, "spin", {}) is False
+    assert _minimal_evaluate_one_of(schema, "spin", {"speed": 1, "turbo": True}) is False
+    assert _minimal_evaluate_one_of(schema, "nope", {}) is False
 
 
 def test_handle_remains_authoritative_fail_closed_even_though_schema_now_correlates():
@@ -400,52 +461,30 @@ def test_build_schema_does_not_leak_shared_mutable_child_schema_by_reference():
     """Regression test: ``build_schema()`` must not embed a child's own
     ``input_schema`` (or its nested containers) by reference into the
     returned schema such that mutating one call's result corrupts a later,
-    independent call. A shallow ``dict.update`` only copies the top level;
-    nested dicts (e.g. ``properties``) stay shared with whatever object the
-    caller's ``input_schema`` points at."""
+    independent call, the child's own canonical ``input_schema``, or a
+    sibling branch of the same call — every branch is its own deep copy."""
     calls: list[dict] = []
     fam = _widget_family(calls)
+    original_spin_schema = copy.deepcopy(dict(fam._children["spin"].input_schema))
+
     first = fam.build_schema()
-    first_spin_branch = next(
-        b for b in first["properties"]["input"]["oneOf"] if b["title"] == "spin input"
-    )
     # Mutate the nested ``properties`` container reachable from the first
-    # returned schema.
-    first_spin_branch["properties"]["speed"]["type"] = "string"
+    # returned schema, then the sibling branch's container too.
+    action_input_schema(first, "spin")["properties"]["speed"]["type"] = "string"
+    action_input_schema(first, "manual")["properties"]["smuggled"] = {"type": "string"}
 
     second = fam.build_schema()
-    second_spin_branch = next(
-        b for b in second["properties"]["input"]["oneOf"] if b["title"] == "spin input"
-    )
-    assert second_spin_branch["properties"]["speed"]["type"] == "integer"
+    assert action_input_schema(second, "spin")["properties"]["speed"]["type"] == "integer"
+    assert action_input_schema(second, "manual")["properties"] == {}
 
-
-def test_build_schema_all_of_conditions_are_mutation_isolated():
-    """Companion to the ``oneOf``-branch mutation-isolation regression test,
-    for the new ``allOf`` conditions: mutating one call's
-    ``then.properties.input`` must not corrupt a later, independent call, the
-    child's own canonical ``input_schema``, or the sibling ``oneOf`` branch —
-    each surface is built from its own deep copy."""
-    calls: list[dict] = []
-    fam = _widget_family(calls)
-    original_spin_schema = dict(fam._children["spin"].input_schema)
-
-    first = fam.build_schema()
-    spin_condition = next(c for c in first["allOf"] if c["if"]["properties"]["action"]["const"] == "spin")
-    spin_condition["then"]["properties"]["input"]["properties"]["speed"]["type"] = "string"
-
-    second = fam.build_schema()
-    second_spin_condition = next(c for c in second["allOf"] if c["if"]["properties"]["action"]["const"] == "spin")
-    assert second_spin_condition["then"]["properties"]["input"]["properties"]["speed"]["type"] == "integer"
-
-    # The child's own canonical schema is untouched.
+    # The children's own canonical schemas are untouched.
     assert fam._children["spin"].input_schema["properties"]["speed"]["type"] == "integer"
     assert dict(fam._children["spin"].input_schema) == original_spin_schema
+    assert fam._children["manual"].input_schema["properties"] == {}
 
-    # The sibling ``oneOf`` branch from the SAME first call is untouched —
-    # allOf.then.input and the oneOf branch do not share a container either.
-    first_spin_branch = next(b for b in first["properties"]["input"]["oneOf"] if b["title"] == "spin input")
-    assert first_spin_branch["properties"]["speed"]["type"] == "integer"
+    # Branches within one call never share a container with each other.
+    assert action_input_schema(first, "spin") is not action_input_schema(first, "manual")
+    assert "smuggled" not in action_input_schema(first, "spin")["properties"]
 
 
 # ---------------------------------------------------------------------------

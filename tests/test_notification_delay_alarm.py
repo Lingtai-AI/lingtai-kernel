@@ -20,6 +20,7 @@ from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdap
 from lingtai.kernel.meta_block import _collect_active_notifications
 from lingtai.tools.notification import get_schema
 from tests._tool_plugin_helpers import dispatch_declared_tool
+from tests._tool_family_schema_helpers import action_input_schema
 from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
 from tests._notification_store_helpers import notification_store_for, publish_test_payload, snapshot_notifications
 
@@ -83,11 +84,7 @@ def test_delay_schema_and_allowlist_expose_alarm_but_forbid_target(tmp_path: Pat
         "settings",
         "manual",
     ]
-    delay_branch = next(
-        branch
-        for branch in schema["properties"]["input"]["anyOf"]
-        if branch["title"] == "delay input"
-    )
+    delay_branch = action_input_schema(schema, "delay")
     seconds_schema = delay_branch["properties"]["seconds"]
     assert seconds_schema["type"] == "integer"
     assert seconds_schema["minimum"] == 0

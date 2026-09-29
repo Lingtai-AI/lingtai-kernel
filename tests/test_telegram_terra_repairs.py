@@ -36,6 +36,7 @@ from lingtai.mcp_servers.telegram.manager import (
 from lingtai.mcp_servers.telegram.server import build_server
 from lingtai.services import mcp_inbox as inbox
 from tests._notification_store_helpers import notification_store_for, store_agent_for
+from tests._tool_family_schema_helpers import action_input_schema
 
 DATE = 1781600000
 USER_A = {"id": 1, "is_bot": False, "first_name": "Alice", "username": "alice"}
@@ -186,10 +187,7 @@ def test_poll_loop_requests_every_catalogued_branch(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_chat_id_schema_accepts_int_and_reserved_bucket_only() -> None:
-    read = next(
-        branch for branch in SCHEMA["properties"]["input"].get("oneOf", SCHEMA["properties"]["input"]["anyOf"])
-        if branch.get("title") == "read input"
-    )
+    read = action_input_schema(SCHEMA, "read")
     chat_id_schema = read["properties"]["chat_id"]
     assert {"type": "integer"} in chat_id_schema["anyOf"]
     assert {

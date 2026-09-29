@@ -11,6 +11,7 @@ from lingtai.tools.bash._tool_family import (
     ShellFamilyDispatcher,
     get_schema,
 )
+from tests._tool_family_schema_helpers import branch_actions
 
 
 def _dispatcher(tmp_path: Path) -> tuple[ShellFamilyDispatcher, ShellManager]:
@@ -46,14 +47,12 @@ def test_shell_opts_in_immediately_before_manual():
     )
     schema = get_schema()
     assert schema["properties"]["action"]["enum"] == list(DECLARATION.public_actions)
-    assert [
-        branch["title"] for branch in schema["properties"]["input"]["anyOf"]
-    ] == [
-        "run input",
-        "poll input",
-        "cancel input",
-        "settings inventory input",
-        "manual input",
+    assert branch_actions(schema) == [
+        "run",
+        "poll",
+        "cancel",
+        "settings",
+        "manual",
     ]
 
 

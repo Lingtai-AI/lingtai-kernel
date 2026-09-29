@@ -170,13 +170,10 @@ _SCHEMA_FAMILY = _schema_only_family()
 
 def wechat_schema() -> dict[str, Any]:
     schema = _SCHEMA_FAMILY.build_schema()
-    # check/contacts/accounts/settings/manual all accept an empty-object input,
-    # so discovery must use anyOf. Settings opt-in already selects it; retain
-    # the conversion for schema-only compatibility if that generic detail
-    # changes later.
-    inputs = schema["properties"]["input"]
-    if "oneOf" in inputs:
-        inputs["anyOf"] = inputs.pop("oneOf")
+    # check/contacts/accounts/settings/manual all accept an empty-object input.
+    # The generic root ``oneOf`` is discriminated by each branch's ``action``
+    # const, so identical input shapes never make it ambiguous; no rewrite is
+    # needed.
     schema["properties"]["action"]["description"] = (
         "When a CURRENT notification carries complete required content and exact "
         "user_id/message_id, do not call check/read merely to reread it or refetch an id "

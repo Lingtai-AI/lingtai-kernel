@@ -93,8 +93,8 @@ generic seam supplies the closed settings child; children consume
 no model tool slots, so the family still advertises exactly one tool. The
 composed schema is built by the generic `ToolFamily` infra
 (`src/lingtai/tools/tool_family/`) from the declaration and provider, so the
-advertised `action` enum, the `input.anyOf` branches, the root `allOf`
-correlation, and dispatch cannot drift apart. `summarize` guidance profile:
+advertised `action` enum, the root `oneOf` action/input branches, and
+dispatch cannot drift apart. `summarize` guidance profile:
 **bulky-result** for `check`, `read`, and `search` (mailbox listings and full
 bodies can be large); **short-result** for every other action, whose receipts
 (`{status: "sent", ...}`, `dismissed`, `archived`, contact records) are small
@@ -325,7 +325,7 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 | `manual` returns the canonical child result verbatim, adapted to Email's exact public shape after dispatch | `src/lingtai/tools/email/__init__.py:_adapt_manual_result` | `tests/test_tool_family_email_migration.py::test_manual_child_returns_the_canonical_result_verbatim_no_double_wrap`, `::test_manual_public_result_is_emails_exact_pre_migration_shape` |
 | Envelope metadata never reaches an action implementation | `src/lingtai/tools/email/__init__.py:handle` | `tests/test_tool_family_email_migration.py::test_reasoning_and_summarize_never_reach_the_action_implementation` |
 | Explicit nulls become absent so pre-existing defaulting is preserved | `src/lingtai/tools/email/__init__.py:_strip_nulls` | `tests/test_tool_family_email_migration.py::test_explicit_nulls_are_stripped_so_defaults_still_apply`, `::test_edit_contact_null_name_does_not_blank_the_stored_name` |
-| The closed root and `allOf` correlation survive both provider wires | `src/lingtai/tools/tool_family/__init__.py:build_schema` | `tests/test_tool_family_email_wire_parity.py` |
+| The closed root and root `oneOf` correlation survive both provider wires | `src/lingtai/tools/tool_family/__init__.py:build_schema` | `tests/test_tool_family_email_wire_parity.py` |
 | `email` is on the kernel `summarize` allowlist it advertises | `src/lingtai/kernel/tool_result_summary.py:_LTP_V2_MIGRATED_FAMILIES` | `tests/test_tool_family_email_migration.py::test_email_joined_the_ltp_v2_summarize_allowlist` |
 
 ## Verification matrix

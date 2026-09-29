@@ -22,6 +22,7 @@ from lingtai.mcp_servers.telegram.settings import (
     DEFAULT_AUTOMATIC_POLL_INTERVAL_SECONDS,
     telegram_setting_rows,
 )
+from tests._tool_family_schema_helpers import action_input_schemas, branch_actions
 
 _SETTING_REFS = (
     ("config.path", "telegram-mcp-manual#telegram-config-path"),
@@ -113,12 +114,11 @@ def test_family_opts_in_immediately_before_manual() -> None:
     assert TELEGRAM_SCHEMA["properties"]["action"]["enum"] == list(
         TELEGRAM_ACTIONS
     )
-    settings_branch, manual_branch = TELEGRAM_SCHEMA["properties"]["input"][
-        "anyOf"
-    ][-2:]
-    assert (settings_branch["title"], manual_branch["title"]) == (
-        "settings inventory input", "manual input"
-    )
+    # The root ``oneOf`` union ends with the settings and manual branches, in
+    # that order, each keyed by its action const.
+    assert branch_actions(TELEGRAM_SCHEMA)[-2:] == ["settings", "manual"]
+    branches = action_input_schemas(TELEGRAM_SCHEMA)
+    settings_branch, manual_branch = branches["settings"], branches["manual"]
     assert all(
         branch["type"] == "object"
         and branch["properties"] == {}

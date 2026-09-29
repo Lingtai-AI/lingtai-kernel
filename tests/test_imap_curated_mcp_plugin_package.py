@@ -17,6 +17,11 @@ from lingtai.mcp_servers.imap import manager as imap_mgr
 from lingtai.mcp_servers.imap import server as imap_server
 from lingtai.mcp_servers.imap.plugin import IMAP_ACTIONS, IMAP_DECLARED_ACTIONS, IMAP_PLUGIN
 from lingtai.services import mcp_registry
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -138,8 +143,22 @@ def test_public_schema_keeps_the_strict_action_family_shape():
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["additionalProperties"] is False
     assert schema["properties"]["action"]["enum"] == list(IMAP_ACTIONS)
-    assert len(schema["allOf"]) == len(IMAP_ACTIONS)
     assert "imap-mcp-manual" in schema["properties"]["action"]["description"]
+    # One root ``oneOf`` branch per action in plugin order, discriminated by
+    # its action const and carrying that action's own canonical input.
+    assert_compact_envelope(schema, list(IMAP_ACTIONS))
+    assert branch_actions(schema) == [*IMAP_DECLARED_ACTIONS, "settings", "manual"]
+    branches = action_input_schemas(schema)
+    canonical = _family._imap_input_schemas()
+    for action in IMAP_DECLARED_ACTIONS:
+        assert branches[action] == canonical[action], action
+    assert branches["manual"] == canonical["manual"]
+    assert branches["settings"] == {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
 
 
 def test_declared_actions_still_dispatch_flat_into_the_manager():

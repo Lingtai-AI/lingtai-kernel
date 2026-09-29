@@ -20,8 +20,8 @@ LARGE_RESULT_DISMISS_ACTION_NOTE = (
 LARGE_RESULT_FORCE_NOTE = ""
 
 # The canonical action order. This is the single source for the schema's
-# ``action`` enum order, the ``input`` disclosure/``allOf`` branch order, and the
-# child registration order in ``__init__.py`` — one list, not three.
+# ``action`` enum order, the root ``oneOf`` branch order, and the child
+# registration order in ``__init__.py`` — one list, not three.
 # Read/clear actions keep the pre-existing prefix stable; hook-registry
 # management (add/drop/edit/list) is administrative and follows.
 NOTIFICATION_DECLARED_ACTIONS = (

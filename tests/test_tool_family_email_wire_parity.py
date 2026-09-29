@@ -9,13 +9,15 @@ receives after ``_build_tool_schemas`` composition, not a unit-level
 
 Both provider builders are exercised at the existing adapter seam with no
 adapter code changes; the Responses builder is the interesting one, because
-``_scrub_responses_schema`` is where a root ``allOf`` would be dropped if that
-route did not accept it.
+``_scrub_responses_schema`` is where the root ``oneOf`` discriminated union
+would be rewritten (as nested ``oneOf`` is) if that route did not preserve
+it at the root.
 """
 from __future__ import annotations
 
 from lingtai.kernel.base_agent.tools import _build_tool_schemas
 from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
+from tests._tool_family_schema_helpers import action_input_schemas, branch_actions
 
 _PUBLIC_ACTIONS = [
     "send", "check", "read", "dismiss", "reply", "reply_all",
@@ -82,43 +84,41 @@ def test_closed_root_survives_both_wires(tmp_path):
         assert params["properties"]["reasoning"]["type"] == "string"
 
 
-def test_action_input_all_of_correlation_survives_both_wires(tmp_path):
-    """Root ``allOf`` correlation must reach the model identically on both routes."""
+def test_action_input_one_of_correlation_survives_both_wires(tmp_path):
+    """The root ``oneOf`` correlation must reach the model identically on both
+    routes: same branch order, same per-action ``input`` schema."""
     email = _email_schema(tmp_path)
     chat = _build_tools([email])[0]["function"]["parameters"]
     responses = _build_responses_tools([email])[0]["parameters"]
 
     for params in (chat, responses):
-        conditions = params["allOf"]
-        assert [
-            c["if"]["properties"]["action"]["const"] for c in conditions
-        ] == _PUBLIC_ACTIONS
-        for condition in conditions:
-            assert condition["if"]["required"] == ["action"]
-            assert "input" in condition["then"]["properties"]
+        assert branch_actions(params) == _PUBLIC_ACTIONS
+        for action, branch in zip(_PUBLIC_ACTIONS, params["oneOf"]):
+            assert set(branch["properties"]) == {"action", "input"}
+            assert branch["properties"]["action"] == {"const": action}
+            assert branch["properties"]["input"]["type"] == "object"
+    assert action_input_schemas(chat) == action_input_schemas(responses)
 
 
-def test_every_action_branch_is_disclosed_on_both_wires(tmp_path):
+def test_every_action_branch_reaches_both_wires_closed(tmp_path):
     """All 15 branches reach the model on both routes, with closed inputs.
 
-    Settings opt-in makes the composed input union ``anyOf`` on both routes.
-    This asserts the branch set and their closedness on both wires.
+    The settings child is discriminated by its ``action`` const like every
+    other, so the root stays a single ``oneOf`` on both routes — no ``anyOf``
+    or ``allOf`` at the root, and no duplicate branch set under
+    ``properties.input``.
     """
     email = _email_schema(tmp_path)
     chat = _build_tools([email])[0]["function"]["parameters"]
     responses = _build_responses_tools([email])[0]["parameters"]
 
-    assert "anyOf" in chat["properties"]["input"]
-    assert "anyOf" in responses["properties"]["input"]
-
     for params in (chat, responses):
-        node = params["properties"]["input"]
-        branches = node["anyOf"]
-        assert [b["title"] for b in branches] == [
-            "settings inventory input" if a == "settings" else f"{a} input"
-            for a in _PUBLIC_ACTIONS
-        ]
-        for branch in branches:
+        assert "oneOf" in params
+        assert "anyOf" not in params and "allOf" not in params
+        for duplicate in ("oneOf", "anyOf", "allOf"):
+            assert duplicate not in params["properties"]["input"]
+        assert branch_actions(params) == _PUBLIC_ACTIONS
+        for branch in action_input_schemas(params).values():
             assert branch["additionalProperties"] is False
 
 

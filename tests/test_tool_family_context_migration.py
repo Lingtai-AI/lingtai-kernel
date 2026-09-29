@@ -30,6 +30,12 @@ from lingtai.agent import Agent
 from lingtai.tools import context as context_tool
 from lingtai.tools.context import ACTION_ORDER, get_schema
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._tool_family_schema_helpers import (
+    action_input_schema,
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 
 _VALID_JOURNAL = """\
@@ -160,13 +166,11 @@ def test_schema_and_dispatch_come_from_one_registry():
     """A child cannot be schema-advertised but dispatch-rejected."""
     schema = get_schema("en")
     advertised = list(schema["properties"]["action"]["enum"])
-    branch_titles = [b["title"] for b in schema["properties"]["input"]["oneOf"]]
-    correlated = [
-        c["if"]["properties"]["action"]["const"] for c in schema["allOf"]
-    ]
     assert advertised == list(ACTION_ORDER)
-    assert correlated == advertised
-    assert branch_titles == [f"{name} input" for name in advertised]
+    # The root ``oneOf`` discriminated union carries exactly one branch per
+    # advertised action, in the same order — and nothing else.
+    assert branch_actions(schema) == advertised
+    assert_compact_envelope(schema, advertised)
 
 
 def test_each_action_advertises_only_its_own_input():
@@ -179,9 +183,8 @@ def test_each_action_advertises_only_its_own_input():
     """
     schema = get_schema("en")
     props = {
-        c["if"]["properties"]["action"]["const"]:
-            set(c["then"]["properties"]["input"]["properties"])
-        for c in schema["allOf"]
+        action: set(input_schema["properties"])
+        for action, input_schema in action_input_schemas(schema).items()
     }
     assert props["molt"] == {
         "summary", "session_journal_path", "keep_tool_calls", "keep_last",
@@ -194,8 +197,8 @@ def test_each_action_advertises_only_its_own_input():
     # The root presentation bool is never domain input at any action.
     assert not any("summarize" in fields for fields in props.values())
     # Every branch is closed.
-    for cond in schema["allOf"]:
-        assert cond["then"]["properties"]["input"]["additionalProperties"] is False
+    for input_schema in action_input_schemas(schema).values():
+        assert input_schema["additionalProperties"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -287,8 +290,8 @@ def test_non_object_input_is_rejected(tmp_path):
 def test_reasoning_and_summarize_never_reach_a_handler(tmp_path):
     """Envelope controls are not action input, and never appear in a branch."""
     schema = get_schema("en")
-    for cond in schema["allOf"]:
-        branch = cond["then"]["properties"]["input"]["properties"]
+    for input_schema in action_input_schemas(schema).values():
+        branch = input_schema["properties"]
         for reserved in ("reasoning", "_reasoning", "summarize", "_tc_id"):
             assert reserved not in branch
 
@@ -535,10 +538,7 @@ def test_successful_molt_lifecycle_in_a_disposable_workdir(tmp_path):
         # The replayed block is model-visible history, so it must satisfy the
         # strict schema this family advertises — same obligation the synthesized
         # forced-molt pair carries.
-        molt_schema = next(
-            c["then"]["properties"]["input"] for c in get_schema("en")["allOf"]
-            if c["if"]["properties"]["action"]["const"] == "molt"
-        )
+        molt_schema = action_input_schema(get_schema("en"), "molt")
         assert set(replayed.args["input"]) == set(molt_schema["required"])
         assert not set(replayed.args["input"]) - set(molt_schema["properties"])
 
@@ -579,10 +579,7 @@ def test_system_forced_molt_synthesizes_the_current_envelope(tmp_path):
         # path does not use spelled as explicit null (the provider-compatible
         # representation of "absent"). A partial object here would teach a
         # model imitating its own history a call the schema rejects.
-        molt_schema = next(
-            c["then"]["properties"]["input"] for c in get_schema("en")["allOf"]
-            if c["if"]["properties"]["action"]["const"] == "molt"
-        )
+        molt_schema = action_input_schema(get_schema("en"), "molt")
         action_input = synth.args["input"]
         assert set(action_input) == set(molt_schema["required"])
         assert set(action_input) == {
@@ -706,10 +703,13 @@ def test_context_is_on_the_ltp_v2_summarize_allowlist():
 def test_one_context_root_survives_both_wires_with_action_input_correlation(tmp_path):
     """Exactly one public root, closed, `reasoning` required, on both wires.
 
-    Also proves the root `allOf` action/input correlation reaches the provider
-    intact — including that `session_journal_path` stays bound to `molt`'s
-    branch, which is what lets a provider reject a mis-paired molt before it is
-    ever dispatched.
+    Also proves the root `oneOf` discriminated union reaches the provider
+    intact on BOTH wires (the Responses scrub preserves a root `oneOf`
+    verbatim; Chat passes the schema through) with the identical per-action
+    mapping — including that `session_journal_path` stays bound to `molt`'s
+    branch, which is what lets a provider reject a mis-paired molt before it
+    is ever dispatched. No `allOf`/`anyOf` survives at root and the root
+    `input` carries no branches: each child schema appears exactly once.
     """
     from lingtai.kernel.base_agent.tools import _build_tool_schemas
     from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
@@ -729,7 +729,7 @@ def test_one_context_root_survives_both_wires_with_action_input_correlation(tmp_
 
         chat = _build_tools(context_schemas)[0]["function"]["parameters"]
         responses = _build_responses_tools(context_schemas)[0]["parameters"]
-        for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+        for wire in (chat, responses):
             assert set(wire["properties"]) == {
                 "action", "input", "reasoning", "summarize",
             }
@@ -738,16 +738,14 @@ def test_one_context_root_survives_both_wires_with_action_input_correlation(tmp_
             # schema is what keeps it required.
             assert wire["required"] == ["action", "input", "reasoning"]
             assert wire["properties"]["action"]["enum"] == list(ACTION_ORDER)
-            branches = wire["properties"]["input"][combinator]
-            assert [b["title"] for b in branches] == [
-                f"{a} input" for a in ACTION_ORDER
-            ]
-            assert len(wire["allOf"]) == len(ACTION_ORDER)
-            molt = next(
-                c["then"]["properties"]["input"] for c in wire["allOf"]
-                if c["if"]["properties"]["action"]["const"] == "molt"
-            )
+            assert "allOf" not in wire and "anyOf" not in wire
+            for duplicate in ("oneOf", "anyOf", "allOf"):
+                assert duplicate not in wire["properties"]["input"], duplicate
+            assert branch_actions(wire) == list(ACTION_ORDER)
+            molt = action_input_schema(wire, "molt")
             assert "session_journal_path" in molt["properties"]
+        # Identical per-action mapping on both wires.
+        assert action_input_schemas(chat) == action_input_schemas(responses)
     finally:
         live.stop(timeout=1.0)
 
@@ -816,16 +814,10 @@ def test_rebuild_items_is_optional_at_the_schema_and_wire_contract():
 
     # Generated model-facing branch: composed by the generic ToolFamily from the
     # schema above, so it must not reintroduce the requirement.
-    rebuild_branch = next(
-        cond["then"]["properties"]["input"] for cond in get_schema("en")["allOf"]
-        if cond["if"]["properties"]["action"]["const"] == "rebuild"
-    )
+    rebuild_branch = action_input_schema(get_schema("en"), "rebuild")
     assert rebuild_branch.get("required", []) == []
     # And the record-only action is unaffected: it still demands items.
-    summarize_branch = next(
-        cond["then"]["properties"]["input"] for cond in get_schema("en")["allOf"]
-        if cond["if"]["properties"]["action"]["const"] == "summarize"
-    )
+    summarize_branch = action_input_schema(get_schema("en"), "summarize")
     assert summarize_branch["required"] == ["items"]
 
 
@@ -839,12 +831,10 @@ def test_rebuild_items_stays_optional_on_both_provider_wires(tmp_path):
         schemas = [s for s in _build_tool_schemas(live) if s.name == "context"]
         chat = _build_tools(schemas)[0]["function"]["parameters"]
         responses = _build_responses_tools(schemas)[0]["parameters"]
-        for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
-            branches = {
-                b["title"]: b for b in wire["properties"]["input"][combinator]
-            }
-            assert branches["rebuild input"].get("required", []) == []
-            assert branches["summarize input"]["required"] == ["items"]
+        for wire in (chat, responses):
+            branches = action_input_schemas(wire)
+            assert branches["rebuild"].get("required", []) == []
+            assert branches["summarize"]["required"] == ["items"]
     finally:
         live.stop(timeout=1.0)
 
@@ -1124,8 +1114,8 @@ def test_root_summarize_bool_is_never_domain_input_of_the_summarize_action(tmp_p
     """
     schema = get_schema("en")
     assert schema["properties"]["summarize"]["type"] == "boolean"
-    for cond in schema["allOf"]:
-        assert "summarize" not in cond["then"]["properties"]["input"]["properties"]
+    for input_schema in action_input_schemas(schema).values():
+        assert "summarize" not in input_schema["properties"]
 
     # Passing the root bool alongside the summarize action reaches the engine
     # as a normal record-only call — it is not read as domain input.

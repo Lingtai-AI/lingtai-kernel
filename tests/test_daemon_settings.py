@@ -11,6 +11,7 @@ from lingtai.tools.daemon import DECLARATION, get_schema
 from lingtai.tools.daemon.settings import DAEMON_SETTING_KEYS, daemon_setting_rows
 from lingtai.tools.tool_family import ChildTool, ToolFamily
 from tests._daemon_helpers import make_daemon_agent
+from tests._tool_family_schema_helpers import action_input_schema, branch_actions
 
 _EMPTY = {
     "type": "object",
@@ -225,12 +226,8 @@ def test_settings_is_strict_empty_read_only_and_list_is_unchanged(
 
     schema = get_schema()
     assert schema["properties"]["action"]["enum"][-2:] == ["settings", "manual"]
-    settings_branch = next(
-        branch
-        for branch in schema["properties"]["input"]["anyOf"]
-        if branch["title"] == "settings inventory input"
-    )
-    assert settings_branch == {"title": "settings inventory input", **_EMPTY}
+    assert branch_actions(schema)[-2:] == ["settings", "manual"]
+    assert action_input_schema(schema, "settings") == _EMPTY
     for invalid in (None, [], {"set": "max_turns"}, {"reset": True}):
         result = _show(agent, invalid)
         assert result["status"] == "failed"

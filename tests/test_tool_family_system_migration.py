@@ -31,6 +31,11 @@ from lingtai.kernel.presets import home_shortened
 from lingtai.tools import system as system_tool
 from lingtai.tools.system.schema import ACTION_ORDER, INPUT_SCHEMAS
 from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +104,8 @@ def test_root_envelope_is_exactly_the_four_ltp_v2_fields() -> None:
 
 def test_every_action_has_one_strict_closed_input_branch() -> None:
     schema = _schema()
-    branches = schema["properties"]["input"]["anyOf"]
+    assert_compact_envelope(schema, list(_PUBLIC_ACTIONS))
+    branches = action_input_schemas(schema)
     public_schemas = system_tool.DECLARATION.public_input_schemas()
     assert len(branches) == len(_PUBLIC_ACTIONS)
     for action in _PUBLIC_ACTIONS:
@@ -112,15 +118,13 @@ def test_every_action_has_one_strict_closed_input_branch() -> None:
             assert reserved not in child["properties"], (action, reserved)
 
 
-def test_root_allof_correlates_each_action_with_its_own_input() -> None:
+def test_root_oneof_correlates_each_action_with_its_own_input() -> None:
+    """One root ``oneOf`` branch per action, in order, carrying its exact input."""
     schema = _schema()
-    conditions = schema["allOf"]
     public_schemas = system_tool.DECLARATION.public_input_schemas()
-    assert len(conditions) == len(_PUBLIC_ACTIONS)
-    for action, condition in zip(_PUBLIC_ACTIONS, conditions):
-        assert condition["if"]["properties"]["action"]["const"] == action
-        assert condition["if"]["required"] == ["action"]
-        assert condition["then"]["properties"]["input"] == public_schemas[action]
+    assert branch_actions(schema) == list(_PUBLIC_ACTIONS)
+    for action, input_schema in action_input_schemas(schema).items():
+        assert input_schema == public_schemas[action], action
 
 
 def test_children_consume_no_model_tool_slots() -> None:
@@ -356,18 +360,17 @@ def test_family_schema_survives_both_provider_wires() -> None:
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert wire["properties"]["action"]["enum"] == list(_PUBLIC_ACTIONS)
-        branches = wire["properties"]["input"]["anyOf"]
-        assert [branch["title"] for branch in branches] == [
-            "settings inventory input" if action == "settings" else f"{action} input"
-            for action in _PUBLIC_ACTIONS
-        ]
-        for branch in branches:
+        assert branch_actions(wire) == list(_PUBLIC_ACTIONS)
+        for branch in action_input_schemas(wire).values():
             assert branch["additionalProperties"] is False
             for reserved in ("reasoning", "_reasoning", "summarize"):
                 assert reserved not in branch["properties"]
 
 
-def test_root_allof_correlation_survives_both_provider_wires() -> None:
+def test_root_oneof_correlation_survives_both_provider_wires() -> None:
+    """The root ``oneOf`` reaches Chat and Responses as ``oneOf`` with the
+    identical per-action mapping; no ``allOf``/``anyOf`` survives at root and
+    the root ``input`` carries no duplicate branches."""
     from lingtai.kernel.llm.base import FunctionSchema
     from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
 
@@ -377,17 +380,17 @@ def test_root_allof_correlation_survives_both_provider_wires() -> None:
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
+    public_schemas = system_tool.DECLARATION.public_input_schemas()
     for wire in (chat, responses):
-        conditions = wire["allOf"]
-        public_schemas = system_tool.DECLARATION.public_input_schemas()
-        assert len(conditions) == len(_PUBLIC_ACTIONS)
-        for action, condition in zip(_PUBLIC_ACTIONS, conditions):
-            assert condition["if"]["properties"]["action"]["const"] == action
-            assert condition["if"]["required"] == ["action"]
-            constrained = condition["then"]["properties"]["input"]
+        assert "allOf" not in wire and "anyOf" not in wire
+        for duplicate in ("oneOf", "anyOf", "allOf"):
+            assert duplicate not in wire["properties"]["input"], duplicate
+        assert branch_actions(wire) == list(_PUBLIC_ACTIONS)
+        for action, constrained in action_input_schemas(wire).items():
             assert set(constrained["properties"]) == set(
                 public_schemas[action]["properties"]
             ), action
+    assert action_input_schemas(chat) == action_input_schemas(responses)
 
 
 # ---------------------------------------------------------------------------

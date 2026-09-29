@@ -40,6 +40,10 @@ from lingtai.services.plugin_registry import (
     validate_manifest,
 )
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -529,9 +533,7 @@ def test_schema_exposes_exact_public_actions_and_envelope():
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema.get("additionalProperties") is False
     assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
-    assert [b["title"] for b in schema["properties"]["input"]["anyOf"]] == [
-        "info input", "settings inventory input", "manual input",
-    ]
+    assert_compact_envelope(schema, ["info", "settings", "manual"])
     action_desc = schema["properties"]["action"]["description"]
     assert "info: read-only action" in action_desc
     assert "No action registers or unregisters anything" in action_desc
@@ -542,16 +544,14 @@ def test_all_actions_declare_strict_empty_input():
     from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 
     schema = get_schema()
-    branches = {
-        branch["title"]: branch
-        for branch in schema["properties"]["input"]["anyOf"]
-    }
-    for title in ("info input", "settings inventory input", "manual input"):
-        branch = branches[title]
+    branches = action_input_schemas(schema)
+    assert list(branches) == ["info", "settings", "manual"]
+    for action in ("info", "settings", "manual"):
+        branch = branches[action]
         assert branch["type"] == "object"
         assert branch.get("properties", {}) == MANUAL_INPUT_SCHEMA.get("properties", {})
         assert branch.get("additionalProperties") is False
-    assert branches["settings inventory input"]["required"] == []
+    assert branches["settings"]["required"] == []
 
 
 def test_schema_only_and_dispatching_families_declare_identical_children(tmp_path):

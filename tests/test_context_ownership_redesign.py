@@ -14,6 +14,7 @@ from lingtai.tools.system.summarize import (
     SUMMARY_STATUS_PENDING,
 )
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._tool_family_schema_helpers import action_input_schema
 
 
 def _agent(tmp_path, **kwargs):
@@ -66,11 +67,7 @@ def test_manual_only_lingtai_has_a_strict_ltp_v2_envelope(tmp_path):
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["additionalProperties"] is False
     assert "lingtai" in schema["properties"]["action"]["enum"]
-    lingtai_branch = next(
-        cond["then"]["properties"]["input"]
-        for cond in schema["allOf"]
-        if cond["if"]["properties"]["action"]["const"] == "lingtai"
-    )
+    lingtai_branch = action_input_schema(schema, "lingtai")
     assert lingtai_branch == {
         "type": "object",
         "properties": {},

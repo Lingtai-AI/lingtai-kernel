@@ -21,6 +21,14 @@ import pytest
 from lingtai.services.vision import VisionService
 from lingtai.tools import vision as vision_tool
 from lingtai.tools.vision import VisionManager, get_schema, setup
+from tests._tool_family_schema_helpers import (
+    action_input_schema,
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
+
+_ACTIONS = ["analyze", "check", "list", "settings", "manual"]
 
 
 class _StubAgent:
@@ -155,32 +163,30 @@ def test_root_schema_is_the_strict_ltp_v2_envelope():
 
 
 def test_root_schema_correlates_each_action_const_with_its_own_input():
+    """The root ``oneOf`` is the discriminated union: exactly one branch per
+    action, each keyed by its ``action`` const and carrying only that
+    action's own ``input`` schema."""
     schema = get_schema()
-    conditions = {
-        cond["if"]["properties"]["action"]["const"]: cond["then"]["properties"]["input"]
-        for cond in schema["allOf"]
-    }
-    assert set(conditions) == {"analyze", "check", "list", "settings", "manual"}
-    assert set(conditions["analyze"]["properties"]) == {"image_path", "question", "preset"}
-    assert conditions["list"]["properties"] == {}
-    assert conditions["manual"]["properties"] == {}
-    for cond in schema["allOf"]:
-        # A strict ``if`` with a missing property matches vacuously; the guard
-        # keeps each branch scoped to its own action.
-        assert cond["if"]["required"] == ["action"]
+    assert_compact_envelope(schema, _ACTIONS)
+    correlated = action_input_schemas(schema)
+    assert list(correlated) == _ACTIONS
+    assert set(correlated["analyze"]["properties"]) == {"image_path", "question", "preset"}
+    assert correlated["list"]["properties"] == {}
+    assert correlated["manual"]["properties"] == {}
+    for action, branch in zip(_ACTIONS, schema["oneOf"]):
+        # Every branch carries a distinct ``const``, so exactly one branch
+        # can match a well-formed call and each stays scoped to its action.
+        assert branch["properties"]["action"] == {"const": action}
+        assert set(branch["properties"]) == {"action", "input"}
 
 
 def test_all_child_input_schemas_are_exposed_before_invocation():
-    branches = get_schema()["properties"]["input"]["anyOf"]
-    assert [b["title"] for b in branches] == [
-        "analyze input",
-        "check input",
-        "list input",
-        "settings inventory input",
-        "manual input",
-    ]
+    schema = get_schema()
+    assert branch_actions(schema) == _ACTIONS
 
-    analyze_branch, check_branch, list_branch, settings_branch, manual_branch = branches
+    analyze_branch, check_branch, list_branch, settings_branch, manual_branch = (
+        action_input_schemas(schema).values()
+    )
     assert analyze_branch["required"] == ["image_path", "question"]
     assert analyze_branch["additionalProperties"] is False
     assert analyze_branch["properties"]["image_path"]["type"] == "string"
@@ -210,13 +216,10 @@ def test_all_child_input_schemas_are_exposed_before_invocation():
 @pytest.mark.parametrize("reasoning", ["chat-wire", "responses-wire"])
 def test_reasoning_and_summarize_never_leak_into_child_input(tmp_path, reasoning):
     schema = get_schema()
-    for branch in schema["properties"]["input"]["anyOf"]:
+    assert branch_actions(schema) == _ACTIONS
+    for branch in action_input_schemas(schema).values():
         assert not {"reasoning", "_reasoning", "summarize", "action"} & set(
             branch["properties"]
-        )
-    for cond in schema["allOf"]:
-        assert not {"reasoning", "_reasoning", "summarize", "action"} & set(
-            cond["then"]["properties"]["input"]["properties"]
         )
 
     svc = MagicMock(spec=VisionService)
@@ -633,11 +636,7 @@ def test_manual_child_input_schema_is_the_generic_owners_object(tmp_path):
     """
     from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 
-    manual_branch = next(
-        b
-        for b in get_schema()["properties"]["input"]["anyOf"]
-        if b["title"] == "manual input"
-    )
+    manual_branch = action_input_schema(get_schema(), "manual")
     assert manual_branch["properties"] == MANUAL_INPUT_SCHEMA["properties"]
     assert manual_branch["additionalProperties"] is False
     assert manual_branch.get("required") == MANUAL_INPUT_SCHEMA["required"] == []
@@ -660,39 +659,37 @@ def test_vision_schema_survives_both_provider_wires():
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
-    for wire, combinator in ((chat, "anyOf"), (responses, "anyOf")):
+    # Chat Completions passes the composed schema through byte-for-byte.
+    assert chat == get_schema()
+    for wire in (chat, responses):
         assert wire["type"] == "object"
         assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
-        assert wire["properties"]["action"]["enum"] == [
-            "analyze", "check", "list", "settings", "manual"
-        ]
-        branches = wire["properties"]["input"][combinator]
-        assert [b["title"] for b in branches] == [
-            "analyze input",
-            "check input",
-            "list input",
-            "settings inventory input",
-            "manual input",
-        ]
-        for branch in branches:
+        assert wire["properties"]["action"]["enum"] == _ACTIONS
+        # The root ``oneOf`` survives as ``oneOf`` on BOTH wires (the
+        # Responses scrub only rewrites nested ``oneOf``); nothing is
+        # duplicated under ``properties.input`` or a root ``allOf``.
+        assert "anyOf" not in wire and "allOf" not in wire
+        for duplicate in ("oneOf", "anyOf", "allOf"):
+            assert duplicate not in wire["properties"]["input"]
+        assert branch_actions(wire) == _ACTIONS
+        correlated = action_input_schemas(wire)
+        for branch in correlated.values():
             assert branch["additionalProperties"] is False
             assert not {"reasoning", "_reasoning", "summarize"} & set(
                 branch["properties"]
             )
         # Root action<->input correlation must survive the wire, not just the
-        # composed schema: each action const keeps its own `then.input`.
-        correlated = {
-            cond["if"]["properties"]["action"]["const"]: cond["then"]["properties"]["input"]
-            for cond in wire["allOf"]
-        }
-        assert set(correlated) == {
-            "analyze", "check", "list", "settings", "manual"
-        }
+        # composed schema: each action const keeps its own branch ``input``.
         assert set(correlated["analyze"]["properties"]) == {"image_path", "question", "preset"}
         assert correlated["list"]["properties"] == {}
         assert correlated["manual"]["properties"] == {}
+    # Identical per-action mapping on both wires.
+    assert chat["oneOf"] == responses["oneOf"]
+    # The Responses scrub's only touch on this shape: the typed root ``input``
+    # gains an empty ``properties`` map; it gains no duplicate child schema.
+    assert responses["properties"]["input"]["properties"] == {}
 
 
 def test_root_summarize_reaches_the_single_centralized_summarizer(tmp_path):

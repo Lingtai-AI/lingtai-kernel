@@ -27,6 +27,7 @@ receipts and through a recording stub manager, never by starting a run.
 """
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -50,12 +51,14 @@ from lingtai.tools.daemon._tool_family import (
 )
 from lingtai.tools.tool_family import ToolFamilyError
 from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
+from tests._tool_family_schema_helpers import (
+    action_input_schema,
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 _ACTIONS = list(DAEMON_ACTIONS)
-_ACTION_TITLES = [
-    "settings inventory input" if action == "settings" else f"{action} input"
-    for action in _ACTIONS
-]
 _READ_ONLY = ("list", "check", "settings", "manual")
 _SIDE_EFFECTFUL = ("emanate", "ask", "reclaim")
 
@@ -225,9 +228,11 @@ def test_canonical_children_are_the_seven_daemon_actions():
     schema = get_schema()
 
     assert schema["properties"]["action"]["enum"] == _ACTIONS
-    assert [b["title"] for b in schema["properties"]["input"]["anyOf"]] == (
-        _ACTION_TITLES
-    )
+    # One root ``oneOf`` branch per child in registration order; the settings
+    # child is discriminated by its ``action`` const like every other, so the
+    # composed root never needs an ``anyOf`` fallback.
+    assert branch_actions(schema) == _ACTIONS
+    assert_compact_envelope(schema, _ACTIONS)
 
 
 @pytest.mark.parametrize(
@@ -284,31 +289,52 @@ def test_reclaim_settings_and_manual_take_the_canonical_strict_empty_input():
     assert RECLAIM_INPUT_SCHEMA == MANUAL_INPUT_SCHEMA
 
 
-def test_root_allof_correlates_each_action_const_to_its_own_input_schema():
+def test_root_one_of_correlates_each_action_const_to_its_own_input_schema(tmp_path):
+    """Each root ``oneOf`` branch pairs one ``action`` const with exactly the
+    canonical child ``input_schema`` the dispatching family validates against
+    — no ``title``, no root ``allOf``, and no second copy under
+    ``properties.input``."""
     schema = get_schema()
+    dispatcher, _ = _dispatcher(tmp_path)
 
-    assert [c["if"]["properties"]["action"]["const"] for c in schema["allOf"]] == _ACTIONS
-    for condition in schema["allOf"]:
-        action = condition["if"]["properties"]["action"]["const"]
-        assert condition["if"]["required"] == ["action"]
-        branch = daemon_action_input_schema(action)
-        correlated = condition["then"]["properties"]["input"]
-        # Same canonical child schema the ``anyOf`` branch embeds, minus the
-        # presentational ``title`` the branch adds.
-        assert correlated == {k: v for k, v in branch.items() if k != "title"}
+    assert branch_actions(schema) == _ACTIONS
+    assert "allOf" not in schema and "anyOf" not in schema
+    for duplicate in ("oneOf", "anyOf", "allOf", "properties"):
+        assert duplicate not in schema["properties"]["input"]
+    for action, branch in zip(_ACTIONS, schema["oneOf"]):
+        assert set(branch) == {"properties"}
+        assert set(branch["properties"]) == {"action", "input"}
+        assert branch["properties"]["action"] == {"const": action}
+        assert "title" not in branch["properties"]["input"]
+        # Same canonical child schema the dispatching family registered.
+        assert branch["properties"]["input"] == dict(
+            dispatcher._family._children[action].input_schema
+        )
 
 
-def test_composed_schema_branches_are_mutation_isolated():
-    """A caller mutating one composed schema must not corrupt the next call's."""
+def test_composed_schema_branches_are_mutation_isolated(tmp_path):
+    """A caller mutating one composed schema must not corrupt the next call's
+    nor the canonical child schema the dispatcher validates against."""
+    dispatcher, _ = _dispatcher(tmp_path)
     first = get_schema()
-    first["properties"]["input"]["anyOf"][0]["properties"].clear()
-    first["allOf"][0]["then"]["properties"]["input"]["properties"].clear()
+    action_input_schema(first, "emanate")["properties"].clear()
+    action_input_schema(first, "list")["properties"]["smuggled"] = {"type": "string"}
 
     second = get_schema()
 
-    assert set(second["properties"]["input"]["anyOf"][0]["properties"]) == {
+    assert set(action_input_schema(second, "emanate")["properties"]) == {
         "tasks", "backend", "max_turns", "timeout"
     }
+    assert "smuggled" not in action_input_schema(second, "list")["properties"]
+    # The canonical child schemas are untouched by the mutation.
+    assert set(dispatcher._family._children["emanate"].input_schema["properties"]) == {
+        "tasks", "backend", "max_turns", "timeout"
+    }
+    assert set(LIST_INPUT_SCHEMA["properties"]) == {
+        "contains", "status", "include_done", "last"
+    }
+    # Branches within one call never share a container with each other.
+    assert "smuggled" not in action_input_schema(first, "check")["properties"]
 
 
 # ---------------------------------------------------------------------------
@@ -770,22 +796,32 @@ def test_daemon_family_schema_survives_chat_and_responses_wires():
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
-    for wire, combinator in ((chat, "anyOf"), (responses, "anyOf")):
+    # Chat Completions passes the composed schema through byte-for-byte.
+    assert chat == get_schema()
+    for wire in (chat, responses):
         assert wire["type"] == "object"
         assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert wire["properties"]["action"]["enum"] == _ACTIONS
-        branches = wire["properties"]["input"][combinator]
-        assert [b["title"] for b in branches] == _ACTION_TITLES
-        for branch in branches:
+        # The root ``oneOf`` survives as ``oneOf`` on BOTH wires (the
+        # Responses scrub only rewrites nested ``oneOf``); nothing is
+        # duplicated under ``properties.input`` or a root ``allOf``.
+        assert "anyOf" not in wire and "allOf" not in wire
+        for duplicate in ("oneOf", "anyOf", "allOf"):
+            assert duplicate not in wire["properties"]["input"]
+        assert branch_actions(wire) == _ACTIONS
+        for branch in action_input_schemas(wire).values():
             assert branch["additionalProperties"] is False
             for host_field in ("reasoning", "_reasoning", "summarize"):
                 assert host_field not in branch["properties"]
+    # The Responses scrub's only touch on this shape: the typed root ``input``
+    # gains an empty ``properties`` map; it gains no duplicate child schema.
+    assert responses["properties"]["input"]["properties"] == {}
 
 
 def test_responses_wire_preserves_the_root_action_input_correlation():
-    """The root ``allOf``/``if``/``then`` correlation must survive the Responses
+    """The root ``oneOf`` discriminated union must survive the Responses
     scrubber, so a mismatched action/input pairing is refusable schema-side on
     both wires — dispatch remains authoritative regardless."""
     from lingtai.kernel.llm.base import FunctionSchema
@@ -795,16 +831,25 @@ def test_responses_wire_preserves_the_root_action_input_correlation():
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
+    # Same root ``oneOf`` discriminated union, same per-action mapping, on
+    # both wires; ``allOf``/``anyOf`` never appear at the root.
+    assert branch_actions(chat) == branch_actions(responses) == _ACTIONS
     for wire in (chat, responses):
-        assert [c["if"]["properties"]["action"]["const"] for c in wire["allOf"]] == _ACTIONS
-        emanate_condition = wire["allOf"][0]["then"]["properties"]["input"]
-        assert set(emanate_condition["properties"]) == {
+        assert "allOf" not in wire and "anyOf" not in wire
+        for duplicate in ("oneOf", "anyOf", "allOf"):
+            assert duplicate not in wire["properties"]["input"]
+        for action in _ACTIONS:
+            assert set(action_input_schema(wire, action)["properties"]) == set(
+                daemon_action_input_schema(action)["properties"]
+            )
+        emanate_branch = action_input_schema(wire, "emanate")
+        assert set(emanate_branch["properties"]) == {
             "tasks", "backend", "max_turns", "timeout"
         }
-        ask_condition = wire["allOf"][2]["then"]["properties"]["input"]
-        assert set(ask_condition["properties"]) == {"id", "message"}
+        ask_branch = action_input_schema(wire, "ask")
+        assert set(ask_branch["properties"]) == {"id", "message"}
         # The complex nested emanate task object survives both wires intact.
-        task_items = emanate_condition["properties"]["tasks"]["items"]
+        task_items = emanate_branch["properties"]["tasks"]["items"]
         assert set(task_items["properties"]) == {
             "task", "tools", "skills", "mcp", "plugin", "preset", "backend_options",
             "prompt", "context_token_limit", "task_files",
@@ -819,15 +864,37 @@ def test_nested_emanate_task_schema_is_identical_on_both_wires():
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
 
-    chat_task = chat["properties"]["input"]["anyOf"][0]["properties"]["tasks"]["items"]
+    chat_task = action_input_schema(chat, "emanate")["properties"]["tasks"]["items"]
     responses_task = (
-        responses["properties"]["input"]["anyOf"][0]["properties"]["tasks"]["items"]
+        action_input_schema(responses, "emanate")["properties"]["tasks"]["items"]
     )
 
+    # Chat Completions carries the canonical nested task object verbatim. The
+    # Responses scrub's only nested touch is on the two free-form objects
+    # (``{"type": "object"}`` with no ``properties``): the ``tasks[].mcp``
+    # entry and ``tasks[].backend_options.env`` each gain an empty
+    # ``properties`` map; every other nested field is byte-identical.
+    assert chat_task == daemon_emanate_task_schema()
+    assert responses_task["properties"]["mcp"]["items"]["properties"] == {}
+    assert responses_task["properties"]["backend_options"]["properties"]["env"]["properties"] == {}
+    expected_responses_task = copy.deepcopy(chat_task)
+    expected_responses_task["properties"]["mcp"]["items"]["properties"] = {}
+    expected_responses_task["properties"]["backend_options"]["properties"]["env"]["properties"] = {}
+    assert responses_task == expected_responses_task
     assert chat_task["properties"]["backend_options"]["description"] == (
         responses_task["properties"]["backend_options"]["description"]
     )
     assert chat_task["required"] == responses_task["required"] == ["task", "tools"]
+    # The deeply nested ``backend_options`` ``anyOf`` (inside a child input,
+    # not at the root) is preserved verbatim on both wires.
+    backend_options = responses_task["properties"]["backend_options"]
+    for nested in (
+        backend_options["additionalProperties"],
+        backend_options["properties"]["config"],
+    ):
+        assert {branch.get("type") for branch in nested["anyOf"]} == {
+            "boolean", "string", "integer", "number", "null", "array"
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -878,6 +945,7 @@ def test_module_level_child_specs_are_the_single_registry_source():
         ("list", LIST_INPUT_SCHEMA), ("ask", ASK_INPUT_SCHEMA),
         ("check", CHECK_INPUT_SCHEMA), ("reclaim", RECLAIM_INPUT_SCHEMA),
     ):
-        assert daemon_action_input_schema(action) == {
-            "title": f"{action} input", **schema
-        }
+        # The public ``oneOf`` branch embeds the module-level spec exactly —
+        # no ``title`` or any other presentational addition.
+        assert daemon_action_input_schema(action) == schema
+        assert dict(dispatcher._family._children[action].input_schema) == schema

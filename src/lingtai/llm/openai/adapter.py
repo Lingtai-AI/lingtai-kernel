@@ -1190,10 +1190,10 @@ def _build_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
 # root for the Responses API. `enum` is only disallowed at the root — it is
 # valid (and common) inside individual properties. `anyOf`/`not` at the root
 # remain untested against the live backend and are kept out of caution;
-# `oneOf`/`allOf` were moved off this list after a live non-strict Codex
-# Responses probe on 2026-07-27 accepted a raw root `oneOf` and a raw root
-# `allOf`/`if`/`then` without error on the current route — see
-# `_scrub_responses_schema`'s root-preservation of both.
+# `allOf` moved off this list after a 2026-07-27 non-strict Codex probe
+# accepted raw root `allOf`/`if`/`then`. Root `oneOf` is also preserved,
+# but its live acceptance is established by separate current-route
+# ToolFamily validation rather than attributed to that older probe.
 _RESPONSES_DISALLOWED_TOP_LEVEL = ("anyOf", "not", "enum")
 
 
@@ -1228,9 +1228,9 @@ def _scrub_responses_schema(node: Any, is_root: bool = False) -> Any:
 
     At the schema **root** (`is_root=True`, the top-level `parameters` dict
     passed in by `_build_responses_tools`), `oneOf` and `allOf` are preserved
-    as-is rather than rewritten/stripped: a live non-strict Codex Responses
-    probe on 2026-07-27 showed the current route accepts a raw root `oneOf`
-    and a raw root `allOf`/`if`/`then` without error. Root `anyOf`/`not`/
+    as-is rather than rewritten/stripped. The 2026-07-27 non-strict Codex
+    probe established raw root `allOf`/`if`/`then`; root `oneOf` acceptance
+    is established by separate current-route ToolFamily validation. Root `anyOf`/`not`/
     `enum` remain untested and are still stripped before this function runs
     (`_RESPONSES_DISALLOWED_TOP_LEVEL`, `_build_responses_tools`).
     `enum`/`anyOf`/`allOf` nested below the root are left untouched as before

@@ -1,6 +1,6 @@
 ---
 name: tool-family
-contract_version: 4
+contract_version: 5
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/tool_family/ANATOMY.md
@@ -32,6 +32,7 @@ related_files:
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md
+  - tests/_tool_family_schema_helpers.py
   - tests/test_tool_family_generic.py
   - tests/test_tool_settings_contract.py
   - tests/test_tool_family_wire_parity.py
@@ -76,32 +77,44 @@ descriptors. Construction is where correctness is enforced: a duplicate child
 name, or more than one child named the reserved `manual`, raises
 `ToolFamilyError` immediately rather than registering silently. Once
 constructed, `build_schema()` deterministically composes the model-facing
-schema with two enforcement layers correlating `action` with `input`,
-generated purely from the child registry (no name/schema mapping table),
-both built from the same deep-copied canonical child schemas:
+schema as **one compact root discriminated union**, generated purely from
+the child registry (no name/schema mapping table) from deep-copied canonical
+child schemas:
 
-1. **Schema-level (`allOf`):** one `if`/`then` condition per child — each
-   `if` tests root `action` via `const` against that child's own registry
-   name (guarded by `required: ["action"]`); each `then` constrains root
-   `input` to that exact child's canonical `input_schema`. Adopted after a
-   live non-strict Codex Responses probe on 2026-07-27 accepted a raw root
-   `allOf`/`if`/`then` schema without error on the current route (see
-   `_scrub_responses_schema` in `../../llm/openai/adapter.py` for the
-   corresponding wire-level change and its own scope note).
-2. **Typed `input.oneOf` disclosure:** `input` explicitly declares the common
-   `type: object` constraint required of every action, then embeds the same
-   per-child `input_schema`s verbatim under a `title` for model discoverability
-   of every action's exact shape in one place. The direct type is redundant for
-   a complete JSON Schema validator, but keeps the object contract unambiguous
-   for model/provider schema consumers that inspect only the immediate node.
+- The closed root (`type: object`, `additionalProperties: false`) declares
+  exactly `action` (a string `enum` in registration order), `input`
+  (declared as `type: object` with its unchanged description — nothing
+  else), required `reasoning`, and optional `summarize`.
+- A root `oneOf` carries exactly one branch per registered child, in
+  registration order: `{"properties": {"action": {"const": <child name>},
+  "input": <that child's exact canonical input_schema>}}`. The `action`
+  const is the discriminator, so exactly one branch can match a well-formed
+  call even when two children (`settings` and `manual`, for instance)
+  declare byte-identical strict-empty inputs — the union never needs an
+  `anyOf` fallback. No branch carries a presentational `title`;
+  `ChildTool.title` and `ChildTool.branch_title()` are retained for source
+  compatibility only and never reach the wire.
+- **Each child schema appears exactly once.** Contract version 4 embedded
+  every child twice — under `properties.input.oneOf`/`anyOf` for disclosure
+  and again under `allOf[].then.properties.input` for correlation — which
+  roughly doubled the provider-facing schema tokens without adding a
+  constraint. Version 5 deliberately replaces that promise; exact token
+  savings are provider- and time-specific and belong in change evidence,
+  not here.
+- The union lives at the **root**, not under `properties.input`, because the
+  provider seams differ there: the OpenAI Responses builder
+  (`_scrub_responses_schema` in `../../llm/openai/adapter.py`) preserves a
+  root `oneOf` verbatim while rewriting any *nested* `oneOf` to `anyOf`.
+  Live acceptance must be proved separately for any exact provider route
+  being claimed, not inferred from that pass-through; the 2026-07-27 probe covered only raw
+  root `allOf`/`if`/`then`. Chat Completions passes through unchanged, and
+  this contract makes no claim about every provider's strictness.
 
-Both layers expose the envelope root `action`, `input`, required
-`reasoning`, and optional `summarize` — exactly the four public fields;
-`allOf` constrains them without adding a fifth field or duplicating `action`
-inside `input`. Dispatch (`handle()`, below) remains the second,
-always-authoritative enforcement layer regardless of whether a given
-provider actually validates `allOf`/`if`/`then` schema-side before
-invocation — it is additive, not a replacement.
+The union constrains `action`/`input` without adding a fifth public field
+or duplicating `action` inside `input`. Dispatch (`handle()`, below) remains
+the always-authoritative, fail-closed enforcement layer regardless of
+whether a given provider actually validates the root `oneOf` schema-side
+before invocation — the schema is additive, not a replacement.
 `reasoning` is Host InvocationContext/audit metadata, so `build_schema()`
 declares it itself (same property text Agent schema composition also
 re-injects into every tool's `properties` uniformly, but that step never
@@ -458,30 +471,36 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006) and
   return one fixed bounded failure with no partial rows. Consumption MUST stop
   incrementally at the 65,536-byte complete-response bound with one fixed
   no-row failure, and the action MUST offer no mutation operation.
-- `build_schema()` MUST declare the aggregate `input` property as direct
-  `type: object`, then embed each child's own object `input_schema` verbatim
-  (no copy-and-reshape) under a branch pairing it with that child's `title`.
-  The branch keyword is `oneOf` for opted-out families and `anyOf` for an
-  opted-in settings family, avoiding duplicate strict-empty branch invalidity.
-  It MUST declare a root `reasoning` string property and include
-  `reasoning` in the root `required` list — `reasoning` is Host
+- `build_schema()` MUST compose a closed root (`type: object`,
+  `additionalProperties: false`) whose `properties` are exactly `action`
+  (string `enum` in registration order), `input`, `reasoning`, and
+  `summarize`, with `required` exactly `["action", "input", "reasoning"]`.
+  The root `input` property MUST be declared as direct `type: object` with a
+  description and MUST NOT embed any child schema or branch list
+  (`oneOf`/`anyOf`/`properties`). `reasoning` is Host
   InvocationContext/audit metadata, not left to Agent schema composition's
   property-only re-injection, which never touches `required`.
-- `build_schema()` MUST also compose a root `allOf` with exactly one
-  `if`/`then` condition per registered child, generated purely from the
-  child registry: `if.properties.action.const` MUST equal that child's own
-  registry name, `if.required` MUST be `["action"]`, and
-  `then.properties.input` MUST be that exact child's own canonical
-  `input_schema` (the same deep-copied schema the disclosure branch embeds, not
-  a separately-maintained copy). This correlates `action` with `input` at
+- `build_schema()` MUST compose a root `oneOf` with exactly one branch per
+  registered child, in registration order, generated purely from the child
+  registry: each branch MUST be `{"properties": {"action": {"const":
+  <name>}, "input": <schema>}}` where `<name>` is that child's own registry
+  name and `<schema>` is a deep copy of that exact child's canonical
+  `input_schema`, verbatim (no copy-and-reshape, no added `title`). The
+  keyword MUST be `oneOf` for every family, settings opt-in included — the
+  `action` const discriminates identical inputs. Each child schema MUST
+  appear exactly once in the composed schema; there MUST be no root `allOf`
+  and no second disclosure copy. This correlates `action` with `input` at
   the schema level without adding a fifth public root field or duplicating
   `action` inside `input`.
+- Every `build_schema()` call MUST return freshly deep-copied branches:
+  mutating one result MUST NOT alter a later call, a sibling branch of the
+  same call, or any child's own canonical `input_schema`.
 - `handle()`, when used, MUST validate `action` against the registry, type-
   check and strip root `summarize` before any child handler runs, and reject
   `input` keys outside the selected child's own declared schema `properties`
   — schema conformance alone is not the sole enforcement boundary; dispatch
   remains always-authoritative and fail-closed regardless of whether a given
-  provider validates the root `allOf`/`if`/`then` schema-side
+  provider validates the root `oneOf` schema-side
   (`../CONTRACT.md` "Dispatch and actions").
 - `handle()` MUST reject an unknown root field UNLESS it is both (a) a
   property declared in the *selected* action's own `input_schema` and (b)
@@ -547,22 +566,29 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006) and
 T011 runs `tests/test_tool_settings_contract.py`; production suites remain the
 schema/dispatch non-regression evidence.
 
+`tests/_tool_family_schema_helpers.py` is the one shared navigation seam for
+the composed shape (`branch_actions`, `action_input_schemas`,
+`action_input_schema`, `assert_compact_envelope`); family suites navigate
+the root `oneOf` through it rather than re-deriving the path.
 `tests/test_tool_family_generic.py` proves the infrastructure is generic using
 a fake `widget` family unrelated to `web`: deterministic registration order,
-duplicate-name and reserved-`manual`-collision failures, `oneOf` schema
-composition with root `reasoning` REQUIRED and no unconstrained generic
-`input` object, dispatch selecting the correct child and passing only its
-`input`, unknown-action/non-boolean-summarize/unknown-root-field/cross-branch-
-key rejection, no double result wrapping, and two dedicated proofs that
-`reasoning`/`summarize` never reach a child handler and never appear in any
-child's own canonical `input_schema`. It also proves the root `allOf`
-correlation directly: every condition's `action` const matches the child
-registry name, `then.input` exactly matches that child's own canonical
-schema, a minimal local `if`/`then` structural evaluator (no JSON Schema
-dependency added) shows the schema itself rejects a mismatched
-`action`/`input` pairing, `handle()` remains authoritative and fail-closed
-regardless, and both the `allOf` conditions and the `oneOf` branches are
-mutation-isolated from each other and from a child's own canonical schema.
+duplicate-name and reserved-`manual`-collision failures, the compact
+closed-root composition with root `reasoning` REQUIRED and no unconstrained
+generic `input` object, dispatch selecting the correct child and passing only
+its `input`, unknown-action/non-boolean-summarize/unknown-root-field/
+cross-branch-key rejection, no double result wrapping, and two dedicated
+proofs that `reasoning`/`summarize` never reach a child handler and never
+appear in any child's own canonical `input_schema`. It also proves the root
+`oneOf` union directly: every branch's `action` const matches the child
+registry name in order, each branch's `input` exactly matches that child's
+own canonical schema, a distinctive marker planted in one child schema
+serializes exactly once (no `allOf`, no disclosure copy, no `title`), two
+children with identical strict-empty inputs stay unambiguous under `oneOf`,
+a minimal local `oneOf` structural evaluator (no JSON Schema dependency
+added) shows the schema itself rejects a mismatched `action`/`input` pairing
+and an unknown action, `handle()` remains authoritative and fail-closed
+regardless, and branches are mutation-isolated from each other, from later
+calls, and from a child's own canonical schema.
 It also proves the "Diagnostics sidecar" contract using an opted-in fake
 `widget` child: the exact owner-declared `DiagnosticDescriptor` and
 mechanically derived `<family>/<action>/input.<field>` location are returned
@@ -575,8 +601,20 @@ rejected value) never appears in a `diagnostics` entry.
 proves the composed schema (including required `reasoning`) survives both
 Chat Completions and Responses wires (including a real Agent
 startup for `web`) at the existing OpenAI adapter seam with zero adapter code
-changes, and that `ChildTool.diagnostics` text never appears anywhere in
-either wire's tool schema. `tests/test_tool_family_manual_contract.py` invokes the actual
+changes — the root `oneOf` is preserved as `oneOf` on both wires with
+identical per-action correlation, a `oneOf` nested inside a child schema is
+rewritten to `anyOf` only on Responses, the Kimi host quirk moves the root
+`type` into each union branch without mutating the canonical schema — and
+that `ChildTool.diagnostics` text never appears anywhere in either wire's
+tool schema. The same file carries local adapter-transform parity (not live
+acceptance) for the non-OpenAI seams: Anthropic `_build_tools` hoists the
+union verbatim into `input_schema`; Gemini Interactions
+`_build_interactions_tools` keeps it exactly (its root-only empty-`required`
+sanitation never fires on the family root); and the canonical Gemini Chat
+`_build_function_declarations` path is pinned as rejecting root combinators
+and `const` in the installed SDK's `Schema` model for the previous
+duplicated shape and this union alike — a pre-existing limitation of that
+path, not introduced by this composition. `tests/test_tool_family_manual_contract.py` invokes the actual
 generic manual child handler (not an unused presentational helper) and
 proves the ManualTool reserved name, strict empty input, the canonical
 `content[0].text`/`structuredContent.manual_path` return shape,
@@ -590,27 +628,25 @@ returns Web's exact pre-migration public flat shape (`status`, `manual`,
 `manual_path`, `action`, `current_setting`) with no canonical fields, for
 both the success and missing-manual/degraded cases, via
 `WebManager._adapt_manual_result`'s post-dispatch adaptation.
-`tests/test_tool_family_web_migration_parity.py` snapshots `web`'s
-pre-migration schema and proves the now-generated schema is field-equivalent
-except the three authorized differences (`anyOf` → `oneOf`, required
-`reasoning`, and the added root `allOf`), and separately proves `web`'s own
-`allOf` correlates every real action's `const` with its exact branch schema.
 `tests/test_tool_family_generic_summarize_executor.py` proves the raw-logged-
 before-summary executor mechanism needs no family-specific kernel wiring,
 using the fake `widget` family. `web`'s own existing suite
 (`tests/test_unified_web_capability.py`,
 `tests/test_web_ltp_v2_summarize_executor.py`, `tests/test_wire_tool_description.py`
-— the last of which now also proves root `allOf` correlation survives
-identically on both Chat Completions and Responses wires)
+— the last of which also proves `web`'s root `oneOf` correlates every real
+action's `const` with its exact branch schema identically on both Chat
+Completions and Responses wires)
 remains this migration's Web-specific evidence per `../web_search/CONTRACT.md`.
 `tests/test_tool_family_daemon_migration.py` is the family-specific evidence
-for `daemon` (`../daemon/CONTRACT.md`): one model tool slot proven against a
-real Agent's composed tool list, all six child schemas and their exact field
-ownership, the complete nested `emanate` task schema, cross-action and
-unknown-root rejection before any engine I/O, read-only vs side-effectful
-receipt truth, the reserved `manual` child's no-double-wrap result and its
-separation from the engine's retained internal flat branch, and the composed
-schema (including the nested task object) surviving both wires.
+for `daemon` (`../daemon/CONTRACT.md`) and the strongest deep-nested case:
+one model tool slot proven against a real Agent's composed tool list, all
+child schemas and their exact field ownership, the complete nested `emanate`
+task schema (including the `backend_options` passthrough's nested `anyOf`),
+cross-action and unknown-root rejection before any engine I/O, read-only vs
+side-effectful receipt truth, the reserved `manual` child's no-double-wrap
+result and its separation from the engine's retained internal flat branch,
+and the composed schema (including the nested task object) surviving both
+wires inside its root `oneOf` branch.
 
 `tests/test_tool_family_context_migration.py` and
 `tests/test_context_ownership_redesign.py` are the family-specific evidence for

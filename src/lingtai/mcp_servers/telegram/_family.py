@@ -370,13 +370,9 @@ _SCHEMA_FAMILY = _schema_only_family()
 def telegram_schema() -> dict[str, Any]:
     schema = _SCHEMA_FAMILY.build_schema()
     # Telegram has intentionally overlapping optional fields (for example a
-    # read with chat_id and a remove_contact with chat_id). The root allOf
-    # discriminator still correlates each action to its exact closed branch;
-    # use anyOf for the model-discovery list so native JSON-Schema validators do
-    # not reject a valid input merely because another action's branch also fits.
-    input_schema = schema["properties"]["input"]
-    if "oneOf" in input_schema:
-        input_schema["anyOf"] = input_schema.pop("oneOf")
+    # read with chat_id and a remove_contact with chat_id). The generic root
+    # ``oneOf`` is discriminated by each branch's ``action`` const, so
+    # overlapping input shapes never make it ambiguous; no rewrite is needed.
     schema["properties"]["action"]["description"] = (
         "Choose an action. A current notification's own (non-synthetic) compound "
         "message id is a valid reply target directly; do not call check, read, or "

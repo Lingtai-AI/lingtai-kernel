@@ -26,6 +26,11 @@ from lingtai.mcp_servers.whatsapp.plugin import (
 )
 from lingtai.services import mcp_registry
 from lingtai.tools.tool_family import ChildTool
+from tests._tool_family_schema_helpers import (
+    action_input_schemas,
+    assert_compact_envelope,
+    branch_actions,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -160,14 +165,22 @@ def test_public_schema_keeps_the_strict_action_family_shape():
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["additionalProperties"] is False
     assert schema["properties"]["action"]["enum"] == list(WHATSAPP_ACTIONS)
-    assert len(schema["allOf"]) == len(WHATSAPP_ACTIONS)
     assert "whatsapp-mcp-manual" in schema["properties"]["action"]["description"]
-    branch_titles = [b["title"] for b in schema["properties"]["input"]["anyOf"]]
-    assert branch_titles == [
-        *(f"{action} input" for action in WHATSAPP_DECLARED_ACTIONS),
-        "settings inventory input",
-        "manual input",
-    ]
+    # One root ``oneOf`` branch per action: declared actions, then the
+    # owner-opted ``settings``, then ``manual`` — discriminated by const.
+    assert_compact_envelope(schema, list(WHATSAPP_ACTIONS))
+    assert branch_actions(schema) == [*WHATSAPP_DECLARED_ACTIONS, "settings", "manual"]
+    branches = action_input_schemas(schema)
+    canonical = _family._whatsapp_input_schemas()
+    for action in WHATSAPP_DECLARED_ACTIONS:
+        assert branches[action] == canonical[action], action
+    assert branches["manual"] == canonical["manual"]
+    assert branches["settings"] == {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
 
 
 def test_declared_actions_still_dispatch_flat_into_the_manager():

@@ -19,6 +19,7 @@ from lingtai.mcp_servers.feishu._family import (
     handle_feishu,
 )
 from lingtai.mcp_servers.feishu.manager import FeishuManager
+from tests._tool_family_schema_helpers import action_input_schemas
 
 
 _FAILURE_KEYS = {
@@ -81,10 +82,8 @@ def _call(manager: FeishuManager, input_: dict[str, Any]) -> dict[str, Any]:
 
 
 def _branches() -> dict[str, dict[str, Any]]:
-    branches = FEISHU_SCHEMA["properties"]["input"]["anyOf"]
-    return {
-        branch["title"].removesuffix(" input"): branch for branch in branches
-    }
+    """Map each action to the ``input`` schema its root ``oneOf`` branch carries."""
+    return action_input_schemas(FEISHU_SCHEMA)
 
 
 def test_react_schema_and_dispatch_keep_add_remove_fields_disjoint(tmp_path: Path) -> None:
