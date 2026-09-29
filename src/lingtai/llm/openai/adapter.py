@@ -4358,6 +4358,20 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             self._session_id = None
             self._thread_id = None
 
+    def update_tools(self, tools: list[FunctionSchema] | None) -> None:
+        """Refresh Codex request tools when a turn-scoped overlay changes.
+
+        The generic Responses session only accepts updates in stateless replay
+        mode. Codex plans each request from its local interface even though it
+        does not use that mode, so it must update both the request payload and
+        the interface snapshot on every turn.
+        """
+        self._tools = _apply_site_quirks(self._base_url, _build_responses_tools(tools))
+        self._interface.add_system(
+            self._interface.current_system_prompt or "",
+            tools=FunctionSchema.list_to_dicts(tools),
+        )
+
     def _cache_affinity_headers(self) -> dict[str, str]:
         """Return the stable ``session_id`` / ``thread_id`` headers, if any.
 
