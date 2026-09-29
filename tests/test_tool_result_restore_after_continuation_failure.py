@@ -347,8 +347,8 @@ def test_process_response_third_identical_tool_error_still_continues(tmp_path):
     assert not any(event.startswith("repeated_tool_error") for event, _ in agent.logs)
     assert not (tmp_path / ".notification" / "repeated_tool_error.json").exists()
 
-def test_process_response_logs_cancel_before_tool_dispatch():
-    agent = _FakeAgent()
+def test_process_response_logs_cancel_before_tool_dispatch(tmp_path):
+    agent = _FakeAgent(working_dir=tmp_path)
     real_result = ToolResultBlock(
         id="call_1",
         name="bash",
@@ -361,6 +361,7 @@ def test_process_response_logs_cancel_before_tool_dispatch():
     agent._on_tool_result_hook = None
     agent._intermediate_text_streamed = True
     agent._sent_tracker = _NoopSentTracker()
+    agent._chat.interface.tool_result_recovery_lookup = lambda _call: real_result
 
     response = LLMResponse(
         text="",
@@ -373,6 +374,18 @@ def test_process_response_logs_cancel_before_tool_dispatch():
     assert agent._executor.calls == []
     assert agent._session.sent == []
     assert agent._cancel_event.is_set()
+    assert not agent._chat.interface.has_pending_tool_calls()
+    assert agent.saved == 1
+    synthetic = agent._chat.interface.entries[-1].content[0]
+    assert synthetic.synthesized is True
+    assert synthetic.content != real_result.content
+    assert "NOT dispatched" in synthetic.content
+    assert "No side effects occurred" in synthetic.content
+    assert "retry" in synthetic.content.lower()
+    restored = ChatInterface.from_dict(json.loads(json.dumps(agent._chat.interface.to_dict())))
+    restored.enforce_tool_pairing()
+    assert not restored.has_pending_tool_calls()
+    assert restored.entries[-1].content[0].content == synthetic.content
 
     names = [name for name, _ in agent.logs]
     assert names == ["tool_calls_not_dispatched"]
