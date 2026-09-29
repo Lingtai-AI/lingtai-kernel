@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lingtai.kernel.llm.base import UsageMetadata
+from lingtai.kernel.llm.base import FunctionSchema, UsageMetadata
 
 from lingtai.llm.openai.codex_ws import SyncCodexWebsocketTransport
 
@@ -874,6 +874,50 @@ def test_rest_prefix_mismatch_falls_back_to_full():
     assert result.usage.extra["codex_transfer_mode"] == "full"
     assert result.usage.extra["codex_ws_delta_reason"] == "non_input_fields_changed"
     assert "previous_response_id" not in client.responses.kwargs[1]
+
+
+def test_rest_dynamic_tools_reach_provider_and_can_be_removed():
+    client = RealisticRestClient()
+    session = _make_rest_session(client)
+    inbox = FunctionSchema(
+        name="read_inbox",
+        description="Read pending messages",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    session.send("before overlay")
+    session.update_tools([inbox])
+    added = session.send("with overlay")
+    assert [tool["name"] for tool in client.responses.kwargs[1]["tools"]] == ["read_inbox"]
+    assert [tool["name"] for tool in session._interface.current_tools] == ["read_inbox"]
+    assert added.usage.extra["codex_request_mode"] == "rest_full"
+
+    session.update_tools(None)
+    removed = session.send("after overlay")
+    assert "tools" not in client.responses.kwargs[2]
+    assert session._interface.current_tools is None
+    assert removed.usage.extra["codex_request_mode"] == "rest_full"
+
+
+def test_ws_dynamic_tools_reach_provider_and_force_full_frame():
+    transport = RealisticWsTransport()
+    session = _make_session(transport)
+    inbox = FunctionSchema(
+        name="read_inbox",
+        description="Read pending messages",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    session.send("before overlay")
+    session.update_tools([inbox])
+    added = session.send("with overlay")
+    assert [tool["name"] for tool in transport.sent_frames[1]["tools"]] == ["read_inbox"]
+    assert added.usage.extra["codex_request_mode"] == "ws_full"
+
+    session.update_tools(None)
+    removed = session.send("after overlay")
+    assert "tools" not in transport.sent_frames[2]
+    assert removed.usage.extra["codex_request_mode"] == "ws_full"
 
 
 def test_rest_incremental_never_sends_previous_response_id():
