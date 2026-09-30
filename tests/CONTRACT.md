@@ -72,11 +72,13 @@ shared or real agent directory. Do not depend on another test's side effects,
 ordering, or leftover files. Threads a test starts are the test's to stop: join
 or otherwise wind down every thread/heartbeat/loop it launches (a `finally` that
 clears the loop predicate and releases any gate), so a failing assertion cannot
-leak a live thread into the next test. Processes follow the same rule and must not outlive
-the test or the pytest session: a detached or new-session child (for example a
-resident daemon manager) is stopped with its process group at teardown, and the
-shared `conftest.py` safety net selects such processes only by their exact
-launch argv under the test's own temp root, never by broad name matching.
+leak a live thread into the next test. Processes follow the same rule and must
+not outlive the test or the pytest session: a detached or new-session child (for
+example a resident daemon manager or a `lingtai run` agent host, including on a
+failing path where cooperative `.suspend` cannot apply) is stopped with its
+process group at teardown, and the shared `conftest.py` safety net selects such
+processes only by their exact launch argv under the test's own temp root, never
+by broad name matching.
 
 ### 3. Realism
 

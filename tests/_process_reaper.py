@@ -1,22 +1,28 @@
-"""Find and stop resident daemon-manager processes that tests left behind.
+"""Find and stop long-lived LingTai processes that tests left behind.
 
-The POSIX central daemon manager (``lingtai.adapters.posix.daemon_manager``)
-is launched with ``start_new_session=True`` and stays resident while idle: in
-production it deliberately outlives the agent process that spawned it. A test
-that drives a real ``emanate`` through the default ``manager_pool_size``
-therefore leaves one live manager per agent directory unless something stops
-it, and a finished pytest process cannot take it down with it.
+Two process kinds deliberately outlive whatever launched them, so a test that
+starts one and then fails (or is interrupted) leaves it running after pytest
+exits:
 
-A manager is identified *only* by its exact launch argv::
+* the POSIX central daemon manager (``lingtai.adapters.posix.daemon_manager``),
+  launched with ``start_new_session=True`` and resident while idle, because in
+  production it outlives its agent; and
+* a ``lingtai run`` agent host, which runs until it is suspended.
+
+A process is identified *only* by its exact launch command line, owned by the
+current uid, and selected *only* when the agent directory in that command line
+lies under a root the caller names (a test's ``tmp_path`` or this session's
+pytest basetemp), or under a numbered pytest session directory whose ``.lock``
+proves that session's pytest process is dead. The recognized shapes are::
 
     <python> -m lingtai.adapters.posix.daemon_manager_entrypoint <agent-dir> <pool>
+    <python> ... -m lingtai run <agent-dir>
 
-owned by the current uid, and it is selected *only* when ``<agent-dir>`` lies
-under a root the caller names (a test's ``tmp_path`` or this session's pytest
-basetemp), or under a numbered pytest session directory whose ``.lock`` proves
-that session's pytest process is dead. Nothing here matches a substring of an
-arbitrary command line, so shells, editors, and real LingTai agents (whose
-agent directories are never under a pytest temp root) are never touched.
+The second is the same module form ``lingtai.kernel.process_match`` treats as
+an agent run, anchored at the end of the command line. Nothing here matches a
+substring of an arbitrary command line, so shells, editors, and real LingTai
+agents (whose directories are never under a pytest temp root) are never
+touched.
 """
 from __future__ import annotations
 
@@ -29,15 +35,24 @@ from pathlib import Path
 from typing import Iterable, NamedTuple
 
 ENTRYPOINT_MODULE = "lingtai.adapters.posix.daemon_manager_entrypoint"
-_ARGV_MARKER = f" -m {ENTRYPOINT_MODULE} "
+DAEMON_MANAGER = "daemon-manager"
+AGENT_RUN = "agent-run"
+ALL_KINDS = (DAEMON_MANAGER, AGENT_RUN)
+_MANAGER_MARKER = f" -m {ENTRYPOINT_MODULE} "
+_AGENT_RUN_MARKER = " -m lingtai run "
 _MANAGER_LOCK_PARTS = ("daemon", "manager", "manager.lock")
 _PYTEST_SESSION_DIR = re.compile(r"^(?P<session>/.*/pytest-of-[^/]+/pytest-\d+)(?:/|$)")
 
 
-class ManagerProcess(NamedTuple):
+class LeakedProcess(NamedTuple):
     pid: int
     pgid: int
+    kind: str
     agent_dir: str
+
+
+def _is_python(executable: str) -> bool:
+    return Path(executable).name.lower().startswith("python")
 
 
 def parse_manager_command(command: str) -> tuple[str, int] | None:
@@ -47,13 +62,40 @@ def parse_manager_command(command: str) -> tuple[str, int] | None:
     so ``sh -c ...`` or ``python -c ...`` wrappers never qualify), and the text
     after the module must be exactly an absolute directory and a pool size.
     """
-    head, sep, tail = command.partition(_ARGV_MARKER)
-    if not sep or " -" in head or not Path(head).name.lower().startswith("python"):
+    head, sep, tail = command.partition(_MANAGER_MARKER)
+    if not sep or " -" in head or not _is_python(head):
         return None
     agent_dir, _, pool = tail.strip().rpartition(" ")
     if not agent_dir.startswith("/") or not pool.isdigit():
         return None
     return agent_dir, int(pool)
+
+
+def parse_agent_run_command(command: str) -> str | None:
+    """Return the agent dir when ``command`` ends in ``-m lingtai run <dir>``.
+
+    The executable (the text before the first `` -`` flag) must be a Python,
+    so a shell whose ``-c`` script mentions the form never qualifies; the
+    remainder after the last marker must be exactly one absolute directory.
+    """
+    idx = command.rfind(_AGENT_RUN_MARKER)
+    if idx < 0:
+        return None
+    if not _is_python(command[:idx].split(" -", 1)[0]):
+        return None
+    agent_dir = command[idx + len(_AGENT_RUN_MARKER):].strip()
+    return agent_dir if agent_dir.startswith("/") else None
+
+
+def classify_command(command: str) -> tuple[str, str] | None:
+    """Return ``(kind, agent_dir)`` for a recognized launch, else ``None``."""
+    manager = parse_manager_command(command)
+    if manager is not None:
+        return DAEMON_MANAGER, manager[0]
+    agent_dir = parse_agent_run_command(command)
+    if agent_dir is not None:
+        return AGENT_RUN, agent_dir
+    return None
 
 
 def daemon_manager_state_present(root: Path) -> bool:
@@ -72,15 +114,17 @@ def daemon_manager_state_present(root: Path) -> bool:
     return False
 
 
-def find_daemon_managers(
+def find_leaked_processes(
     *,
     under: Iterable[Path] = (),
     dead_pytest_sessions: bool = False,
-) -> list[ManagerProcess]:
-    """List this uid's daemon managers whose agent dir matches the filters."""
+    kinds: Iterable[str] = ALL_KINDS,
+) -> list[LeakedProcess]:
+    """List this uid's recognized processes whose agent dir matches a filter."""
     if os.name != "posix":
         return []
     roots = _root_texts(under)
+    wanted = set(kinds)
     if not roots and not dead_pytest_sessions:
         return []
     found = []
@@ -88,25 +132,27 @@ def find_daemon_managers(
     for pid, pgid, proc_uid, command in _process_table():
         if proc_uid != uid or pid == os.getpid():
             continue
-        parsed = parse_manager_command(command)
-        if parsed is None:
+        classified = classify_command(command)
+        if classified is None or classified[0] not in wanted:
             continue
-        agent_dir = parsed[0]
+        kind, agent_dir = classified
         if any(_is_within(agent_dir, root) for root in roots) or (
             dead_pytest_sessions and _pytest_session_is_dead(agent_dir)
         ):
-            found.append(ManagerProcess(pid, pgid, agent_dir))
+            found.append(LeakedProcess(pid, pgid, kind, agent_dir))
     return found
 
 
-def reap_daemon_managers(
-    processes: Iterable[ManagerProcess], *, grace_s: float = 5.0
+def reap_processes(
+    processes: Iterable[LeakedProcess], *, grace_s: float = 5.0
 ) -> list[int]:
-    """SIGTERM each manager's own process group, then SIGKILL any survivor.
+    """SIGTERM each process's own process group, then SIGKILL any survivor.
 
-    The manager is a session leader, so its group holds exactly the manager
-    and the execution children it started; the caller's own group is never
-    signalled. A survivor is re-identified by its argv before SIGKILL so a
+    Managers and relaunched agents are session leaders, so their group holds
+    exactly them and the children they started; a process that is not its own
+    group leader is signalled alone, and the caller's own group is never
+    signalled. ``lingtai run`` maps SIGTERM to its cooperative ``.suspend``
+    stop. A survivor is re-identified by its command line before SIGKILL so a
     recycled pid is never escalated against. Returns the pids signalled.
     """
     if os.name != "posix":
@@ -125,13 +171,13 @@ def reap_daemon_managers(
             break
         time.sleep(0.05)
     if pending:
-        still_managers = {
-            (pid, parsed[0])
+        still_running = {
+            (pid, classified)
             for pid, _pgid, _uid, command in _process_table()
-            if (parsed := parse_manager_command(command)) is not None
+            if (classified := classify_command(command)) is not None
         }
         for proc, group in pending:
-            if (proc.pid, proc.agent_dir) not in still_managers:
+            if (proc.pid, (proc.kind, proc.agent_dir)) not in still_running:
                 continue
             _signal(proc.pid, group, signal.SIGKILL)
             kill_deadline = time.monotonic() + 2.0
@@ -140,9 +186,30 @@ def reap_daemon_managers(
     return [proc.pid for proc, _group in targets]
 
 
-def reap_daemon_managers_under(root: Path, *, grace_s: float = 5.0) -> list[int]:
-    """Stop every daemon manager whose agent dir lies under ``root``."""
-    return reap_daemon_managers(find_daemon_managers(under=[root]), grace_s=grace_s)
+def reap_processes_under(
+    root: Path, *, kinds: Iterable[str] = ALL_KINDS, grace_s: float = 5.0
+) -> list[int]:
+    """Stop every recognized process whose agent dir lies under ``root``."""
+    return reap_processes(
+        find_leaked_processes(under=[root], kinds=kinds), grace_s=grace_s
+    )
+
+
+def process_exited(pid: int) -> bool:
+    """Whether ``pid`` is gone, reaping it first when it is our own child."""
+    try:
+        reaped, _status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+    else:
+        return reaped == pid
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
 
 
 def _process_table() -> list[tuple[int, int, int, str]]:
@@ -213,30 +280,18 @@ def _signal(pid: int, group: int | None, signum: int) -> None:
         pass
 
 
-def process_exited(pid: int) -> bool:
-    """Whether ``pid`` is gone, reaping it first when it is our own child."""
-    try:
-        reaped, _status = os.waitpid(pid, os.WNOHANG)
-    except ChildProcessError:
-        pass
-    else:
-        return reaped == pid
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
-
-
 __all__ = [
+    "AGENT_RUN",
+    "ALL_KINDS",
+    "DAEMON_MANAGER",
     "ENTRYPOINT_MODULE",
-    "ManagerProcess",
+    "LeakedProcess",
+    "classify_command",
     "daemon_manager_state_present",
-    "find_daemon_managers",
+    "find_leaked_processes",
+    "parse_agent_run_command",
     "parse_manager_command",
     "process_exited",
-    "reap_daemon_managers",
-    "reap_daemon_managers_under",
+    "reap_processes",
+    "reap_processes_under",
 ]

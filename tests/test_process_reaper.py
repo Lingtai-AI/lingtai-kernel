@@ -1,10 +1,12 @@
-"""The suite's daemon-manager reaper kills exactly the managers it is scoped to.
+"""The suite's process reaper kills exactly the processes it is scoped to.
 
-``tests/conftest.py`` relies on ``tests/_daemon_manager_reaper.py`` to stop the
-resident POSIX daemon managers that real ``emanate`` tests spawn. Because it
-sends signals on a developer machine that also runs real LingTai agents, its
-selection must be exact: the launch argv shape, the current uid, and an agent
-directory under a caller-named root (or a provably dead pytest session).
+``tests/conftest.py`` relies on ``tests/_process_reaper.py`` to stop the
+resident POSIX daemon managers that real ``emanate`` tests spawn and the
+``lingtai run`` agent hosts a failing test leaves behind. Because it sends
+signals on a developer machine that also runs real LingTai agents, its
+selection must be exact: the launch command-line shape, the current uid, and
+an agent directory under a caller-named root (or a provably dead pytest
+session).
 """
 from __future__ import annotations
 
@@ -20,10 +22,10 @@ import pytest
 
 from lingtai.adapters.posix import daemon_manager
 from lingtai.adapters.posix.daemon_manager import MANAGER_DIR
-from tests import _daemon_manager_reaper as reaper
+from tests import _process_reaper as reaper
 
 pytestmark = pytest.mark.skipif(
-    os.name != "posix", reason="the central daemon manager and its reaper are POSIX-only"
+    os.name != "posix", reason="the reaped process kinds and the reaper are POSIX-only"
 )
 
 _MODULE = reaper.ENTRYPOINT_MODULE
@@ -52,6 +54,30 @@ def test_parse_accepts_only_the_exact_manager_launch_argv() -> None:
         assert reaper.parse_manager_command(command) is None, command
 
 
+def test_parse_accepts_only_an_agent_run_ending_the_command_line() -> None:
+    agent = "/tmp/pytest-of-u/pytest-1/t0/source-project/.lingtai/initiator"
+    wrapper = f"{_PYTHON} -c import json\\012run(agent) {agent} /x/move.py -m lingtai run {agent}"
+    assert reaper.parse_agent_run_command(f"{_PYTHON} -m lingtai run {agent}") == agent
+    assert reaper.parse_agent_run_command(wrapper) == agent
+    assert reaper.parse_agent_run_command(
+        f"{_PYTHON} -m lingtai run /tmp/target M-iM^[M-* project/.lingtai/a"
+    ) == "/tmp/target M-iM^[M-* project/.lingtai/a"
+    assert reaper.classify_command(f"{_PYTHON} -m lingtai run {agent}") == (
+        reaper.AGENT_RUN, agent,
+    )
+
+    for command in (
+        f"/bin/zsh -c {_PYTHON} -m lingtai run {agent}",
+        f"sh -c 'pgrep -f \" -m lingtai run {agent}\"'",
+        f"grep -m lingtai run {agent}",
+        f"{_PYTHON} -m lingtai run relative/agent",
+        f"{_PYTHON} -m lingtai run",
+        f"/usr/bin/node -m lingtai run {agent}",
+        f"{_PYTHON} -m lingtai-agent run {agent}",
+    ):
+        assert reaper.parse_agent_run_command(command) is None, command
+
+
 def test_find_scopes_by_root_uid_and_dead_pytest_session(tmp_path, monkeypatch) -> None:
     finished = subprocess.Popen([sys.executable, "-c", "pass"])
     finished.wait()
@@ -75,9 +101,24 @@ def test_find_scopes_by_root_uid_and_dead_pytest_session(tmp_path, monkeypatch) 
     ]
     monkeypatch.setattr(reaper, "_process_table", lambda: rows)
 
-    assert [p.pid for p in reaper.find_daemon_managers(under=[inside])] == [101]
-    assert [p.pid for p in reaper.find_daemon_managers(dead_pytest_sessions=True)] == [105]
-    assert reaper.find_daemon_managers() == []
+    agent_rows = [
+        (201, 201, uid, f"{_PYTHON} -m lingtai run {inside}/.lingtai/initiator"),
+        (202, 202, uid, f"{_PYTHON} -c import x -m lingtai run {sessions}/pytest-7/t1/a"),
+        (203, 203, uid, f"{_PYTHON} -m lingtai run {sessions}/pytest-8/t1/a"),
+        (204, 204, uid, f"{_PYTHON} -m lingtai run /Users/someone/project/.lingtai/mimo-1"),
+        (205, 205, uid, f"/bin/zsh -c {_PYTHON} -m lingtai run {inside}/a"),
+    ]
+    monkeypatch.setattr(reaper, "_process_table", lambda: rows + agent_rows)
+    managers = (reaper.DAEMON_MANAGER,)
+
+    def pids(**filters) -> list[int]:
+        return [proc.pid for proc in reaper.find_leaked_processes(**filters)]
+
+    assert pids(under=[inside], kinds=managers) == [101]
+    assert pids(dead_pytest_sessions=True, kinds=managers) == [105]
+    assert pids(under=[inside]) == [101, 201]
+    assert pids(dead_pytest_sessions=True) == [105, 202]
+    assert pids() == []
 
 
 def test_state_gate_needs_the_manager_lock(tmp_path) -> None:
@@ -125,7 +166,7 @@ def test_reap_stops_only_the_scoped_real_manager(tmp_path) -> None:
         inside_pid = _spawn_registered_manager(inside)
         outside_pid = _spawn_registered_manager(outside)
 
-        assert reaper.reap_daemon_managers_under(inside.parent) == [inside_pid]
+        assert reaper.reap_processes_under(inside.parent) == [inside_pid]
 
         assert reaper.process_exited(inside_pid)
         assert not reaper.process_exited(outside_pid)
@@ -134,7 +175,7 @@ def test_reap_stops_only_the_scoped_real_manager(tmp_path) -> None:
         for decoy in decoys:
             os.killpg(decoy.pid, signal.SIGKILL)
             decoy.wait()
-        reaper.reap_daemon_managers_under(tmp_path)
+        reaper.reap_processes_under(tmp_path)
 
 
 _IGNORE_SIGTERM = (
@@ -174,7 +215,7 @@ def test_reap_escalates_to_sigkill_for_a_manager_ignoring_sigterm(tmp_path) -> N
     try:
         _wait_ready(tmp_path / "ready")
 
-        assert reaper.reap_daemon_managers_under(tmp_path, grace_s=0.3) == [stubborn.pid]
+        assert reaper.reap_processes_under(tmp_path, grace_s=0.3) == [stubborn.pid]
 
         assert reaper.process_exited(stubborn.pid)
     finally:
@@ -192,13 +233,54 @@ def test_reap_never_escalates_against_a_recycled_pid(tmp_path) -> None:
     )
     try:
         _wait_ready(tmp_path / "ready")
-        recycled = reaper.ManagerProcess(
-            bystander.pid, bystander.pid, str(tmp_path / "agent")
+        recycled = reaper.LeakedProcess(
+            bystander.pid, bystander.pid, reaper.DAEMON_MANAGER, str(tmp_path / "agent")
         )
 
-        reaper.reap_daemon_managers([recycled], grace_s=0.3)
+        reaper.reap_processes([recycled], grace_s=0.3)
 
         assert bystander.poll() is None
     finally:
         os.killpg(bystander.pid, signal.SIGKILL)
         bystander.wait()
+
+
+_AGENT_HOST = (
+    "import os, pathlib, subprocess, sys, time\n"
+    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+    "pathlib.Path(os.environ['REAPER_TEST_READY']).write_text(str(child.pid))\n"
+    "time.sleep(60)\n"
+)
+
+
+def _spawn_agent_host(agent_dir: Path, ready: Path) -> subprocess.Popen:
+    return subprocess.Popen(
+        [sys.executable, "-c", _AGENT_HOST, "-m", "lingtai", "run", str(agent_dir)],
+        env={**os.environ, "REAPER_TEST_READY": str(ready)},
+        start_new_session=True,
+    )
+
+
+def test_reap_stops_a_scoped_agent_run_with_its_process_group(tmp_path) -> None:
+    inside = _spawn_agent_host(tmp_path / "inside" / ".lingtai" / "a", tmp_path / "in.ready")
+    outside = _spawn_agent_host(tmp_path / "outside" / ".lingtai" / "a", tmp_path / "out.ready")
+    try:
+        _wait_ready(tmp_path / "in.ready")
+        _wait_ready(tmp_path / "out.ready")
+        inside_child = int((tmp_path / "in.ready").read_text(encoding="utf-8"))
+
+        assert reaper.reap_processes_under(
+            tmp_path / "inside", kinds=(reaper.AGENT_RUN,)
+        ) == [inside.pid]
+
+        assert reaper.process_exited(inside.pid)
+        deadline = time.monotonic() + 5.0
+        while not reaper.process_exited(inside_child) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert reaper.process_exited(inside_child), "the agent's process group must go too"
+        assert outside.poll() is None
+    finally:
+        for host in (inside, outside):
+            if host.poll() is None:
+                os.killpg(host.pid, signal.SIGKILL)
+            host.wait()

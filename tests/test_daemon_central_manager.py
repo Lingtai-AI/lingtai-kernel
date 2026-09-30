@@ -22,10 +22,11 @@ from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_p
 from lingtai.tools.daemon import DaemonManager
 from lingtai.tools.daemon.run_dir import DaemonRunDir
 from tests._daemon_helpers import install_fake_detached_owner, make_daemon_agent
-from tests._daemon_manager_reaper import (
-    find_daemon_managers,
+from tests._process_reaper import (
+    DAEMON_MANAGER,
+    find_leaked_processes,
     process_exited,
-    reap_daemon_managers_under,
+    reap_processes_under,
 )
 
 
@@ -664,7 +665,7 @@ def _wait_for(predicate, *, timeout: float = 5.0, message: str = "condition") ->
 
 def _terminate_resident_manager(agent) -> None:
     """Stop this agent's resident manager and its process group, and wait."""
-    reap_daemon_managers_under(agent._working_dir)
+    reap_processes_under(agent._working_dir, kinds=(DAEMON_MANAGER,))
 
 
 def _manager_runtime_identity(code_head: str) -> dict[str, str]:
@@ -949,7 +950,8 @@ def test_real_idle_manager_exits_after_agent_directory_is_deleted(tmp_path):
     try:
         daemon_manager._ensure_manager(agent_working_dir, pool_size=1)
         pid = _wait_for(registered_pid, timeout=15.0, message="manager registration")
-        assert [proc.pid for proc in find_daemon_managers(under=[tmp_path])] == [pid]
+        managers = find_leaked_processes(under=[tmp_path], kinds=(DAEMON_MANAGER,))
+        assert [proc.pid for proc in managers] == [pid]
 
         shutil.rmtree(agent_working_dir)
 
@@ -959,7 +961,7 @@ def test_real_idle_manager_exits_after_agent_directory_is_deleted(tmp_path):
             message="resident manager to exit after its agent directory was deleted",
         )
     finally:
-        reap_daemon_managers_under(tmp_path)
+        reap_processes_under(tmp_path)
 
 
 def test_central_manager_completes_run_and_notifies(tmp_path, monkeypatch):

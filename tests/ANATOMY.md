@@ -13,7 +13,7 @@ related_files:
   - tests/_agent_presence_helpers.py
   - tests/_chat_completion_helpers.py
   - tests/_daemon_helpers.py
-  - tests/_daemon_manager_reaper.py
+  - tests/_process_reaper.py
   - tests/_detached_cli_parent.py
   - tests/_fake_codex_app_server.py
   - tests/_fake_codex_cli.py
@@ -135,7 +135,6 @@ related_files:
   - tests/test_daemon_empty_parity.py
   - tests/test_daemon_kimicode_submanual.py
   - tests/test_daemon_lingtai_submanual.py
-  - tests/test_daemon_manager_reaper.py
   - tests/test_daemon_manifest.py
   - tests/test_daemon_mimocode_jsonl.py
   - tests/test_daemon_missing_finish_guidance.py
@@ -294,6 +293,7 @@ related_files:
   - tests/test_project_creation.py
   - tests/test_process_identity.py
   - tests/test_process_match.py
+  - tests/test_process_reaper.py
   - tests/test_process_scan.py
   - tests/test_prompt.py
   - tests/test_prompt_catalog.py
@@ -503,12 +503,12 @@ complete, not to pair with a governed contract.
 - `conftest.py` — the only shared fixture module. It exposes the
   `make_agent_dir` factory fixture and the autouse hermeticity fixtures that
   stop ambient operator environment (for example
-  `LINGTAI_CACHE_MISS_BUDGET`) from leaking into assertions. Its
-  `pytest_runtest_teardown` wrapper and `pytest_sessionfinish` hook stop the
-  resident POSIX daemon managers that real `emanate` tests spawn, through
-  `_daemon_manager_reaper.py`: after each test for managers under its
-  `tmp_path`, and at session end for managers under this session's basetemp or
-  under an earlier pytest session whose `.lock` names a dead pid.
+  `LINGTAI_CACHE_MISS_BUDGET`) from leaking into assertions. Through
+  `_process_reaper.py`, its `pytest_runtest_teardown` wrapper stops the
+  resident POSIX daemon managers that real `emanate` tests spawn under the
+  test's `tmp_path`, and its `pytest_sessionfinish` hook stops daemon managers
+  and `lingtai run` agent hosts under this session's basetemp or under an
+  earlier pytest session whose `.lock` names a dead pid.
 - `_*.py` helper modules (21) — the suite's own test infrastructure, imported
   rather than collected. Three families plus one process-hygiene helper:
   - **Builders/fixtures:** `_agent_dir_helpers.py`, `_agent_presence_helpers.py`,
@@ -522,10 +522,12 @@ complete, not to pair with a governed contract.
   - **Detached-process parents:** `_detached_cli_parent.py` and
     `_manager_detached_parent.py`, executed as real child processes by the
     daemon and lifecycle suites.
-  - **Process hygiene:** `_daemon_manager_reaper.py` finds daemon managers only
-    by their exact `-m lingtai.adapters.posix.daemon_manager_entrypoint
-    <agent-dir> <pool>` argv, current uid, and an agent dir under a named root,
-    then stops each manager's own process group; `test_daemon_manager_reaper.py`
+  - **Process hygiene:** `_process_reaper.py` finds daemon managers and agent
+    hosts only by their exact launch command line (`-m
+    lingtai.adapters.posix.daemon_manager_entrypoint <agent-dir> <pool>`, or a
+    Python command line ending in `-m lingtai run <agent-dir>`), current uid,
+    and an agent dir under a named root, then SIGTERMs each process's own
+    group and re-identifies it before any SIGKILL; `test_process_reaper.py`
     pins that selection against decoy command lines.
 - `codex` and `opencode` — executable `/bin/sh` shims on the test PATH. Each
   execs `_fake_resume_cli.py` under `${PYTHON:-python}`; `opencode` additionally
@@ -587,7 +589,8 @@ under `tmp_path`, per the isolation principle in `CONTRACT.md`; the detached
 parents and fake CLIs spawn real processes that must be reaped within the test
 that started them. Resident daemon managers are the one deliberate exception
 to self-exit (production managers outlive their agent), so `conftest.py`
-reaps them after each test and again at session end. Ambient environment is
+reaps them after each test and again at session end; the session-end net also
+stops `lingtai run` agent hosts a failing test could not suspend. Ambient environment is
 neutralized by `conftest.py`'s autouse fixtures rather than by per-test
 cleanup.
 

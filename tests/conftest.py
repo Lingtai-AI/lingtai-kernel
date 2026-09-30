@@ -5,10 +5,11 @@ from __future__ import annotations
 import pytest
 
 from ._agent_dir_helpers import make_agent_dir as _make_agent_dir
-from ._daemon_manager_reaper import (
+from ._process_reaper import (
+    DAEMON_MANAGER,
     daemon_manager_state_present,
-    find_daemon_managers,
-    reap_daemon_managers,
+    find_leaked_processes,
+    reap_processes,
 )
 
 
@@ -135,7 +136,9 @@ def pytest_runtest_teardown(item, nextitem):
         if tmp_path is not None and (
             not tmp_path.exists() or daemon_manager_state_present(tmp_path)
         ):
-            reap_daemon_managers(find_daemon_managers(under=[tmp_path]))
+            reap_processes(
+                find_leaked_processes(under=[tmp_path], kinds=(DAEMON_MANAGER,))
+            )
 
 
 def _session_basetemp(config):
@@ -151,17 +154,18 @@ def _session_basetemp(config):
 
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
-    """Session safety net for daemon managers the per-test teardown missed.
+    """Session safety net for long-lived processes a test failed to stop.
 
-    Runs on pass, failure, ``-x``, and Ctrl-C alike. It reaps managers whose
-    agent directory lies under this session's basetemp (covering
-    ``tmp_path_factory`` directories and managers spawned by child CLI
-    processes) and managers left by an earlier pytest session whose ``.lock``
-    proves that session's process was killed before it could clean up.
+    Runs on pass, failure, ``-x``, and Ctrl-C alike. It reaps resident daemon
+    managers and ``lingtai run`` agent hosts whose agent directory lies under
+    this session's basetemp (covering ``tmp_path_factory`` directories and
+    processes spawned by child CLI processes), and those left by an earlier
+    pytest session whose ``.lock`` proves that session's process was killed
+    before it could clean up.
     """
     basetemp = _session_basetemp(session.config)
     roots = [basetemp] if basetemp is not None else []
-    reap_daemon_managers(find_daemon_managers(under=roots, dead_pytest_sessions=True))
+    reap_processes(find_leaked_processes(under=roots, dead_pytest_sessions=True))
 
 
 @pytest.fixture(autouse=True)

@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import socket
 import stat
 import subprocess
@@ -51,6 +52,31 @@ def _supervisor_at(pid: int | None, source: Path) -> bool:
         ["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, check=False, timeout=5
     )
     return result.returncode == 0 and "--_supervise" in result.stdout and str(source) in result.stdout
+def _terminate_owned(pid: int, still_owned) -> None:
+    """Escalate a test-owned process that ignored, or never reached, ``.suspend``.
+
+    SIGTERM its own process group (``lingtai run`` maps SIGTERM to its cooperative
+    stop), wait, then SIGKILL only if ``still_owned(pid)`` re-reads its exact command
+    line, so a recycled pid is never signalled and pytest's own group never is.
+    """
+    try:
+        group = os.getpgid(pid)
+    except ProcessLookupError:
+        return
+    def send(signum: int) -> None:
+        try:
+            if group == pid and group != os.getpgrp(): os.killpg(group, signum)
+            else: os.kill(pid, signum)
+        except ProcessLookupError:
+            pass
+    if not still_owned(pid):
+        return
+    send(signal.SIGTERM)
+    if _wait_until(lambda: not still_owned(pid), 10):
+        return
+    if still_owned(pid):
+        send(signal.SIGKILL)
+        _wait_until(lambda: not still_owned(pid), 5)
 def _write_init(agent: Path, venv: Path, base_url: str | None = None) -> dict:
     data = {"manifest": {"agent_name": "temporary-true-name", "language": "en",
         "llm": {"provider": "anthropic", "model": "test", "api_key": "fake", "base_url": base_url},
@@ -509,13 +535,16 @@ def invoke():
     while not (Path(agent,'.agent.heartbeat').is_file() and Path(trigger).is_file()): time.sleep(.05)
     result=subprocess.run([sys.executable,script,'--agent-dir',agent,'--to',target,'--timeout','20'],cwd=agent,env=os.environ.copy(),capture_output=True,text=True,timeout=25)
     Path(receipt).write_text(json.dumps({'returncode':result.returncode,'stdout':result.stdout,'stderr':result.stderr}),encoding='utf-8')
-thread=threading.Thread(target=invoke); thread.start()
+thread=threading.Thread(target=invoke,daemon=True); thread.start()
 from lingtai.cli import run; run(Path(agent)); thread.join()
 """
     command = [str(managed / "bin/python"), "-c", wrapper, str(agent), str(SCRIPT), str(target),
                str(trigger), str(receipt), "-m", "lingtai", "run", str(agent)]
+    # The invoke thread is a daemon so a failed boot cannot wedge the wrapper forever
+    # waiting for a heartbeat, and the wrapper gets its own process group so teardown
+    # can stop it (and its move_project child) without signalling pytest.
     initial = subprocess.Popen(command, cwd=agent, env=env, stdin=subprocess.DEVNULL,
-                               stdout=stream, stderr=subprocess.STDOUT)
+                               stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
     supervisor_pid = None
     owned = {initial.pid}
     target_agent, target_sibling = target / ".lingtai" / agent.name, target / ".lingtai" / sibling.name
@@ -581,9 +610,20 @@ from lingtai.cli import run; run(Path(agent)); thread.join()
             if not remaining and not _supervisor_at(supervisor_pid, source): break
             time.sleep(0.1)
         remaining = {pid for candidate in (agent, target_agent) for pid in _agents_at(candidate) if pid in owned}
-        assert not remaining, f"test-owned Agent PIDs failed cooperative shutdown: {remaining}"
-        assert not _supervisor_at(supervisor_pid, source)
+        supervisor_left = _supervisor_at(supervisor_pid, source)
+        # Cooperative .suspend cannot stop a host whose Agent never booted, and the relaunch
+        # and supervisor run in detached sessions: escalate before asserting so a failing
+        # run never leaves a live process behind after pytest exits.
+        def owned_agent(pid: int) -> bool:
+            return pid in _agents_at(agent) or pid in _agents_at(target_agent)
+        for pid in remaining - {initial.pid}:
+            _terminate_owned(pid, owned_agent)
+        if supervisor_left:
+            _terminate_owned(supervisor_pid, lambda pid: _supervisor_at(pid, source))
+        _terminate_owned(initial.pid, lambda pid: initial.poll() is None and pid in _agents_at(agent))
         initial.wait(timeout=5)
+        assert not remaining, f"test-owned Agent PIDs failed cooperative shutdown: {remaining}"
+        assert not supervisor_left
 def _lock_probe(path: Path, phase: str) -> str:
     code = """import fcntl, sys
 stream = open(sys.argv[1], 'a+')

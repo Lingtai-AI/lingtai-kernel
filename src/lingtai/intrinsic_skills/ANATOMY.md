@@ -85,7 +85,7 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   procedure and acceptance boundary. The Project-root helper retains
   its root lifecycle and temporary-process proofs in
   `src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/move_project.py:1-704`
-  and `tests/test_move_project.py:1-864`; sqlite-log-query ships `scripts/event_summary.py`. This bundle remains the
+  and `tests/test_move_project.py:1-904`; sqlite-log-query ships `scripts/event_summary.py`. This bundle remains the
   canonical System operational manual: the declared official `system` family
   derives its reserved `manual` child from `DECLARATION.manual ==
   "system-manual"` (`src/lingtai/tools/system/__init__.py`), and no second
