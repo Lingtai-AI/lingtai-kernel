@@ -163,11 +163,13 @@ _SUMMARIZE_ITEMS_DESCRIPTION = (
     "The item `tool_call_id` is the producer call ID, not the visible `_tool_call_id` "
     "event reference; preserve any `raw_locator` or spill path for recovery. "
     "This action RECORDS ONLY: the active provider context may still carry "
-    "the old raw results until context(action='rebuild') applies them."
+    "the old raw results until a rebuild or molt (or the 1.0 forced boundary) "
+    "supersedes them; prefer molt over a manual rebuild for noisy history."
 )
 
 _REBUILD_ITEMS_DESCRIPTION = (
-    "Optional — omit it entirely for the ordinary call. Every rebuild first "
+    "Rare exception, not routine compaction: prefer molt for substantial or noisy "
+    "history. Optional — omit it entirely for the ordinary call. Every rebuild first "
     "re-reads and recomposes ALL canonical system-prompt sections from durable "
     "and configured sources, then applies summaries, then requests provider "
     "replay with the new prompt/history. context(action='rebuild', input={}) is "
@@ -355,14 +357,20 @@ _ACTION_ENUM_DESCRIPTION = (
     'Required operation. '
     'molt: shed your conversation context, keep the durable stores. Requires '
     '`summary` and a valid `session_journal_path` — write the journal first and '
-    'update only durable stores that changed. See context-manual.\n'
+    'update only durable stores that changed. Prefer molt over rebuild for '
+    'substantial or noisy history or context pressure when a fresh briefing is '
+    'worth its cost. See context-manual.\n'
     'summarize: record your own compact replacements for prior tool results in '
     'runtime history. RECORD ONLY — it does not rebuild, so the active '
     'provider context may still carry the old raw results.\n'
     'rebuild: re-read and recompose ALL canonical prompt sources, then apply '
     'pending/new summaries, then replay provider context with the new prompt and '
-    'history. Bare input={} is valid even with zero pending summaries. Prefer '
-    'one tactical rebuild; do not loop rebuild.\n'
+    'history. Strongly discouraged as routine compaction, tool-result cleanup, or '
+    'a step after every durable edit: full replay is costly, can disturb '
+    'prompt-prefix cache reuse, and keeps the bulky history. Use it only as a rare '
+    'exception when new prompt sources or pending summaries must apply in this '
+    'conversation and molt is unsuitable; one targeted call, never a loop. Bare '
+    'input={} is valid even with zero pending summaries.\n'
     'manual: return the installed context-manual skill without performing any '
     'context operation.\n'
     'Identity/lifecycle actions are not here: use '
@@ -371,7 +379,7 @@ _ACTION_ENUM_DESCRIPTION = (
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Your context: shed it, compact it, rebuild it. Four actions, each with its own strict input object. molt (凝蜕): shed the conversation, keep the durable stores; requires a written session journal. summarize: record compact replacements for bulky prior tool results — records only, does NOT rebuild. rebuild: re-read and recompose every canonical prompt source, apply pending/new summaries, then replay provider context with the new prompt/history; bare input={} is valid even with zero pending summaries. manual: return the installed context-manual skill. Identity/lifecycle actions are not here — use system(action=\'name_set\'|\'name_nickname\'). Note the two levels: the ACTION named summarize is this domain operation, while the optional ROOT summarize boolean is the unrelated result-presentation control — leave it false here (results are small), including for manual, so the exact molt procedure is not summarized away.'
+    return 'Your context: shed it, compact it, rebuild it. Four actions, each with its own strict input object. molt (凝蜕): shed the conversation, keep the durable stores; requires a written session journal; the preferred deliberate response to substantial or noisy history or context pressure. summarize: record compact replacements for bulky prior tool results — records only, does NOT rebuild. rebuild: re-read and recompose every canonical prompt source, apply pending/new summaries, then replay provider context with the new prompt/history; strongly discouraged as routine compaction or post-edit ceremony (rare exception, one targeted call, never a loop); bare input={} is valid even with zero pending summaries. manual: return the installed context-manual skill. Identity/lifecycle actions are not here — use system(action=\'name_set\'|\'name_nickname\'). Note the two levels: the ACTION named summarize is this domain operation, while the optional ROOT summarize boolean is the unrelated result-presentation control — leave it false here (results are small), including for manual, so the exact molt procedure is not summarized away.'
 
 
 def get_schema(lang: str = "en") -> dict:

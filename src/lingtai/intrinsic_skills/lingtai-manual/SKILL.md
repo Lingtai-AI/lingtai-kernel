@@ -3,8 +3,8 @@ name: lingtai-manual
 description: |
   Read before changing character/identity in `system/lingtai.md`, choosing forced
   versus self-evolve mode, or applying durable identity edits.
-version: 2.0.0
-last_changed_at: 2026-09-09T00:00:00Z
+version: 2.1.0
+last_changed_at: 2026-09-29T00:00:00Z
 related_files:
 - src/lingtai/tools/lingtai/__init__.py
 - src/lingtai/tools/lingtai/_lingtai.py
@@ -38,7 +38,10 @@ Durable identity changes go through `shell`, anchored in the authorized working
 directory: rewrite `system/lingtai.md` in full, or make a bounded exact change
 after verifying the old text exists exactly once, then verify the written file.
 Platform recipes live in `shell-manual`. Preserve all character content you
-intend to keep when rewriting. No shell write hot-loads the prompt; use one
+intend to keep when rewriting. No shell write hot-loads the prompt; the edit takes effect at the next natural molt or reload, so
+do not rebuild after each edit. Manual rebuild is strongly discouraged (costly full
+replay); only when the identity change must apply in this conversation and a molt
+is unsuitable, make one targeted
 `context(action="rebuild", input={}, reasoning="apply identity change")`.
 
 - **Self-evolve:** an absent or empty **resolved** `lingtai` value (inline or

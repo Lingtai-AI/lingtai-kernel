@@ -4,8 +4,8 @@ description: >
   Read before creating or organizing private durable knowledge
   (`knowledge/<name>/KNOWLEDGE.md`) or cross-references; use it for local memory,
   not portable procedures.
-version: 1.0.0
-last_changed_at: "2026-09-09T00:00:00Z"
+version: 1.1.0
+last_changed_at: "2026-09-29T00:00:00Z"
 related_files:
 - src/lingtai/tools/skills/manual/reference/cleanup-footprint-contract.md
 - src/lingtai/tools/knowledge/__init__.py
@@ -60,9 +60,11 @@ For an edit, first prove the old text exists exactly once (for example
 `grep -c -F -- '<old>' knowledge/<name>/KNOWLEDGE.md` must print `1`), then
 replace it and read the file back to verify; never replace blindly. Keep output
 bounded, and treat a binary or non-UTF-8 file honestly rather than as text.
-Writing does not hot-load the catalog. Apply one
-`context(action="rebuild", input={}, reasoning="refresh knowledge catalog")`, or
-let passive refresh/molt reconstruction apply it. Psyche's
+Writing does not hot-load the catalog. Prefer letting the next natural
+refresh/molt reconstruction apply it; a manual rebuild is strongly discouraged
+(costly full replay). Only when the entry must be cataloged in this conversation
+and a molt is unsuitable, make one targeted
+`context(action="rebuild", input={}, reasoning="refresh knowledge catalog")`. Psyche's
 `settings/psyche.json` does not configure Knowledge and there is no Knowledge
 settings, set, reset, migration, or writeback action.
 

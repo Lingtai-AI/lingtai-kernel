@@ -1693,9 +1693,11 @@ def test_forced_rebuild_always_carries_unified_warning_even_when_low():
     assert "Forced provider-context rebuild applied at the 100% hard context boundary" in warning
     assert "100000 tokens (100%) before" in warning
     assert "40000 tokens (40%) after" in warning
-    assert "prefer a proactive" in warning
-    # The proactive rebuild is now the explicit public action, not a boolean.
+    # Molt is the preferred deliberate response; a manual rebuild is discouraged.
+    assert "prefer preparing a deliberate molt" in warning
     assert "context(action='rebuild')" in warning
+    assert "strongly discouraged" in warning
+    assert "prefer a proactive" not in warning
     assert "0.85" in warning or "85%" in warning
     assert "75%" in warning or "0.75" in warning
     assert "molt" in warning
@@ -4489,6 +4491,12 @@ def test_build_context_rebuild_hint_stamps_after_high_ratio():
     assert "does NOT itself rebuild the active provider context" in hint
     assert "forces a rebuild at the 1.0 hard boundary" in hint
     assert "meta_guidance" in hint
+    # Molt is preferred; a manual rebuild is a discouraged, rare exception.
+    assert "Prefer preparing a deliberate molt" in hint
+    assert "strongly discouraged as routine compaction" in hint
+    assert "one targeted rebuild" in hint
+    assert "MAY pay" not in hint
+    assert "proactive rebuild" not in hint
     assert build_context_rebuild_hint(SimpleNamespace(_intrinsics=set()), 0.90) is None
 
 

@@ -369,12 +369,14 @@ def _build_summarize_only_reconstruction(snapshot: dict, totals: dict) -> str:
     if _pending_count(totals) > 0:
         body = (
             "Two ways to apply the pending summaries: let the runtime force a rebuild "
-            "at the 1.0 hard context boundary (it applies pending summaries then), OR "
-            "make one tactical context(action='rebuild', input={}, reasoning='...') "
-            "call proactively — that applies what is already pending, no new items "
-            "needed — preferably when context is high (>=0.85 / the runtime rebuild "
-            "hint) or a fresh context is worth the cache-miss cost. Proactive is "
-            "better: the 1.0 forced path is the emergency boundary. "
+            "at the 1.0 hard context boundary (it applies pending summaries then), OR, "
+            "as a rare exception when they must apply in this conversation and a molt "
+            "is unsuitable, make one targeted "
+            "context(action='rebuild', input={}, reasoning='...') call — that applies "
+            "what is already pending, no new items needed. A manual rebuild is "
+            "strongly discouraged as routine compaction: full replay is costly, can "
+            "disturb prompt-prefix cache reuse, and keeps the bulky history; prefer a "
+            "deliberate molt for substantial or noisy history. "
         )
     else:
         body = (

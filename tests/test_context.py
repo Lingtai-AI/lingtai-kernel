@@ -243,6 +243,61 @@ def test_context_schema_is_the_closed_ltp_v2_envelope():
     assert "object" not in SCHEMA["properties"]
 
 
+def test_context_guidance_prefers_molt_and_discourages_manual_rebuild():
+    """Guidance-only: molt is preferred; manual rebuild is a rare exception.
+
+    Schema shape and dispatch are unchanged (see the exact-surface test above);
+    only model-visible prose is protected here, without any savings claim.
+    """
+    from lingtai.tools.context import get_description, get_schema
+    schema = get_schema("en")
+    action_text = schema["properties"]["action"]["description"]
+    rebuild_text = action_text.split("rebuild:", 1)[1].split("\nmanual:", 1)[0]
+    assert "Strongly discouraged" in rebuild_text
+    assert "prompt-prefix cache" in rebuild_text
+    assert "rare exception" in rebuild_text
+    assert "one targeted call, never a loop" in rebuild_text
+    assert "Prefer molt over rebuild" in action_text
+    assert "Prefer one tactical rebuild" not in action_text
+    # The rebuild input schema still accepts the bare ``{}`` ordinary call.
+    rebuild_input = next(
+        cond["then"]["properties"]["input"]
+        for cond in schema["allOf"]
+        if cond["if"]["properties"]["action"]["const"] == "rebuild"
+    )
+    assert "required" not in rebuild_input or "items" not in rebuild_input["required"]
+    assert "strongly discouraged" in get_description("en")
+
+
+def test_context_manual_and_resident_prompt_prefer_molt_over_manual_rebuild():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "src/lingtai"
+    manual = (root / "tools/context/manual/SKILL.md").read_text(encoding="utf-8")
+    assert "strongly discouraged as routine compaction" in manual
+    assert "preferred deliberate response" in manual
+    assert "No summarize or rebuild is required first" in manual
+    assert "next natural molt or reload" in manual
+    assert "Rare exception" in manual
+    assert "one targeted" in manual and "never a loop" in manual
+    # The contradictory default recommendation must not return.
+    assert "Use one `context(action=\"rebuild\", input={})` to apply" not in manual
+    principle = (root / "prompts/principle/principle.md").read_text(encoding="utf-8")
+    assert "prefer a deliberate molt over a manual `context` rebuild" in principle
+    assert "strongly discouraged as routine compaction" in principle
+    assert "do not molt automatically" in principle
+    for rel in (
+        "intrinsic_skills/pad-manual/SKILL.md",
+        "intrinsic_skills/lingtai-manual/SKILL.md",
+        "intrinsic_skills/psyche-manual/SKILL.md",
+        "tools/knowledge/manual/SKILL.md",
+        "tools/skills/manual/SKILL.md",
+    ):
+        text = " ".join((root / rel).read_text(encoding="utf-8").split())
+        assert "strongly discouraged" in text, rel
+        assert "next natural" in text, rel
+
+
 def test_context_schema_has_no_files_field_after_the_pad_split():
     """`files` left with the pad family; no psyche action advertises it."""
     from lingtai.tools.context import get_schema

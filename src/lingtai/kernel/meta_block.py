@@ -1157,14 +1157,16 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
         return None
     return (
         "context now above 85%: recording summaries does NOT itself rebuild the "
-        "active provider context. If recorded summaries are worth making active "
-        "sooner, you MAY pay for a provider-context rebuild via "
-        "context(action='rebuild') (with or without new items). This "
-        "is a permitted option, not a requirement; if you do nothing, the runtime "
+        "active provider context. Prefer preparing a deliberate molt (tend changed "
+        "durable stores, write the session journal and a short handoff) over a "
+        "manual rebuild; a manual context(action='rebuild') is strongly "
+        "discouraged as routine compaction because full replay is costly, can "
+        "disturb prompt-prefix cache reuse, and keeps the bulky history. Reserve "
+        "one targeted rebuild for the rare case where recorded summaries or new "
+        "prompt sources must apply in this conversation and a molt is unsuitable. "
+        "This is not a requirement; if you do nothing, the runtime "
         "forces a rebuild at the 1.0 hard boundary (full context) regardless. "
-        "Preferring a proactive rebuild here avoids the emergency forced path. Keep "
-        "summarizing digested results to shrink recorded history either way. See "
-        "meta_guidance for details."
+        "See meta_guidance for details."
     )
 
 

@@ -1,6 +1,6 @@
 ---
 name: psyche-manual
-last_changed_at: 2026-09-09T00:00:00Z
+last_changed_at: 2026-09-29T00:00:00Z
 description: >
   Compact router for Psyche's four durable domains (pad, lingtai, knowledge,
   skills), the shared file→rebuild model, redacted settings, and the separate
@@ -55,10 +55,12 @@ root `summarize=false` when exact guidance matters.
 Change durable content through `shell` on its owning path — a full rewrite, or
 an exact replacement after verifying the old text exists exactly once — anchored
 in the authorized working directory, and verify the result after writing. Then
-apply one
-`context(action="rebuild", input={}, reasoning="apply durable changes")` (or let
-refresh/molt reconstruct). A filesystem mutation never hot-loads; there is no
-per-domain reload, and Skills/Knowledge retain catalog ownership. Platform
+leave it for the next natural molt or refresh to reconstruct; do not rebuild after
+every edit. A filesystem mutation never hot-loads; there is no per-domain reload,
+and Skills/Knowledge retain catalog ownership. Manual
+`context(action="rebuild", input={})` is strongly discouraged (costly full replay
+that can disturb prompt-prefix cache reuse); use one targeted call only when the
+change must apply in this conversation and a molt is unsuitable. Platform
 recipes live in `shell-manual`.
 
 ## Lifecycle and settings
