@@ -18,6 +18,7 @@ durable files only.
 """
 from __future__ import annotations
 
+import re
 import copy
 import json
 import threading
@@ -1931,7 +1932,18 @@ def test_fingerprint_ignores_only_wall_clock_ticks(tmp_path):
 # Real TelegramManager, FakeAccount transport, tiny in-memory price catalog
 # installed as ``api_cost.CATALOG``: no provider, Telegram or catalog network.
 
-_PRICE_LABEL = "STANDARD API TOKEN list-price ESTIMATE USD (LiteLLM):"
+_PRICE_LINE_RE = re.compile(r"^\s*(?:[\d.]+ tok/s · )?(?:≈\$|cost (?:n/a|\?|loading))")
+
+
+def _is_price_line(line: str) -> bool:
+    """The compact Telegram API list-price line (optionally led by tok/s)."""
+    return bool(_PRICE_LINE_RE.match(line))
+
+
+def _price_lines(text: str) -> list[str]:
+    return [line for line in text.splitlines() if _is_price_line(line)]
+
+
 _FIXED_NOW = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc)  # footer clock
 _TINY = {
     "input_cost_per_token": 1e-06,
@@ -1942,14 +1954,8 @@ _TINY = {
 _TINY2 = {name: rate * 2 for name, rate in _TINY.items()}
 _BILL = {"model": "tiny", "cache_write_tokens": 1000, "billable_output_tokens": 500}
 # total 10k input / 4k read / 1k write / 500 output over a 2.0 s API delay.
-_TINY_LINE = (
-    f"avg out 250.0 tok/s · {_PRICE_LABEL} input $0.0050 | write $0.0020"
-    " | read $0.0004 | output $0.0010 | total $0.0084 (catalog 2026-09-29)"
-)
-_TINY2_LINE = (
-    f"avg out 250.0 tok/s · {_PRICE_LABEL} input $0.0100 | write $0.0040"
-    " | read $0.0008 | output $0.0020 | total $0.0168 (catalog 2026-09-29)"
-)
+_TINY_LINE = "250.0 tok/s · ≈$0.0084 (in $0.0050 · write $0.0020 · read $0.0004 · out $0.0010)"
+_TINY2_LINE = "250.0 tok/s · ≈$0.0168 (in $0.0100 · write $0.0040 · read $0.0008 · out $0.0020)"
 
 
 def _static_catalog(monkeypatch, models):
@@ -2006,7 +2012,7 @@ def _last_edit(acct) -> str:
 
 def _assert_price_line_after_metrics(text, expected, *, metrics="↻ 2.0s"):
     lines = text.splitlines()
-    cost = [i for i, line in enumerate(lines) if _PRICE_LABEL in line]
+    cost = [i for i, line in enumerate(lines) if _is_price_line(line)]
     assert len(cost) == 1, text
     assert expected in lines[cost[0]]
     # The original glyph metrics row is unchanged and directly above.
@@ -2069,8 +2075,8 @@ def test_carrier_first_then_llm_response_in_later_batch_gains_price_line(tmp_pat
     ])
     manager._poll_event_tail()
     before = _last_edit(acct)
-    assert "↑6.0k" in before and _PRICE_LABEL in before
-    assert "n/a (model unknown)" in before  # carrier alone: no round facts yet
+    assert "↑6.0k" in before and _price_lines(before)
+    assert "cost n/a (model unknown)" in before  # carrier alone: no round facts yet
 
     _write_lines(path, [_priced_llm("api-1", 103.0, billing=_BILL)])
     manager._poll_event_tail()
@@ -2128,9 +2134,9 @@ def test_repeated_render_one_price_line_per_group_and_model_change_between_calls
 
     first = render()
     assert first == render() == render()  # repeated render is stable
-    assert first.count(_PRICE_LABEL) == 2  # exactly one line per group
+    assert len(_price_lines(first)) == 2  # exactly one line per group
     # Each exact call id is priced with its OWN model's catalog entry.
-    lines = [line for line in first.splitlines() if _PRICE_LABEL in line]
+    lines = _price_lines(first)
     assert _TINY_LINE in lines[0] and _TINY2_LINE in lines[1]
     delivered = _last_edit(acct)
     assert _TINY_LINE in delivered and _TINY2_LINE in delivered
@@ -2139,7 +2145,7 @@ def test_repeated_render_one_price_line_per_group_and_model_change_between_calls
     _write_lines(_events_path(tmp_path), [_priced_carrier("c2", 500, 6_000)])
     manager._poll_event_tail()
     after = _last_edit(acct)
-    assert _TINY_LINE in after and _TINY2_LINE in after and after.count(_PRICE_LABEL) == 2
+    assert _TINY_LINE in after and _TINY2_LINE in after and len(_price_lines(after)) == 2
 
 
 def test_pure_text_call_gets_price_line(tmp_path, monkeypatch):
@@ -2172,9 +2178,9 @@ def test_legacy_event_without_billing_facts_shows_unknown_never_a_price(tmp_path
     manager._poll_event_tail()
 
     text = _last_edit(acct)
-    assert f"{_PRICE_LABEL} n/a (model unknown)" in text
+    assert "cost n/a (model unknown)" in text
     assert "↓500" in text  # the old metrics row is still rendered
-    assert "total" not in text.split(_PRICE_LABEL)[1].splitlines()[0]
+    assert "≈$" not in text  # no price without billing facts
 
 
 def test_price_line_is_html_escaped_in_telegram_delivery(tmp_path, monkeypatch):
@@ -2227,9 +2233,9 @@ def test_default_shared_render_is_byte_identical_and_hook_only_adds_price_lines(
     telegram = TaskCardEventProjection.render_event_groups(
         groups, normal_rows=2, now=_FIXED_NOW, usage_line=api_cost.usage_line,
     )
-    assert telegram.count(_PRICE_LABEL) == 2
+    assert len(_price_lines(telegram)) == 2
     # Removing exactly the added price lines gives back the shared bytes.
-    kept = [line for line in telegram.splitlines() if _PRICE_LABEL not in line]
+    kept = [line for line in telegram.splitlines() if not _is_price_line(line)]
     assert kept == default.splitlines()
 
 
@@ -2252,7 +2258,7 @@ def test_price_lines_stay_whole_under_the_text_budget(tmp_path, monkeypatch):
     )
     assert len(raw) <= TaskCardEventProjection.TEXT_LIMIT
     for line in raw.splitlines():
-        if _PRICE_LABEL in line:
+        if _is_price_line(line):
             # A price line is either whole or absent; never cut mid-number.
-            assert line.endswith("(catalog 2026-09-29)")
+            assert line.endswith(")")
             assert len(line) <= TaskCardEventProjection.EVENT_TEXT_CAP

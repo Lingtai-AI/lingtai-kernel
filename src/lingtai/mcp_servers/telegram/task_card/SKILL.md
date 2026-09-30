@@ -53,44 +53,45 @@ Under each API-call metrics row (`↻ <delay> ↓out ↑miss ◌ ctx | cache%`) 
 automatic Telegram card adds one plain line, for example:
 
 ```text
-avg out 250.0 tok/s · STANDARD API TOKEN list-price ESTIMATE USD (LiteLLM): input $0.0050 | write $0.0020 | read $0.0004 | output $0.0010 | total $0.0084 (catalog 2026-09-29)
+250.0 tok/s · ≈$0.0084 (in $0.0050 · write $0.0020 · read $0.0004 · out $0.0010)
 ```
 
 Reading it:
 
-- **What it is.** A STANDARD public per-token list-price ESTIMATE in USD, not a
-  bill or invoice. It is not the actual subscription/Codex-pool bill, and it
+- **What it is.** `≈$` marks a STANDARD public per-token list-price ESTIMATE in
+  USD (LiteLLM prices), not a bill or invoice. It is not the actual subscription/Codex-pool bill, and it
   does not claim the routed tier, batch/priority pricing or discounts. Search,
   grounding and image fixed fees are not included in `total`.
 - **Source and basis.** Prices come from LiteLLM's public
   `model_prices_and_context_window.json`, looked up by the EXACT model that
-  made that round (no alias or fuzzy match). `(catalog YYYY-MM-DD)` is the day
-  this process fetched the prices; `, stale` is added once the snapshot is older
-  than six hours and a refresh has not landed. Above 200k/272k total input the
+  made that round (no alias or fuzzy match), fetched by this process in the
+  background; `stale prices` is appended once the snapshot is older than six
+  hours and a refresh has not landed. Above 200k/272k total input the
   catalog's above-threshold rates are used when the model lists them.
-- **Four buckets.** `input` is uncached input (total input minus cache read
+- **Four buckets.** `in` is uncached input (total input minus cache read
   minus cache write); `write` is the cache-write count; `read` is the cache-read
-  count; `output` is the provider-billable output (thinking included exactly
+  count; `out` is the provider-billable output (thinking included exactly
   once). `<$0.0001` is a nonzero amount that rounds below the display precision.
 - **Unknowns are never zero.** A bucket shows `?` when the provider wire did not
   state its count (for example OpenAI/Gemini/Codex do not report cache-write
   tokens, so `write` and the uncached `input` stay `?`), when the catalog lacks
   that rate, or when the counts are incoherent (for example a 1-hour cache-write
   part larger than the whole write). If any bucket is unknown the total is NOT
-  a sum: it reads `total ? (known $x)` (the known subtotal only) or `total ?`.
-  Other notes: `n/a (model unknown)` (old history, no round facts),
-  `n/a (model not listed)`, `n/a (catalog unavailable)`, `loading`,
-  `n/a (estimated tokens)`.
-- **`avg out` vs decode speed.** `avg out <n> tok/s` is billable output tokens
+  a full sum: the headline is the known subtotal with a trailing `+`
+  (`≈$0.0249+`, a lower bound), or `cost ?` when nothing is known.
+  Other notes: `cost n/a (model unknown)` (old history, no round facts),
+  `cost n/a (model not listed)`, `cost n/a (prices unavailable)`,
+  `cost loading`, `cost n/a (estimated tokens)`.
+- **`tok/s` vs decode speed.** The leading `<n> tok/s` is billable output tokens
   divided by the existing displayed API gap. That gap may include waiting,
   prefill, streaming and orchestration; it is not an independently measured
   decode interval, and no universal speed comparison is claimed. It is omitted
   when the delay or token count is unknown.
 - **Async cache, offline, old history.** The card never waits for the network:
-  the first render may show `loading`, one bounded background refresh (fixed
+  the first render may show `cost loading`, one bounded background refresh (fixed
   URL, 8 MiB cap, per-read timeout plus a total deadline, no credentials)
   fills a process-local snapshot, and a failed fetch is retried no faster than
-  every five minutes. Offline, prices stay `n/a (catalog unavailable)` (or the
-  last snapshot marked stale). Old events written before this feature carry no
-  round facts and show `n/a (model unknown)`; no price is invented for them.
+  every five minutes. Offline, prices stay `cost n/a (prices unavailable)` (or the
+  last snapshot marked `stale prices`). Old events written before this feature carry no
+  round facts and show `cost n/a (model unknown)`; no price is invented for them.
   Feishu and other channels render exactly as before.
