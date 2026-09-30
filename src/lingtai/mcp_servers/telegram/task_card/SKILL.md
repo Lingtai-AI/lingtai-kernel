@@ -74,14 +74,16 @@ Reading it:
   otherwise at the input rate); `|` is the cache-hit (cache-read) input,
   the `| hit%` share of `◌`. `↓` is the provider-billable output (thinking included exactly
   once). `<$0.0001` is a nonzero amount that rounds below the display precision.
-- **Unknowns are never zero.** A part shows `?` when a count it needs is
-  unknown (for example the catalog prices cache writes separately but the
-  wire did not report a write count; OpenAI-compatible backends such as Codex
-  report it as `input_tokens_details.cache_write_tokens`), when the catalog
-  lacks that rate, or when the counts are incoherent (for example a 1-hour
-  cache-write part larger than the whole write). If any part is unknown the
-  total is NOT a full sum: the headline is the known subtotal with a trailing
-  `+` (`$0.0249+`, a lower bound), or `cost ?` when nothing is known.
+- **Unknowns are never zero.** When the catalog prices cache writes
+  separately but a round has no recorded write count (for example rounds
+  logged before the adapter read `input_tokens_details.cache_write_tokens`),
+  `↑` shows a lower bound with a trailing `+`: every cache-miss token priced at
+  the cheapest applicable rate. A part shows `?` when no safe value exists: a
+  count it needs is missing, the catalog lacks or has an invalid rate, or the
+  counts are incoherent (for example a 1-hour cache-write part larger than the
+  whole write). If any part is a lower bound or unknown, the headline total is
+  the known subtotal with a trailing `+` (`$0.0682+`), or `cost ?` when nothing
+  is known.
 - **No speed figure.** The line shows no tokens/second: the displayed API
   gap includes waiting, prefill, streaming and orchestration, so dividing by it
   would not be a real generation speed.

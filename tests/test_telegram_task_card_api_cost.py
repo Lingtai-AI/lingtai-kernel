@@ -221,21 +221,43 @@ def test_line_complete_partial_and_unknown():
     assert "?" not in line and "+" not in line
     partial = {"output": 50, "bill": {"model": "sol", "input": 1000, "cached": 400, "billable_output_tokens": 50}}
     text = api_cost.usage_line(2.0, partial, catalog)
-    assert "↑?" in text  # writes priced but not reported: cache-miss cost unknown
-    # Partial: the known subtotal with a trailing "+" (unknown parts are
-    # non-negative, so it is a lower bound).
-    assert text == "$0.0005+ · ↓$0.0005 ↑? | <$0.0001"
+    # Writes priced separately but no write count recorded: ↑ is a lower bound
+    # (all 600 cache-miss tokens at the cheaper input rate), marked "+", and so
+    # is the total.
+    assert text == "$0.0017+ · ↓$0.0005 ↑$0.0012+ | <$0.0001"
     nothing = {"output": 5, "bill": {"model": "sol", "input": 100, "cached": 0}}
-    # Only a real known-zero read bucket: total stays unknown, subtotal is $0.
-    assert api_cost.usage_line(1.0, nothing, catalog) == "$0+ · ↓? ↑? | $0"
+    # Output unknown: "?" there; ↑ floor and the total are lower bounds.
+    assert api_cost.usage_line(1.0, nothing, catalog) == "$0.0002+ · ↓? ↑$0.0002+ | $0"
     unpriced = {"output": 5, "bill": {"model": "sol", "input": 100, "cached": 10}}
-    assert "↑?" in api_cost.usage_line(1.0, unpriced, catalog)
+    assert "↑$0.0002+" in api_cost.usage_line(1.0, unpriced, catalog)
     assert api_cost.usage_line(None, {"output": 5}, catalog) == "cost n/a (model unknown)"
     unlisted = {"output": 5, "bill": {"model": "nope", "input": 10, "cached": 0}}
     assert api_cost.usage_line(0, unlisted, catalog).endswith("n/a (model not listed)")
     estimated = {"output": 5, "bill": {"estimated": True}}
     assert api_cost.usage_line(1.0, estimated, catalog) == "cost n/a (estimated tokens)"
     assert api_cost.usage_line(1.0, None, catalog) == ""
+
+
+def test_missing_write_count_floor_uses_cheapest_rate_and_never_exact():
+    bill = {"input": 1000, "cached": 400, "billable_output_tokens": 50}
+    costs, floors = api_cost.estimate_parts(bill, SOL)
+    assert floors == {"miss"} and costs["miss"] == pytest.approx(600 * 2e-06)
+    # The exact API still reports a floor-only part as unknown.
+    assert api_cost.estimate_costs(bill, SOL)["miss"] is None
+    # The floor uses the cheapest applicable rate, incl. a distinct 1h price.
+    cheap_write = {**TTL, "cache_creation_input_token_cost": 1e-06}
+    costs, floors = api_cost.estimate_parts(bill, cheap_write)
+    assert floors == {"miss"} and costs["miss"] == pytest.approx(600 * 1e-06)
+    # A present-but-invalid rate leaves no safe floor: still unknown.
+    invalid = {**SOL, "cache_creation_input_token_cost": None}
+    costs, floors = api_cost.estimate_parts(bill, invalid)
+    assert costs["miss"] is None and not floors
+    catalog = _ready_catalog({"bad": invalid})
+    line = api_cost.usage_line(1.0, {"output": 50, "bill": {**bill, "model": "bad"}}, catalog)
+    assert "↑?" in line and line.startswith("$") and "+ ·" in line
+    # A recorded write count is exact: no floor, no "+".
+    costs, floors = api_cost.estimate_parts({**bill, "cache_write_tokens": 0}, SOL)
+    assert not floors and costs["miss"] == pytest.approx(600 * 2e-06)
 
 
 def test_line_marks_estimate_and_never_invoice_or_routing_claims():

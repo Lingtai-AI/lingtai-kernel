@@ -223,6 +223,14 @@ def _finite(value: float | None) -> float | None:
 def estimate_costs(
     bill: dict[str, Any], entry: dict[str, float | None]
 ) -> dict[str, float | None]:
+    """Exact per-part costs (``None`` = unknown or only a lower bound known)."""
+    costs, floors = estimate_parts(bill, entry)
+    return {name: (None if name in floors else value) for name, value in costs.items()}
+
+
+def estimate_parts(
+    bill: dict[str, Any], entry: dict[str, float | None]
+) -> tuple[dict[str, float | None], frozenset[str]]:
     """STANDARD list-price USD per metrics-row bucket; ``None`` = unknown.
 
     Buckets mirror the task-card metrics row: ``miss`` is the ``↑`` cache-miss
@@ -235,6 +243,13 @@ def estimate_costs(
     (OpenAI/Codex style), writes are ordinary input, so ``miss`` needs no write
     count. Missing/incoherent counts, missing/invalid rates and non-finite
     (overflowing) products never become zero: they stay unknown.
+
+    Returns ``(costs, floors)``: ``floors`` names parts whose value is only a
+    lower bound. That happens for ``miss`` when the catalog prices cache
+    writes separately but the round did not record a write count (e.g. rounds
+    logged before the adapter read it): every cache-miss token is then priced
+    at the cheapest applicable rate (input or cache write), which can only
+    under-state the real cost.
     """
     total = _count(bill.get("input"))
     read = _count(bill.get("cached"))
@@ -244,12 +259,13 @@ def estimate_costs(
     ttl_malformed = raw_one_hour is not None and one_hour is None
     output = _count(bill.get("billable_output_tokens"))
     result: dict[str, float | None] = {"miss": None, "hit": None, "output": None}
+    floors: set[str] = set()
     if output is not None:
         # Output does not depend on input counts; tier by total when known.
         suffix = _tier_suffix(entry, total) if total is not None else ""
         result["output"] = _charge(output, entry.get(_BUCKET_FIELDS["output"] + suffix))
     if total is None or read is None or read > total:
-        return result
+        return result, frozenset(floors)
     suffix = _tier_suffix(entry, total)
 
     def rate(bucket: str) -> float | None:
@@ -261,9 +277,21 @@ def estimate_costs(
         # No separate cache-write price: every non-cached input token bills
         # at the input rate, whether or not the wire reported writes.
         result["miss"] = _charge(total - read, rate("input"))
-        return result
-    if write is None or read + write > total:
-        return result  # writes are priced separately but their count is unknown
+        return result, frozenset(floors)
+    if write is None:
+        # Writes are priced separately but this round has no write count:
+        # price every cache-miss token at the cheapest applicable rate.
+        rates = [rate("input"), rate("write")]
+        if any(key.startswith(_BUCKET_FIELDS["write_1h"]) for key in entry):
+            rates.append(rate("write_1h"))
+        if all(r is not None for r in rates):
+            floor = _charge(total - read, min(rates))
+            if floor is not None:
+                result["miss"] = floor
+                floors.add("miss")
+        return result, frozenset(floors)
+    if read + write > total:
+        return result, frozenset(floors)  # incoherent counts
     uncached = _charge(total - read - write, rate("input"))
     write_cost: float | None = None
     one_hour_rate = rate("write_1h")
@@ -285,7 +313,7 @@ def estimate_costs(
         write_cost = _charge(write, standard_write)
     if uncached is not None and write_cost is not None:
         result["miss"] = _finite(uncached + write_cost)
-    return result
+    return result, frozenset(floors)
 
 
 def _charge(count: int | None, price: float | None) -> float | None:
@@ -343,18 +371,20 @@ def usage_line(
                 "unlisted": "cost n/a (model not listed)",
             }[status])
         else:
-            costs = estimate_costs(bill, entry)
+            costs, floors = estimate_parts(bill, entry)
             known = [value for value in costs.values() if value is not None]
             subtotal = _finite(sum(known)) if known else None
             if subtotal is None:
                 head = "cost ?"
-            elif len(known) == len(costs):
+            elif len(known) == len(costs) and not floors:
                 head = _money(subtotal)
             else:
                 head = f"{_money(subtotal)}+"
 
             def cell(name: str) -> str:
-                return _money(costs[name]) if costs[name] is not None else "?"
+                if costs[name] is None:
+                    return "?"
+                return _money(costs[name]) + ("+" if name in floors else "")
 
             # Mirrors the metrics row: ↓ output, ↑ cache-miss input, | cache hits.
             text = f"{head} · ↓{cell('output')} ↑{cell('miss')} | {cell('hit')}"
