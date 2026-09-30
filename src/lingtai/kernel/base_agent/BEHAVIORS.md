@@ -239,7 +239,7 @@ Pass when the suite is green and the inspection matches the Contract. Fail if th
 ### Steps
 
 1. Run `python -m pytest -q tests/test_tool_result_restore_after_continuation_failure.py -k empty_completion`.
-2. Inspect the positive case for a `sent` receipt with every cover recorded and the negative cases for held, uncovered, hidden threaded, and `agent_only` sends.
+2. Inspect the positive case for a `sent` receipt with every cover recorded and a zero-uncovered active-turn attestation. Inspect negative cases for missing or positive attestation, held, uncovered, hidden threaded, and `agent_only` sends, plus a concurrent admission call.
 
 ### Expected evidence
 
@@ -248,4 +248,4 @@ Pass when the suite is green and the inspection matches the Contract. Fail if th
 
 ### Pass / Fail
 
-Pass when both assertions hold and no test sends a real message. Fail if a hidden or uncovered reply settles the turn, or if a delivered and covered reply causes an AED retry.
+Pass when both assertions hold and no test sends a real message. Fail if a hidden, partially covered, or unattested reply settles the turn, or if a fully attested visible reply causes an AED retry.

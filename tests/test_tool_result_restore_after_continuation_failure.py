@@ -365,7 +365,8 @@ def test_empty_completion_after_sent_and_covered_puffo_reply_settles_turn(
         content={
             "status": "success",
             "text": '[send_result context_version=1 state="sent" attempted=true '
-            'covers_recorded=["msg_question"] message_id="msg_answer"]',
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
         },
     )
     agent = _FakeAgent(working_dir=tmp_path)
@@ -396,33 +397,49 @@ def test_empty_completion_after_sent_and_covered_puffo_reply_settles_turn(
     ("receipt", "extra_args"),
     [
         (
+            '[send_result context_version=1 state="sent" attempted=true '
+            'covers_recorded=["msg_question"] message_id="msg_answer"]',
+            {},
+        ),
+        (
+            '[send_result context_version=1 state="sent" attempted=true '
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=1 message_id="msg_answer"]',
+            {},
+        ),
+        (
             '[send_result context_version=1 state="held" attempted=true '
             'covers_recorded=[] covers_dropped=["msg_question"]]',
             {},
         ),
         (
             '[send_result context_version=1 state="sent" attempted=true '
-            'covers_recorded=[] message_id="msg_answer"]',
+            'covers_recorded=[] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
             {},
         ),
         (
             '[send_result context_version=1 state="sent" attempted=true '
-            'covers_recorded=["msg_question"] message_id="msg_answer"]',
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
             {"covers": ["msg_question", "msg_second_question"]},
         ),
         (
             '[send_result context_version=1 state="sent" attempted=true '
-            'covers_recorded=["msg_question"] message_id="msg_answer"]',
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
             {"root_id": "msg_thread", "visibility_level": "default"},
         ),
         (
             '[send_result context_version=1 state="sent" attempted=true '
-            'covers_recorded=["msg_question"] message_id="msg_answer"]',
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
             {"visibility_level": "agent_only"},
         ),
         (
             '[send_result context_version=1 state="sent" attempted=true '
-            'covers_recorded=["msg_question"] message_id="msg_answer"]\n'
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]\n'
             '[note context_version=1] content="sent hidden"',
             {"visibility_level": "human"},
         ),
@@ -454,6 +471,24 @@ def test_empty_completion_still_retries_without_visible_settled_reply(
 
     with pytest.raises(turn.EmptyLLMResponseError):
         _process_response(agent, LLMResponse(tool_calls=[call]), ledger_source="test")
+
+
+def test_concurrent_inbox_admission_invalidates_send_coverage_attestation():
+    send = ToolCall(
+        id="call_reply", name="send_message",
+        args={"channel": "ch_test", "text": "42", "covers": ["msg_question"]},
+    )
+    read = ToolCall(id="call_read", name="read_inbox", args={})
+    receipt = ToolResultBlock(
+        id=send.id, name=send.name,
+        content={
+            "status": "success",
+            "text": '[send_result context_version=1 state="sent" '
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
+        },
+    )
+    assert not turn._settled_visible_puffo_reply([send, read], [receipt])
 
 
 def test_process_response_logs_cancel_before_tool_dispatch(tmp_path):

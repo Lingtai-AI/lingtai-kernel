@@ -2749,7 +2749,12 @@ def _check_poll_backoff(agent, tool_calls, tool_results=None) -> bool:
 
 
 def _settled_visible_puffo_reply(tool_calls, tool_results) -> bool:
-    """Whether this batch visibly answered and covered a Puffo input."""
+    """Whether one sent reply covers the Puffo runtime's whole human turn."""
+    # A concurrent read_inbox (or other admission tool) could grow the active
+    # cohort after the send receipt was produced.  Only a single-send batch
+    # can use that receipt as a terminal coverage fact.
+    if len(tool_calls) != 1:
+        return False
     results = {getattr(result, "id", None): result for result in tool_results}
     for call in tool_calls:
         if call.name not in {"send_message", "send_message_with_attachments"}:
@@ -2778,6 +2783,31 @@ def _settled_visible_puffo_reply(tool_calls, tool_results) -> bool:
         if "sent hidden" in receipt:
             continue
         header = receipt.partition("\n")[0]
+        # Puffo must attest coverage over its authoritative active turn after
+        # recording this send's covers.  A covers_recorded list alone proves
+        # only that this call's requested IDs were recorded.
+        coverage_marker = "coverage_turn_id="
+        coverage_start = header.find(coverage_marker)
+        count_marker = "active_human_uncovered_count="
+        count_start = header.find(count_marker)
+        if coverage_start < 0 or count_start < 0:
+            continue
+        try:
+            coverage_turn_id, _ = json.JSONDecoder().raw_decode(
+                header[coverage_start + len(coverage_marker):]
+            )
+            uncovered_count, _ = json.JSONDecoder().raw_decode(
+                header[count_start + len(count_marker):]
+            )
+        except json.JSONDecodeError:
+            continue
+        if (
+            not isinstance(coverage_turn_id, str)
+            or not coverage_turn_id
+            or type(uncovered_count) is not int
+            or uncovered_count != 0
+        ):
+            continue
         marker = "covers_recorded="
         start = header.find(marker)
         if start < 0:
