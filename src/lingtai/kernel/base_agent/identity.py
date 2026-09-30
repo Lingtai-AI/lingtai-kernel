@@ -151,24 +151,51 @@ def _safe_llm_from_service(agent) -> dict:
     if isinstance(api_compat, str) and api_compat:
         llm["api_compat"] = api_compat
 
-    # The native Codex adapter always uses the Responses API. Its configured
-    # service tier is safe runtime identity metadata; other adapters do not
-    # consume this option and must not claim one in presentation surfaces.
-    provider = llm.get("provider")
-    if isinstance(provider, str) and provider.lower() in {
-        "codex",
-        "codex-pool",
-        "codex_pool",
-    }:
+    # The configured service tier is safe runtime identity metadata, reported
+    # only for routes whose factory actually forwards it (Codex, official
+    # OpenAI, custom api_compat=openai); other adapters must not claim one.
+    route = _service_tier_route(service, llm.get("provider"))
+    if route is not None:
         service_tier = _provider_default_from_service(service, "service_tier")
-        if isinstance(service_tier, str) and service_tier.strip():
-            llm["service_tier"] = service_tier.strip()
-        else:
-            # The request omits service_tier, so label the known request-side
-            # default rather than inventing a provider-returned tier.
-            llm["service_tier"] = "default"
+        authored = service_tier.strip() if isinstance(service_tier, str) else ""
+        if route == "openai":
+            # OpenAI-compatible factories forward only recognized tiers and
+            # ignore the rest, so report what is actually sent.
+            from lingtai.llm._register import _openai_compatible_service_tier
+
+            if _openai_compatible_service_tier(authored) is None:
+                authored = ""
+        # An omitted tier labels the known request-side default rather than
+        # inventing a provider-returned tier.
+        llm["service_tier"] = authored or "default"
 
     return llm
+
+
+def _service_tier_route(service, provider) -> str | None:
+    """Return ``"codex"``/``"openai"`` when the selected factory forwards
+    ``service_tier``, else ``None``. Classified by registered factory identity
+    (mirroring ``lingtai.llm._register``), never by provider-name guesses."""
+    if not isinstance(provider, str) or not provider:
+        return None
+    try:
+        from lingtai.llm.service import LLMService
+
+        factories = LLMService._adapter_registry
+    except Exception:
+        return None
+    selected = factories.get(provider.lower())
+    if selected is None:
+        return None
+    if selected is factories.get("codex"):
+        return "codex"
+    if selected is factories.get("openai"):
+        return "openai"
+    if selected is factories.get("custom"):
+        api_compat = _provider_default_from_service(service, "api_compat")
+        if (api_compat if api_compat is not None else "openai") == "openai":
+            return "openai"
+    return None
 
 
 def _effective_base_url_from_service(service) -> str | None:

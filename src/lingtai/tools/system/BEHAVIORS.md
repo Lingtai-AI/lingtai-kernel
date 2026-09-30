@@ -274,7 +274,8 @@ Pass only when mounted and direct routes agree on refusal, force escape, receipt
       generic axes are null rather than global defaults, and `llm.api_compat`
       reports the effective adapter route rather than malformed authored syntax.
 - [ ] Wire API defaults follow the selected factory (MiMo/Codex Responses,
-      OpenAI/custom/DeepSeek Chat Completions), service tier is Codex-only, and
+      OpenAI/custom/DeepSeek Chat Completions), service tier is reported only on
+      routes that forward it (Codex, OpenAI, custom `api_compat=openai`), and
       factories that ignore either axis report null rather than fake values.
 - [ ] Omitted thinking uses the selected route's canonical hydrated default,
       and selected-provider credentials reflect only authored key/alias sources.
