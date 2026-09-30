@@ -377,7 +377,7 @@ window is passed into the daemon `LLMService` and its context telemetry.
 Per-task `context_token_limit` (positive integer; bool rejected) is a
 context-token compaction threshold — rendered/provider-context tokens, never
 cumulative spend — effective only for `backend="lingtai"` tasks whose resolved
-provider is Codex (`codex`/`codex-pool`) or the native `mimo` LLM provider
+provider is Codex (`codex`) or the native `mimo` LLM provider
 (`manifest.llm.provider="mimo"` — distinct from the `backend` enum's
 `mimo`/`mimocode` alias above, which drives the external `mimo` CLI as a
 subprocess and never consults this field); every other provider and every
@@ -787,7 +787,7 @@ cumulative spend. This capability is narrowly scoped and does not join the
 general skills/MCP/completion/backend-support invariants above:
 
 - Effective ONLY for `backend="lingtai"` tasks whose resolved provider is Codex
-  (`codex`/`codex-pool`) or the native `mimo` LLM provider, threaded through
+  (`codex`) or the native `mimo` LLM provider, threaded through
   `_daemon_provider_defaults` as `codex_compact_token_limit` /
   `mimo_compact_token_limit` respectively. Every other provider and every
   external CLI backend never receives it.

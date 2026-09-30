@@ -158,15 +158,10 @@ def register_all_adapters() -> None:
     # -- codex ----------------------------------------------------------------
 
     def _codex(*, model=None, defaults=None, **kw):
-        """Build the one native Codex provider, including account selection."""
+        """Build the native single-account Codex provider."""
         from .openai.adapter import CodexOpenAIAdapter
-        from lingtai.auth.codex import CodexTokenManager
-        from lingtai.auth.codex_account_source import FixedAccountSource, WeightedAccountSource
-        from lingtai.auth.codex_pool import (
-            legacy_codex_token_path,
-            resolve_codex_pool_path,
-            resolve_codex_tui_dir,
-        )
+        from lingtai.auth.codex import CodexTokenManager, default_codex_token_path
+        from lingtai.auth.codex_account_source import FixedAccountSource
 
         kw.pop("model", None)
         kw.pop("api_key", None)
@@ -193,19 +188,12 @@ def register_all_adapters() -> None:
         if service_tier is not None:
             codex_id_kw["codex_service_tier"] = service_tier
 
+        # One account: an explicit ``codex_auth_path`` or the default
+        # ``<tui_dir>/codex-auth.json``. Binding is deferred until
+        # create_chat/request time. Account pooling is external (subs-pool).
         auth_path = d.get("codex_auth_path")
         auth_path = auth_path.strip() if isinstance(auth_path, str) and auth_path.strip() else None
-        fallback_path = auth_path or str(legacy_codex_token_path())
-
-        # The ordinary codex provider owns both the fixed and weighted source
-        # paths. Binding is deferred until create_chat/request time, so a pool
-        # does not require the legacy default credential to exist at boot.
-        if auth_path:
-            source = FixedAccountSource(auth_path)
-        else:
-            pool_path = resolve_codex_pool_path(d)
-            tui_dir = resolve_codex_tui_dir()
-            source = WeightedAccountSource(pool_path, tui_dir, model=model)
+        source = FixedAccountSource(auth_path or str(default_codex_token_path()))
 
         return CodexOpenAIAdapter(
             api_key="__lingtai_codex_deferred__",
@@ -214,15 +202,10 @@ def register_all_adapters() -> None:
             force_responses=True,
             codex_account_source=source,
             codex_token_manager_factory=CodexTokenManager,
-            codex_fallback_auth_path=fallback_path,
             **codex_id_kw,
         )
 
-    # ``codex-pool`` remains only a configuration-level spelling.  All names
-    # resolve to this same factory and the same native Codex adapter; there is
-    # no pool-specific chat/session/retry implementation.
-    for name in ("codex", "codex-pool", "codex_pool"):
-        LLMService.register_adapter(name, _codex)
+    LLMService.register_adapter("codex", _codex)
 
     def _claude_code(*, model=None, defaults=None, **kw):
         from .claude_code.adapter import ClaudeCodeAdapter

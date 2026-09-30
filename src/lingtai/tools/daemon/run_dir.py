@@ -24,7 +24,7 @@ from lingtai.adapters.posix.process_identity import (
 from lingtai.kernel._fsutil import append_jsonl, atomic_write_json
 from lingtai.kernel.token_ledger import (
     append_token_entry,
-    safe_codex_pool_usage_extra,
+    safe_codex_usage_extra,
 )
 from . import dispatch_ledger
 
@@ -1181,7 +1181,7 @@ class DaemonRunDir:
         attribution fields on both ledgers — the daemon may use a different
         model/provider than the parent, so per-entry tagging is required for
         multi-provider cost analytics. ``usage_extra`` is projected once onto
-        the five safe codex-pool attribution fields; arbitrary provider metadata
+        the safe Codex account attribution field; arbitrary provider metadata
         is never copied into either ledger.
 
         Skips both writes if all four values are zero — avoids ledger noise
@@ -1206,14 +1206,14 @@ class DaemonRunDir:
             self._persist_daemon_state()
         self._safe_state("append_tokens.state", _update_state)
 
-        # Sanitize once, then mirror the same safe pool-attribution subset
+        # Sanitize once, then mirror the same safe attribution subset
         # into both ledgers.  Arbitrary UsageMetadata.extra fields never cross
         # this helper-writer boundary.
         ledger_extra = {
             "source": "daemon",
             "em_id": self._handle,
             "run_id": self._run_id,
-            **safe_codex_pool_usage_extra(usage_extra),
+            **safe_codex_usage_extra(usage_extra),
         }
 
         # Daemon's own ledger — tagged source=daemon for uniformity with

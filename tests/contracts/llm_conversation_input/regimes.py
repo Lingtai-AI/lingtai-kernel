@@ -814,16 +814,14 @@ REGISTRY_EDGES: list[RegistryEdge] = [
                  base_url=None),
     RegistryEdge("kimi_code", "KimiCodeAdapter", "KimiCodeChatSession",
                  base_url=None),
-    # --- Codex (all three registered spellings) — token manager mocked --
+    # --- Codex (single registered spelling) — token manager mocked -------
     RegistryEdge("codex", "CodexOpenAIAdapter", "CodexResponsesSession"),
-    RegistryEdge("codex-pool", "CodexOpenAIAdapter", "CodexResponsesSession"),
-    RegistryEdge("codex_pool", "CodexOpenAIAdapter", "CodexResponsesSession"),
 ]
 
 # Providers whose factory constructs a real CodexTokenManager (reads a local
 # token file / may refresh over the network). Mock it so the matrix asserts
 # routing without touching auth.
-_CODEX_PROVIDERS = frozenset({"codex", "codex-pool", "codex_pool"})
+_CODEX_PROVIDERS = frozenset({"codex"})
 
 
 @contextlib.contextmanager

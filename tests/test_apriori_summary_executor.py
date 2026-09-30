@@ -542,11 +542,8 @@ def test_apriori_summary_writes_main_ledger_row(tmp_path):
     assert row["tool_call_id"] == "toolu_ledger"
     assert row.get("model") == "m"
     assert row["codex_auth_path_sha8"] == "a1b2c3d4"
-    assert row["codex_pool_source_index"] == 1
-    assert row["codex_pool_size"] == 2
-    assert row["codex_pool_weight"] == 1
-    assert row["codex_pool_model_scope"] == "gpt-5.6"
-    assert "codex_pool_source_ref" not in row
+    # Retired in-kernel pool attribution keys are never projected.
+    assert not any(key.startswith("codex_pool") for key in row)
     assert "unsafe" not in row
     # It lands in the MAIN agent ledger, not a daemon ledger.
     assert not is_daemon_entry(row)

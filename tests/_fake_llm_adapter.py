@@ -44,6 +44,9 @@ class _FakeChatSession(ChatSession):
         if sleep_s:
             time.sleep(float(sleep_s))
         self._send_count += 1
+        # ``codex_auth_path_sha8`` is the one safe Codex attribution field the
+        # daemon ledger mirrors. The retired in-kernel pool keys and ``unsafe``
+        # are deliberately emitted so the sanitizer's drop is observable.
         usage_extra = {
             "codex_auth_path_sha8": "a1b2c3d4",
             "codex_pool_source_index": 1,

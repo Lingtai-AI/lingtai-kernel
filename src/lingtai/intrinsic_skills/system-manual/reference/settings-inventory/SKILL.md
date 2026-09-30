@@ -11,7 +11,6 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/adapters/posix/mail.py
   - src/lingtai/auth/codex.py
-  - src/lingtai/auth/codex_pool.py
   - src/lingtai/cli.py
   - src/lingtai/init_reader.py
   - src/lingtai/init_schema.py
@@ -232,7 +231,6 @@ path, endpoint pool, or credential-bearing URL is ever projected.
 | `llm.api_compat` | Every name bound to `_custom` (`custom`, `grok`, `qwen`, `kimi`) has factory default `openai`; omission and explicit null both select/report `openai`. Exact `anthropic` and `gemini` report those adapter routes. Every other finite accepted value—including case variants, unknown strings, numbers, lists, and objects—selects and reports canonical public `openai`, because that is the custom adapter's fallback. Other registered factories ignore this axis and report null current/default | Any non-finite float at any nesting depth fails canonical init validation; other finite compatibility values remain deliberately tolerant and select the fallback above | effective selected adapter route and default, never malformed authored syntax | Adapter rebuild on refresh |
 | `llm.codex_session_anchor` | derived from the resolved agent `init.json` path for Codex | Explicit value is an internal/testing escape, not an authorized production setting | `<redacted>` | Adapter rebuild; `configurable` is false |
 | `llm.codex_auth_path` | provider-owned legacy auth path when absent; path-like override | Missing/unreadable/invalid auth fails the request/provider path closed | `<redacted>` | Adapter rebuild/request-owned reread |
-| `llm.codex_auth_pool_path` | provider/TUI pool resolution when absent; path-like override | Invalid pool fails the provider account-source path closed | `<redacted>` | Adapter rebuild and request-bound account selection |
 | `llm.codex_base_urls` | absent means single `base_url`; string or list accepted by the Codex adapter | Invalid/empty entries follow the adapter's pool validation/fallback | `<redacted>` | Adapter rebuild; selection rotates only at the documented molt boundary |
 | `llm.default_headers` | `{}` user headers; JSON object in normal use | Non-object values are not forwarded as user headers; provider construction owns final validation | `<redacted>` including names and values | Adapter rebuild on refresh |
 
@@ -283,7 +281,7 @@ cleans files, resets counters, or authorizes a risky operation.
 For `LINGTAI_TUI_DIR`, use that launcher procedure and a full relaunch. The
 kernel does not create or validate the directory eagerly: an unexpandable `~`
 can fail adapter construction, while a missing directory or unreadable/invalid
-`codex-auth.json` / `codex-auth-pool.json` fails the later Codex account or
+`codex-auth.json` fails the later Codex account or
 request path closed. Never print the resolved directory or credential paths;
 SHOW fully redacts the env-selected and fallback paths.
 

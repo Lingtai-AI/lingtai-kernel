@@ -12,9 +12,9 @@ from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
-from unittest.mock import MagicMock
 
 from lingtai.agent import Agent
 from lingtai.kernel.base_agent import BaseAgent, _build_identity_section
@@ -168,8 +168,8 @@ def test_safe_llm_from_service_uses_provider_default_base_url():
 
 def test_safe_llm_from_service_exposes_codex_responses_service_tier():
     agent = MagicMock()
-    svc = _mock_service("codex-pool", "gpt-5.6-terra", None)
-    svc._provider_defaults = {"codex-pool": {"service_tier": "fast"}}
+    svc = _mock_service("codex", "gpt-5.6-terra", None)
+    svc._provider_defaults = {"codex": {"service_tier": "fast"}}
     agent.service = svc
 
     assert _safe_llm_from_service(agent)["service_tier"] == "fast"
@@ -177,8 +177,8 @@ def test_safe_llm_from_service_exposes_codex_responses_service_tier():
 
 def test_safe_llm_from_service_labels_omitted_codex_service_tier_default():
     agent = MagicMock()
-    svc = _mock_service("codex-pool", "gpt-5.6-terra", None)
-    svc._provider_defaults = {"codex-pool": {}}
+    svc = _mock_service("codex", "gpt-5.6-terra", None)
+    svc._provider_defaults = {"codex": {}}
     agent.service = svc
 
     assert _safe_llm_from_service(agent)["service_tier"] == "default"
@@ -214,8 +214,10 @@ def test_safe_llm_from_service_reports_tier_on_openai_compatible_routes(provider
         ("custom", {"api_compat": "anthropic", "service_tier": "fast"}),
         ("gemini", {"service_tier": "fast"}),
         ("mimo", {"service_tier": "fast"}),
+        ("codex-pool", {"service_tier": "fast"}),
+        ("codex_pool", {"service_tier": "fast"}),
     ],
-    ids=["custom-anthropic", "gemini", "mimo"],
+    ids=["custom-anthropic", "gemini", "mimo", "removed-codex-pool", "removed-codex_pool"],
 )
 def test_safe_llm_from_service_omits_tier_where_not_forwarded(provider, defaults):
     from lingtai.llm._register import register_all_adapters

@@ -58,8 +58,7 @@ def _consent_guidance() -> str:
     )
 
 
-_CODEX_POOL_ALIASES = {"codex-pool", "codex_pool"}
-_CODEX_FAMILY = {"codex"} | _CODEX_POOL_ALIASES
+_CODEX_FAMILY = {"codex"}
 
 # Claude Code CLI vision: all three spellings identify the claude backend
 # whose vision route is the operator-installed Claude Code CLI (``claude -p``).
@@ -99,8 +98,6 @@ _BASE_URL_DEFAULTS = {
     "local": DEFAULT_LOCAL_BASE_URL,
     "mimo": "https://api.xiaomimimo.com/v1",
     "codex": "https://chatgpt.com/backend-api/codex",
-    "codex-pool": "https://chatgpt.com/backend-api/codex",
-    "codex_pool": "https://chatgpt.com/backend-api/codex",
 }
 _MAX_TOKENS_DEFAULTS = {
     "local": 1024,
@@ -137,14 +134,7 @@ class _VisionRouteProvenance:
 
 
 def _same_codex_family(requested: str, active: str) -> bool:
-    """Return whether both names are Codex-family spellings.
-
-    Provider spelling is only a Codex-family *compatibility gate*: ``codex``,
-    ``codex-pool``, and ``codex_pool`` all resolve to the one native Codex
-    factory (see ``lingtai/llm/_register.py``). Spelling never selects the
-    fixed/direct vs weighted/pool route; that choice is made solely from the
-    active provider-default bucket (``_codex_bucket_route``).
-    """
+    """Return whether both names identify the native Codex provider."""
     return requested in _CODEX_FAMILY and active in _CODEX_FAMILY
 
 
@@ -195,31 +185,15 @@ def _normalize_codex_auth_path(raw: object) -> str | None:
     """Return a trimmed nonblank Codex auth path, or ``None``.
 
     Mirrors the canonical Codex factory (``lingtai/llm/_register.py`` ``_codex``),
-    which strips ``codex_auth_path`` before constructing ``FixedAccountSource``.
-    The single trimmed value is used both to decide the direct route and as the
-    propagated ``token_path``, so a space-padded path never routes direct while
-    forwarding an invalid, un-normalized value.
+    which strips ``codex_auth_path`` before constructing ``FixedAccountSource``,
+    so a space-padded or whitespace-only value is never forwarded as
+    ``token_path``.
     """
     if isinstance(raw, str):
         trimmed = raw.strip()
         if trimmed:
             return trimmed
     return None
-
-
-def _codex_bucket_route(bucket: dict | None) -> str:
-    """Resolve the active Codex route from the provider-default bucket.
-
-    Mirrors the canonical Codex factory: the route is ``"direct"`` iff the
-    active bucket carries a nonblank ``codex_auth_path`` (trimmed; Fixed
-    account); otherwise it is ``"pool"`` (Weighted account selection). The
-    request spelling is irrelevant — an active ``codex-pool`` service that
-    configures a ``codex_auth_path`` is a direct/Fixed route, exactly as the
-    factory treats it.
-    """
-    if isinstance(bucket, dict) and _normalize_codex_auth_path(bucket.get("codex_auth_path")):
-        return "direct"
-    return "pool"
 
 
 def _same_provider_identity(requested: str, active: str) -> bool:
@@ -509,7 +483,7 @@ PROVIDERS = {
     "providers": [
         "gemini", "anthropic", "openai", "openrouter", "custom", "deepseek",
         "minimax", "mimo", "glm", "zhipu", "grok", "qwen", "kimi",
-        "codex", "codex-pool", "codex_pool", "claude-p", "claude-code", "claude_code",
+        "codex", "claude-p", "claude-code", "claude_code",
         "local",
     ],
     "default": None,
@@ -711,8 +685,8 @@ class VisionManager:
         ``manifest.capabilities.vision`` provide the provider/model/credential
         identity; ``_resolve_direct_service`` is invoked with an identity shim
         built from that preset so the borrowed provider resolves its own route
-        and credentials (e.g. a ``codex-pool`` preset selects its own OAuth
-        pool identity) instead of inheriting the active provider's.
+        and credentials (e.g. a ``codex`` preset with its own
+        ``codex_auth_path``) instead of inheriting the active provider's.
 
         Returns ``(VisionService | None, manual_reason, identity)`` where
         ``identity`` is a dict of the resolved provider/model identity (empty
@@ -759,12 +733,21 @@ class VisionManager:
             "base_url": llm.get("base_url"),
         }
 
+        preset_provider = llm.get("provider") or provider
+        # Carry the preset's own Codex identity into the identity bucket so a
+        # borrowed ``codex`` preset binds its ``codex_auth_path`` rather than
+        # the default token file.
+        preset_defaults: dict = {}
+        preset_auth_path = _normalize_codex_auth_path(llm.get("codex_auth_path"))
+        if preset_auth_path and isinstance(preset_provider, str):
+            preset_defaults[preset_provider.lower()] = {"codex_auth_path": preset_auth_path}
+
         class _PresetIdentity:
-            provider = llm.get("provider") or provider
+            provider = preset_provider
             _model = llm.get("model")
             _base_url = llm.get("base_url")
             api_key = None
-            _provider_defaults: dict = {}
+            _provider_defaults: dict = preset_defaults
 
         kwargs = dict(vision_cap)
         for key in ("model", "base_url", "api_key_env", "api_compat", "wire_api"):
@@ -1153,9 +1136,9 @@ def _resolve_direct_service(
     """Resolve a direct VisionService from provider + kwargs.
 
     ``identity_service`` overrides the active-provider port's service used for
-    provider identity, model/base_url inheritance, and the Codex pool bucket.
-    Preset borrowing passes a lightweight identity shim built from the borrowed
-    preset's ``manifest.llm`` so the borrowed provider (e.g. ``codex-pool``)
+    provider identity, model/base_url inheritance, and the Codex provider-default
+    bucket. Preset borrowing passes a lightweight identity shim built from the
+    borrowed preset's ``manifest.llm`` so the borrowed provider (e.g. ``codex``)
     resolves its own route and credentials instead of the active provider's.
     """
     vision_service: "VisionService | None" = None
@@ -1355,13 +1338,11 @@ def _resolve_direct_service(
             )
         elif provider_key in _CODEX_FAMILY:
             # Codex vision is a standalone Responses request. It may share
-            # the active Codex family's model and endpoint, but never
-            # inherits those from an unrelated main provider. The fixed/
-            # direct vs weighted/pool credential route is *not* chosen from
-            # provider spelling: it follows the active provider-default
-            # bucket exactly as the canonical Codex factory does — direct
-            # iff the bucket carries a nonblank trimmed ``codex_auth_path``,
-            # otherwise pool (see ``lingtai/llm/_register.py``).
+            # the active Codex provider's model and endpoint, but never
+            # inherits those from an unrelated main provider. The OAuth
+            # identity mirrors the canonical Codex factory: an explicit
+            # ``token_path``, else the active bucket's ``codex_auth_path``,
+            # else (active Codex service only) the default token file.
             if same_provider:
                 if active_model:
                     kwargs.setdefault("model", active_model)
@@ -1373,62 +1354,24 @@ def _resolve_direct_service(
             bucket = defaults.get(active_provider_key) if isinstance(defaults, dict) else None
             if not isinstance(bucket, dict):
                 bucket = {}
-            # Bucket-driven route: the active Codex service is direct iff its
-            # bucket configures a nonblank ``codex_auth_path``, else pool. An
-            # unrelated active provider carries an empty bucket → ``"pool"``,
-            # and its pool branch stays gated by ``same_provider`` below, so it
-            # never reads a default pool and still fails closed.
-            codex_route = _codex_bucket_route(bucket)
-            # Normalize an explicit capability identity on every route. This
-            # preserves a valid independent token path while ensuring a
-            # whitespace-only value cannot bypass either fail-closed branch.
+            # Normalize an explicit capability identity. This preserves a valid
+            # independent token path while ensuring a whitespace-only value
+            # cannot bypass the fail-closed branch.
             explicit_token_path = _normalize_codex_auth_path(kwargs.pop("token_path", None))
-            if explicit_token_path:
-                kwargs["token_path"] = explicit_token_path
+            token_path = explicit_token_path or _normalize_codex_auth_path(
+                bucket.get("codex_auth_path")
+            )
+            if not token_path and same_provider:
+                from lingtai.auth.codex import default_codex_token_path
+
+                token_path = str(default_codex_token_path())
             if not kwargs.get("model"):
                 manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current model for direct vision')."
-            elif codex_route == "direct":
-                # A whitespace-only explicit ``token_path`` is not an identity;
-                # normalize both it and the inherited bucket path once so the
-                # trimmed value drives ``token_path`` exactly like the factory.
-                token_path = (
-                    explicit_token_path
-                    or _normalize_codex_auth_path(bucket.get("codex_auth_path"))
-                )
-                if token_path:
-                    kwargs["token_path"] = token_path
-                else:
-                    manual_reason = "Codex vision has no explicit current OAuth identity; use vision(action='manual', input={}, reasoning='Codex vision has no explicit current OAuth identity')."
+            elif token_path:
+                kwargs["token_path"] = token_path
             else:
-                # Pool route (bucket has no nonblank ``codex_auth_path``).
-                # WeightedAccountSource selects an account from the pool file
-                # (thin-wrapper spec v3).  Reads only the non-secret pool;
-                # Codex core owns token refresh, quota, retry, and transport.
-                # Only an active Codex-family service (``same_provider``) may
-                # supply a pool identity; an unrelated active provider never
-                # runs the selector and falls through to fail-closed below,
-                # so no unrelated/default pool file is read on its behalf.
-                if same_provider:
-                    from lingtai.auth.codex_pool import (
-                        resolve_codex_pool_path,
-                        resolve_codex_tui_dir,
-                    )
-                    from lingtai.auth.codex_account_source import (
-                        WeightedAccountSource,
-                        NoCandidateError,
-                    )
-                    tui_dir = resolve_codex_tui_dir()
-                    pool_path = resolve_codex_pool_path(bucket)
-                    source = WeightedAccountSource(
-                        pool_path, tui_dir, model=kwargs.get("model"),
-                    )
-                    try:
-                        candidate = source.select()
-                        kwargs["token_path"] = candidate.auth_ref
-                    except NoCandidateError:
-                        pass
-                if not kwargs.get("token_path"):
-                    manual_reason = "Codex pool vision has no selected current OAuth identity; use vision(action='manual', input={}, reasoning='Codex pool vision has no selected current OAuth identity')."
+                # An unrelated active provider never supplies a Codex identity.
+                manual_reason = "Codex vision has no explicit current OAuth identity; use vision(action='manual', input={}, reasoning='Codex vision has no explicit current OAuth identity')."
             kwargs.pop("api_compat", None)
             kwargs.pop("base_url", None)
             if codex_base_url:

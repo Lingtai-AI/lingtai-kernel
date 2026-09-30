@@ -35,7 +35,7 @@ LingTai registers the following provider keys (each usable in presets / `init.js
 
 | Provider keys (aliases) | Factory / adapter | Transport(s) | Notes |
 |---|---|---|---|
-| `codex`, `codex-pool`, `codex_pool` | `CodexOpenAIAdapter` (in `openai/adapter.py`) | REST (default), WebSocket (opt-in) | Official ChatGPT Codex backend; account selection + token pool; `store=false` forced; streaming forced |
+| `codex` | `CodexOpenAIAdapter` (in `openai/adapter.py`) | REST (default), WebSocket (opt-in) | Official ChatGPT Codex backend; one OAuth account (`codex_auth_path` or default) with token refresh; `store=false` forced; streaming forced. No built-in account pool — see [subs-pool](../subs-pool/SKILL.md) |
 | `openai` | `OpenAIAdapter` | REST (Chat Completions / Responses) | Responses API optional via `wire_api` / `use_responses_api` |
 | `anthropic` | `AnthropicAdapter` | REST | Anthropic Messages API |
 | `gemini` | `GeminiAdapter` | REST | Google Gemini API |

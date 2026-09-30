@@ -29,6 +29,7 @@ related_files:
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
   - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/move_project.py
   - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/subs-pool/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/refresh-precheck/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
@@ -67,11 +68,12 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
 
 - `__init__.py` — the package marker that states the contract above: one
   subdirectory per bundle, copied verbatim, for skills without companion code.
-- `system-manual/` — the largest bundle: the `system` family manual plus ten
+- `system-manual/` — the largest bundle: the `system` family manual plus
   `reference/` sub-skills (`environment-variables`, `goal-manual`,
   `migration-guide`, `llm-adapters`, `procedures-manual`,
   `refresh-precheck`, `runtime-update-checks`, `sqlite-log-query`,
-  `substrate-manual`, `trajectory-mining`). Migration-guide is a short common
+  `subs-pool`, `substrate-manual`, `trajectory-mining`). `subs-pool` is a
+  pointer to the external Codex account pool (LingTai has none built in). Migration-guide is a short common
   router; its nested `agent-name-move` and `project-move` references own the
   separate helper contracts. The Agent-name helper owns one planned,
   fenced same-parent cutover

@@ -118,7 +118,7 @@ def _same_provider_identity(provider_identity: "ProviderIdentityPort", name: str
     (``LLMService.register_adapter`` in ``lingtai.llm._register``). Aliased,
     CLI-login, or wire-compatible names (``claude-code``/``claude_code``,
     ``custom``, ``openrouter``, ``deepseek``, ``glm``/``zhipu``, ``grok``,
-    ``qwen``, ``kimi``, ``codex``/``codex-pool``/``codex_pool``) never
+    ``qwen``, ``kimi``, ``codex``) never
     register under ``"anthropic"`` or ``"gemini"``, so exact equality is the
     smallest truthful boundary — no substring, alias, or model-name guess.
     Private to ``web``: only this capability's Anthropic/Gemini opt-in needs

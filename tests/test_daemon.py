@@ -4342,11 +4342,11 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
                      if json.loads(line).get("source") == "daemon"]
     assert len(daemon_tagged) == 2
     assert all(e["em_id"] == em_id for e in daemon_tagged)
-    assert all(e["codex_pool_source_index"] == 1 for e in daemon_tagged)
-    assert all(e["codex_pool_size"] == 2 for e in daemon_tagged)
-    assert all(e["codex_pool_weight"] == 1 for e in daemon_tagged)
-    assert all(e["codex_pool_model_scope"] == "gpt-5.6" for e in daemon_tagged)
-    assert all("codex_pool_source_ref" not in e for e in daemon_tagged)
+    assert all(e["codex_auth_path_sha8"] == "a1b2c3d4" for e in daemon_tagged)
+    # Retired in-kernel pool attribution keys are never mirrored.
+    assert all(
+        not any(key.startswith("codex_pool") for key in e) for e in daemon_tagged
+    )
     assert all("unsafe" not in e for e in daemon_tagged)
 
     # Reclaim does not touch folder
@@ -5515,10 +5515,13 @@ def test_daemon_llm_defaults_carries_codex_auth_path():
             "codex_auth_path": "/secrets/alice/codex-auth.json",
             # An unrelated key must still be dropped (allowlist, not pass-all).
             "api_key": "should-not-survive",
+            # Retired in-kernel pool path: legacy-ignored, never forwarded.
+            "codex_auth_pool_path": "/home/alice/.lingtai-tui/codex-auth-pool.json",
         }
     )
     assert defaults["codex_auth_path"] == "/secrets/alice/codex-auth.json"
     assert "api_key" not in defaults
+    assert "codex_auth_pool_path" not in defaults
 
 
 def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
@@ -5550,14 +5553,13 @@ def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
     )
 
 
-def _assert_codex_pool_daemon_defaults(provider, tmp_path):
-    """codex-pool daemon defaults keep the pool path, re-anchor to daemon.json.
-
-    ``codex-pool`` reuses the Codex adapter and also seeds its sticky auth-pool
-    choice off the anchor, so a daemon run must keep the non-secret
-    ``codex_auth_pool_path`` while getting its own per-run anchor (its own cache
-    slot and an independent pool selection from the parent).
-    """
+@pytest.mark.parametrize("provider", ["codex-pool", "codex_pool"])
+def test_daemon_provider_defaults_removed_codex_pool_spellings_are_not_reanchored(
+    provider, tmp_path
+):
+    """The in-kernel Codex pool was removed: only ``codex`` gets a per-run
+    daemon anchor. The retired pool spellings are ordinary provider keys whose
+    defaults pass through unchanged (no re-anchor, no compaction limit)."""
     from types import SimpleNamespace
 
     from lingtai.tools.daemon import DaemonManager
@@ -5567,27 +5569,11 @@ def _assert_codex_pool_daemon_defaults(provider, tmp_path):
     out = DaemonManager._daemon_provider_defaults(
         mgr,
         provider,
-        {
-            "codex_auth_pool_path": "/home/alice/.lingtai-tui/codex-auth-pool.json",
-            "codex_session_anchor": "/agents/alice/init.json",
-        },
+        {"codex_session_anchor": "/agents/alice/init.json"},
         run_dir,
+        context_token_limit=123_456,
     )
-    assert out[provider]["codex_auth_pool_path"] == (
-        "/home/alice/.lingtai-tui/codex-auth-pool.json"
-    )
-    # The per-run daemon anchor replaces the parent agent's anchor.
-    assert out[provider]["codex_session_anchor"] == str(
-        (run_dir.path / "daemon.json").resolve()
-    )
-
-
-def test_daemon_provider_defaults_codex_pool_dash(tmp_path):
-    _assert_codex_pool_daemon_defaults("codex-pool", tmp_path)
-
-
-def test_daemon_provider_defaults_codex_pool_underscore(tmp_path):
-    _assert_codex_pool_daemon_defaults("codex_pool", tmp_path)
+    assert out == {provider: {"codex_session_anchor": "/agents/alice/init.json"}}
 
 
 def _capturing_fake_service(captured, text="daemon done"):

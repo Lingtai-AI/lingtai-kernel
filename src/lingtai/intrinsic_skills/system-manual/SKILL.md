@@ -4,8 +4,8 @@ description: >
   Short router for runtime, lifecycle, identity, Agent/Project relocation,
   refresh transactions, presets, settings, update/mismatch diagnosis, LLM
   adapters, and operating procedures.
-version: 1.24.0
-last_changed_at: "2026-09-14T00:00:00Z"
+version: 1.25.0
+last_changed_at: "2026-09-29T00:00:00Z"
 tags: [lingtai, agent, project, workdir, relocation, runtime, procedures, substrate, system, lifecycle, alarm, memory, communication, skills, settings, molt, summarize, nudge, updates, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
@@ -19,6 +19,7 @@ related_files:
 - tests/test_system_declared_plugin.py
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/subs-pool/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/refresh-precheck/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
@@ -51,6 +52,7 @@ read one route below for unfamiliar or consequential work.
 | Settings and SHOW ownership | [settings inventory](reference/settings-inventory/SKILL.md) |
 | Environment variables and runtime controls | [environment variables](reference/environment-variables/SKILL.md) |
 | Provider transport and adapter behavior | [LLM adapters](reference/llm-adapters/SKILL.md) |
+| Pooling several Codex accounts, or migrating a removed `codex-pool` config | [subs-pool](reference/subs-pool/SKILL.md) |
 | SQLite traces and log queries | [SQLite log query](reference/sqlite-log-query/SKILL.md) |
 | Trajectory mining and recurring patterns | [trajectory mining](reference/trajectory-mining/SKILL.md) |
 | Goal lifecycle and goal records | [goal manual](reference/goal-manual/SKILL.md) |

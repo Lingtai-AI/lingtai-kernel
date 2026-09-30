@@ -98,9 +98,7 @@ related_files:
   - tests/test_codex_endpoint_override.py
   - tests/test_codex_endpoint_pool.py
   - tests/test_codex_native_multiaccount.py
-  - tests/test_codex_pool.py
   - tests/test_codex_prompt_cache_key.py
-  - tests/test_codex_quota.py
   - tests/test_codex_raw_reasoning_replay.py
   - tests/test_codex_standalone_compaction.py
   - tests/test_codex_ws_delta.py

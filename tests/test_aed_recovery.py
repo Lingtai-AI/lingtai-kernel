@@ -30,7 +30,7 @@ from lingtai.kernel.llm.base import (
 from lingtai.kernel.llm_utils import WorkerStillRunningError, send_with_timeout_stream
 from lingtai.kernel.message import _make_message, MSG_REQUEST
 from lingtai.kernel.state import AgentState
-from lingtai.auth.codex_account_source import AccountCandidate, NoCandidateError
+from lingtai.auth.codex_account_source import FixedAccountSource, NoCandidateError
 from lingtai.llm.openai.adapter import CodexOpenAIAdapter
 
 
@@ -400,14 +400,7 @@ def test_codex_provider_retry_budget_is_terminal_in_run_loop(tmp_path, monkeypat
                 raise _TokenExpired("expired")
             raise RuntimeError("network failed after provider-owned retry")
 
-    candidate = AccountCandidate("one.json", "account.json", 0, 1)
-    source = SimpleNamespace(
-        snapshot=lambda: [candidate],
-        quota_targets=lambda exclude=None, snapshot=None: [
-            (candidate.auth_ref, candidate.auth_path_sha8)
-        ],
-        select=lambda exclude=None, quota_left_snapshot=None, snapshot=None: candidate,
-    )
+    source = FixedAccountSource("one.json")
 
     class _Manager:
         def __init__(self):
@@ -434,7 +427,6 @@ def test_codex_provider_retry_budget_is_terminal_in_run_loop(tmp_path, monkeypat
         force_responses=True,
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
-        codex_fallback_auth_path="one.json",
     )
     adapter._client = SimpleNamespace(responses=responses, api_key="boot")
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -499,14 +491,7 @@ def test_codex_terminal_wrapper_survives_watchdog_settle_boundary(
             time.sleep(0.08)
             raise RuntimeError("network failed after provider-owned retry")
 
-    candidate = AccountCandidate("one.json", "account.json", 0, 1)
-    source = SimpleNamespace(
-        snapshot=lambda: [candidate],
-        quota_targets=lambda exclude=None, snapshot=None: [
-            (candidate.auth_ref, candidate.auth_path_sha8)
-        ],
-        select=lambda exclude=None, quota_left_snapshot=None, snapshot=None: candidate,
-    )
+    source = FixedAccountSource("one.json")
 
     class _Manager:
         def __init__(self):
@@ -533,7 +518,6 @@ def test_codex_terminal_wrapper_survives_watchdog_settle_boundary(
         force_responses=True,
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
-        codex_fallback_auth_path="one.json",
     )
     adapter._client = SimpleNamespace(responses=responses, api_key="boot")
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -680,14 +664,7 @@ def test_codex_adapter_run_loop_uses_non_dispatching_replay_markers(
 
             return partial_events()
 
-    candidate = AccountCandidate("one.json", "account.json", 0, 1)
-    source = SimpleNamespace(
-        snapshot=lambda: [candidate],
-        quota_targets=lambda exclude=None, snapshot=None: [
-            (candidate.auth_ref, candidate.auth_path_sha8)
-        ],
-        select=lambda exclude=None, quota_left_snapshot=None, snapshot=None: candidate,
-    )
+    source = FixedAccountSource("one.json")
 
     class _Manager:
         def __init__(self):
@@ -714,7 +691,6 @@ def test_codex_adapter_run_loop_uses_non_dispatching_replay_markers(
         force_responses=True,
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
-        codex_fallback_auth_path="one.json",
     )
     adapter._client = SimpleNamespace(responses=responses, api_key="boot")
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -821,14 +797,7 @@ def test_codex_post_recovery_tail_failure_is_terminal_in_run_loop(
                 ),
             ])
 
-    candidate = AccountCandidate("one.json", "account.json", 0, 1)
-    source = SimpleNamespace(
-        snapshot=lambda: [candidate],
-        quota_targets=lambda exclude=None, snapshot=None: [
-            (candidate.auth_ref, candidate.auth_path_sha8)
-        ],
-        select=lambda exclude=None, quota_left_snapshot=None, snapshot=None: candidate,
-    )
+    source = FixedAccountSource("one.json")
 
     class _Manager:
         def __init__(self):
@@ -855,7 +824,6 @@ def test_codex_post_recovery_tail_failure_is_terminal_in_run_loop(
         force_responses=True,
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
-        codex_fallback_auth_path="one.json",
     )
     adapter._client = SimpleNamespace(responses=responses, api_key="boot")
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -960,14 +928,7 @@ def test_codex_post_recovery_snapshot_failure_is_terminal_in_run_loop(
                 ),
             ])
 
-    candidate = AccountCandidate("one.json", "account.json", 0, 1)
-    source = SimpleNamespace(
-        snapshot=lambda: [candidate],
-        quota_targets=lambda exclude=None, snapshot=None: [
-            (candidate.auth_ref, candidate.auth_path_sha8)
-        ],
-        select=lambda exclude=None, quota_left_snapshot=None, snapshot=None: candidate,
-    )
+    source = FixedAccountSource("one.json")
 
     class _Manager:
         def __init__(self):
@@ -994,7 +955,6 @@ def test_codex_post_recovery_snapshot_failure_is_terminal_in_run_loop(
         force_responses=True,
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
-        codex_fallback_auth_path="one.json",
     )
     adapter._client = SimpleNamespace(responses=responses, api_key="boot")
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -1058,15 +1018,7 @@ def test_no_candidate_error_is_terminal_without_aed_retry(tmp_path, monkeypatch)
     def fake_handle(_agent, _msg):
         calls["n"] += 1
         _agent._shutdown.set()
-        raise NoCandidateError(
-            "No eligible account remaining",
-            diagnostics={
-                "codex_account_pool_size": 2,
-                "codex_account_quota_read_error_count": 1,
-                "secret_path": "/tmp/token.json",
-                "no_candidate_token": "secret-token-value",
-            },
-        )
+        raise NoCandidateError("Codex account is excluded")
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     agent._stop_on_sleep = True
@@ -1078,13 +1030,15 @@ def test_no_candidate_error_is_terminal_without_aed_retry(tmp_path, monkeypatch)
     assert agent._asleep.is_set()
     logs = [fields for name, fields in agent._logs if name == "no_candidate_terminal"]
     assert len(logs) == 1
-    assert logs[0]["codex_account_pool_size"] == 2
-    assert logs[0]["codex_account_quota_read_error_count"] == 1
-    assert "/tmp/token.json" not in repr(logs[0])
-    assert "secret-token-value" not in repr(logs[0])
+    # The single-account source carries no pool/quota diagnostics: the terminal
+    # log is exactly the bounded error description and exception class.
+    assert logs[0] == {
+        "error": "Codex account is excluded",
+        "exception": "NoCandidateError",
+    }
     assert not any(name == "aed_attempt" for name, _ in agent._logs)
     assert len(agent.reports) == 1
-    assert agent.reports[0][0].args == ("No eligible account remaining",)
+    assert agent.reports[0][0].args == ("Codex account is excluded",)
     assert agent.reports[0][1] == {
         "attempt": None,
         "max_attempts": None,

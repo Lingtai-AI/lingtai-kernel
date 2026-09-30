@@ -100,11 +100,6 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     "codex_session_anchor",
     "codex_thread_salt",
     "codex_auth_path",
-    # Optional Codex AUTH pool shared by every accepted Codex spelling. Points
-    # at the non-secret pool file listing token paths + weights; the one native
-    # adapter re-reads and selects at each real request boundary. A truly empty
-    # pool may fall back to the legacy default token path.
-    "codex_auth_pool_path",
     # Optional Codex endpoint pool (molt-boundary shuffle). A manifest ``llm``
     # block may carry ``codex_base_urls`` (list/tuple or comma/newline string);
     # the adapter chooses one endpoint at request time without changing
@@ -125,11 +120,9 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     "prompt_cache_namespace",
 )
 
-# Accepted Codex config spellings that get the automatic per-agent
-# ``codex_session_anchor`` (the resolved ``init.json`` path). They all resolve to
-# the same factory/adapter and therefore share cache-affinity and endpoint-pool
-# identity. LLMService itself does no dash/underscore normalization.
-_CODEX_ANCHOR_PROVIDERS = ("codex", "codex-pool", "codex_pool")
+# Codex providers that get the automatic per-agent ``codex_session_anchor``
+# (the resolved ``init.json`` path).
+_CODEX_ANCHOR_PROVIDERS = ("codex",)
 
 
 def build_provider_defaults_from_manifest_llm(

@@ -4,10 +4,8 @@ This module owns the ONE native integration where LingTai can currently change
 effort at runtime, and nothing else:
 
   * integration — the LingTai main-agent native ``codex`` provider path
-    (``CodexOpenAIAdapter`` / ``CodexResponsesSession``). The ``codex``,
-    ``codex-pool``, and ``codex_pool`` provider names are configuration
-    spellings of that ONE adapter (``lingtai/llm/_register.py``), so they share
-    this descriptor and its fingerprint rather than naming three routes;
+    (``CodexOpenAIAdapter`` / ``CodexResponsesSession``) registered as the
+    ``codex`` provider (``lingtai/llm/_register.py``);
   * model — exactly ``gpt-5.6-sol``;
   * endpoint — every non-empty endpoint selected for the native Codex session;
     ``None`` means the official default, while explicit endpoints are normalized
@@ -64,8 +62,7 @@ from lingtai.llm._register import CODEX_OFFICIAL_BASE_URL
 #: The one native Codex integration this descriptor describes.
 CODEX_EFFORT_INTEGRATION = "lingtai_main_agent_native"
 
-#: The route's stable provider identity — the native adapter, NOT the
-#: configuration alias (``codex-pool`` / ``codex_pool``) that built it.
+#: The route's stable provider identity — the native Codex adapter.
 CODEX_EFFORT_PROVIDER_ROUTE = "codex"
 
 #: Exact model. Nothing else in the current catalog is authorized here.
@@ -138,9 +135,7 @@ class CodexEffortDescriptor:
         values, provider default, omitted-default policy, construction
         baseline, evidence revision).
 
-        Alias-independent, so ``codex`` / ``codex-pool`` / ``codex_pool``
-        produce the SAME fingerprint and a controller bound through one spelling
-        stays valid through another. It DOES include the construction baseline:
+        It DOES include the construction baseline:
         a rebuilt session at a different construction effort is a different
         route identity, so the controller drops the override rather than
         re-applying a value chosen against another baseline.

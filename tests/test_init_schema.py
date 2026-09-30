@@ -200,6 +200,22 @@ def test_retired_llm_compact_threshold_is_ignored_without_warning():
     assert not any("compact_threshold" in w for w in warnings)
 
 
+def test_retired_llm_codex_auth_pool_path_is_ignored_without_warning():
+    """The in-kernel Codex pool was removed; a stale ``codex_auth_pool_path``
+    on a single-account ``codex`` block is recognized-and-ignored, silently."""
+    from lingtai.init_schema import LLM_LEGACY_IGNORED, LLM_PASS_THROUGH_KNOWN
+
+    assert "codex_auth_pool_path" in LLM_LEGACY_IGNORED
+    assert "codex_auth_pool_path" not in LLM_PASS_THROUGH_KNOWN
+
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "codex"
+    data["manifest"]["llm"]["model"] = "gpt-5.5"
+    data["manifest"]["llm"]["codex_auth_pool_path"] = "/tokens/codex-pool.json"
+
+    assert validate_init(data) == []
+
+
 def test_check_type_bool_allowed_when_listed():
     # Escape hatch: a field that explicitly accepts bool | int is not rejected.
     _check_type(True, (int, bool), "x")  # should not raise
@@ -301,7 +317,6 @@ def test_legacy_manifest_soul_block_is_tolerated_without_warning():
         ("codex_session_anchor", "/agents/alice/init.json"),
         ("codex_thread_salt", "alice"),
         ("codex_auth_path", "/tokens/alice/codex-auth.json"),
-        ("codex_auth_pool_path", "/tokens/codex-pool.json"),
         ("codex_base_urls", ["https://codex-a.example.test/v1"]),
         ("service_tier", "fast"),
     ],
@@ -505,12 +520,69 @@ def test_llm_thinking_rejected_outside_thinking_capable_scope(llm_patch):
         validate_init(data)
 
 
+def test_removed_codex_pool_provider_spellings_are_exact():
+    from lingtai.init_schema import REMOVED_CODEX_POOL_PROVIDERS
+
+    assert REMOVED_CODEX_POOL_PROVIDERS == frozenset({"codex-pool", "codex_pool"})
+
+
+@pytest.mark.parametrize(
+    "provider", ["codex-pool", "codex_pool", "Codex-Pool", "CODEX_POOL"]
+)
+def test_llm_removed_codex_pool_provider_raises_with_subs_pool_pointer(provider):
+    """The in-kernel Codex pool was removed; any spelling fails loudly and
+    points the operator at the external subs-pool proxy."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["model"] = "gpt-5.5"
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_init(data)
+
+    message = str(excinfo.value)
+    assert message.startswith(
+        f"manifest.llm.provider: provider {provider!r} was removed from LingTai."
+    )
+    assert "subs-pool" in message
+
+
 @pytest.mark.parametrize("provider", ["codex-pool", "codex_pool"])
-def test_llm_thinking_accepted_for_codex_pool(provider):
-    """codex-pool reuses the Codex adapter, so thinking is Codex-compatible."""
+def test_llm_removed_codex_pool_provider_raises_even_with_thinking(provider):
+    """Thinking no longer rescues a codex-pool block: the provider is gone."""
     data = _valid_init()
     data["manifest"]["llm"]["provider"] = provider
     data["manifest"]["llm"]["thinking"] = "xhigh"
+
+    with pytest.raises(ValueError, match="subs-pool"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("provider", ["codex-pool", "Codex_Pool"])
+def test_capability_removed_codex_pool_provider_raises_with_capability_path(
+    provider,
+):
+    data = _valid_init()
+    data["manifest"]["capabilities"] = {
+        "web_search": {"provider": provider, "model": "gpt-5.5"}
+    }
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_init(data)
+
+    message = str(excinfo.value)
+    assert message.startswith(
+        "manifest.capabilities.web_search.provider: "
+        f"provider {provider!r} was removed from LingTai."
+    )
+    assert "subs-pool" in message
+
+
+def test_capability_codex_provider_is_not_treated_as_removed_pool():
+    data = _valid_init()
+    data["manifest"]["capabilities"] = {
+        "web_search": {"provider": "codex", "model": "gpt-5.5"}
+    }
+
     validate_init(data)
 
 

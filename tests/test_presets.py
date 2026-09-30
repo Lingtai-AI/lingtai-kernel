@@ -448,8 +448,9 @@ def test_load_preset_rejects_thinking_outside_thinking_capable_scope(tmp_path, l
 
 
 @pytest.mark.parametrize("provider", ["codex-pool", "codex_pool"])
-def test_load_preset_accepts_thinking_for_codex_pool(tmp_path, provider):
-    """A saved/builtin-style codex-pool preset may carry thinking."""
+def test_load_preset_rejects_thinking_for_removed_codex_pool(tmp_path, provider):
+    """The in-kernel Codex pool was removed: its spellings are no longer
+    Codex-family thinking providers (pooling is the external subs-pool)."""
     p = {
         "name": "pool",
         "description": _DESC,
@@ -461,9 +462,8 @@ def test_load_preset_accepts_thinking_for_codex_pool(tmp_path, provider):
     f = tmp_path / "pool.json"
     f.write_text(json.dumps(p))
 
-    loaded = load_preset(str(f))
-
-    assert loaded["manifest"]["llm"]["thinking"] == "xhigh"
+    with pytest.raises(ValueError, match="thinking-capable providers"):
+        load_preset(str(f))
 
 
 def test_preset_context_limit_reads_from_llm_block():
