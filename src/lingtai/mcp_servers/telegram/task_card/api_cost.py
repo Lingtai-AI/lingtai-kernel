@@ -33,8 +33,6 @@ FETCH_DEADLINE_S = 30.0
 _READ_CHUNK = 64 * 1024
 REFRESH_AFTER_S = 6 * 3600.0
 RETRY_AFTER_S = 300.0
-# Compact bucket labels for the rendered line, in display order.
-_SHORT_BUCKETS = (("input", "in"), ("write", "write"), ("read", "read"), ("output", "out"))
 
 _TIER_THRESHOLDS = ((272_000, "272k"), (200_000, "200k"))
 _BUCKET_FIELDS = {
@@ -225,11 +223,17 @@ def _finite(value: float | None) -> float | None:
 def estimate_costs(
     bill: dict[str, Any], entry: dict[str, float | None]
 ) -> dict[str, float | None]:
-    """STANDARD list-price USD per bucket; ``None`` = unknown, ``0.0`` = known zero.
+    """STANDARD list-price USD per metrics-row bucket; ``None`` = unknown.
 
-    ``bill["input"]`` is the TOTAL input incl. cache counts (it selects the
-    tier); uncached = total - cache read - cache write, so nothing is charged
-    twice. Missing/incoherent counts, missing/invalid rates and non-finite
+    Buckets mirror the task-card metrics row: ``miss`` is the ``↑`` cache-miss
+    input (total input minus cache read, i.e. uncached input plus any cache
+    writes), ``hit`` is the cache-read input (the ``| hit%`` share of ``◌``),
+    and ``output`` is the ``↓`` billable output. ``bill["input"]`` is the TOTAL
+    input incl. cache counts (it selects the tier). When the catalog prices
+    cache writes separately (e.g. Anthropic), a known write count is charged
+    at the write rate inside ``miss``; when it has no cache-write price at all
+    (OpenAI/Codex style), writes are ordinary input, so ``miss`` needs no write
+    count. Missing/incoherent counts, missing/invalid rates and non-finite
     (overflowing) products never become zero: they stay unknown.
     """
     total = _count(bill.get("input"))
@@ -239,52 +243,62 @@ def estimate_costs(
     one_hour = _count(raw_one_hour)
     ttl_malformed = raw_one_hour is not None and one_hour is None
     output = _count(bill.get("billable_output_tokens"))
-    result: dict[str, float | None] = {
-        "input": None, "write": None, "read": None, "output": None,
-    }
-    if total is None or read is None:
+    result: dict[str, float | None] = {"miss": None, "hit": None, "output": None}
+    if output is not None:
+        # Output does not depend on input counts; tier by total when known.
+        suffix = _tier_suffix(entry, total) if total is not None else ""
+        result["output"] = _charge(output, entry.get(_BUCKET_FIELDS["output"] + suffix))
+    if total is None or read is None or read > total:
         return result
     suffix = _tier_suffix(entry, total)
 
     def rate(bucket: str) -> float | None:
         return entry.get(_BUCKET_FIELDS[bucket] + suffix)
 
-    def charge(count: int | None, price: float | None) -> float | None:
-        if count is None:
-            return None
-        if count == 0:
-            return 0.0
-        if price is None:
-            return None
-        try:
-            return _finite(count * price)
-        except OverflowError:
-            return None
-
-    if read <= total:
-        result["read"] = charge(read, rate("read"))
-    if output is not None:
-        result["output"] = charge(output, rate("output"))
-    if write is not None and read + write <= total:
-        result["input"] = charge(total - read - write, rate("input"))
-        one_hour_rate = rate("write_1h")
-        standard_write = rate("write")
-        if ttl_malformed or (one_hour is not None and one_hour > write):
-            pass  # malformed/incoherent TTL split (1h > total write): unknown
-        elif write == 0:
-            result["write"] = 0.0
-        elif one_hour is not None:
-            five_min = charge(write - one_hour, standard_write)
-            long = charge(one_hour, one_hour_rate)
-            if five_min is not None and long is not None:
-                result["write"] = _finite(five_min + long)
-        elif (
-            not any(key.startswith(_BUCKET_FIELDS["write_1h"]) for key in entry)
-            or (one_hour_rate is not None and one_hour_rate == standard_write)
-        ):
-            # No distinct 1h price exists, so the TTL split cannot change it.
-            result["write"] = charge(write, standard_write)
+    result["hit"] = _charge(read, rate("read"))
+    writes_priced = any(key.startswith(_BUCKET_FIELDS["write"]) for key in entry)
+    if not writes_priced:
+        # No separate cache-write price: every non-cached input token bills
+        # at the input rate, whether or not the wire reported writes.
+        result["miss"] = _charge(total - read, rate("input"))
+        return result
+    if write is None or read + write > total:
+        return result  # writes are priced separately but their count is unknown
+    uncached = _charge(total - read - write, rate("input"))
+    write_cost: float | None = None
+    one_hour_rate = rate("write_1h")
+    standard_write = rate("write")
+    if ttl_malformed or (one_hour is not None and one_hour > write):
+        pass  # malformed/incoherent TTL split (1h > total write): unknown
+    elif write == 0:
+        write_cost = 0.0
+    elif one_hour is not None:
+        five_min = _charge(write - one_hour, standard_write)
+        long = _charge(one_hour, one_hour_rate)
+        if five_min is not None and long is not None:
+            write_cost = _finite(five_min + long)
+    elif (
+        not any(key.startswith(_BUCKET_FIELDS["write_1h"]) for key in entry)
+        or (one_hour_rate is not None and one_hour_rate == standard_write)
+    ):
+        # No distinct 1h price exists, so the TTL split cannot change it.
+        write_cost = _charge(write, standard_write)
+    if uncached is not None and write_cost is not None:
+        result["miss"] = _finite(uncached + write_cost)
     return result
+
+
+def _charge(count: int | None, price: float | None) -> float | None:
+    if count is None:
+        return None
+    if count == 0:
+        return 0.0
+    if price is None:
+        return None
+    try:
+        return _finite(count * price)
+    except OverflowError:
+        return None
 
 
 def _money(value: float) -> str:
@@ -295,46 +309,27 @@ def _money(value: float) -> str:
     return f"${value:.4f}" if value < 1 else f"${value:,.2f}"
 
 
-def _avg_tps(api_delay_s: float | None, usage: dict[str, Any], bill: dict[str, Any]) -> str | None:
-    if bill.get("estimated") is True:
-        return None
-    tokens = _count(bill.get("billable_output_tokens"))
-    if tokens is None:
-        tokens = _count(usage.get("output"))
-    if (
-        tokens is None
-        or type(api_delay_s) not in (int, float)
-        or not math.isfinite(api_delay_s)
-        or api_delay_s <= 0
-    ):
-        return None
-    try:
-        speed = _finite(tokens / api_delay_s)
-    except (OverflowError, ZeroDivisionError):
-        return None
-    return None if speed is None else f"{speed:.1f}"
-
-
 def usage_line(
     api_delay_s: float | None,
     usage: dict[str, Any] | None,
     catalog: PriceCatalog | None = None,
 ) -> str:
-    """One compact line: output tok/s plus a list-price estimate, or ``""``.
+    """One compact list-price estimate line, or ``""``.
 
-    ``6.5 tok/s · ≈$0.0249+ (in ? · write ? · read $0.0243 · out $0.0006)``:
-    ``≈`` marks a STANDARD list-price estimate; a trailing ``+`` means some
-    buckets are unknown, so the figure is the known subtotal (every bucket is
-    non-negative, so it is a lower bound).
+    ``$0.0310 · ↓$0.0006 ↑$0.0070 | $0.0234`` mirrors the metrics
+    row (``↓`` output, ``↑`` cache-miss input, ``|`` cache hits). The total is
+    a STANDARD list-price estimate; a trailing ``+`` means some parts are
+    unknown, so the figure is the known subtotal (every part is non-negative,
+    so it is a lower bound).
     """
     if not isinstance(usage, dict) or not usage:
         return ""
     bill = usage.get("bill")
     bill = bill if isinstance(bill, dict) else {}
-    tps = _avg_tps(api_delay_s, usage, bill)
+    # ``api_delay_s`` is part of the shared hook signature but unused: a
+    # tokens/second figure over the displayed API gap (which includes waiting,
+    # prefill and streaming) would not be a real generation speed.
     parts = []
-    if tps is not None:
-        parts.append(f"{tps} tok/s")
     if bill.get("estimated") is True:
         parts.append("cost n/a (estimated tokens)")
     elif not isinstance(bill.get("model"), str):
@@ -354,14 +349,15 @@ def usage_line(
             if subtotal is None:
                 head = "cost ?"
             elif len(known) == len(costs):
-                head = f"≈{_money(subtotal)}"
+                head = _money(subtotal)
             else:
-                head = f"≈{_money(subtotal)}+"
-            cells = " · ".join(
-                f"{short} {_money(costs[name]) if costs[name] is not None else '?'}"
-                for name, short in _SHORT_BUCKETS
-            )
-            text = f"{head} ({cells})"
+                head = f"{_money(subtotal)}+"
+
+            def cell(name: str) -> str:
+                return _money(costs[name]) if costs[name] is not None else "?"
+
+            # Mirrors the metrics row: ↓ output, ↑ cache-miss input, | cache hits.
+            text = f"{head} · ↓{cell('output')} ↑{cell('miss')} | {cell('hit')}"
             if status == "stale":
                 text += " stale prices"
             parts.append(text)

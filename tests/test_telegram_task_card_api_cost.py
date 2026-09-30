@@ -68,27 +68,41 @@ def _wait(predicate, timeout=2.0):
 def test_standard_costs_do_not_double_charge_cache():
     bill = {"input": 1000, "cached": 400, "cache_write_tokens": 100, "billable_output_tokens": 50}
     costs = api_cost.estimate_costs(bill, SOL)
-    assert costs["input"] == pytest.approx(500 * 2e-06)
-    assert costs["write"] == pytest.approx(100 * 2.5e-06)
-    assert costs["read"] == pytest.approx(400 * 1e-07)
+    assert set(costs) == {"miss", "hit", "output"}
+    # ↑ cache miss = uncached input + priced cache writes; | hit = cache reads.
+    assert costs["miss"] == pytest.approx(500 * 2e-06 + 100 * 2.5e-06)
+    assert costs["hit"] == pytest.approx(400 * 1e-07)
     assert costs["output"] == pytest.approx(50 * 1e-05)
+
+
+def test_no_cache_write_price_means_writes_bill_as_input():
+    # OpenAI-style catalog entry: no cache_creation price at all, so the
+    # whole cache-miss input bills at the input rate with or without a
+    # reported write count.
+    entry = {"input_cost_per_token": 1.25e-06, "output_cost_per_token": 1e-05,
+             "cache_read_input_token_cost": 1.25e-07}
+    bill = {"input": 294_200, "cached": 291_400, "billable_output_tokens": 63}
+    costs = api_cost.estimate_costs(bill, entry)
+    assert costs["miss"] == pytest.approx(2_800 * 1.25e-06)
+    assert costs["hit"] == pytest.approx(291_400 * 1.25e-07)
+    assert costs["output"] == pytest.approx(63 * 1e-05)
+    assert api_cost.estimate_costs({**bill, "cache_write_tokens": 500}, entry)["miss"] == pytest.approx(2_800 * 1.25e-06)
 
 
 def test_large_context_tier_uses_total_input_including_cache():
     # Uncached input is only 200k, but the TOTAL 300k crosses the 272k tier.
     bill = {"input": 300_000, "cached": 100_000, "cache_write_tokens": 0, "billable_output_tokens": 1000}
     costs = api_cost.estimate_costs(bill, SOL)
-    assert costs["input"] == pytest.approx(200_000 * 4e-06)
-    assert costs["read"] == pytest.approx(100_000 * 2e-07)
+    assert costs["miss"] == pytest.approx(200_000 * 4e-06)
+    assert costs["hit"] == pytest.approx(100_000 * 2e-07)
     assert costs["output"] == pytest.approx(1000 * 1.5e-05)
-    assert costs["write"] == 0.0
 
 
 def test_present_but_invalid_tier_rate_never_falls_back_to_cheaper_base_rate():
     bill = {"input": 300_000, "cached": 0, "cache_write_tokens": 0, "billable_output_tokens": 10}
     invalid_tier = {**SOL, "input_cost_per_token_above_272k_tokens": None}
     costs = api_cost.estimate_costs(bill, invalid_tier)
-    assert costs["input"] is None  # unknown, NOT 300k * base 2e-06
+    assert costs["miss"] is None  # unknown, NOT 300k * base 2e-06
     assert costs["output"] == pytest.approx(10 * 1.5e-05)
     # Same through the real parser: a junk tier price stays PRESENT (as None).
     models = api_cost.parse_catalog(_catalog_bytes({"m": {
@@ -99,20 +113,21 @@ def test_present_but_invalid_tier_rate_never_falls_back_to_cheaper_base_rate():
     }}))
     assert models["m"]["input_cost_per_token_above_272k_tokens"] is None
     costs = api_cost.estimate_costs(bill, models["m"])
-    assert costs["input"] is None and costs["output"] is None
+    assert costs["miss"] is None and costs["output"] is None
     # Below the threshold the base rates still apply.
     small = {**bill, "input": 1000}
-    assert api_cost.estimate_costs(small, models["m"])["input"] == pytest.approx(1000 * 2e-06)
+    assert api_cost.estimate_costs(small, models["m"])["miss"] == pytest.approx(1000 * 2e-06)
 
 
 def test_ttl_split_and_unknown_split():
     known = {"input": 500, "cached": 0, "cache_write_tokens": 100,
              "cache_write_1h_tokens": 40, "billable_output_tokens": 0}
-    assert api_cost.estimate_costs(known, TTL)["write"] == pytest.approx(60 * 2.5e-06 + 40 * 4e-06)
+    assert api_cost.estimate_costs(known, TTL)["miss"] == pytest.approx(
+        400 * 2e-06 + 60 * 2.5e-06 + 40 * 4e-06)
     unsplit = {k: v for k, v in known.items() if k != "cache_write_1h_tokens"}
-    assert api_cost.estimate_costs(unsplit, TTL)["write"] is None
+    assert api_cost.estimate_costs(unsplit, TTL)["miss"] is None
     # Without a distinct 1h price the split cannot change the amount.
-    assert api_cost.estimate_costs(unsplit, SOL)["write"] == pytest.approx(100 * 2.5e-06)
+    assert api_cost.estimate_costs(unsplit, SOL)["miss"] == pytest.approx(400 * 2e-06 + 100 * 2.5e-06)
 
 
 @pytest.mark.parametrize("entry", [TTL, SOL])
@@ -120,10 +135,10 @@ def test_one_hour_larger_than_total_write_is_rejected_not_negative(entry):
     bill = {"input": 500, "cached": 0, "cache_write_tokens": 100,
             "cache_write_1h_tokens": 150, "billable_output_tokens": 0}
     costs = api_cost.estimate_costs(bill, entry)
-    assert costs["write"] is None
-    assert costs["input"] == pytest.approx(400 * 2e-06)  # partition still coherent
+    assert costs["miss"] is None  # incoherent write split: the ↑ cost is unknown
+    assert costs["hit"] == 0.0 and costs["output"] == 0.0
     # 1h with no write at all is equally incoherent.
-    assert api_cost.estimate_costs({**bill, "cache_write_tokens": 0}, entry)["write"] is None
+    assert api_cost.estimate_costs({**bill, "cache_write_tokens": 0}, entry)["miss"] is None
 
 
 @pytest.mark.parametrize("bad", [-1, True, 1.5, "3", float("nan")])
@@ -131,7 +146,7 @@ def test_malformed_one_hour_bucket_is_unknown_even_without_1h_price(bad):
     bill = {"input": 500, "cached": 0, "cache_write_tokens": 100,
             "cache_write_1h_tokens": bad, "billable_output_tokens": 0}
     for entry in (TTL, SOL):
-        assert api_cost.estimate_costs(bill, entry)["write"] is None
+        assert api_cost.estimate_costs(bill, entry)["miss"] is None
     for value in api_cost.estimate_costs(bill, TTL).values():
         assert value is None or value >= 0
 
@@ -139,31 +154,31 @@ def test_malformed_one_hour_bucket_is_unknown_even_without_1h_price(bad):
 def test_unknown_missing_invalid_never_become_zero():
     base = {"input": 100, "cached": 10, "cache_write_tokens": 0, "billable_output_tokens": 5}
     no_write = {k: v for k, v in base.items() if k != "cache_write_tokens"}
-    costs = api_cost.estimate_costs(no_write, SOL)
-    assert costs["write"] is None and costs["input"] is None
-    assert costs["read"] is not None and costs["output"] is not None
+    costs = api_cost.estimate_costs(no_write, SOL)  # writes priced, count unknown
+    assert costs["miss"] is None
+    assert costs["hit"] is not None and costs["output"] is not None
     for bad in (-1, True, 1.5, float("nan"), "3", None):
         assert api_cost.estimate_costs({**base, "billable_output_tokens": bad}, SOL)["output"] is None
     absent = {k: v for k, v in base.items() if k != "billable_output_tokens"}
     assert api_cost.estimate_costs(absent, SOL)["output"] is None
     # cache read + write larger than total input is incoherent.
-    assert api_cost.estimate_costs({**base, "cache_write_tokens": 500}, SOL)["input"] is None
+    assert api_cost.estimate_costs({**base, "cache_write_tokens": 500}, SOL)["miss"] is None
     # Missing rate: positive count unknown, known zero count stays a real 0.
     rateless = {"input_cost_per_token": 1e-06}
     costs = api_cost.estimate_costs(base, rateless)
-    assert costs["output"] is None and costs["read"] is None
-    assert api_cost.estimate_costs({**base, "cached": 0, "billable_output_tokens": 0}, rateless)["read"] == 0.0
+    assert costs["output"] is None and costs["hit"] is None
+    assert api_cost.estimate_costs({**base, "cached": 0, "billable_output_tokens": 0}, rateless)["hit"] == 0.0
 
 
 def test_overflow_and_nonfinite_inputs_fail_unknown_without_raising():
     huge = 10**400
     bill = {"input": huge, "cached": huge, "cache_write_tokens": 0, "billable_output_tokens": huge}
     costs = api_cost.estimate_costs(bill, SOL)  # int*float raises OverflowError
-    assert costs["read"] is None and costs["output"] is None
+    assert costs["hit"] is None and costs["output"] is None
     # Finite rate x finite count that overflows float range is unknown, not inf.
     bill = {"input": 10, "cached": 10, "cache_write_tokens": 0, "billable_output_tokens": 10}
     costs = api_cost.estimate_costs(bill, {"output_cost_per_token": 1e308, "cache_read_input_token_cost": 1e308})
-    assert costs["output"] is None and costs["read"] is None
+    assert costs["output"] is None and costs["hit"] is None
     # A giant JSON rate (int too large for float, or 1e999) is dropped as invalid.
     payload = b'{"m": {"input_cost_per_token": 1e-6, "output_cost_per_token": 1' + b"0" * 400 + b"}}"
     assert api_cost.parse_catalog(payload)["m"]["output_cost_per_token"] is None
@@ -178,17 +193,7 @@ def test_line_never_leaks_inf_or_nan_and_total_overflow_is_unknown():
     bill = {"model": "big", "input": 1, "cached": 1, "cache_write_tokens": 0, "billable_output_tokens": 1}
     line = api_cost.usage_line(1.0, {"output": 1, "bill": bill}, catalog)
     assert "inf" not in line.lower() and "nan" not in line.lower()
-    assert "cost ?" in line and "≈" not in line  # finite parts sum to inf: unknown
-
-
-@pytest.mark.parametrize("delay", [1e-320, 5e-324, 1e-300])
-def test_tiny_positive_elapsed_or_huge_count_never_escapes_tps(delay):
-    catalog = api_cost.PriceCatalog(lambda *a: b"")
-    for tokens in (10, 10**400):
-        line = api_cost.usage_line(delay, {"output": tokens}, catalog)
-        assert "inf" not in line.lower()
-        assert isinstance(line, str)
-    assert "tok/s" not in api_cost.usage_line(5e-324, {"output": 10}, catalog)
+    assert line.startswith("cost ?")  # finite parts sum to inf: unknown
 
 
 # ---------------------------------------------------------------- catalog
@@ -212,21 +217,19 @@ def test_line_complete_partial_and_unknown():
     full = {"output": 50, "bill": {"model": "sol", "input": 1000, "cached": 400,
                                     "cache_write_tokens": 120, "billable_output_tokens": 50}}
     line = api_cost.usage_line(2.0, full, catalog)
-    assert line == (
-        "25.0 tok/s · ≈$0.0018 (in $0.0010 · write $0.0003 · read <$0.0001 · out $0.0005)"
-    )
+    assert line == "$0.0018 · ↓$0.0005 ↑$0.0013 | <$0.0001"
     assert "?" not in line and "+" not in line
     partial = {"output": 50, "bill": {"model": "sol", "input": 1000, "cached": 400, "billable_output_tokens": 50}}
     text = api_cost.usage_line(2.0, partial, catalog)
-    assert "(in ? · write ?" in text
-    # Partial: the known subtotal with a trailing "+" (unknown buckets are
+    assert "↑?" in text  # writes priced but not reported: cache-miss cost unknown
+    # Partial: the known subtotal with a trailing "+" (unknown parts are
     # non-negative, so it is a lower bound).
-    assert "≈$0.0005+ (" in text
+    assert text == "$0.0005+ · ↓$0.0005 ↑? | <$0.0001"
     nothing = {"output": 5, "bill": {"model": "sol", "input": 100, "cached": 0}}
     # Only a real known-zero read bucket: total stays unknown, subtotal is $0.
-    assert "≈$0+ (" in api_cost.usage_line(1.0, nothing, catalog)
+    assert api_cost.usage_line(1.0, nothing, catalog) == "$0+ · ↓? ↑? | $0"
     unpriced = {"output": 5, "bill": {"model": "sol", "input": 100, "cached": 10}}
-    assert "(in ?" in api_cost.usage_line(1.0, unpriced, catalog)
+    assert "↑?" in api_cost.usage_line(1.0, unpriced, catalog)
     assert api_cost.usage_line(None, {"output": 5}, catalog) == "cost n/a (model unknown)"
     unlisted = {"output": 5, "bill": {"model": "nope", "input": 10, "cached": 0}}
     assert api_cost.usage_line(0, unlisted, catalog).endswith("n/a (model not listed)")
@@ -241,14 +244,21 @@ def test_line_marks_estimate_and_never_invoice_or_routing_claims():
                                       "cache_write_tokens": 120, "billable_output_tokens": 50}}
     for line in (api_cost.usage_line(1.0, priced, catalog),
                  api_cost.usage_line(1.0, {"output": 5}, api_cost.PriceCatalog(lambda *a: b""))):
-        assert "≈" in line or "cost " in line  # always marked as an estimate / cost note
+        assert line.startswith(("$", "<$", "cost "))  # a price or an explicit cost note
         for forbidden in ("bill", "invoice", "charged", "discount", "priority", "batch"):
             assert forbidden not in line.lower()
 
 
-@pytest.mark.parametrize("delay", [None, 0, -1, True, float("inf"), float("nan")])
-def test_tps_unknown_for_invalid_timing(delay):
-    assert "tok/s" not in api_cost.usage_line(delay, {"output": 10}, api_cost.PriceCatalog(lambda *a: b""))
+@pytest.mark.parametrize("delay", [None, 0, 2.0, 5e-324, float("inf"), float("nan")])
+def test_line_never_shows_a_speed(delay):
+    # The displayed API gap includes waiting/prefill/streaming, so no tok/s
+    # figure is ever rendered, whatever the delay or token count.
+    catalog = _ready_catalog({"sol": SOL})
+    for usage in ({"output": 10}, {"output": 10**400},
+                  {"output": 50, "bill": {"model": "sol", "input": 1000, "cached": 400,
+                                          "cache_write_tokens": 120, "billable_output_tokens": 50}}):
+        line = api_cost.usage_line(delay, usage, catalog)
+        assert "tok/s" not in line and "inf" not in line.lower()
 
 
 def test_catalog_first_use_is_nonblocking_and_single_flight():
@@ -300,7 +310,7 @@ def test_catalog_failure_backs_off_then_recovers_and_stale_is_labelled():
     stale_line = api_cost.usage_line(
         1.0, {"output": 5, "bill": {"model": "sol", "input": 100, "cached": 0,
                                     "cache_write_tokens": 0, "billable_output_tokens": 5}}, catalog)
-    assert stale_line.endswith(") stale prices")
+    assert stale_line.endswith(" stale prices")
 
 
 def test_thread_start_failure_releases_inflight_and_paces_retry(monkeypatch):
@@ -492,7 +502,7 @@ def test_render_pure_text_group_with_bill_gets_line():
     text = TaskCardEventProjection.render_event_groups(
         [{"events": [{"kind": "text", "text": "hello", "_ts": 1.0, "api_delay_s": 2.0, "_usage": usage}]}],
         normal_rows=3, usage_line=lambda d, u: api_cost.usage_line(d, u, catalog))
-    assert "25.0 tok/s · ≈$" in text and "(in $" in text
+    assert "\n$0." in text and " · ↓$" in text and " ↑" in text and " | " in text
 
 
 # ---------------------------------------------------------------- providers
@@ -606,7 +616,7 @@ def test_null_or_invalid_declared_tier_stays_unknown(null_rate):
     }}))["m"]
     bill = {"input": 300_000, "cached": 0, "cache_write_tokens": 0}
     assert "input_cost_per_token_above_200k_tokens" in entry
-    assert api_cost.estimate_costs(bill, entry)["input"] is None
+    assert api_cost.estimate_costs(bill, entry)["miss"] is None
 
 
 def test_unknown_declared_one_hour_price_never_becomes_base_write_price():
@@ -614,11 +624,12 @@ def test_unknown_declared_one_hour_price_never_becomes_base_write_price():
     entry = {"input_cost_per_token": 1e-6,
              "cache_creation_input_token_cost": 2e-6,
              "cache_creation_input_token_cost_above_1hr": None}
-    assert api_cost.estimate_costs(bill, entry)["write"] is None
+    assert api_cost.estimate_costs(bill, entry)["miss"] is None
     # A known zero 1h share needs no 1h rate: all writes use the 5m rate.
-    assert api_cost.estimate_costs({**bill, "cache_write_1h_tokens": 0}, entry)["write"] == pytest.approx(0.0001)
+    assert api_cost.estimate_costs({**bill, "cache_write_1h_tokens": 0}, entry)["miss"] == pytest.approx(
+        50 * 1e-6 + 50 * 2e-6)
     # If a model advertises 1h pricing but lacks that large-context variant,
     # an unknown TTL split still cannot be priced at the 5m rate.
     entry["cache_creation_input_token_cost_above_1hr"] = 4e-6
     entry["cache_creation_input_token_cost_above_200k_tokens"] = 3e-6
-    assert api_cost.estimate_costs({**bill, "input": 300_000}, entry)["write"] is None
+    assert api_cost.estimate_costs({**bill, "input": 300_000}, entry)["miss"] is None

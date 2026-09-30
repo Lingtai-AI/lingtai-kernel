@@ -269,6 +269,7 @@ related_files:
   - tests/test_openai_compatible_service_tier.py
   - tests/test_openai_reasoning_fallback.py
   - tests/test_openai_responses_stateless.py
+  - tests/test_openai_cache_write_usage.py
   - tests/test_openai_prompt_cache_key.py
   - tests/test_openai_responses_streaming.py
   - tests/test_outbound_file_containment.py

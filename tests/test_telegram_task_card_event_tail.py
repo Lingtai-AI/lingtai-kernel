@@ -1932,11 +1932,11 @@ def test_fingerprint_ignores_only_wall_clock_ticks(tmp_path):
 # Real TelegramManager, FakeAccount transport, tiny in-memory price catalog
 # installed as ``api_cost.CATALOG``: no provider, Telegram or catalog network.
 
-_PRICE_LINE_RE = re.compile(r"^\s*(?:[\d.]+ tok/s · )?(?:≈\$|cost (?:n/a|\?|loading))")
+_PRICE_LINE_RE = re.compile(r"^\s*(?:<?\$[\d.,]+\+? · ↓|cost (?:n/a|\?|loading))")
 
 
 def _is_price_line(line: str) -> bool:
-    """The compact Telegram API list-price line (optionally led by tok/s)."""
+    """The compact Telegram API list-price line."""
     return bool(_PRICE_LINE_RE.match(line))
 
 
@@ -1954,8 +1954,8 @@ _TINY = {
 _TINY2 = {name: rate * 2 for name, rate in _TINY.items()}
 _BILL = {"model": "tiny", "cache_write_tokens": 1000, "billable_output_tokens": 500}
 # total 10k input / 4k read / 1k write / 500 output over a 2.0 s API delay.
-_TINY_LINE = "250.0 tok/s · ≈$0.0084 (in $0.0050 · write $0.0020 · read $0.0004 · out $0.0010)"
-_TINY2_LINE = "250.0 tok/s · ≈$0.0168 (in $0.0100 · write $0.0040 · read $0.0008 · out $0.0020)"
+_TINY_LINE = "$0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004"
+_TINY2_LINE = "$0.0168 · ↓$0.0020 ↑$0.0140 | $0.0008"
 
 
 def _static_catalog(monkeypatch, models):
@@ -2180,7 +2180,7 @@ def test_legacy_event_without_billing_facts_shows_unknown_never_a_price(tmp_path
     text = _last_edit(acct)
     assert "cost n/a (model unknown)" in text
     assert "↓500" in text  # the old metrics row is still rendered
-    assert "≈$" not in text  # no price without billing facts
+    assert not any(line.lstrip().startswith("$") for line in text.splitlines())  # no price without billing facts
 
 
 def test_price_line_is_html_escaped_in_telegram_delivery(tmp_path, monkeypatch):
@@ -2191,14 +2191,14 @@ def test_price_line_is_html_escaped_in_telegram_delivery(tmp_path, monkeypatch):
     _write_lines(_events_path(tmp_path), [
         _priced_tool_call("api-0", "c0", 100.0),
         _priced_tool_call("api-1", "c1", 102.0),
-        # 500 cached tokens -> read bucket 5e-05 USD renders as "<$0.0001".
+        # 500 cached tokens -> cache-hit part 5e-05 USD renders as "<$0.0001".
         _priced_llm("api-1", 103.0, billing=_BILL, cached=500),
     ])
     manager._poll_event_tail()
 
     text = _last_edit(acct)
-    assert "read &lt;$0.0001" in text
-    assert "read <$0.0001" not in text
+    assert "| &lt;$0.0001" in text
+    assert "| <$0.0001" not in text
 
 
 def test_default_shared_render_is_byte_identical_and_hook_only_adds_price_lines(tmp_path, monkeypatch):
@@ -2260,5 +2260,5 @@ def test_price_lines_stay_whole_under_the_text_budget(tmp_path, monkeypatch):
     for line in raw.splitlines():
         if _is_price_line(line):
             # A price line is either whole or absent; never cut mid-number.
-            assert line.endswith(")")
+            assert re.search(r"\| (?:<?\$[\d.,]+|\?)(?: stale prices)?$", line) or "cost " in line
             assert len(line) <= TaskCardEventProjection.EVENT_TEXT_CAP

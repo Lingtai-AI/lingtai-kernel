@@ -146,7 +146,8 @@ class UsageMetadata:
     extra: dict[str, Any] = field(default_factory=dict)
     # Optional billing evidence an adapter positively established from its wire
     # contract. ``None`` means unknown (never zero). ``cache_write_tokens`` is
-    # the part of ``input_tokens`` written to the prompt cache (its 1h-TTL part
+    # the part of ``input_tokens`` written to the prompt cache (OpenAI-compatible
+    # wires: ``*_tokens_details.cache_write_tokens`` when reported) (its 1h-TTL part
     # in ``cache_write_1h_tokens``); ``billable_output_tokens`` is the output
     # count providers charge, thinking included exactly once.
     cache_write_tokens: int | None = None
