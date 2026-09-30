@@ -2748,6 +2748,53 @@ def _check_poll_backoff(agent, tool_calls, tool_results=None) -> bool:
     return should_idle
 
 
+def _settled_visible_puffo_reply(tool_calls, tool_results) -> bool:
+    """Whether this batch visibly answered and covered a Puffo input."""
+    results = {getattr(result, "id", None): result for result in tool_results}
+    for call in tool_calls:
+        if call.name not in {"send_message", "send_message_with_attachments"}:
+            continue
+        args = call.args if isinstance(call.args, dict) else {}
+        requested = args.get("covers")
+        if not isinstance(requested, list) or not requested or not all(
+            isinstance(item, str) and item for item in requested
+        ):
+            continue
+        # Puffo shows default top-level sends, but agent_only opts out of
+        # that safety net. Threaded replies require the explicit human level.
+        if args.get("visibility_level") == "agent_only":
+            continue
+        if args.get("root_id") and args.get("visibility_level") != "human":
+            continue
+        result = results.get(call.id)
+        content = getattr(result, "content", None)
+        if not isinstance(content, dict) or content.get("status") != "success":
+            continue
+        receipt = content.get("text")
+        if not isinstance(receipt, str) or not receipt.startswith(
+            '[send_result context_version=1 state="sent" '
+        ):
+            continue
+        if "sent hidden" in receipt:
+            continue
+        header = receipt.partition("\n")[0]
+        marker = "covers_recorded="
+        start = header.find(marker)
+        if start < 0:
+            continue
+        try:
+            recorded, _ = json.JSONDecoder().raw_decode(header[start + len(marker):])
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(recorded, list)
+            and all(isinstance(item, str) for item in recorded)
+            and set(requested).issubset(recorded)
+        ):
+            return True
+    return False
+
+
 def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
     """Handle tool calls and collect text output.
 
@@ -2760,6 +2807,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
     collected_text_parts: list[str] = []
     collected_errors: list[str] = []
     in_tool_loop = False
+    settled_visible_reply = False
 
     while True:
         # Empty-response guard: text + tool_calls + thoughts all empty means
@@ -2770,6 +2818,16 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # response (often caused by heavy context or mid-loop notification
         # injection confusing the model).
         if is_all_empty_response(response):
+            if in_tool_loop and settled_visible_reply and not collected_errors:
+                usage = getattr(response, "usage", None)
+                agent._log(
+                    "empty_after_settled_puffo_reply",
+                    ledger_source=ledger_source,
+                    output_tokens=getattr(usage, "output_tokens", 0) or 0,
+                    thinking_tokens=getattr(usage, "thinking_tokens", 0) or 0,
+                    api_call_id=getattr(response, "api_call_id", None),
+                )
+                break
             # Extract diagnostic metadata from provider response.
             raw = response.raw
             _diag: dict = {}
@@ -3027,6 +3085,9 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # Issue #63: dedup check — warn agent if it just re-sent
         # a duplicate message to an external channel.
         _check_external_send(agent, response.tool_calls, tool_results)
+        settled_visible_reply = _settled_visible_puffo_reply(
+            response.tool_calls, tool_results,
+        )
 
         # Issue #63: poll backoff — if the agent is repeatedly checking
         # for new messages without finding any, go IDLE after max retries.
