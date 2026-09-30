@@ -7,55 +7,12 @@ from dataclasses import dataclass
 
 
 # Accepted manifest.llm.thinking values, mirroring the upstream Responses
-# ``reasoning.effort`` payload values in ascending effort order. Explicit
-# ``"none"`` is a real payload value (effort none), distinct from an *omitted*
-# field — omitted stays the internal ``"default"`` sentinel and adapters that
-# own a default map it to ``"xhigh"``.
+# ``reasoning.effort`` payload values in ascending effort order. Every
+# provider accepts them. Explicit ``"none"`` is a real payload value (effort
+# none), distinct from an *omitted* field — omitted stays the internal
+# ``"default"`` sentinel, which each adapter maps to its own default.
 THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
-# Codex providers that accept manifest.llm.thinking. This list stays
-# Codex-only; the complete acceptance rule (Anthropic and every
-# OpenAI-compatible block too) lives in ``llm_supports_thinking`` so validators
-# share it.
-THINKING_PROVIDERS = ("codex",)
-
-# Non-Codex providers whose adapter is thinking-capable on its own, even when
-# the manifest omits ``api_compat``: the Anthropic adapter maps thinking to an
-# extended-thinking budget, and the openai/deepseek factories always pin an
-# OpenAI-compatible adapter, so their blocks carry an implicit
-# ``api_compat="openai"``.
-THINKING_NATIVE_PROVIDERS = ("anthropic", "openai", "deepseek", "claude-code", "claude_code")
-
-# Providers that own their reasoning-effort contract in their own module: the
-# accepted vocabulary is per model and per wire, and so is what an OMITTED
-# value means. This is a coarse SCOPE name only — the kernel deliberately holds
-# no level vocabulary, model list, alias table, or default for these routes,
-# and cannot import them (see tests/test_kernel_isolation.py). The exact
-# validation is applied by the lingtai-layer ingress (``lingtai/init_schema.py``
-# and ``lingtai/agent.py``) against the provider's own module.
-THINKING_OWNED_PROVIDERS = ("deepseek",)
-
-
-def llm_supports_thinking(llm: dict) -> bool:
-    """Return whether a manifest LLM block accepts explicit thinking effort.
-
-    Every thinking-capable wire is accepted:
-
-    * the Codex family (``THINKING_PROVIDERS``) — it owns its own wire/backend;
-    * ``THINKING_NATIVE_PROVIDERS`` — ``anthropic`` (thinking budget),
-      Claude Code's provider-local CLI effort route, plus the OpenAI-wire
-      natives whose ``api_compat`` may be left implicit;
-    * any OpenAI-compatible block (``api_compat == "openai"``) regardless of
-      ``wire_api`` — Responses sends ``reasoning.effort`` and Chat Completions
-      sends ``reasoning_effort``, so both wires carry the effort.
-
-    Everything else (Gemini, MiniMax, a custom Gemini/Anthropic-compat block)
-    is rejected so a knob the wire would silently drop fails loudly.
-    """
-    provider = str(llm.get("provider") or "").lower()
-    if provider in THINKING_PROVIDERS or provider in THINKING_NATIVE_PROVIDERS:
-        return True
-    return str(llm.get("api_compat") or "").lower() == "openai"
 
 # Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
 # agent-configurable. An agent must not be able to raise its own molt
@@ -144,7 +101,7 @@ def system_prompt_pressure_ratio() -> float:
 # ``_refresh_tool_inventory_section``) and once as the tool-calling schema's
 # top-level ``description``. For API providers the wire copy is the generic
 # ``WIRE_TOOL_DESCRIPTION`` pointer, so only the section carried the prose; for
-# the CLI-backed adapters (``claude_code``, ``kimi_code``) the full prose is
+# the CLI-backed adapter (``claude-code``) the full prose is
 # serialised verbatim into the ``# AVAILABLE TOOLS`` block *next to* the very
 # same text inside ``# AGENT SYSTEM INSTRUCTIONS`` — literal byte-identical
 # duplication of ~1.1 KB per registered tool, every turn.

@@ -327,8 +327,8 @@ provenance, composed by `setup` and granted to `web` alone through
 once), and the narrow read-only `provider_identity` label
 (`AgentProviderIdentityAdapter`, built in the standard table only for `web`);
 `_bind` fails closed with `HostPortError` on a missing or mistyped
-`web_runtime`, the explicit Anthropic/Gemini opt-in is gated by exact match on
-that label, and no automatic provider/browser fallback exists beyond the
+`web_runtime`, the backend-gated OpenAI/Anthropic engines are admitted only on
+an exact match of that label, and no automatic provider/browser fallback exists beyond the
 family's one documented OpenAI→DuckDuckGo runtime fallback.
 Every landed
 family retains its public name, actions, inputs, and result shapes. The

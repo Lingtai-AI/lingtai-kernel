@@ -7,7 +7,7 @@ import pytest
 
 from lingtai.agent import Agent
 from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 
 
 @pytest.fixture
@@ -18,7 +18,7 @@ def email_agent(tmp_path):
         pseudo_agent_subscriptions=["../private-email-settings-marker"],
     )
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="email-official-plugin",
         working_dir=workdir,
         mail_service=mail_service,
@@ -48,8 +48,8 @@ def _write_refresh_init(workdir, *, capabilities: dict, disable: list[str] | Non
             "agent_name": "email-opt-out",
             "language": "en",
             "llm": {
-                "provider": "gemini",
-                "model": "gemini-test",
+                "provider": "anthropic",
+                "model": "claude-test",
                 "api_key": "test-key",
                 "base_url": None,
             },
@@ -294,7 +294,7 @@ def test_email_official_boot_runs_exactly_once_per_construction_and_refresh(
 
     workdir = tmp_path / "agent"
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="email-exact-once",
         working_dir=workdir,
         capabilities={},
@@ -329,7 +329,7 @@ def test_email_opt_out_forms_keep_one_official_surface_on_construction_and_refre
     """Email's former mandatory surface cannot fall back to a generic intrinsic."""
     workdir = tmp_path / "agent"
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="email-opt-out",
         working_dir=workdir,
         capabilities=capabilities,

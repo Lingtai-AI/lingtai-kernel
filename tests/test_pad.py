@@ -23,8 +23,8 @@ from tests._workdir_lease_helpers import make_test_lease
 def make_mock_service():
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     return svc
 
 

@@ -1,6 +1,11 @@
 """Token counting with provider-agnostic fallback chain.
 
 Priority: google.genai LocalTokenizer → tiktoken → len(text) // 4
+
+Every tokenizer backend is opportunistic: none is a declared dependency (the
+``google-genai`` SDK left the dependency list with the Gemini LLM adapter), so
+each is used only when it happens to be importable and the chain falls through
+otherwise.
 """
 from __future__ import annotations
 
@@ -30,8 +35,9 @@ def _init_tokenizer() -> None:
 
     # Try google-genai first.
     #
+    # Neither ``google-genai`` nor ``sentencepiece`` is a declared dependency.
     # ``google.genai.local_tokenizer`` hard-imports ``sentencepiece`` at module
-    # scope, and sentencepiece is not a declared dependency — so on a stock
+    # scope — so on a stock
     # install this branch always raises ModuleNotFoundError and we fall through.
     # But by then the ``google.genai`` package import has already run, resident
     # for the life of the process at a measured ~66MB RSS (it drags in

@@ -22,8 +22,8 @@ from tests._agent_presence_helpers import make_test_presence_store
 def make_mock_service():
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     return svc
 
 

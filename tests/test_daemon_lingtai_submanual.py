@@ -120,7 +120,6 @@ def test_lingtai_child_routes_to_live_authorities():
         "native LingTai LLM providers",
         "mimocode",
         "non-fatal",
-        "hard failure",
     ):
         assert phrase in body, phrase
 

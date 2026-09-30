@@ -15,7 +15,7 @@ import pytest
 
 from lingtai.agent import Agent
 from lingtai.tools import psyche as psyche_tool
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 MANUAL_ACTIONS = ["pad", "lingtai", "knowledge", "skills", "manual"]
@@ -342,8 +342,8 @@ def test_full_setup_binds_resolved_pad_snapshot_and_prompt(tmp_path):
             json.dumps({
                 "manifest": {
                     "llm": {
-                        "provider": "gemini",
-                        "model": "gemini-test",
+                        "provider": "anthropic",
+                        "model": "claude-test",
                         "api_key": "test-only",
                     },
                 },

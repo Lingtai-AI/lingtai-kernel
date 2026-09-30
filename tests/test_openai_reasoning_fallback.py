@@ -42,9 +42,10 @@ from tests._chat_completion_helpers import (
 )
 
 
-_DEEPSEEK_DEFAULTS = dict(
+# A thinking-mode OpenAI-compatible endpoint configured through the generic
+# ``openai`` provider (e.g. base_url https://api.deepseek.com).
+_COMPAT_DEFAULTS = dict(
     inject_reasoning_fallback=True,
-    reasoning_effort_vocab="seven_tier",
     prompt_cache_namespace="deepseek",
 )
 
@@ -128,7 +129,7 @@ class TestRealReasoningPreserved:
                 ToolCallBlock(id="call_1", name="email", args={"action": "check"}),
             ],
             model="deepseek-v4-pro",
-            provider="deepseek",
+            provider="openai",
         )
         iface.add_tool_results([
             ToolResultBlock(id="call_1", name="email", content="no mail"),
@@ -139,7 +140,7 @@ class TestRealReasoningPreserved:
                 TextBlock(text="no new mail for you"),
             ],
             model="deepseek-v4-pro",
-            provider="deepseek",
+            provider="openai",
         )
 
         client = MagicMock()
@@ -171,7 +172,7 @@ class TestFallbackForRehydratedHistory:
                 ToolCallBlock(id="restored_call", name="email", args={"action": "check"}),
             ],
             model="deepseek-v4-pro",
-            provider="deepseek",
+            provider="openai",
         )
         iface.add_tool_results([
             ToolResultBlock(id="restored_call", name="email", content="no mail"),
@@ -202,7 +203,7 @@ class TestFallbackForRehydratedHistory:
             [TextBlock(text="let me check"),
              ToolCallBlock(id="restored_call", name="email", args={"action": "check"})],
             model="deepseek-v4-pro",
-            provider="deepseek",
+            provider="openai",
         )
         iface.add_tool_results([
             ToolResultBlock(id="restored_call", name="email", content="no mail"),
@@ -240,7 +241,7 @@ class TestFallbackForRehydratedHistory:
         iface.add_assistant_message(
             [ToolCallBlock(id="call_1", name="email", args={"action": "check"})],
             model="deepseek-v4-pro",
-            provider="deepseek",
+            provider="openai",
         )
         iface.add_tool_results([
             ToolResultBlock(id="call_1", name="email", content="no mail"),
@@ -248,7 +249,7 @@ class TestFallbackForRehydratedHistory:
         iface.add_assistant_message(
             [ToolCallBlock(id="call_2", name="search", args={"q": "x"})],
             model="deepseek-v4-pro",
-            provider="deepseek",
+            provider="openai",
         )
         iface.add_tool_results([
             ToolResultBlock(id="call_2", name="search", content="no results"),
@@ -283,7 +284,7 @@ class TestFallbackForRehydratedHistory:
                 ToolCallBlock(id="call_1", name="email", args={"action": "check"}),
             ],
             model="deepseek-v4-pro",
-            provider="deepseek",
+            provider="openai",
         )
         iface.add_tool_results([
             ToolResultBlock(id="call_1", name="email", content="no mail"),
@@ -351,21 +352,18 @@ def test_fallback_reasoning_for_round_trips_tool_identity():
 
 
 class TestOpenAIAdapterWiring:
-    def test_session_class_override(self):
-        assert OpenAIAdapter._session_class is OpenAIChatSession
-
     def test_default_base_url(self):
-        adapter = OpenAIAdapter(api_key="stub", base_url="https://api.deepseek.com", **_DEEPSEEK_DEFAULTS)
+        adapter = OpenAIAdapter(api_key="stub", base_url="https://api.deepseek.com", **_COMPAT_DEFAULTS)
         assert adapter.base_url == "https://api.deepseek.com"
 
     def test_base_url_override(self):
         adapter = OpenAIAdapter(
-            api_key="stub", base_url="https://alt.example/v1", **_DEEPSEEK_DEFAULTS
+            api_key="stub", base_url="https://alt.example/v1", **_COMPAT_DEFAULTS
         )
         assert adapter.base_url == "https://alt.example/v1"
 
 
-def test_deepseek_inherits_shared_tool_pairing_rejection_after_reasoning_hook():
+def test_compat_session_inherits_shared_tool_pairing_rejection_after_reasoning_hook():
     """The fallback hook runs, then the shared validator blocks dispatch."""
     class _MalformedSession(OpenAIChatSession):
         def _build_messages(self):
@@ -404,38 +402,24 @@ def test_deepseek_inherits_shared_tool_pairing_rejection_after_reasoning_hook():
     assert client.chat.completions.create.call_count == 0
 
 
-def test_deepseek_responses_wire_selection():
-    """OpenAIAdapter can opt into the Responses wire via wire_api/use_responses."""
-    chat = OpenAIAdapter(api_key="x", **_DEEPSEEK_DEFAULTS)
+def test_compat_responses_wire_selection():
+    """OpenAIAdapter opts into the Responses wire only via wire_api."""
+    chat = OpenAIAdapter(api_key="x", **_COMPAT_DEFAULTS)
     assert chat._should_use_responses() is False
 
-    responses = OpenAIAdapter(api_key="x", wire_api="responses", **_DEEPSEEK_DEFAULTS)
+    responses = OpenAIAdapter(api_key="x", wire_api="responses", **_COMPAT_DEFAULTS)
     assert responses._should_use_responses() is True
 
     explicit_chat = OpenAIAdapter(
-        api_key="x", wire_api="chat_completions", use_responses=True, **_DEEPSEEK_DEFAULTS
+        api_key="x", wire_api="chat_completions", **_COMPAT_DEFAULTS
     )
     assert explicit_chat._should_use_responses() is False
 
-    legacy = OpenAIAdapter(
-        api_key="x", use_responses=True, force_responses=True, **_DEEPSEEK_DEFAULTS
-    )
-    assert legacy._should_use_responses() is True
+    legacy_auto = OpenAIAdapter(api_key="x", wire_api="auto", **_COMPAT_DEFAULTS)
+    assert legacy_auto._should_use_responses() is False
 
 
-def test_deepseek_responses_defaults_are_stateless_no_compaction():
-    """DeepSeek's Responses opt-in kept the old adapter's stateless replay
-    default on the generic adapter."""
-    adapter = OpenAIAdapter(
-        api_key="x",
-        wire_api="responses",
-        responses_stateless_replay=True,
-        **_DEEPSEEK_DEFAULTS,
-    )
-    assert adapter._responses_stateless_replay is True
-
-
-def test_deepseek_responses_reasoning_fallback_injection():
+def test_compat_responses_reasoning_fallback_injection():
     """Fallback reasoning item is injected after first function_call in Responses items."""
     items = [
         {"role": "user", "content": "hi"},
@@ -452,7 +436,7 @@ def test_deepseek_responses_reasoning_fallback_injection():
     assert out[-1]["role"] == "assistant" and out[-1]["content"] == "post-tool reply"
 
 
-def test_deepseek_responses_keeps_existing_reasoning():
+def test_compat_responses_keeps_existing_reasoning():
     """Real preserved reasoning items are not duplicated by the fallback."""
     items = [
         {"type": "function_call", "call_id": "c1", "name": "f1", "arguments": "{}"},
@@ -466,15 +450,14 @@ def test_deepseek_responses_keeps_existing_reasoning():
     assert reasoning_items[0]["summary"][0]["text"] == "real thinking"
 
 
-def test_deepseek_responses_create_responses_session_uses_generic_session():
+def test_compat_responses_create_responses_session_uses_generic_session():
     """_create_responses_session builds an OpenAIResponsesSession (stateless)."""
     from lingtai.kernel.llm.interface import ChatInterface
 
     adapter = OpenAIAdapter(
         api_key="x",
         wire_api="responses",
-        responses_stateless_replay=True,
-        **_DEEPSEEK_DEFAULTS,
+        **_COMPAT_DEFAULTS,
     )
     iface = ChatInterface()
     iface.add_system("sys")
@@ -553,11 +536,13 @@ def test_reset_preserves_inject_reasoning_fallback():
     assert session._inject_reasoning_fallback is True
 
 
-def test_provider_defaults_lift_new_reasoning_keys():
-    """fable F2: manifest llm defaults for the three new reasoning knobs must
-    reach the OpenAIAdapter (previously schema-accepted but dead config).
-    Exercise the REAL manifest->defaults builder (not a hand-built defaults
-    dict) plus the registered factory, mirroring production."""
+def test_provider_defaults_lift_generic_reasoning_keys():
+    """fable F2: manifest llm defaults for the generic knobs must reach the
+    OpenAIAdapter (previously schema-accepted but dead config). Exercise the
+    REAL manifest->defaults builder (not a hand-built defaults dict) plus the
+    registered factory, mirroring production. The retired
+    ``reasoning_effort_vocab`` key is recognized-and-ignored: it never reaches
+    the adapter."""
     from lingtai.llm._register import register_all_adapters
     from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 
@@ -572,34 +557,12 @@ def test_provider_defaults_lift_new_reasoning_keys():
     )
     assert defaults is not None
     assert defaults["openai"]["inject_reasoning_fallback"] is False
-    assert defaults["openai"]["reasoning_effort_vocab"] == "seven_tier"
+    assert "reasoning_effort_vocab" not in defaults["openai"]
     assert defaults["openai"]["prompt_cache_namespace"] == "custom-ns"
 
     register_all_adapters()
     factory = LLMService._adapter_registry["openai"]
     a = factory(model="gpt-4o", api_key="sk-test", defaults=defaults["openai"])
     assert a._inject_reasoning_fallback is False
-    assert a._reasoning_effort_vocab == "seven_tier"
+    assert not hasattr(a, "_reasoning_effort_vocab")
     assert a._prompt_cache_namespace == "custom-ns"
-
-    # fable R3-L2: the deepseek factory must lift the same keys from
-    # defaults (its lift sits ABOVE the setdefault block; a reorder would
-    # silently regress manifest opt-out back to True with all tests green).
-    ds_defaults = build_provider_defaults_from_manifest_llm(
-        {
-            "provider": "deepseek",
-            "inject_reasoning_fallback": False,
-            "reasoning_effort_vocab": "seven_tier",
-            "prompt_cache_namespace": "custom-ns",
-        },
-        max_rpm=0,
-    )
-    assert ds_defaults is not None
-    assert ds_defaults["deepseek"]["inject_reasoning_fallback"] is False
-    assert ds_defaults["deepseek"]["reasoning_effort_vocab"] == "seven_tier"
-    assert ds_defaults["deepseek"]["prompt_cache_namespace"] == "custom-ns"
-    ds_factory = LLMService._adapter_registry["deepseek"]
-    dsa = ds_factory(model="deepseek-chat", api_key="sk-test", defaults=ds_defaults["deepseek"])
-    assert dsa._inject_reasoning_fallback is False
-    assert dsa._reasoning_effort_vocab == "seven_tier"
-    assert dsa._prompt_cache_namespace == "custom-ns"

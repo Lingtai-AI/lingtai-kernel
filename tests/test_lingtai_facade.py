@@ -33,14 +33,7 @@ _FORBIDDEN_AFTER_BARE_IMPORT: frozenset[str] = frozenset(
         for name in (
             "anthropic",
             "claude_code",
-            "custom",
-            "deepseek",
-            "gemini",
-            "minimax",
-            "mimo",
             "openai",
-            "openrouter",
-            "zhipu",
         )
     }
 )

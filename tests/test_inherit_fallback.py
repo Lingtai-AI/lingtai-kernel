@@ -87,16 +87,26 @@ def test_web_supported_provider_uses_it(monkeypatch):
 
 
 def test_web_gated_provider_raises_actionable_error(monkeypatch):
-    """web with provider='gemini' is explicit opt-in through settings only;
+    """web with provider='anthropic' is explicit opt-in through settings only;
     a direct provider= composition rejects it outright rather than silently
     admitting or falling back (2026-07-28 canonical-provider-routing repair).
-    Gemini is an active canonical provider, never "retired" -- this raises
+    Anthropic is an active canonical engine, never "retired" -- this raises
     SettingsOnlyProviderError, not RetiredProviderError (g2 repair)."""
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     from lingtai.tools.web_search import SettingsOnlyProviderError, setup as ws_setup
     a = _stub_agent()
     with pytest.raises(SettingsOnlyProviderError):
-        ws_setup(a, provider="gemini", api_key="sk-test")
+        ws_setup(a, provider="anthropic", api_key="sk-test")
+
+
+def test_web_removed_gemini_engine_falls_back_without_raising():
+    """The removed ``gemini`` engine is now an unknown name: composition takes
+    the legacy DuckDuckGo fallback instead of failing."""
+    from lingtai.tools.web_search import setup as ws_setup
+
+    a = _stub_agent()
+    ws_setup(a, provider="gemini", api_key="sk-test")
+    assert "web" in a._tool_handlers
 
 
 def test_web_no_provider_uses_duckduckgo():
@@ -136,7 +146,7 @@ def test_shipped_init_jsonc_web_block_registers_the_web_tool():
 def test_shipped_init_jsonc_web_block_names_no_retired_or_gated_provider():
     """A narrower, faster-failing companion to the composition test above:
     directly asserts the shipped `web` block never names minimax/zhipu
-    (RetiredProviderError) or anthropic/gemini (SettingsOnlyProviderError)
+    (RetiredProviderError) or anthropic (SettingsOnlyProviderError)
     through a direct default_engine=/provider= route, so a future edit is
     caught at the exact invariant even before touching setup()."""
     from pathlib import Path

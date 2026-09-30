@@ -312,7 +312,6 @@ def test_legacy_manifest_soul_block_is_tolerated_without_warning():
 @pytest.mark.parametrize(
     ("key", "value"),
     [
-        ("api_compat", "anthropic"),
         ("default_headers", {"x-test": "1"}),
         ("codex_session_anchor", "/agents/alice/init.json"),
         ("codex_thread_salt", "alice"),
@@ -330,259 +329,235 @@ def test_known_manifest_llm_pass_through_fields_do_not_warn(key, value):
     assert all(f"unknown field in manifest.llm: {key}" != w for w in warnings)
 
 
+# --- Retired per-vendor routing keys: recognized-and-ignored ---------------
+
+
 @pytest.mark.parametrize(
-    "value",
+    ("key", "value"),
     [
-        "OPENAI",
-        7,
-        [],
-        {},
-        {1.5: [True, None, {"nested": (2.5, "finite")}]},
+        ("api_compat", "anthropic"),
+        ("api_compat", {"nested": float("nan")}),
+        ("reasoning_effort_vocab", "seven_tier"),
+        ("reasoning_effort_vocab", 7),
+        ("use_responses_api", True),
+        ("use_responses_api", "yes"),
     ],
 )
-def test_api_compat_preserves_finite_compatibility_values(value):
-    data = _valid_init()
-    data["manifest"]["llm"]["api_compat"] = value
+def test_retired_llm_routing_keys_are_ignored_without_warning(key, value):
+    """``api_compat``, ``reasoning_effort_vocab`` and ``use_responses_api`` are
+    legacy keys: known (no warning), never type-checked, never forwarded."""
+    from lingtai.init_schema import LLM_LEGACY_IGNORED, LLM_OPTIONAL, LLM_PASS_THROUGH_KNOWN
+    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
 
+    assert key in LLM_LEGACY_IGNORED
+    assert key not in LLM_OPTIONAL
+    assert key not in LLM_PASS_THROUGH_KNOWN
+
+    data = _valid_init()
+    data["manifest"]["llm"][key] = value
     assert validate_init(data) == []
-    assert data["manifest"]["llm"]["api_compat"] is value
+    assert build_provider_defaults_from_manifest_llm(
+        {"provider": "openai", key: value}, max_rpm=0
+    ) is None
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        pytest.param(float("nan"), id="scalar-nan"),
-        pytest.param(float("inf"), id="scalar-positive-infinity"),
-        pytest.param(float("-inf"), id="scalar-negative-infinity"),
-        pytest.param(["finite", {"nested": float("nan")}], id="nested-dict-value"),
-        pytest.param({"nested": (0, float("inf"))}, id="nested-tuple-value"),
-        pytest.param({float("-inf"): "nested-key"}, id="dict-key"),
-    ],
-)
-def test_api_compat_rejects_non_finite_values_at_every_depth(value):
+# --- Standard ``thinking``: one vocabulary for all four families -----------
+
+_THINKING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+_FAMILY_PATCHES = [
+    {"provider": "openai"},
+    {"provider": "openai", "wire_api": "responses"},
+    {"provider": "openai", "base_url": "https://compat.example/v1", "wire_api": "chat_completions"},
+    {"provider": "anthropic"},
+    {"provider": "anthropic", "base_url": "https://compat.example"},
+    {"provider": "codex", "model": "gpt-5.5"},
+    {"provider": "claude-code", "model": "sonnet"},
+]
+
+
+@pytest.mark.parametrize("llm_patch", _FAMILY_PATCHES)
+@pytest.mark.parametrize("value", _THINKING_LEVELS)
+def test_llm_thinking_valid_for_every_family(llm_patch, value):
     data = _valid_init()
-    data["manifest"]["llm"]["api_compat"] = value
+    data["manifest"]["llm"].update(llm_patch)
+    data["manifest"]["llm"]["thinking"] = value
+    validate_init(data)
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            r"^manifest\.llm\.api_compat: expected recursively "
-            r"JSON-finite value$"
-        ),
+
+@pytest.mark.parametrize("llm_patch", _FAMILY_PATCHES)
+@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
+def test_llm_thinking_invalid_values_for_every_family(llm_patch, value):
+    data = _valid_init()
+    data["manifest"]["llm"].update(llm_patch)
+    data["manifest"]["llm"]["thinking"] = value
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
+        validate_init(data)
+
+
+def test_thinking_scope_tables_are_gone():
+    """No per-vendor thinking lists remain in the kernel config."""
+    import lingtai.kernel.config as config
+
+    for name in (
+        "THINKING_PROVIDERS",
+        "THINKING_NATIVE_PROVIDERS",
+        "THINKING_OWNED_PROVIDERS",
+        "llm_supports_thinking",
     ):
-        validate_init(data)
+        assert not hasattr(config, name), name
 
 
-def test_api_compat_finite_walk_is_depth_safe():
-    value: object = "openai"
-    for _ in range(2_000):
-        value = [value]
-    data = _valid_init()
-    data["manifest"]["llm"]["api_compat"] = value
-
-    assert validate_init(data) == []
+# --- Standard ``service_tier``: one normalizer for openai and codex ---------
 
 
-@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
-def test_llm_thinking_valid_values(value):
-    data = _valid_init()
-    data["manifest"]["llm"]["provider"] = "codex"
-    data["manifest"]["llm"]["thinking"] = value
-    validate_init(data)
-
-
-@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
-def test_llm_thinking_valid_for_custom_openai_responses(value):
-    data = _valid_init()
-    data["manifest"]["llm"].update(
-        {
-            "provider": "custom",
-            "api_compat": "openai",
-            "wire_api": "responses",
-            "thinking": value,
-        }
-    )
-
-    validate_init(data)
-
-
-@pytest.mark.parametrize("value", ["low", "high", "max"])
-def test_llm_thinking_valid_for_deepseek_responses(value):
-    """DeepSeek owns its effort surface: Responses serves exactly low|high|max.
-
-    This route previously inherited the generic "any kernel level on an
-    OpenAI-compatible Responses wire" rule, which advertised tiers DeepSeek's
-    Responses guide does not document (and which that endpoint may silently
-    ignore). The exact per-model/per-wire set is pinned in
-    tests/test_deepseek_reasoning_effort.py.
-    """
-    data = _valid_init()
-    data["manifest"]["llm"].update(
-        {
-            "provider": "deepseek",
-            "model": "deepseek-v4-flash",
-            "api_compat": "openai",
-            "wire_api": "responses",
-            "thinking": value,
-        }
-    )
-    validate_init(data)
-
-@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
-def test_llm_thinking_invalid_for_custom_openai_responses(value):
-    data = _valid_init()
-    data["manifest"]["llm"].update(
-        {
-            "provider": "custom",
-            "api_compat": "openai",
-            "wire_api": "responses",
-            "thinking": value,
-        }
-    )
-
-    with pytest.raises(ValueError, match="manifest.llm.thinking"):
-        validate_init(data)
-
-
-@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
-def test_llm_thinking_invalid_values(value):
-    data = _valid_init()
-    data["manifest"]["llm"]["provider"] = "codex"
-    data["manifest"]["llm"]["thinking"] = value
-    with pytest.raises(ValueError, match="manifest.llm.thinking"):
-        validate_init(data)
-
-
-@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
-def test_llm_thinking_valid_for_anthropic(value):
-    # The Anthropic adapter maps thinking to an extended-thinking budget.
-    data = _valid_init()
-    data["manifest"]["llm"]["provider"] = "anthropic"
-    data["manifest"]["llm"]["thinking"] = value
-    validate_init(data)
-
-
-@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
-def test_llm_thinking_invalid_for_anthropic(value):
-    data = _valid_init()
-    data["manifest"]["llm"]["provider"] = "anthropic"
-    data["manifest"]["llm"]["thinking"] = value
-    with pytest.raises(ValueError, match="manifest.llm.thinking"):
-        validate_init(data)
-
-
-@pytest.mark.parametrize(
-    "llm_patch",
-    [
-        # Custom OpenAI-compatible on either wire — Responses sends
-        # reasoning.effort, Chat Completions sends reasoning_effort.
-        {"provider": "custom", "api_compat": "openai"},
-        {
-            "provider": "custom",
-            "api_compat": "openai",
-            "wire_api": "chat_completions",
-        },
-        # Built-in OpenAI-wire providers, with api_compat left implicit.
-        {"provider": "openai", "wire_api": "responses"},
-        {"provider": "openai"},
-        # DeepSeek owns its effort contract; a real served model is required
-        # (policy fail-closed per model/wire; covered deeply in
-        # test_deepseek_reasoning_effort.py).
-        {"provider": "deepseek", "model": "deepseek-v4-flash"},
-    ],
-)
-def test_llm_thinking_accepted_for_openai_compatible(llm_patch):
-    data = _valid_init()
-    data["manifest"]["llm"].update(llm_patch)
-    data["manifest"]["llm"]["thinking"] = "high"
-
-    validate_init(data)
-
-
-@pytest.mark.parametrize(
-    "llm_patch",
-    [
-        {"provider": "gemini"},
-        {"provider": "minimax"},
-        {
-            "provider": "custom",
-            "api_compat": "gemini",
-            "wire_api": "auto",
-        },
-    ],
-)
-def test_llm_thinking_rejected_outside_thinking_capable_scope(llm_patch):
-    data = _valid_init()
-    data["manifest"]["llm"].update(llm_patch)
-    data["manifest"]["llm"]["thinking"] = "high"
-
-    with pytest.raises(ValueError, match="thinking-capable providers"):
-        validate_init(data)
-
-
-def test_removed_codex_pool_provider_spellings_are_exact():
-    from lingtai.init_schema import REMOVED_CODEX_POOL_PROVIDERS
-
-    assert REMOVED_CODEX_POOL_PROVIDERS == frozenset({"codex-pool", "codex_pool"})
-
-
-@pytest.mark.parametrize(
-    "provider", ["codex-pool", "codex_pool", "Codex-Pool", "CODEX_POOL"]
-)
-def test_llm_removed_codex_pool_provider_raises_with_subs_pool_pointer(provider):
-    """The in-kernel Codex pool was removed; any spelling fails loudly and
-    points the operator at the external subs-pool proxy."""
+@pytest.mark.parametrize("provider", ["openai", "codex", "anthropic", "claude-code"])
+@pytest.mark.parametrize("value", ["fast", "auto", "default", "flex", "priority", " fast "])
+def test_llm_service_tier_standard_values_validate(provider, value):
     data = _valid_init()
     data["manifest"]["llm"]["provider"] = provider
-    data["manifest"]["llm"]["model"] = "gpt-5.5"
+    data["manifest"]["llm"]["service_tier"] = value
+    assert validate_init(data) == []
+
+
+@pytest.mark.parametrize("provider", ["openai", "codex"])
+@pytest.mark.parametrize("value", ["turbo", "scale", "Fast", "unsupported"])
+def test_llm_service_tier_invalid_value_fails_validation(provider, value):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["service_tier"] = value
+    with pytest.raises(ValueError, match=r"^manifest\.llm\.service_tier: "):
+        validate_init(data)
+
+
+def test_llm_service_tier_wrong_type_fails_validation():
+    data = _valid_init()
+    data["manifest"]["llm"]["service_tier"] = 3
+    with pytest.raises(ValueError, match="manifest.llm.service_tier"):
+        validate_init(data)
+
+
+# --- ``wire_api`` belongs to ``openai`` only --------------------------------
+
+
+@pytest.mark.parametrize("value", ["auto", "chat_completions", "responses"])
+def test_llm_wire_api_values_accepted_for_openai(value):
+    data = _valid_init()
+    data["manifest"]["llm"].update({"provider": "openai", "wire_api": value})
+    validate_init(data)
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "codex", "claude-code"])
+def test_llm_explicit_wire_api_rejected_for_non_openai(provider):
+    data = _valid_init()
+    data["manifest"]["llm"].update({"provider": provider, "wire_api": "responses"})
+    with pytest.raises(ValueError, match="only for provider openai"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "codex", "claude-code"])
+def test_llm_legacy_auto_wire_api_is_inert_for_every_family(provider):
+    data = _valid_init()
+    data["manifest"]["llm"].update({"provider": provider, "wire_api": "auto"})
+    validate_init(data)
+
+
+# --- Removed LLM providers fail loudly with a replacement pointer -----------
+
+_REMOVED = [
+    "deepseek", "zhipu", "glm", "mimo", "minimax", "openrouter", "grok",
+    "qwen", "kimi", "gemini", "kimi-code", "kimi_code", "custom",
+    "claude_code", "codex-pool", "codex_pool",
+]
+
+
+def test_removed_llm_provider_set_is_exact():
+    from lingtai.init_schema import REMOVED_LLM_PROVIDERS
+
+    assert REMOVED_LLM_PROVIDERS == frozenset(_REMOVED)
+
+
+@pytest.mark.parametrize("provider", _REMOVED + ["DeepSeek", "Gemini", " custom ", "Codex-Pool"])
+def test_llm_removed_provider_raises_with_replacement_pointer(provider):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["model"] = "some-model"
 
     with pytest.raises(ValueError) as excinfo:
         validate_init(data)
 
     message = str(excinfo.value)
     assert message.startswith(
-        f"manifest.llm.provider: provider {provider!r} was removed from LingTai."
+        f"manifest.llm.provider: provider {provider!r} was removed from LingTai;"
     )
-    assert "subs-pool" in message
+    assert "provider openai (OpenAI-compatible: base_url + wire_api responses|chat_completions)" in message
+    assert "anthropic (Anthropic-compatible: base_url)" in message
+    assert "sub2api/subs-pool" in message
 
 
 @pytest.mark.parametrize("provider", ["codex-pool", "codex_pool"])
-def test_llm_removed_codex_pool_provider_raises_even_with_thinking(provider):
-    """Thinking no longer rescues a codex-pool block: the provider is gone."""
+def test_llm_removed_codex_pool_provider_keeps_single_account_pointer(provider):
     data = _valid_init()
     data["manifest"]["llm"]["provider"] = provider
     data["manifest"]["llm"]["thinking"] = "xhigh"
 
-    with pytest.raises(ValueError, match="subs-pool"):
+    with pytest.raises(ValueError) as excinfo:
+        validate_init(data)
+    message = str(excinfo.value)
+    assert "subs-pool" in message
+    assert "provider codex for a single account" in message
+
+
+def test_llm_removed_claude_code_underscore_points_at_hyphen_spelling():
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "claude_code"
+    with pytest.raises(ValueError, match="use provider claude-code"):
         validate_init(data)
 
 
-@pytest.mark.parametrize("provider", ["codex-pool", "Codex_Pool"])
-def test_capability_removed_codex_pool_provider_raises_with_capability_path(
-    provider,
-):
+@pytest.mark.parametrize("cap", ["vision", "daemon", "listen", "avatar"])
+@pytest.mark.parametrize("provider", ["gemini", "mimo", "Custom", "codex-pool", "claude_code"])
+def test_capability_removed_llm_provider_raises_with_capability_path(cap, provider):
     data = _valid_init()
-    data["manifest"]["capabilities"] = {
-        "web_search": {"provider": provider, "model": "gpt-5.5"}
-    }
+    data["manifest"]["capabilities"] = {cap: {"provider": provider, "model": "m"}}
 
     with pytest.raises(ValueError) as excinfo:
         validate_init(data)
 
     message = str(excinfo.value)
     assert message.startswith(
-        "manifest.capabilities.web_search.provider: "
-        f"provider {provider!r} was removed from LingTai."
+        f"manifest.capabilities.{cap}.provider: provider {provider!r} was removed from LingTai;"
     )
-    assert "subs-pool" in message
 
 
-def test_capability_codex_provider_is_not_treated_as_removed_pool():
+@pytest.mark.parametrize(
+    ("cap", "provider"),
+    [
+        ("vision", "openai"),
+        ("vision", "anthropic"),
+        ("vision", "codex"),
+        ("vision", "claude-code"),
+        ("vision", "local"),
+        ("vision", "mlx"),
+        ("vision", "inherit"),
+        ("web", "duckduckgo"),
+        ("web", "openai"),
+        ("web_search", "duckduckgo"),
+        ("listen", "whisper"),
+    ],
+)
+def test_capability_non_removed_providers_are_accepted(cap, provider):
     data = _valid_init()
-    data["manifest"]["capabilities"] = {
-        "web_search": {"provider": "codex", "model": "gpt-5.5"}
-    }
+    data["manifest"]["capabilities"] = {cap: {"provider": provider}}
+    validate_init(data)
 
+
+@pytest.mark.parametrize("provider", ["gemini", "minimax", "zhipu", "codex-pool"])
+@pytest.mark.parametrize("cap", ["web", "web_search"])
+def test_web_engine_names_are_not_llm_routes_and_are_not_rejected(cap, provider):
+    """``web``/``web_search`` ``provider`` values name search engines, whose
+    retired names keep the capability's own legacy runtime handling."""
+    data = _valid_init()
+    data["manifest"]["capabilities"] = {cap: {"provider": provider}}
     validate_init(data)
 
 
@@ -1059,11 +1034,25 @@ def test_legacy_prompt_is_not_reintroduced_as_lingtai_alias() -> None:
     assert "unknown top-level field: prompt" in warnings
 
 
-def test_deepseek_wire_api_responses_allowed():
-    """wire_api=responses is accepted for the deepseek provider (Responses opt-in)."""
+def test_vendor_endpoint_via_openai_wire_api_responses_allowed():
+    """A vendor's OpenAI-compatible endpoint is configured through ``openai``
+    (base_url + wire_api); the vendor name itself is no longer a provider."""
     data = _valid_init()
-    data["manifest"]["llm"]["provider"] = "deepseek"
+    data["manifest"]["llm"]["provider"] = "openai"
     data["manifest"]["llm"]["model"] = "deepseek-v4-flash"
     data["manifest"]["llm"]["base_url"] = "https://api.deepseek.com"
     data["manifest"]["llm"]["wire_api"] = "responses"
     validate_init(data)  # should not raise
+
+
+def test_removed_provider_pointer_survives_init_reader_redaction():
+    """The init reader's safe error excerpt redacts every quoted substring, so
+    the replacement pointer is written unquoted and stays actionable."""
+    from lingtai.init_reader import _safe_error
+    from lingtai.init_schema import removed_provider_message
+
+    excerpt = _safe_error(removed_provider_message("manifest.llm.provider", "deepseek"))
+    assert "deepseek" not in excerpt  # the user value itself is redacted
+    assert "use provider openai (OpenAI-compatible" in excerpt
+    assert "or anthropic (Anthropic-compatible: base_url)" in excerpt
+    assert "sub2api/subs-pool" in excerpt

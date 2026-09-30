@@ -19,8 +19,8 @@ def test_mail_send_passes_attachments(tmp_path):
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
 
     mail_svc = MagicMock()
     mail_svc.address = str(tmp_path / "test")

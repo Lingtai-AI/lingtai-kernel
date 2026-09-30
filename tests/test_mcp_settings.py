@@ -131,13 +131,13 @@ def test_settings_is_strict_show_only_and_manual_anchor_exists_in_canonical_manu
 
 def test_real_agent_starts_mounts_settings_and_builds_complete_prompt(tmp_path):
     from lingtai.agent import Agent
-    from tests._service_helpers import make_gemini_mock_service
+    from tests._service_helpers import make_mock_llm_service
 
     workdir = tmp_path / "agent"
     workdir.mkdir()
     _write_init(workdir, addons=[], marker="prompt-private-marker")
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="mcp-settings-real-agent",
         working_dir=workdir,
         capabilities={"mcp": {}},

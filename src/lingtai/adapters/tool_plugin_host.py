@@ -125,7 +125,7 @@ class AgentProviderIdentityAdapter:
 
     Narrower than :class:`AgentActiveProviderAdapter`: it holds one read
     closure and exposes only a string (or ``None``). Web consumes exactly this
-    label for its explicit Anthropic/Gemini eligibility gate; it never sees the
+    label for its backend-gated OpenAI/Anthropic engine eligibility; it never sees the
     provider service, credentials, model configuration, or the Agent. A
     non-string read is reported as ``None`` rather than coerced.
     """

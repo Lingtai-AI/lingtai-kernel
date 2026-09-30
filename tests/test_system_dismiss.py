@@ -163,8 +163,8 @@ def test_guarded_email_force_clears_surface_but_not_mail_state(tmp_path: Path) -
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     agent = Agent(service=svc, agent_name="test", working_dir=tmp_path / "test")
 
     email_id = str(uuid4())

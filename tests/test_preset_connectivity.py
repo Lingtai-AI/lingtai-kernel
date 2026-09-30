@@ -12,8 +12,8 @@ def test_no_credentials_does_not_make_network_call(monkeypatch):
     from lingtai.kernel import preset_connectivity
     with patch.object(preset_connectivity, "_probe_host") as probe:
         result = preset_connectivity.check_connectivity(
-            provider="minimax",
-            base_url="https://api.minimax.io",
+            provider="anthropic",
+            base_url="https://api.minimax.io/anthropic",
             api_key_env="MISSING_KEY",
         )
         assert result["status"] == "no_credentials"
@@ -188,18 +188,6 @@ def test_claude_code_ok_when_module_importable(monkeypatch):
         probe.assert_not_called()  # local provider — never hits the network
 
 
-def test_claude_code_underscore_alias_treated_as_local(monkeypatch):
-    """The underscore alias claude_code is the same local provider."""
-    from lingtai.kernel import preset_connectivity
-    with patch.object(preset_connectivity, "_module_available", return_value=True):
-        result = preset_connectivity.check_connectivity(
-            provider="claude_code",
-            base_url=None,
-            api_key_env=None,
-        )
-        assert result["status"] == "ok"
-
-
 def test_claude_code_missing_module_reports_no_credentials(monkeypatch):
     """When the backing module is absent, report a clear, actionable status
     (not the misleading 'no base_url' error)."""
@@ -215,32 +203,41 @@ def test_claude_code_missing_module_reports_no_credentials(monkeypatch):
         assert "no base_url" not in (result.get("error") or "")
 
 
-def test_kimi_code_aliases_are_local_cli_providers(monkeypatch):
-    """Kimi Code aliases must use module health, never a Kimi HTTP probe."""
+def test_only_claude_code_is_a_local_cli_login_provider():
+    """The removed ``claude_code``/``kimi-code``/``kimi_code`` spellings are no
+    longer local CLI-login providers; the default-URL probe table covers only
+    the three API families."""
     from lingtai.kernel import preset_connectivity
-    with patch.object(preset_connectivity, "_probe_host") as probe, \
-         patch.object(preset_connectivity, "_module_available", return_value=True):
-        for provider in ("kimi-code", "kimi_code"):
-            result = preset_connectivity.check_connectivity(
-                provider=provider,
-                base_url="https://api.kimi.com",
-                api_key_env="KIMI_MODEL_API_KEY",
-            )
-            assert result["status"] == "ok"
-        probe.assert_not_called()
+
+    assert set(preset_connectivity._LOCAL_CLI_LOGIN_PROVIDERS) == {"claude-code"}
+    assert set(preset_connectivity._PROVIDER_DEFAULT_URLS) == {
+        "openai",
+        "anthropic",
+        "codex",
+    }
 
 
-def test_kimi_code_missing_module_is_actionable(monkeypatch):
+@pytest.mark.parametrize(
+    "provider,expected_url",
+    (
+        ("openai", "https://api.openai.com"),
+        ("anthropic", "https://api.anthropic.com"),
+        ("codex", "https://chatgpt.com"),
+    ),
+)
+def test_default_url_probe_for_api_families(monkeypatch, provider, expected_url):
+    monkeypatch.setenv("MOCK_KEY", "sk-test")
     from lingtai.kernel import preset_connectivity
-    with patch.object(preset_connectivity, "_module_available", return_value=False):
+
+    with patch.object(preset_connectivity, "_probe_host", return_value=7) as probe:
         result = preset_connectivity.check_connectivity(
-            provider="kimi-code",
+            provider=provider,
             base_url=None,
-            api_key_env=None,
+            api_key_env="MOCK_KEY",
         )
-    assert result["status"] == "no_credentials"
-    assert "kimi-code" in (result.get("error") or "")
-    assert "no base_url" not in (result.get("error") or "")
+    assert result["status"] == "ok"
+    host = expected_url.split("://", 1)[1]
+    assert probe.call_args.args[0] == host
 
 
 # ---------------------------------------------------------------------------

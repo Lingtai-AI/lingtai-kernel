@@ -60,7 +60,7 @@ def _make_agent(tmp_path, capabilities=None, presets_dir=None):
     return agent
 
 
-def _write_preset(presets_dir, name, capabilities, provider="deepseek",
+def _write_preset(presets_dir, name, capabilities, provider="openai",
                   model="deepseek-v3", api_key_env="DEEPSEEK_API_KEY"):
     preset = {
         "name": name,
@@ -69,6 +69,7 @@ def _write_preset(presets_dir, name, capabilities, provider="deepseek",
             "llm": {
                 "provider": provider,
                 "model": model,
+                "base_url": "https://api.deepseek.com",
                 "api_key": None,
                 "api_key_env": api_key_env,
             },
@@ -286,7 +287,7 @@ def test_instantiate_skips_blacklisted_capabilities(tmp_path):
 def test_instantiate_resolves_inherit_against_preset_llm(tmp_path):
     """provider:'inherit' in a capability kwarg gets the preset's LLM, not
     the parent's. We check this by giving the parent a 'mock' provider but
-    the preset a 'gemini' provider — the resolved capability must see gemini.
+    the preset an 'anthropic' provider — the resolved capability must see anthropic.
     """
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
@@ -300,13 +301,13 @@ def test_instantiate_resolves_inherit_against_preset_llm(tmp_path):
     with patch("lingtai.tools.registry.setup_capability", side_effect=fake_setup):
         mgr._instantiate_preset_capabilities(
             {"web_search": {"provider": "inherit"}},
-            {"provider": "gemini", "model": "gemini-pro",
-             "api_key_env": "GEMINI_API_KEY"},
+            {"provider": "anthropic", "model": "claude-sonnet-4-5",
+             "api_key_env": "ANTHROPIC_API_KEY"},
         )
 
-    assert captured.get("web", {}).get("provider") == "gemini"
+    assert captured.get("web", {}).get("provider") == "anthropic"
     # api credentials inherited too; the legacy input key materializes canonically.
-    assert captured["web"].get("api_key_env") == "GEMINI_API_KEY"
+    assert captured["web"].get("api_key_env") == "ANTHROPIC_API_KEY"
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +574,7 @@ def test_emanate_preset_broken_requested_vision_fails(tmp_path, monkeypatch):
 # Preset must not erase the parent's always-on host tool floor.
 #
 # A preset selects the child LLM + provider-specific capabilities
-# (e.g. zhipu vision / web_search). It does NOT re-declare the always-on
+# (e.g. vision / web_search). It does NOT re-declare the always-on
 # CORE_DEFAULTS floor (shell / read / write / edit / glob / grep), because the
 # TUI preset wizard only writes overrides/opt-ins into manifest.capabilities.
 # So requested host tools that are valid in the *parent* capability set must
@@ -771,7 +772,7 @@ def test_emanate_preset_skipped_provider_cap_still_runs_host_tools(
     _write_preset(
         presets_dir,
         "glm_like",
-        capabilities={"vision": {"provider": "zhipu", "api_key_env": "IGNORED"}},
+        capabilities={"vision": {"provider": "openai", "api_key_env": "IGNORED"}},
     )
 
     # Parent agent HAS the host floor.

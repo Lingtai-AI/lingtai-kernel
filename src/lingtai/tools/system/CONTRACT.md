@@ -1,7 +1,7 @@
 ---
 name: system-contract
 tool: system
-contract_version: 5
+contract_version: 6
 related_files:
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/plugin.py
@@ -44,6 +44,9 @@ maintenance: |
   suite. If behavior and this contract disagree, the code is the source of
   truth — fix the contract in the same change and bump contract_version on
   breaking contract edits.
+  contract_version 6 collapses the LLM route classifier to the four provider
+  families and retires the llm.api_compat / llm.reasoning_effort_vocab rows
+  (their init pointers, with llm.use_responses_api, are inert exclusions).
   contract_version 5 applies the System kernel-level catch-all rule to every
   effective setting without another concrete ToolPlugin owner while retaining
   a SHOW-only five-field surface. contract_version 4 added read-only discovery
@@ -134,9 +137,12 @@ resolver, constant, or selected registered-factory route. SHOW fresh-reads
 effective init/preset inputs and per-use environment resolvers where the runtime
 does; process-start constants are reported as the current effective process
 state. Canonical provider-default normalization runs before the narrow
-registered-factory classifier projects each LLM row. A selected factory's row
-reports the effective value and default that factory actually consumes; an axis
-the factory ignores reports null current/default. Effective adapter selectors
+registered-factory classifier projects each LLM row; the registered factories
+are exactly `openai`, `anthropic`, `codex`, and `claude-code`. A selected
+factory's row reports the effective value and default that factory actually
+consumes; an axis the factory ignores reports null current/default. The retired
+`manifest.llm.api_compat`, `reasoning_effort_vocab`, and `use_responses_api`
+keys are recognized-and-ignored inert exclusions, never rows. Effective adapter selectors
 report the selected public route rather than malformed authored syntax, and an
 unknown selected provider fails the complete action loudly. Projection may
 inspect registry/factory identity, canonical constants, and signatures only; it

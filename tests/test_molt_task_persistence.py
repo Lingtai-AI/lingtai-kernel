@@ -33,8 +33,8 @@ def _make_mock_service():
     """Create a mocked LLMService whose create_session returns a ChatInterface."""
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
 
     def fake_create_session(**kwargs):
         mock_chat = MagicMock()

@@ -1,8 +1,9 @@
 """OpenAI adapter — wraps the ``openai`` SDK for OpenAI and compatible APIs.
 
-Covers: OpenAI, DeepSeek, Together AI, Groq, Fireworks, Ollama, vLLM,
-and any other provider exposing an OpenAI-compatible ``/chat/completions``
-endpoint.
+Backs the ``openai`` provider (official OpenAI by default, or any endpoint
+exposing an OpenAI-compatible ``/chat/completions`` or ``/responses`` API —
+vendor endpoints, gateways, local servers) and, through
+``CodexOpenAIAdapter``, the ``codex`` provider.
 
 This is the **only** module that imports the ``openai`` package.
 """
@@ -968,35 +969,35 @@ def _estimate_responses_input_tokens(
     return total
 
 
-def _responses_reasoning_kwargs(thinking: str | None) -> dict[str, dict[str, str]]:
-    """Return OpenAI Responses reasoning kwargs for a configured thinking level.
+def _standard_reasoning_effort(thinking: str | None) -> str | None:
+    """Return the standard reasoning-effort value for a configured level.
 
-    An omitted/``default`` level maps to the explicit ``xhigh`` effort (the
-    kernel's canonical default), matching the Codex adapter's longstanding
-    behavior. Explicit levels pass through; ``none`` is sent as
-    ``reasoning.effort = "none"``.
+    ``thinking`` is sent verbatim as the standard field on both wires; the
+    omitted/``default`` sentinel returns ``None`` so the field is omitted and
+    the endpoint's own default applies. Explicit ``none`` is a real value and
+    is sent. Anything outside ``THINKING_LEVELS`` fails loudly.
     """
     if thinking in (None, "default"):
-        thinking = "xhigh"
+        return None
     if thinking not in THINKING_LEVELS:
         raise ValueError(
-            "OpenAI Responses thinking must be one of "
+            "thinking must be one of "
             f"{', '.join(THINKING_LEVELS)}, or default"
         )
-    return {"reasoning": {"effort": thinking}}
+    return thinking
 
 
-def _capture_reasoning_application(session: Any, applied: Any) -> Any:
-    """Attach the one resolved reasoning decision to the session, if any.
+def _responses_reasoning_kwargs(thinking: str | None) -> dict[str, dict[str, str]]:
+    """Return Responses ``reasoning`` kwargs for a configured thinking level.
 
-    Observation (``lingtai.kernel.session``) reads this exact object, so what
-    gets recorded is the decision the request really carries rather than a
-    recomputation from raw config. Sessions on a route with no provider-local
-    reasoning policy are left untouched.
+    ``reasoning: {effort: <level>}`` verbatim; omitted/``default`` sends no
+    ``reasoning`` field. (The Codex adapter substitutes its own explicit
+    ``xhigh`` default before calling this.)
     """
-    if applied is not None:
-        session.reasoning_application = applied
-    return session
+    effort = _standard_reasoning_effort(thinking)
+    if effort is None:
+        return {}
+    return {"reasoning": {"effort": effort}}
 
 
 def _codex_responses_trace_path() -> Path | None:
@@ -2877,7 +2878,15 @@ class OpenAIChatSession(ChatSession):
 
 
 class OpenAIResponsesSession(ChatSession):
-    """Session backed by OpenAI's Responses API with server-side state."""
+    """Session backed by the Responses API.
+
+    ``OpenAIAdapter`` always builds it with ``stateless_replay=True``: every
+    request replays the full canonical history and never sends
+    ``previous_response_id``. The non-replay mode (``stateless_replay=False``)
+    remains only as the base of ``CodexResponsesSession``, which overrides
+    ``send``/``send_stream`` with its own full/incremental planner and uses the
+    base accessors of that mode.
+    """
 
     def __init__(
         self,
@@ -3064,12 +3073,7 @@ class OpenAIResponsesSession(ChatSession):
     def _replay_input_items(self) -> list[dict]:
         """Return the stateless-replay wire items for the CURRENT interface.
 
-        Extracted seam (not just an inline ``to_responses_input`` call) so a
-        subclass with standalone compaction active (e.g.
-        ``MimoResponsesSession``) can substitute the opaque compacted-prefix-
-        plus-delta representation here instead of a full re-conversion —
-        without duplicating ``send``/``send_stream``. Plain (non-compacting)
-        Responses sessions keep the original full-conversion behavior. When
+        Plain Responses sessions convert the full canonical interface. When
         ``inject_reasoning_fallback`` is enabled, assistant turns after the
         first ``function_call`` that lack a preserved ``reasoning`` item get
         a per-turn-unique fallback item injected (generic version of the
@@ -3256,15 +3260,25 @@ class OpenAIResponsesSession(ChatSession):
 # ---------------------------------------------------------------------------
 
 
-class OpenAIAdapter(LLMAdapter):
-    """Adapter that wraps the ``openai`` SDK for OpenAI and compatible APIs."""
+#: The official OpenAI endpoint — the ``openai`` provider's default when a
+#: manifest omits ``base_url``.
+OPENAI_OFFICIAL_BASE_URL = "https://api.openai.com/v1"
 
-    # Session class for the Chat Completions path. MiMo and Zhipu subclasses
-    # override this to inject provider-specific behavior. Shared-adapter routes
-    # such as DeepSeek configure behavior through constructor hooks instead.
-    # Responses-API sessions use OpenAIResponsesSession unconditionally
-    # since that path is OpenAI-only.
-    _session_class: type = OpenAIChatSession
+#: Accepted ``wire_api`` selector values. ``auto`` is a legacy spelling that
+#: means the same as omitting the selector (Chat Completions).
+_WIRE_API_VALUES = frozenset({"auto", "chat_completions", "responses"})
+
+
+class OpenAIAdapter(LLMAdapter):
+    """Adapter that wraps the ``openai`` SDK for any OpenAI-compatible endpoint.
+
+    ``base_url`` is optional (the official endpoint when omitted). ``wire_api``
+    selects Chat Completions (default; legacy ``auto`` means the same) or the
+    Responses API, which is ALWAYS stateless full-history replay: every request
+    carries the canonical conversation and never relies on
+    ``previous_response_id`` server-side state. ``thinking`` and
+    ``service_tier`` are forwarded as the standard wire fields.
+    """
 
     def __init__(
         self,
@@ -3272,32 +3286,23 @@ class OpenAIAdapter(LLMAdapter):
         *,
         base_url: str | None = None,
         timeout_ms: int = 300_000,
-        use_responses: bool = False,
-        force_responses: bool = False,
         wire_api: str | None = None,
         max_rpm: int = 0,
         default_headers: dict | None = None,
         prompt_cache_key: str | bool | None = None,
         service_tier: str | None = None,
-        responses_stateless_replay: bool = False,
         inject_reasoning_fallback: bool | None = None,
-        reasoning_effort_vocab: str = "openai",
         prompt_cache_namespace: str | None = None,
-        reasoning_policy: Callable[..., Any] | None = None,
     ):
         self.base_url = base_url
-        self._use_responses = use_responses
-        self._force_responses = force_responses
-        # Canonical wire selection: ``auto`` delegates to the legacy
-        # ``use_responses``/``force_responses`` heuristics; explicit
-        # ``chat_completions``/``responses`` force that path regardless of
-        # base URL or legacy flags. ``None`` is treated as ``auto`` so
-        # existing callers keep their current behavior.
-        if wire_api is not None and wire_api not in {"auto", "chat_completions", "responses"}:
+        # Canonical wire selection: ``responses`` selects the Responses API;
+        # ``chat_completions``, the legacy ``auto``, and omission all select
+        # Chat Completions.
+        if wire_api is not None and wire_api not in _WIRE_API_VALUES:
             raise ValueError(
-                f"wire_api must be one of auto/chat_completions/responses, got {wire_api!r}"
+                f"wire_api must be one of chat_completions/responses (or legacy auto), got {wire_api!r}"
             )
-        self._wire_api = wire_api or "auto"
+        self._wire_api = "responses" if wire_api == "responses" else "chat_completions"
         # Prompt-cache-key policy for this adapter's OpenAI-compatible sessions:
         #   None  -> auto-derive a stable, namespaced default per model
         #   str   -> use this exact key for every session (override)
@@ -3311,18 +3316,16 @@ class OpenAIAdapter(LLMAdapter):
             self._prompt_cache_key_policy = _AUTO_PROMPT_CACHE_KEY
         else:
             self._prompt_cache_key_policy = prompt_cache_key
-        self._responses_stateless_replay = bool(responses_stateless_replay)
         # Wire ``service_tier`` (already normalized by the factory, e.g. user
         # ``fast`` -> ``priority``). ``None`` omits the field.
         self._service_tier: str | None = service_tier or None
-        # Generic ``reasoning_content`` round-trip fallback (the former
-        # DeepSeek-specific behavior, now available to any OpenAI-compatible
-        # provider). On by default: real thinking is already passed back via
-        # ThinkingBlock, and this only injects a per-turn-unique stub on
-        # assistant tool-call turns that lack preserved thinking — required
-        # by thinking-mode endpoints (DeepSeek V4, opencode.ai zen/go) and
-        # harmlessly ignored by endpoints that don't know the field. The
-        # explicit bool param (from provider config) wins; when unset, the
+        # Generic ``reasoning_content`` round-trip fallback for any
+        # OpenAI-compatible endpoint. On by default: real thinking is already
+        # passed back via ThinkingBlock, and this only injects a
+        # per-turn-unique stub on assistant tool-call turns that lack preserved
+        # thinking — required by thinking-mode endpoints and harmlessly
+        # ignored by endpoints that don't know the field. The explicit bool
+        # param (from provider config) wins; when unset, the
         # LINGTAI_INJECT_REASONING_FALLBACK env var controls it (default on).
         # Forwarded into both session classes.
         if inject_reasoning_fallback is None:
@@ -3330,21 +3333,8 @@ class OpenAIAdapter(LLMAdapter):
                 "LINGTAI_INJECT_REASONING_FALLBACK", default=True
             )
         self._inject_reasoning_fallback = bool(inject_reasoning_fallback)
-        # Chat Completions ``reasoning_effort`` vocabulary: ``openai`` (default)
-        # maps kernel levels onto OpenAI's high/low surface; ``seven_tier`` is
-        # the retained compatibility path that passes THINKING_LEVELS through.
-        self._reasoning_effort_vocab = reasoning_effort_vocab
-        # Optional provider-local reasoning owner. A route may install a
-        # callable ``policy(model=..., wire=..., thinking=...)`` that returns
-        # the reasoning decision for that request; when it is installed it
-        # decides the reasoning fields for BOTH wires and the generic
-        # vocabulary projections below are never consulted. When it is absent
-        # — every route except deepseek — this adapter behaves exactly as
-        # before. This transport holds no provider's models, levels, aliases,
-        # or defaults; see ``lingtai/llm/deepseek/policy.py``.
-        self._reasoning_policy = reasoning_policy
-        # Optional fixed provider namespace for the auto-derived
-        # ``prompt_cache_key`` (e.g. ``deepseek`` -> ``lingtai-deepseek:{model}:v1``).
+        # Optional fixed namespace for the auto-derived ``prompt_cache_key``
+        # (e.g. ``acme`` -> ``lingtai-acme:{model}:v1``).
         self._prompt_cache_namespace = prompt_cache_namespace
         kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:
@@ -3354,6 +3344,23 @@ class OpenAIAdapter(LLMAdapter):
         self._client_kwargs = dict(kwargs)  # store for session reset
         self._client = openai.OpenAI(**kwargs)
         self._setup_gate(max_rpm)
+
+    @property
+    def effective_base_url(self) -> str:
+        """The endpoint this adapter's requests actually reach.
+
+        The configured ``base_url`` when set; otherwise the SDK client's
+        resolved endpoint (the official ``https://api.openai.com/v1`` unless
+        the SDK's own environment override applies). Credential-reusing
+        capabilities read this instead of the raw manifest ``base_url``.
+        """
+        if self.base_url:
+            return self.base_url
+        try:
+            resolved = str(self._client.base_url).rstrip("/")
+        except Exception:
+            resolved = ""
+        return resolved or OPENAI_OFFICIAL_BASE_URL
 
     # -- Prompt cache key ------------------------------------------------------
 
@@ -3366,8 +3373,8 @@ class OpenAIAdapter(LLMAdapter):
           * custom/compatible base_url    -> ``lingtai-openai-compat:{host}:{model}:v1``
 
         A configured ``prompt_cache_namespace`` gives a fixed provider identity
-        (DeepSeek, Zhipu, MiMo, Codex) a clean provider namespace instead of
-        the base_url host, without needing a subclass override.
+        a clean namespace instead of the base_url host, without needing a
+        subclass override.
         """
         if self._prompt_cache_namespace:
             return f"lingtai-{self._prompt_cache_namespace}:{model}:v1"
@@ -3389,21 +3396,8 @@ class OpenAIAdapter(LLMAdapter):
         return policy  # explicit override string
 
     def _should_use_responses(self) -> bool:
-        """Return True if the selected wire API is the Responses path.
-
-        Canonical ``wire_api`` wins over legacy ``use_responses``/
-        ``force_responses`` heuristics:
-          * ``chat_completions`` -> always False
-          * ``responses``        -> always True, even for custom base URLs
-          * ``auto``             -> legacy behavior: ``use_responses`` AND
-            (no base URL OR ``force_responses``)
-        """
-        if self._wire_api == "chat_completions":
-            return False
-        if self._wire_api == "responses":
-            return True
-        # auto
-        return self._use_responses and (not self.base_url or self._force_responses)
+        """Return True when the selected wire is the Responses API."""
+        return self._wire_api == "responses"
 
     # -- LLMAdapter interface --------------------------------------------------
 
@@ -3417,7 +3411,7 @@ class OpenAIAdapter(LLMAdapter):
         force_tool_call: bool = False,
         interface: ChatInterface | None = None,
         thinking: str = "default",
-        interaction_id: str | None = None,  # ignored — Gemini-specific
+        interaction_id: str | None = None,  # ignored — no server-side resume
         context_window: int = 0,
     ) -> ChatSession:
         # Create interface if not provided
@@ -3426,7 +3420,7 @@ class OpenAIAdapter(LLMAdapter):
             interface = ChatInterface()
             interface.add_system(system_prompt, tools=tool_dicts)
 
-        # Select the wire path. Canonical ``wire_api`` wins over legacy flags.
+        # Select the wire path from the canonical ``wire_api`` selector.
         if self._should_use_responses():
             session = self._create_responses_session(
                 model,
@@ -3481,21 +3475,17 @@ class OpenAIAdapter(LLMAdapter):
 
         # Responses API takes `reasoning: { effort: ... }`, not the Chat
         # Completions SDK's flat `reasoning_effort`. Sending the wrong shape
-        # silently drops the field on the OpenAI Responses endpoint and 400s
-        # on Codex's `/backend-api/codex/responses`.
-        #
-        # A route with a provider-local reasoning policy owns this decision
-        # entirely — including whether any field is sent at all — and may raise
-        # before the SDK is ever touched.
-        applied = self._apply_reasoning_policy(
-            model=model, wire="responses", thinking=thinking, extra_kwargs=extra_kwargs
-        )
-        if applied is None:
-            extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        # silently drops the field on the OpenAI Responses endpoint. The
+        # configured level is sent verbatim; omitted/``default`` sends none.
+        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
         if self._service_tier is not None:
             extra_kwargs["service_tier"] = self._service_tier
 
-        session = OpenAIResponsesSession(
+        # The Responses wire is ALWAYS stateless full-history replay: every
+        # request carries the canonical conversation and never sends
+        # ``previous_response_id``, on every endpoint including official
+        # OpenAI.
+        return OpenAIResponsesSession(
             client=self._client,
             model=model,
             instructions=system_prompt,
@@ -3506,42 +3496,9 @@ class OpenAIAdapter(LLMAdapter):
             interface=interface,
             prompt_cache_key=self._resolve_prompt_cache_key(model),
             context_window=context_window,
-            stateless_replay=self._responses_stateless_replay,
+            stateless_replay=True,
             inject_reasoning_fallback=self._inject_reasoning_fallback,
         )
-        return _capture_reasoning_application(session, applied)
-
-    def _apply_reasoning_policy(
-        self,
-        *,
-        model: str,
-        wire: str,
-        thinking: Any,
-        extra_kwargs: dict[str, Any],
-    ) -> Any:
-        """Let an installed provider-local policy own the reasoning fields.
-
-        Returns the resolved application (for capture on the session), or
-        ``None`` when no policy is installed so the caller keeps the generic
-        OpenAI projection. Transport-neutral: nothing here knows any provider's
-        models, levels, aliases, or defaults.
-        """
-        policy = self._reasoning_policy
-        if policy is None:
-            return None
-        applied = policy(model=model, wire=wire, thinking=thinking)
-        payload = applied.request_kwargs()
-        # ``extra_body`` is a shared channel — a provider extension, a subclass
-        # contribution and a caller override can all want a key in it — so it
-        # composes instead of overwriting; unrelated existing keys survive.
-        extra_body = payload.pop("extra_body", None)
-        extra_kwargs.update(payload)
-        if extra_body:
-            extra_kwargs["extra_body"] = {
-                **(extra_kwargs.get("extra_body") or {}),
-                **extra_body,
-            }
-        return applied
 
     def _create_completions_session(
         self,
@@ -3578,37 +3535,16 @@ class OpenAIAdapter(LLMAdapter):
                 },
             }
 
-        # Generic Chat Completions reasoning projection. The retained
-        # ``seven_tier`` compatibility vocabulary passes kernel levels through
-        # unchanged, while the default ``openai`` vocabulary clamps
-        # ``xhigh``/``max`` to ``high`` and omits the field for the
-        # omitted/``default`` sentinel so the upstream v1 default applies.
-        # A route with a provider-local reasoning policy owns this decision
-        # entirely (DeepSeek, for instance, also emits its own ``thinking``
-        # switch and rejects levels its model does not really have); the
-        # generic vocabulary projection is then never consulted.
-        applied = self._apply_reasoning_policy(
-            model=model,
-            wire="chat_completions",
-            thinking=thinking,
-            extra_kwargs=extra_kwargs,
-        )
-        if applied is None:
-            effort = self._chat_reasoning_effort(thinking)
-            if effort is not None:
-                extra_kwargs["reasoning_effort"] = effort
+        # Standard Chat Completions ``reasoning_effort``: the configured level
+        # verbatim; omitted/``default`` sends no field so the endpoint's own
+        # default applies.
+        effort = _standard_reasoning_effort(thinking)
+        if effort is not None:
+            extra_kwargs["reasoning_effort"] = effort
         if self._service_tier is not None:
             extra_kwargs["service_tier"] = self._service_tier
 
-        # Subclass-provided extra_body (e.g. OpenRouter's reasoning include).
-        # Merge rather than overwrite so callers adding their own extra_body
-        # via extra_kwargs aren't clobbered.
-        sub_extra_body = self._adapter_extra_body()
-        if sub_extra_body:
-            existing = extra_kwargs.get("extra_body") or {}
-            extra_kwargs["extra_body"] = {**sub_extra_body, **existing}
-
-        session = self._session_class(
+        return OpenAIChatSession(
             client=self._client,
             model=model,
             interface=interface,
@@ -3621,59 +3557,6 @@ class OpenAIAdapter(LLMAdapter):
             inject_reasoning_fallback=self._inject_reasoning_fallback,
             base_url=self.base_url,
         )
-        return _capture_reasoning_application(session, applied)
-
-    def _adapter_extra_body(self) -> dict:
-        """Return extra_body JSON fields to include on every request.
-
-        Default is empty. Subclasses override to inject provider-specific
-        kwargs (e.g. OpenRouter needs `reasoning: {include: true}` to
-        surface reasoning text on reasoning-capable models).
-        """
-        return {}
-
-    def _chat_reasoning_effort(self, thinking: str | None) -> str | None:
-        """Map a kernel thinking level to the Chat Completions reasoning_effort value.
-
-        This is the v1 projection of the Responses semantics (which sends
-        ``reasoning: {effort: <level>}`` verbatim and maps an omitted/default
-        level to explicit ``xhigh``). The vocabulary is selected by
-        ``reasoning_effort_vocab``:
-
-          * ``openai`` (default) projects the Responses vocabulary onto OpenAI
-            v1's official set ``minimal | low | medium | high``: explicit
-            ``minimal``/``low``/``medium``/``high`` pass through, ``xhigh`` and
-            ``max`` clamp to ``high`` (v1 has no higher tier), ``none`` maps to
-            ``None`` so the field is omitted (no reasoning control), and the
-            omitted/``default`` sentinel maps to ``None`` so the upstream v1
-            default applies (OpenAI v1 has no ``xhigh``; omission is the
-            graceful v1 projection of the Responses xhigh default).
-          * ``seven_tier`` is the retained compatibility projection: it passes
-            the kernel THINKING_LEVELS through unchanged and maps the omitted/
-            ``default`` sentinel to explicit ``xhigh``. Provider-specific routes
-            with a different model/wire contract use a provider-local policy.
-
-        Returns ``None`` so the field is not sent.
-        """
-        from lingtai.kernel.config import THINKING_LEVELS
-
-        if self._reasoning_effort_vocab == "seven_tier":
-            if thinking in (None, "default"):
-                return "xhigh"
-            if thinking not in THINKING_LEVELS:
-                raise ValueError(
-                    "thinking must be one of "
-                    f"{', '.join(THINKING_LEVELS)}, or default"
-                )
-            return thinking
-        if thinking in (None, "default", "none"):
-            return None
-        if thinking not in THINKING_LEVELS:
-            raise ValueError(
-                "thinking must be one of "
-                f"{', '.join(THINKING_LEVELS)}, or default"
-            )
-        return "high" if thinking in ("xhigh", "max") else thinking
 
     def generate(
         self,
@@ -3828,21 +3711,19 @@ class _StandaloneCompactionMixin:
     compacted-prefix-plus-strict-additive-delta replay basis
     (``_compacted_replay_input``), and the turn-aware boundary selection that
     builds the next compact request's ``input`` (``_prepare_compact_request``).
-    First extracted from ``CodexResponsesSession`` (PR #926) so a second
-    provider (MiMo) can reuse it without duplicating the calibration/boundary
-    logic — see PR #926 for the original design rationale and
+    Extracted from ``CodexResponsesSession`` (PR #926); Codex is its only
+    host today — see PR #926 for the original design rationale and
     ``tests/test_codex_standalone_compaction.py`` for the behavior contract.
 
-    Subclasses differ in exactly two ways, both left as seams:
+    The host class supplies two seams:
       * ``_compaction_prefix_input(entries)`` — how a list of canonical
         ``ChatInterface`` entries converts to Responses-wire items for the
         compact request / delta replay. Codex routes this through its
-        per-session tool-result output freezing; a plain stateless session
-        uses the ordinary converter.
+        per-session tool-result output freezing; the default uses the
+        ordinary converter.
       * ``_compact_now()`` — the actual ``client.responses.compact()`` call
         and its failure policy. Codex treats any failure as non-fatal (skip
-        compaction for this turn); MiMo treats it as a hard failure (see
-        ``MimoResponsesSession._compact_now``). This mixin does not call
+        compaction for this turn). This mixin does not call
         ``client.responses.compact`` itself; it only prepares the request.
 
     Requires the host class to also provide (already true of
@@ -3859,8 +3740,7 @@ class _StandaloneCompactionMixin:
         # actual reported input-token count and a LOCAL estimate of the exact
         # rendered representation that produced it, captured together right
         # after a successful response (see each host session's own
-        # post-response hook — ``CodexResponsesSession.send_stream`` /
-        # ``MimoResponsesSession._record_calibration_sample``). Both ``None``
+        # post-response hook — ``CodexResponsesSession.send_stream``). Both ``None``
         # until the first successful provider response.
         self._last_provider_input_tokens: int | None = None
         self._last_local_estimate_tokens: int | None = None
@@ -6597,8 +6477,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
     """OpenAIAdapter variant that builds CodexResponsesSession instead of the
     standard server-stateful OpenAIResponsesSession.
 
-    Use this with `provider=codex` only. Always set `use_responses=True,
-    force_responses=True`. `base_url` defaults to the official Codex endpoint
+    Use this with `provider=codex` only. Always set `wire_api="responses"`.
+    `base_url` defaults to the official Codex endpoint
     (`https://chatgpt.com/backend-api/codex`) but is configurable — the `codex`
     factory forwards an explicit `manifest.llm['base_url']`. It binds one
     OAuth account (``FixedAccountSource``); account pooling is external.
@@ -7169,9 +7049,9 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         # Omitted/``default`` thinking sends an explicit
         # ``reasoning.effort = "xhigh"`` instead of omitting the field
         # (omitting it would fall back to the Codex backend's own, lower
-        # default). Explicit levels pass through unchanged; the generic OpenAI
-        # Responses path shares the same explicit ``xhigh`` default (see
-        # ``_responses_reasoning_kwargs``).
+        # default). Explicit levels pass through unchanged. This default is
+        # Codex-only: the generic ``openai`` Responses path omits the field
+        # for ``default`` (see ``_responses_reasoning_kwargs``).
         if thinking in (None, "default"):
             thinking = "xhigh"
         extra_kwargs.update(_responses_reasoning_kwargs(thinking))

@@ -22,13 +22,13 @@ import pytest
 
 from lingtai.agent import Agent
 from lingtai.services.vision import VisionService
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 
 
 @pytest.fixture
 def mcp_agent(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="tool-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"mcp": {}},
@@ -43,7 +43,7 @@ def mcp_agent(tmp_path):
 @pytest.fixture
 def daemon_agent(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="daemon-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"daemon": {}},
@@ -57,7 +57,7 @@ def daemon_agent(tmp_path):
 @pytest.fixture
 def plugin_agent(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="tool-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"plugin": {}},
@@ -71,7 +71,7 @@ def plugin_agent(tmp_path):
 @pytest.fixture
 def task_card_agent(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="task-card-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"task_card": {}},
@@ -91,7 +91,7 @@ def test_all_thirteen_official_families_mount_exactly_once_together(tmp_path):
         "notification", "shell", "system", "task_card", "vision", "web",
     )
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="all-thirteen-official-plugins",
         working_dir=tmp_path / "agent",
         capabilities={
@@ -147,7 +147,7 @@ def test_official_vision_mount_keeps_active_provider_and_packaged_manual(tmp_pat
     from lingtai.tools.vision import DECLARATION, VisionManager
 
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="vision-tool-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"vision": {"vision_service": MagicMock(spec=VisionService)}},
@@ -191,7 +191,7 @@ def test_official_web_mount_keeps_provider_identity_and_packaged_manual(tmp_path
     from lingtai.tools.web_search import DECLARATION, WebManager
 
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="web-tool-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"web": {}},
@@ -400,7 +400,7 @@ def test_notification_is_mounted_once_on_live_construction_despite_opt_out(
 ):
     """Both capability-shaped opt-outs preserve one live official Notification mount."""
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="notification-always-on-construction",
         working_dir=tmp_path / "agent",
         **construction_kwargs,
@@ -433,7 +433,7 @@ def test_notification_is_remounted_once_on_live_refresh_despite_opt_out(
     """Refresh clears/rebuilds the surface but cannot remove the official mount."""
     workdir = tmp_path / "agent"
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="notification-always-on-refresh",
         working_dir=workdir,
         capabilities={},
@@ -443,8 +443,8 @@ def test_notification_is_remounted_once_on_live_refresh_despite_opt_out(
             "agent_name": "notification-always-on-refresh",
             "language": "en",
             "llm": {
-                "provider": "gemini",
-                "model": "gemini-test",
+                "provider": "anthropic",
+                "model": "claude-test",
                 "api_key": "test-key",
                 "base_url": None,
             },

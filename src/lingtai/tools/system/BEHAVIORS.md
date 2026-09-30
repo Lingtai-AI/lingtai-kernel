@@ -270,14 +270,19 @@ Pass only when mounted and direct routes agree on refusal, force escape, receipt
 ### Expected evidence
 - [ ] The complete catalogue is returned with unique ordered keys and no partial success.
 - [ ] Nullable LLM `current` and `default` fields follow the selected registered
-      factory route after canonical provider-default normalization; ignored
-      generic axes are null rather than global defaults, and `llm.api_compat`
-      reports the effective adapter route rather than malformed authored syntax.
-- [ ] Wire API defaults follow the selected factory (MiMo/Codex Responses,
-      OpenAI/custom/DeepSeek Chat Completions), service tier is reported only on
-      routes that forward it (Codex, OpenAI, custom `api_compat=openai`), and
-      factories that ignore either axis report null rather than fake values.
-- [ ] Omitted thinking uses the selected route's canonical hydrated default,
+      factory route (`openai`, `anthropic`, `codex`, or `claude-code`) after
+      canonical provider-default normalization; ignored generic axes are null
+      rather than global defaults. There are no `llm.api_compat` or
+      `llm.reasoning_effort_vocab` rows — those retired keys (with
+      `llm.use_responses_api`) are inert exclusions.
+- [ ] Wire API follows the selected factory (`codex` forced `responses`;
+      `openai` `chat_completions` unless `responses` is authored, legacy `auto`
+      reporting `chat_completions`), service tier is reported only on the
+      routes that forward it (`openai`, `codex`), and factories that ignore
+      either axis (`anthropic`, `claude-code`) report null rather than fake
+      values.
+- [ ] Omitted thinking uses the selected route's canonical hydrated default
+      (`default` for `openai`/`codex`, `high` for `anthropic`/`claude-code`),
       and selected-provider credentials reflect only authored key/alias sources.
 - [ ] `runtime.tool_batch_memory_relief` matches the canonical live resolver for
       the global post-`ToolExecutor`-batch hook, including ordinary main-agent

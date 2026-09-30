@@ -7,7 +7,7 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 15
+contract_version: 16
 last_changed_at: "2026-09-08"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
@@ -59,11 +59,11 @@ related_files:
   - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
   - src/lingtai/mcp_servers/daemon_common/server.py
   - src/lingtai/llm/openai/ANATOMY.md
-  - src/lingtai/llm/mimo/ANATOMY.md
   - tests/test_task_card_proactivity.py
   - tests/test_tool_family_daemon_migration.py
   - tests/test_daemon_settings.py
   - tests/test_daemon.py
+  - tests/test_daemon_llm_defaults_forwarding.py
   - tests/test_daemon_central_manager.py
   - tests/test_daemon_empty_parity.py
   - tests/test_daemon_missing_finish_guidance.py
@@ -377,23 +377,24 @@ window is passed into the daemon `LLMService` and its context telemetry.
 Per-task `context_token_limit` (positive integer; bool rejected) is a
 context-token compaction threshold — rendered/provider-context tokens, never
 cumulative spend — effective only for `backend="lingtai"` tasks whose resolved
-provider is Codex (`codex`) or the native `mimo` LLM provider
-(`manifest.llm.provider="mimo"` — distinct from the `backend` enum's
-`mimo`/`mimocode` alias above, which drives the external `mimo` CLI as a
-subprocess and never consults this field); every other provider and every
-external CLI backend ignores it. This threshold does not set the daemon context
+provider is Codex (`codex`); every other provider (`openai`, `anthropic`,
+`claude-code`) and every external CLI backend (including the `mimo`/`mimocode`
+alias, which drives the external `mimo` CLI as a subprocess) ignores it. This threshold does not set the daemon context
 window. Omitted, it uses the daemon session's own resolved context window as the
 threshold: explicit preset canonical `manifest.llm.context_limit` when supplied,
 otherwise the inherited valid parent effective window, otherwise 272,000. An
 explicit `context_token_limit` value wins only for this separate provider
-compaction threshold. Native
-`mimo` defaults to the stateless OpenAI Responses wire (full-history replay;
-never `store`/`previous_response_id`/`conversation`/`context_management`) — an explicit `wire_api="chat_completions"` on the
-preset selects the Chat Completions escape hatch instead. **Failure policy
-differs by provider:** a standalone-compaction failure is non-fatal for Codex
-(that turn's compaction is skipped; the loop continues on full history) but a
-HARD failure for native `mimo` (propagates to the caller; never silently
-continues on full history and never falls back to a different wire).
+compaction threshold. A standalone-compaction failure is non-fatal for Codex
+(that turn's compaction is skipped; the loop continues on full history).
+
+A daemon run from an explicit preset forwards the preset's full generic
+provider-default surface to its daemon-scoped `LLMService`: the bucket is built
+by the same `build_provider_defaults_from_manifest_llm` safelist the main
+agent boot uses (`service_tier`, `wire_api`, `inject_reasoning_fallback`,
+`prompt_cache_namespace`, `default_headers`, `codex_*` identity/endpoint keys)
+plus the preset's `base_url` and `max_rpm`; no separate daemon key list may
+drop a knob the main agent would honor. The per-run Codex cache anchor still
+replaces the parent's.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
@@ -761,7 +762,7 @@ run artifacts, verify state, and only then continue. It is not silent
 continuation. Compaction construction/send failures propagate through the
 existing daemon failure path; they are not swallowed.
 
-Provider-specific standalone compaction (including Codex/native-MiMo's
+Provider-specific standalone compaction (including Codex's
 `context_token_limit` path) remains independent: this countdown is daemon-owned,
 provider-independent safety state and adds no user configuration or flag.
 
@@ -779,7 +780,7 @@ prompt tokens or window are unknown/zero. It never repeats or embeds the
 prompt body, adds no Nudge/notification/file/timer/dismissal/config surface,
 and does not affect or share state with the 90% countdown above.
 
-### 9. Per-task `context_token_limit` is Codex/native-mimo-only and lingtai-backend-only
+### 9. Per-task `context_token_limit` is Codex-only and lingtai-backend-only
 
 The daemon task object also carries an optional per-task `context_token_limit`
 (positive integer; bool rejected) — a context-token compaction threshold, never
@@ -787,23 +788,20 @@ cumulative spend. This capability is narrowly scoped and does not join the
 general skills/MCP/completion/backend-support invariants above:
 
 - Effective ONLY for `backend="lingtai"` tasks whose resolved provider is Codex
-  (`codex`) or the native `mimo` LLM provider, threaded through
-  `_daemon_provider_defaults` as `codex_compact_token_limit` /
-  `mimo_compact_token_limit` respectively. Every other provider and every
-  external CLI backend never receives it.
+  (`codex`), threaded through `_daemon_provider_defaults` as
+  `codex_compact_token_limit`. Every other provider and every external CLI
+  backend never receives it.
 - Omitted, the threshold uses the daemon session's own resolved context window:
   explicit preset canonical `manifest.llm.context_limit` when supplied,
   otherwise the inherited valid parent effective window, otherwise 272,000.
   This value is only the provider-compaction threshold and does not set the
   daemon context window; an explicit task value always wins for the threshold.
-- When the threshold is reached, the Codex or native-MiMo Responses session
-  compacts prior context via that provider's standalone `POST /responses/compact`
-  endpoint and continues the same tool loop.
-- **Failure policy differs by provider.** A standalone compact call/parse
-  failure is non-fatal for Codex; for the native `mimo` provider the same class
-  of failure is a hard failure.
-- Trigger/boundary/invalidation mechanics are shared Responses adapter/session
-  internals (`_StandaloneCompactionMixin`), not daemon-owned. This contract
+- When the threshold is reached, the Codex Responses session compacts prior
+  context via the standalone `POST /responses/compact` endpoint and continues
+  the same tool loop.
+- A standalone compact call/parse failure is non-fatal for Codex.
+- Trigger/boundary/invalidation mechanics are Codex adapter/session internals
+  (`_StandaloneCompactionMixin`), not daemon-owned. This contract
   states only the daemon-task-object capability boundary.
 
 ## A-priori summary composition
@@ -1144,7 +1142,8 @@ Re-check this contract when touching:
 | CLI-backend terminal `ask` returns immediately and enforces its own timeout | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs`, `::test_ask_codex_silent_subprocess_enforces_timeout` |
 | Active common-MCP CLI `ask` queues an ID-bound next-checkpoint message; checkpoint records/drains/wakes without terminal mutation and old live RunDirs backfill fields | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/run_dir.py`, `src/lingtai/mcp_servers/daemon_common/server.py` | `tests/test_daemon_checkpoint.py`, `tests/test_daemon_run_dir.py::test_checkpoint_inbox_backfills_pre_checkpoint_live_state` |
 | Token rows are written to both the daemon and parent ledgers, tagged | `src/lingtai/tools/daemon/run_dir.py` | `tests/test_daemon_run_dir.py::test_append_tokens_writes_daemon_ledger`, `::test_append_tokens_writes_parent_ledger_tagged` |
-| `context_token_limit` is validated, reaches Codex and native `mimo`, and is inert for every other provider and every external CLI backend | `src/lingtai/tools/daemon/__init__.py` | `tests/test_codex_standalone_compaction.py`, `tests/test_mimo_responses_compaction.py` |
+| `context_token_limit` is validated, reaches Codex, and is inert for every other provider and every external CLI backend | `src/lingtai/tools/daemon/__init__.py` | `tests/test_codex_standalone_compaction.py` |
+| A preset-driven daemon forwards the preset's generic provider knobs (`service_tier`, `wire_api`, `inject_reasoning_fallback`, `prompt_cache_namespace`, `default_headers`, `codex_*`, `base_url`, `max_rpm`) through the shared `build_provider_defaults_from_manifest_llm` safelist | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/llm/service.py` | `tests/test_daemon_llm_defaults_forwarding.py` |
 | `tasks[].plugin` renders the `## Parent-selected plugins` section into the durable `.prompt` the detached child reads; plugin skills and mcp.json servers are merged/mounted; missing plugin paths resolve to nothing; non-list fails preflight | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_task_plugin_context_renders_catalog_and_flattens_skills_mcp`, `::test_task_plugin_context_rejects_bad_plugin_path`, `::test_task_plugin_context_rejects_non_list`, `::test_handle_emanate_writes_plugin_section_to_prompt_before_detach` |
 | LingTai daemon tool results carry daemon-local `_meta.agent_meta`, omit parent notifications/guidance, and carry the exact warning only while current usage is >=90% | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_agent_meta_is_local_and_warning_tracks_current_usage` |
 | LingTai task-scoped MCP calls remove server-undeclared `_reasoning`, retain ordinary unknown business fields, and preserve strict LTP-v2 restoration | `src/lingtai/services/mcp.py`, `src/lingtai/tools/daemon/__init__.py` | `tests/test_mcp_v2_adapter_metadata.py::test_task_daemon_adapts_host_private_arguments_at_mcp_boundary` |
@@ -1164,13 +1163,13 @@ Re-check this contract when touching:
 | CLI `ask` never blocks the caller's tool thread | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs` | `ask` a hung CLI daemon, confirm immediate return | Parent loop stalls on a hung subprocess |
 | Reclaim kills every tracked CLI proc; each run's own detached supervisor kills only its own exact child on timeout | `tests/test_daemon_cli_watchdog_scope.py`, `tests/test_lifecycle_daemon_shutdown.py` | Emanate two runs, reclaim, confirm both are killed; let one run time out and confirm only its own child dies | Reclaim misses a tracked proc, or one run's timeout kills an unrelated run's child |
 | Dual-ledger token accounting stays correct | `tests/test_daemon_run_dir.py::test_append_tokens_writes_parent_ledger_tagged` | Inspect both token_ledger.jsonl files after a run | Daemon spend double-counted or lost in totals |
-| `context_token_limit` stays Codex/native-mimo-only and inert everywhere else; native `mimo` compaction failure is a HARD failure | `tests/test_codex_standalone_compaction.py`, `tests/test_mimo_responses_compaction.py` | Emanate a `backend='lingtai'` Codex task with an explicit `context_token_limit`, then repeat with native `mimo` | A bad value silently breaks unrelated providers/backends or swallows a hard MiMo failure |
+| `context_token_limit` stays Codex-only and inert everywhere else | `tests/test_codex_standalone_compaction.py` | Emanate a `backend='lingtai'` Codex task with an explicit `context_token_limit`, then repeat with an `openai` preset | A bad value silently breaks unrelated providers/backends |
 | Task-scoped MCP host-private argument isolation preserves server schema authority | `tests/test_mcp_v2_adapter_metadata.py::test_task_daemon_adapts_host_private_arguments_at_mcp_boundary` | Mount a closed-schema MCP tool, invoke it with model reasoning, and inspect provider-bound arguments | Kernel rationale leaks to providers or business schema errors are silently masked |
 
 Run before merging daemon tool-surface changes:
 
 ```bash
-python -m pytest tests/test_daemon_settings.py tests/test_tool_family_daemon_migration.py tests/test_tool_settings_contract.py tests/test_daemon.py tests/test_daemon_check.py tests/test_daemon_backend_options.py tests/test_daemon_run_dir.py tests/test_lifecycle_daemon_shutdown.py tests/test_codex_standalone_compaction.py tests/test_mimo_responses_compaction.py -q
+python -m pytest tests/test_daemon_settings.py tests/test_tool_family_daemon_migration.py tests/test_tool_settings_contract.py tests/test_daemon.py tests/test_daemon_check.py tests/test_daemon_backend_options.py tests/test_daemon_run_dir.py tests/test_lifecycle_daemon_shutdown.py tests/test_codex_standalone_compaction.py -q
 ```
 
 ## Schema and Glossary Ownership

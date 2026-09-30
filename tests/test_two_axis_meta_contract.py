@@ -10,7 +10,6 @@ from lingtai.llm.interface_converters import (
     _normalize_runtime_envelope,
     _restore_projected_result,
     to_anthropic,
-    to_gemini,
     to_openai,
     to_responses_input,
 )
@@ -95,7 +94,6 @@ def test_tool_only_sidecar_has_no_invented_agent_axis_on_all_providers():
         to_anthropic(iface)[-1]["content"][0]["content"],
         to_openai(iface)[-1]["content"],
         to_responses_input(iface)[-1]["output"],
-        to_gemini(iface)[-1]["content"][0]["result"],
     ]
     for wire in wires:
         value = json.loads(wire)
@@ -161,7 +159,6 @@ def test_handler_meta_survives_runtime_sidecar_projection_and_restore():
             to_anthropic(interface)[-1]["content"][0]["content"],
             to_openai(interface)[-1]["content"],
             to_responses_input(interface)[-1]["output"],
-            to_gemini(interface)[-1]["content"][0]["result"],
         ]
         for wire in wires:
             projected = json.loads(wire)

@@ -7,7 +7,7 @@ related_files:
   - src/lingtai/tools/vision/settings.py
   - src/lingtai/tools/vision/CONTRACT.md
 maintenance: |
-  Keep the thirteen setting anchors in the router stable. Describe only the
+  Keep the twelve setting anchors in the router stable. Describe only the
   applied, read-only snapshot and existing owner procedures; never add a writer
   or imply provider/credential fallback.
 ---
@@ -26,12 +26,15 @@ internal presence markers/nulls are not exposed.
 
 ## Setting: provider
 
-Explicit Vision provider, otherwise a compatible active provider; no default or
-automatic switch. Change the active capability/preset, refresh, and check.
+Explicit Vision provider (`openai`, `anthropic`, `codex`, `claude-code`,
+`claude-p`, `local`, or `mlx`), otherwise the active provider's family; no
+default or automatic switch. Change the active capability/preset, refresh, and
+check.
 
 ## Setting: base-url
 
-Explicit endpoint, same-provider endpoint, or local `settings/vision.json` then
+Explicit endpoint, the active same-provider *effective* endpoint (configured or
+adapter default), or local `settings/vision.json` then
 `http://localhost:11434/v1`; route constructors own other defaults. Always redacted.
 
 ## Setting: model
@@ -55,18 +58,13 @@ fallback. Name and value are redacted; SHOW never reads or changes the environme
 
 Positive response-token cap. Explicit capability wins, then local owner file;
 service defaults are 1024 for API/local routes and 512 for MLX where applicable,
-otherwise `null`. Gemini has no Vision-owned cap default.
-
-## Setting: api-compat
-
-Compatibility family from explicit Vision or active-provider defaults (`openai` or
-`anthropic` where supported); irrelevant routes show `null`. It grants no access.
+otherwise `null`.
 
 ## Setting: wire-api
 
-Effective wire: configured `auto`, `chat_completions`, or `responses` subject to
-route support. Local/OpenAI-compatible routes normally use `chat_completions`,
-Codex uses `responses`, and irrelevant routes show `null`.
+Effective wire: `responses` when explicitly selected, otherwise
+`chat_completions` (the legacy `auto` means the same). `openai`/local routes use
+it, Codex always uses `responses`, and irrelevant routes show `null`.
 
 ## Setting: default-headers
 
@@ -76,7 +74,7 @@ the mapping and names are always redacted, including when no headers apply.
 ## Setting: token-path
 
 Whether a Codex OAuth identity path was applied from explicit value, active
-`codex_auth_path`, or authorized pool selection. Non-Codex routes do not consume it;
+`codex_auth_path`, or the default Codex token file. Non-Codex routes do not consume it;
 SHOW still redacts path and token presence.
 
 ## Setting: instructions
@@ -100,15 +98,15 @@ preset, local-file, launcher, or Codex account procedure instead.
 
 ## Authorized change routes
 
-- `provider`, `api_compat`, `wire_api`, `default_headers`, `instructions`,
+- `provider`, `wire_api`, `default_headers`, `instructions`,
   `max_output_tokens`, `timeout`: existing Vision capability/active-preset or
   same-provider configuration; verify backend support before editing.
 - `base_url`, `model`, `max_tokens`: same owners; the local route additionally
   reads `settings/vision.json`, with capability values taking precedence.
 - `api_key`, `api_key_env`: owner secret store/launcher and explicit capability
   pointer; `api_key_env` resolves before raw-key fallback. Never print either.
-- `token_path`: existing Codex login/account-pool or explicit capability/preset
-  procedure; never copy OAuth files into output.
+- `token_path`: existing Codex login or explicit capability/preset procedure;
+  never copy OAuth files into output.
 
 After an authorized edit, refresh/relaunch and SHOW again. These routes grant no
 new installation, credential, network, or retry authority.

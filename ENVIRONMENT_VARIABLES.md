@@ -3,8 +3,8 @@ name: environment-variable-registry
 description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
-version: 1.10.0
-last_changed_at: "2026-09-14"
+version: 1.11.0
+last_changed_at: "2026-09-29"
 related_files:
 - ANATOMY.md
 - CONTRACT.md
@@ -31,7 +31,6 @@ related_files:
 - src/lingtai/kernel/session_stats/CONTRACT.md
 - src/lingtai/llm/openai/ANATOMY.md
 - src/lingtai/llm/anthropic/ANATOMY.md
-- src/lingtai/llm/gemini/ANATOMY.md
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/SKILL.md
 - src/lingtai/mcp_servers/local_commands/ANATOMY.md
@@ -107,8 +106,8 @@ reports, prompts, or this registry.
 | `LINGTAI_WEB_MAX_CHARS` | Valid `settings/web.json`; otherwise `50000` | Integer string `1..100000` | Highest-precedence shared Web search/browse inline-versus-artifact threshold | Every applicable search/browse operation and Web `settings` inventory; no rebuild | Missing falls through; malformed or out-of-range input fails with `WEB_OUTPUT_SETTINGS_INVALID` before provider/fetch I/O | Web — `src/lingtai/tools/web_search/settings.py`, `src/lingtai/tools/web_search/__init__.py` | Output-delivery tuning only; complete content remains inline or in the canonical artifact |
 | `LINGTAI_AGENT_DIR` | unset; normally launcher-injected | Existing local directory | Out-of-process MCP and client workdir | MCP/client process start; restart after change | Invalid path fails the MCP or client operation | `src/lingtai/mcp_servers/_config.py` | Keep private workdir contents out of model-facing output |
 | `LINGTAI_MCP_NAME` | unset | Registered MCP name | One MCP process identity | MCP process start; restart after change | Missing or unknown name fails closed | `src/lingtai/mcp_servers/_config.py` | Prevents arbitrary server selection; it is not a secret |
-| `LINGTAI_TUI_DIR` | expanded `~/.lingtai-tui` when unset | Any path string; the environment value wins and only `Path.expanduser` is applied, so relative paths stay relative and explicit empty means `.` | Base directory for the default Codex token and auth-pool paths | Codex adapter/account-source or default token-manager construction; change the launcher or `env_file` and fully relaunch | No eager directory validation; unexpandable `~` can fail construction, while missing/unreadable/invalid auth files fail the later account/request path closed | `system` catch-all — `src/lingtai/tools/system/settings.py`; canonical consumers in `src/lingtai/auth/codex.py` and `src/lingtai/auth/codex_pool.py` | SHOW fully redacts both current and default paths; never log the resolved directory or credential paths, and do not treat a path as authorization |
-| `LINGTAI_INJECT_REASONING_FALLBACK` | `on` | `1`/`0`, `true`/`false`, `on`/`off` (component boolean forms); explicit provider config param wins | Inject a per-turn-unique reasoning stub on assistant tool-call turns that lack preserved thinking (required by thinking-mode endpoints such as DeepSeek V4) | Adapter session construction; restart session after change | Invalid values fall back to `on` | `src/lingtai/llm/openai/adapter.py` | Reasoning stub only; not a capability or authorization switch |
+| `LINGTAI_TUI_DIR` | expanded `~/.lingtai-tui` when unset | Any path string; the environment value wins and only `Path.expanduser` is applied, so relative paths stay relative and explicit empty means `.` | Base directory for the default Codex token path (`codex-auth.json`) | Codex adapter/account-source or default token-manager construction; change the launcher or `env_file` and fully relaunch | No eager directory validation; unexpandable `~` can fail construction, while missing/unreadable/invalid auth files fail the later account/request path closed | `system` catch-all — `src/lingtai/tools/system/settings.py`; canonical consumers in `src/lingtai/auth/codex.py` and `src/lingtai/auth/codex_account_source.py` | SHOW fully redacts both current and default paths; never log the resolved directory or credential paths, and do not treat a path as authorization |
+| `LINGTAI_INJECT_REASONING_FALLBACK` | `on` | `1`/`0`, `true`/`false`, `on`/`off` (component boolean forms); explicit provider config param wins | Inject a per-turn-unique reasoning stub on assistant tool-call turns that lack preserved thinking on the `openai` provider (required by some OpenAI-compatible thinking-mode endpoints) | Adapter session construction; restart session after change | Invalid values fall back to `on` | `src/lingtai/llm/openai/adapter.py` | Reasoning stub only; not a capability or authorization switch |
 
 ## MCP and provider configuration
 
@@ -154,7 +153,6 @@ surface is explicit; do not set test hooks in a production agent environment.
 | `LINGTAI_FAKE_CLI_REPORT` | unset | Test-only path or selector | Fake CLI report | Fake CLI invocation; rerun test after change | Invalid value fails the test | `tests/_fake_*` | Keep artifacts in a test temporary directory |
 | `LINGTAI_TEST_CONFIG` | unset | Test-only string or path | Test fixture setup | Fixture construction; rerun test after change | Invalid value fails fixture setup | `tests/` | No production behavior |
 | `LINGTAI_TEST_FAKE_CLAUDE_SIGNAL_RECORD` | unset | Test-only local path | Fake Claude signal record | Fake launcher invocation; rerun test after change | Invalid value fails the test | `tests/` | Keep artifacts in a test temporary directory |
-| `LINGTAI_RUN_LIVE_KIMI_CODE` | unset and off | `1` enables the live Kimi Code integration test | Opt-in paid-call integration test | Test module import; rerun test after change | Values other than `1` disable the test | `tests/integration_test_kimi_code.py` | Test-only; requires explicit paid-call authorization |
 
 ## Reading and ownership notes
 

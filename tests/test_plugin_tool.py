@@ -39,7 +39,7 @@ from lingtai.services.plugin_registry import (
     resolve_server_spec,
     validate_manifest,
 )
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 # ---------------------------------------------------------------------------
@@ -784,7 +784,7 @@ def test_manifest_plugins_is_a_known_manifest_field():
 
 
 def _init_data(**manifest_extra) -> dict:
-    manifest = {"llm": {"provider": "gemini", "model": "gemini-2.5-flash"}}
+    manifest = {"llm": {"provider": "anthropic", "model": "claude-sonnet-4-5"}}
     manifest.update(manifest_extra)
     return {"manifest": manifest, "covenant": "be good", "pad": ""}
 

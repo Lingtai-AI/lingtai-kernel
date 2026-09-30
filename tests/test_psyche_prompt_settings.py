@@ -21,7 +21,7 @@ from lingtai.tools.psyche.settings import (
     read_prompt_owner_values,
     read_resolved_prompt_inputs,
 )
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 def _write_init(
@@ -51,7 +51,7 @@ def _agent(root: Path) -> Agent:
     # tests; no real provider adapter or credential is needed here.
     service._base_url = None
     service._context_window = CONSERVATIVE_CONTEXT_WINDOW
-    service._provider_defaults = {"gemini": {"max_rpm": 60}}
+    service._provider_defaults = {"anthropic": {"max_rpm": 60}}
     return Agent(
         service=service, agent_name="test", working_dir=root,
         capabilities=[],
@@ -362,7 +362,7 @@ def test_prompt_plan_is_immutable_and_reads_static_sources_without_writes(
 def test_startup_resolves_and_applies_one_identical_prompt_plan(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    _write_init(tmp_path, provider="gemini", model="gemini-test")
+    _write_init(tmp_path, provider="anthropic", model="claude-test")
     agent = _agent(tmp_path)
     candidates = []
     applied = []
@@ -394,7 +394,7 @@ def test_startup_resolves_and_applies_one_identical_prompt_plan(
 def test_packaged_mirror_write_failure_uses_captured_fallback_without_reread(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    _write_init(tmp_path, provider="gemini", model="gemini-test")
+    _write_init(tmp_path, provider="anthropic", model="claude-test")
     _write_owner(tmp_path)
     agent = _agent(tmp_path)
     mirror = tmp_path / "system" / "substrate.md"
@@ -432,7 +432,7 @@ def test_packaged_mirror_write_failure_uses_captured_fallback_without_reread(
 def test_packaged_missing_does_not_write_existing_fallback_mirror(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    _write_init(tmp_path, provider="gemini", model="gemini-test")
+    _write_init(tmp_path, provider="anthropic", model="claude-test")
     _write_owner(tmp_path)
     agent = _agent(tmp_path)
     mirror = tmp_path / "system" / "substrate.md"
@@ -466,7 +466,7 @@ def test_packaged_missing_does_not_write_existing_fallback_mirror(
 def test_static_mirror_read_failure_does_not_block_packaged_write(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    _write_init(tmp_path, provider="gemini", model="gemini-test")
+    _write_init(tmp_path, provider="anthropic", model="claude-test")
     _write_owner(tmp_path)
     agent = _agent(tmp_path)
     mirror = tmp_path / "system" / "substrate.md"

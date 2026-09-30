@@ -29,9 +29,9 @@ def _snapshot(max_chars: int) -> OutputSettingsSnapshot:
 class _OfficialHost:
     """Minimal registrar host used by Web's direct behavior tests."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, provider: str | None = None) -> None:
         self._working_dir = root
-        self.service = SimpleNamespace(provider=None)
+        self.service = SimpleNamespace(provider=provider)
         self._official_tool_plugins = {}
         self._bound_plugins = {}
 
@@ -346,7 +346,8 @@ def test_search_spilled_openai_fallback_preserves_comment_and_failure_class(tmp_
     from lingtai.services.websearch import SearchResult, SearchService
     from lingtai.services.websearch.openai import OpenAISearchError
 
-    agent = _OfficialHost(tmp_path)
+    # The OpenAI engine is backend-gated to an ``openai`` LLM provider.
+    agent = _OfficialHost(tmp_path, provider="openai")
     failing_service = MagicMock(spec=SearchService)
     failing_service.search.side_effect = OpenAISearchError("Timeout")
     manager = setup(agent, engines={"openai": {"search_service": failing_service}}, browser_port=_Port(b"<p>x</p>"))
@@ -833,10 +834,10 @@ def test_artifact_readable_end_to_end_via_shell_tool(tmp_path):
     """The spilled artifact is a plain workdir-relative file that ``shell``
     (the one durable filesystem surface) reads back in full."""
     from lingtai.agent import Agent
-    from tests._service_helpers import make_gemini_mock_service
+    from tests._service_helpers import make_mock_llm_service
 
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="web-artifact-shell-read",
         working_dir=tmp_path,
         capabilities={

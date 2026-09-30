@@ -15,15 +15,17 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 
-def make_gemini_mock_service() -> MagicMock:
-    """The common adapter-backed stub: a Gemini provider/model with an adapter.
+def make_mock_llm_service() -> MagicMock:
+    """The common adapter-backed stub: an ``anthropic`` provider/model with an adapter.
 
-    This is the shape ~19 modules copied verbatim.
+    This is the shape ~19 modules copied verbatim. The provider label only has
+    to be a registered family whose omitted-thinking default is the legacy
+    ``"high"`` (``anthropic``); no adapter is ever constructed from it.
     """
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     return svc
 
 

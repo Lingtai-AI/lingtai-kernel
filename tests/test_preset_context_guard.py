@@ -86,8 +86,8 @@ def _make_test_agent(tmp_path):
     from unittest.mock import MagicMock
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     plib = tmp_path / "presets"
     _build_lib(plib)
     wd = tmp_path / "test"

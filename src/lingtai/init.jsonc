@@ -6,7 +6,7 @@
 //
 // Secrets go in a .env file (see env_file below).
 // Example .env:
-//   MINIMAX_API_KEY=your-minimax-api-key
+//   OPENAI_API_KEY=your-api-key
 //   TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
 //   IMAP_PASSWORD=your-email-password
 // =============================================================
@@ -29,15 +29,23 @@
     // LLM configuration
     // -------------------------------------------------------
     "llm": {
-      // Provider: "minimax", "anthropic", "openai", "gemini", "openrouter",
-      //           "deepseek", "grok", "qwen", "glm", "kimi" (OpenAI-compatible via custom adapter),
-      //           or "custom" (generic — set api_compat + base_url for any OpenAI/Anthropic/Gemini-compatible API).
-      // "openrouter" is first-class (base_url fixed to https://openrouter.ai/api/v1,
-      // reasoning text suppressed by default since context.md would strip it anyway).
-      "provider": "minimax",
+      // Provider — exactly four families:
+      //   "openai"      any OpenAI-compatible endpoint (official OpenAI when
+      //                 base_url is omitted; any vendor, gateway, or local
+      //                 server via base_url)
+      //   "anthropic"   any Anthropic-compatible (Messages API) endpoint
+      //                 (official Anthropic when base_url is omitted)
+      //   "codex"       Codex / ChatGPT OAuth (one account)
+      //   "claude-code" the local Claude Code CLI login
+      // Other vendors and subscriptions: point "openai"/"anthropic" at that
+      // vendor's compatible base_url, or at an external pool (sub2api /
+      // subs-pool). Removed provider names (deepseek, zhipu/glm, mimo,
+      // minimax, openrouter, grok, qwen, kimi, gemini, kimi-code, custom,
+      // claude_code, codex-pool) fail validation with that pointer.
+      "provider": "openai",
 
       // Model name as recognized by the provider's API.
-      "model": "MiniMax-M3",
+      "model": "gpt-5.5",
 
       // API key — set to null and use api_key_env to read from environment (recommended).
       // Never hardcode secrets here.
@@ -45,25 +53,31 @@
 
       // Environment variable name that holds the API key.
       // Resolved at startup from .env or system environment.
-      "api_key_env": "MINIMAX_API_KEY",
+      "api_key_env": "OPENAI_API_KEY",
 
-      // Base URL for the provider's API.
-      // MiniMax China endpoint with Anthropic-compatible protocol.
-      // Set to null to use the provider's default.
+      // Base URL for the provider's API. Set to null (or omit) to use the
+      // official endpoint of the chosen family; set it to any compatible
+      // endpoint, e.g. "https://api.deepseek.com" or "http://127.0.0.1:8000/v1".
       //
-      // Thinking-capable providers (codex family, anthropic, openai,
-      // deepseek, or any api_compat="openai" block on either wire) may add an
-      // explicit reasoning effort.
-      // Allowed values are none/minimal/low/medium/high/xhigh/max. Omit
-      // thinking for "default"; non-Codex providers then keep the existing
-      // high default. DeepSeek is provider-owned: its accepted values and
-      // their meaning are defined per model and wire by its own policy
-      // (src/lingtai/llm/deepseek/policy.py) — omission sends no reasoning
-      // field so DeepSeek's own default applies.
-      // "api_compat": "openai",
+      // "openai" only: "wire_api" selects "chat_completions" (default; the
+      // legacy "auto" means the same) or "responses" (always stateless
+      // full-history replay; never previous_response_id).
+      //
+      // Standard parameters (sent verbatim, no per-vendor mapping):
+      //   "thinking": none/minimal/low/medium/high/xhigh/max — every
+      //     provider. openai sends it as reasoning.effort (Responses) /
+      //     reasoning_effort (Chat Completions) and omits it when unset;
+      //     codex defaults to xhigh; anthropic maps it to a thinking budget;
+      //     claude-code maps it to --effort.
+      //   "service_tier": "fast" (sent as priority) or auto/default/flex/
+      //     priority — openai and codex only; any other value fails
+      //     validation.
+      // Retired keys "api_compat", "reasoning_effort_vocab", and
+      // "use_responses_api" are ignored.
       // "wire_api": "responses",
       // "thinking": "minimal",
-      "base_url": "https://api.minimaxi.com/anthropic"
+      // "service_tier": "fast",
+      "base_url": null
     },
 
     // -------------------------------------------------------
@@ -114,19 +128,26 @@
       // Edit and call system.refresh to apply. init.json is ground truth.
       "skills": { "paths": ["../.library_shared", "~/.lingtai-tui/utilities"] },
 
-      // --- Vision (opt-in) ---
-      // Providers: "minimax", "anthropic", "openai", "gemini", "local" (no API key).
-      "vision": { "provider": "minimax", "api_key_env": "MINIMAX_API_KEY" },
+      // --- Vision (default-on) ---
+      // Omitted (or "provider": "inherit"): the agent's own provider family at
+      // its effective endpoint and key (openai, anthropic, codex; claude-code
+      // gets `claude -p` guidance). Explicit providers: "openai" (+ base_url,
+      // api_key_env, model, wire_api), "anthropic" (+ base_url, api_key_env,
+      // model), "codex" (+ model, token_path), "local" (OpenAI-compatible
+      // local server, no API key), "mlx" (on-device).
+      "vision": { "provider": "openai", "api_key_env": "OPENAI_API_KEY", "model": "gpt-5.5" },
 
       // --- Unified web (default-on) ---
-      // No operator config: the real built-in default resolver composes all
-      // four canonical providers (openai/anthropic/gemini/duckduckgo) and
-      // selects canonical OpenAI when its standard OPENAI_API_KEY is set,
-      // else DuckDuckGo. Anthropic/Gemini stay explicit opt-in only through
-      // the Agent's settings/web.search.json file and canonical-backend
-      // eligibility (see tools/web_search/manual/SKILL.md). Do not name a
-      // retired provider (minimax, zhipu) here — it raises a composition-time
-      // error, not a silent DuckDuckGo fallback.
+      // No operator config: the built-in default resolver composes the three
+      // engines (duckduckgo/openai/anthropic) and selects OpenAI Web Search
+      // only when OPENAI_API_KEY is set AND this agent's LLM provider is
+      // "openai", else DuckDuckGo. openai/anthropic are backend-gated to an
+      // agent whose own provider is that family; Anthropic is explicit opt-in
+      // only through the Agent's settings/web.search.json (or
+      // LINGTAI_WEB_ENGINE) (see tools/web_search/manual/SKILL.md). Do not
+      // name a retired provider (minimax, zhipu) here — it raises a
+      // composition-time error; any other unrecognized name (e.g. the removed
+      // "gemini") falls back to DuckDuckGo.
       "web": {}
 
       // --- Removed capabilities (for reference) ---

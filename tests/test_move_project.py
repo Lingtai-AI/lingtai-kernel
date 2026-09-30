@@ -53,7 +53,7 @@ def _supervisor_at(pid: int | None, source: Path) -> bool:
     return result.returncode == 0 and "--_supervise" in result.stdout and str(source) in result.stdout
 def _write_init(agent: Path, venv: Path, base_url: str | None = None) -> dict:
     data = {"manifest": {"agent_name": "temporary-true-name", "language": "en",
-        "llm": {"provider": "gemini", "model": "test", "api_key": "fake", "base_url": base_url},
+        "llm": {"provider": "anthropic", "model": "test", "api_key": "fake", "base_url": base_url},
         "capabilities": {}, "soul": {"delay": 60}, "stamina": 10, "context_limit": None,
         "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 5, "admin": {}, "streaming": False},
         "principle": "", "covenant": "No network.", "pad": "", "lingtai": "", "venv_path": str(venv),
@@ -65,7 +65,7 @@ def _write_identity(agent: Path, agent_id: str = "id") -> None:
     (agent / ".agent.json").write_text(json.dumps(data), encoding="utf-8")
 def _create_project(root: Path, preset: Path, base_url: str | None = None) -> Path:
     root.mkdir()
-    llm = {"provider": "gemini", "model": "test", "api_key": "fake", "base_url": base_url}
+    llm = {"provider": "anthropic", "model": "test", "api_key": "fake", "base_url": base_url}
     preset.write_text(json.dumps({"description": {"summary": "test"},
         "manifest": {"llm": llm, "capabilities": {}}}), encoding="utf-8")
     request = ProjectCreateRequest("initiator", str(preset), llm, {},

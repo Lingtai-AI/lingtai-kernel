@@ -11,7 +11,7 @@ from lingtai.tools.email.primitives import EMAIL_BODY_CHAR_LIMIT, _mailman
 from uuid import uuid4
 
 from lingtai.agent import Agent
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 

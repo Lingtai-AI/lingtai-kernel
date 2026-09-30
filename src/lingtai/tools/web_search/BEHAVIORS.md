@@ -27,8 +27,8 @@ maintenance: |
 # Web Search Behavior Tests
 
 LABT v2. Self-contained agent-executable behavioral tests for the `web`
-capability (`src/lingtai/tools/web_search/`): W001 covers canonical provider
-default selection and hot settings, W002 covers routing constraints, typed
+capability (`src/lingtai/tools/web_search/`): W001 covers the three-engine
+default selection and hot settings, W002 covers backend gating, typed
 failures, and DuckDuckGo fallback, and W003 covers the settings owner. All three
 guard clauses in
 `src/lingtai/tools/web_search/CONTRACT.md` (frontmatter name `web`).
@@ -37,7 +37,7 @@ guard clauses in
 
 - **id**: W001
 - **title**: web search→browse canonical provider selection and hot-read settings
-- **guards**: `web` § Provider ownership and routing (built-in default engine resolved live per call; anthropic/gemini are settings-only opt-in; retired-provider composition errors) ([CONTRACT.md](CONTRACT.md#provider-ownership-and-routing))
+- **guards**: `web` § Provider ownership and routing (exactly three engines; built-in default engine resolved live per call and backend-gated; anthropic is settings-only opt-in; retired-provider composition errors; removed/unknown names take the legacy DuckDuckGo fallback) ([CONTRACT.md](CONTRACT.md#provider-ownership-and-routing))
 - **supersedes**: tests/test_web_canonical_provider_routing.py (CONVERT_BEHAVIOR)
 - **runner**: any LingTai agent with the `web` tool
 - **prerequisites**: repo checkout with src/lingtai/tools/web_search; provider factories are stubbed/recording — no network; env vars are managed per-case (isolated and restored after each case); tool name is `web` per web_search CONTRACT.md; contract section `#provider-ownership-and-routing`.
@@ -45,18 +45,20 @@ guard clauses in
 
 ### Steps
 
-1. Clear all provider env vars, then set `OPENAI_API_KEY` and call the `web` tool's search provider selection.
+1. Clear all provider env vars, then set `OPENAI_API_KEY` and call the `web` tool's search provider selection on an Agent whose LLM provider is `openai`; repeat on an Agent whose provider is `anthropic` (or `claude-code`/`codex`).
 2. Clear `OPENAI_API_KEY` too, so no keys exist; select again.
-3. Set only `ANTHROPIC_API_KEY` (or `GEMINI_API_KEY`); select again.
+3. Set only `ANTHROPIC_API_KEY`; select again.
 4. Write `settings/web.search.json` with `{"schema_version": 1, "engine": ...}` and select again without restarting.
+5. Compose `web` with `provider="gemini"` (and separately `engines={"gemini": {...}, "duckduckgo": {...}}`) and search.
 
 ### Expected evidence
 
-- [ ] With `OPENAI_API_KEY` set and nothing else: `engine == "openai"`, `source == "built_in_default"`, and the factory tuple is `("openai", api_key=<env value>, model=None)`.
+- [ ] With `OPENAI_API_KEY` set and nothing else on the `openai` backend: `engine == "openai"`, `source == "built_in_default"`, and the factory tuple is `("openai", api_key=<env value>, model=None)`. On every non-`openai` backend the same key leaves `engine == "duckduckgo"` and the OpenAI service is never constructed.
 - [ ] With **no** keys: `engine == "duckduckgo"` (built-in default fallback).
-- [ ] With only anthropic/gemini keys: the corresponding engine is **available but unselected**; `PROVIDERS["providers"]` is exactly `{"duckduckgo", "gemini", "anthropic", "openai"}`.
+- [ ] With only the anthropic key: the `anthropic` engine is **available but unselected**; `PROVIDERS["providers"]` is exactly `["duckduckgo", "anthropic", "openai"]` (no `gemini`).
 - [ ] Settings file present: selection re-reads it hot — `engine` matches the file, and `source == "settings/web.search.json"` (relative to the working dir).
 - [ ] `minimax` and `zhipu` are retired: composing either raises `RetiredProviderError` before any factory runs.
+- [ ] The removed `gemini` name never raises: both compositions search DuckDuckGo (`actual_engine == "duckduckgo"`) with `current_setting.legacy_fallback_from == "gemini"`.
 
 ### Pass / Fail
 
@@ -74,14 +76,14 @@ PASS when the selected engine, source, provider set, hot-read settings, and reti
 
 ### Steps
 
-1. Select anthropic/gemini via `settings/web.search.json` while the active backend is a non-canonical one (`claude-code`, `openai`, `openrouter`, `custom`, or `codex`).
+1. Select `anthropic` via `settings/web.search.json` while the active backend is another family (`claude-code`, `openai`, or `codex`); select `openai` (via the settings file, and separately via `setup(provider="openai")`) while the active backend is `anthropic`, `claude-code`, or `codex`.
 2. Force each typed failure below and inspect the error envelope.
 3. Make OpenAI-only search fail, then fall back; inspect the fallback result.
 4. Call `web` browse with a URL and with an empty URL.
 
 ### Expected evidence
 
-- [ ] **Backend-gated**: settings-selected anthropic/gemini on the non-canonical backends listed above is refused with `error_code == "PROVIDER_BACKEND_INELIGIBLE"` (distinct from `SettingsOnlyProviderError`).
+- [ ] **Backend-gated**: a selected `anthropic` or `openai` engine on the other backends listed above is refused with `error_code == "PROVIDER_BACKEND_INELIGIBLE"` (distinct from `SettingsOnlyProviderError`), with no provider construction, no search call, and no DuckDuckGo substitution; the same selection on its own family's backend searches normally.
 - [ ] **Typed errors**: provider failures surface as `error_code == "SEARCH_FAILED"` with a `provider_failure_class` field carrying the provider's exception class; a non-provider `TypeError` is **not** classified as `SEARCH_FAILED` and triggers **no** fallback.
 - [ ] **OpenAI-only DDG fallback**: when the sole configured provider (openai) fails, the result is `actual_engine == "duckduckgo"` with `openai_failure_class` set; the result contains no API keys or secrets.
 - [ ] **link_ref**: an item's `link_ref` is truthy iff its `url` is non-empty; items with an empty URL are discarded, not returned with empty link_ref.
@@ -111,7 +113,7 @@ PASS when error codes, fallback engine, secrets-free results, link_ref, and brow
 
 ### Expected evidence
 
-- [ ] Public action order is `search`, `browse`, `settings`, `manual`; inventory has the exact nine ordered Web row keys and every row has only `key`, `current`, `default`, `configurable`, and `comment`.
+- [ ] Public action order is `search`, `browse`, `settings`, `manual`; inventory has the exact eight ordered Web row keys (no `credentials.gemini_api_key`) and every row has only `key`, `current`, `default`, `configurable`, and `comment`.
 - [ ] Hot env values shadow valid files while composed/50000 defaults remain truthful; invalid env/file truth yields fixed `SETTINGS_UNAVAILABLE` with no partial rows.
 - [ ] Non-empty input fails and no file or process environment is changed; there is no set/reset/mutation result shape.
 - [ ] Credential `current` and `default` are `<redacted>`; no sentinel, credential-env value, private flag, or absolute workdir path appears.

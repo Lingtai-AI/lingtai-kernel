@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 from lingtai.agent import Agent
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 
 
 def test_official_web_mount_preserves_declared_surface_and_packaged_manual(tmp_path):
     from lingtai.tools.web_search import DECLARATION
 
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="web-official-plugin",
         working_dir=tmp_path / "agent",
         capabilities={"web": {}},
@@ -44,7 +44,7 @@ def test_official_web_provider_identity_is_a_narrow_read_through_label(tmp_path)
     )
 
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="web-official-plugin-identity",
         working_dir=tmp_path / "agent",
         capabilities={"web": {}},
@@ -53,7 +53,7 @@ def test_official_web_provider_identity_is_a_narrow_read_through_label(tmp_path)
         table = agent_host_ports(agent, "web")
         port = table["provider_identity"]
         assert isinstance(port, AgentProviderIdentityAdapter)
-        assert port.provider == agent.service.provider == "gemini"
+        assert port.provider == agent.service.provider == "anthropic"
         assert sorted(name for name in dir(port) if not name.startswith("_")) == ["provider"]
         assert "web_runtime" not in table
         assert "active_provider" not in table
@@ -70,7 +70,7 @@ def test_official_web_refresh_re_claims_the_same_declaration(tmp_path):
     from lingtai.tools.web_search import DECLARATION, WebManager
 
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="web-official-plugin-refresh",
         working_dir=tmp_path / "agent",
         capabilities={"web": {}},

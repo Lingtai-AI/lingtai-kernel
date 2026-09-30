@@ -37,8 +37,10 @@ def test_builtin_capabilities_have_empty_providers():
 def test_provider_dependent_capabilities():
     result = get_all_providers()
     assert result["vision"]["default"] is None
-    assert "minimax" in result["vision"]["providers"]
-    assert "gemini" in result["vision"]["providers"]
+    for family in ("openai", "anthropic", "codex", "claude-code"):
+        assert family in result["vision"]["providers"]
+    for removed in ("gemini", "minimax", "mimo", "zhipu", "glm", "custom", "claude_code"):
+        assert removed not in result["vision"]["providers"]
     # "local" is the generic local OpenAI-compatible provider: advertised in
     # check-caps so operators see it as a first-class route. The native
     # on-device "mlx" pseudo-provider stays hidden (explicit opt-in only).

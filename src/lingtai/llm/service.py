@@ -55,14 +55,10 @@ def _generate_tool_call_id() -> str:
 # Fields from manifest.llm that adapter factories may consult via
 # LLMService._provider_defaults. Keep this list opt-in (rather than
 # splatting the whole manifest.llm dict) so the surface area between
-# init.json and adapter construction stays auditable.
+# init.json and adapter construction stays auditable. Retired manifest keys
+# (``api_compat``, ``reasoning_effort_vocab``, ``use_responses_api``) are
+# recognized-and-ignored by ``lingtai.init_schema`` and deliberately absent.
 #
-# api_compat in particular MUST propagate: the custom-provider factory
-# (lingtai/llm/_register.py:_custom) dispatches between OpenAI/Anthropic/
-# Gemini wire protocols based on it. Dropping it silently routes
-# api_compat="anthropic" custom providers (e.g. local GLM proxies) to
-# OpenAIAdapter, which then explodes on raw.choices access. See
-# Lingtai-AI/lingtai#112 for the full failure trace.
 # ``codex_session_anchor`` / ``codex_thread_salt`` carry the agent's per-agent
 # Codex identity down to the adapter, which lets the Codex REST path send
 # ``session_id`` / ``thread_id`` cache-affinity headers (issue #378; the
@@ -96,7 +92,6 @@ def _generate_tool_call_id() -> str:
 # the adapter never logs token contents. Blank/whitespace values are treated as
 # omitted by the factory (legacy default-path behavior).
 _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
-    "api_compat",
     "codex_session_anchor",
     "codex_thread_salt",
     "codex_auth_path",
@@ -105,18 +100,18 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     # the adapter chooses one endpoint at request time without changing
     # prompt_cache_key/session/thread identity.
     "codex_base_urls",
-    # Optional Codex service tier. ``fast`` is normalized to the wire value
-    # ``priority`` at the common Codex factory boundary.
+    # Standard ``service_tier`` for the ``openai`` and ``codex`` factories:
+    # ``fast`` -> wire ``priority``; ``auto``/``default``/``flex``/``priority``
+    # pass through verbatim (``lingtai.llm._register._normalize_service_tier``).
     "service_tier",
-    # OpenAI-compatible wire selection. ``auto`` preserves legacy behavior;
-    # ``chat_completions``/``responses`` explicitly select the wire path even
-    # for custom base URLs. Scoped to OpenAI-compatible adapters.
+    # OpenAI-compatible wire selection for the ``openai`` provider:
+    # ``chat_completions`` (default; legacy ``auto`` means the same) or
+    # ``responses`` (stateless full-history replay).
     "wire_api",
-    # Generic reasoning_content round-trip knobs (fable R2 F2). Manifest llm:
-    # values must reach the adapter, not be dropped by this safelist. Scoped
-    # to OpenAI-compatible adapters; other adapters ignore them.
+    # Generic OpenAI-compatible knobs (the ``reasoning_content`` round-trip
+    # fallback and the fixed ``prompt_cache_key`` namespace). Manifest llm:
+    # values must reach the adapter, not be dropped by this safelist.
     "inject_reasoning_fallback",
-    "reasoning_effort_vocab",
     "prompt_cache_namespace",
 )
 
@@ -197,7 +192,7 @@ class LLMService(LLMServiceABC):
     - ``key_resolver``: callable(provider) -> api_key | None.
       Defaults to reading ``{PROVIDER}_API_KEY`` from the environment.
     - ``provider_defaults``: dict mapping provider name to defaults dict
-      (model, base_url, api_compat, etc.).  Defaults to empty dict.
+      (model, base_url, wire_api, etc.).  Defaults to empty dict.
     """
 
     _adapter_registry: dict[str, Callable[..., LLMAdapter]] = {}
@@ -236,7 +231,7 @@ class LLMService(LLMServiceABC):
         # Remember the directly supplied credential for this service's own
         # provider. Agent boot resolves manifest ``api_key`` / ``api_key_env``
         # before constructing LLMService, so this may be a key from a
-        # *noncanonical* env slot such as ``LLM_API_KEY`` / ``MIMO_1_API_KEY``.
+        # *noncanonical* env slot such as ``LLM_API_KEY`` / ``OPENAI_2_API_KEY``.
         # Keeping it lets an inheriting caller (the no-preset daemon path) reuse
         # the real key directly instead of re-deriving it through a canonical-only
         # resolver, which would lose a noncanonical-env key. Never logged.
@@ -254,7 +249,8 @@ class LLMService(LLMServiceABC):
         max_rpm = defaults.get("max_rpm", 0) if defaults else 0
         rpm_kw: dict = {"max_rpm": max_rpm} if max_rpm > 0 else {}
 
-        # Provider-specific default headers (e.g. Kimi requires honest UA per ToS).
+        # Caller-supplied default headers (merged over the LingTai identity
+        # headers inside each adapter).
         headers_kw: dict = {}
         default_headers = self._default_headers_for(provider, defaults)
         if default_headers:
@@ -276,20 +272,16 @@ class LLMService(LLMServiceABC):
         )
 
     def _default_headers_for(self, provider: str, defaults: dict | None) -> dict | None:
-        """Return provider-specific default HTTP headers, if any.
+        """Return the caller-supplied default HTTP headers, if any.
 
         Caller-supplied headers in *defaults* (under the ``default_headers``
-        key) win; provider-policy defaults only fill in what the caller did
-        not specify. For Kimi we set ``User-Agent`` to honestly identify
-        ourselves — Kimi's ToS forbids spoofing other coding tools'
-        User-Agents, and accounts can be suspended for it.
+        key) are forwarded verbatim; the adapters merge them over the shared
+        LingTai identity headers (``lingtai.llm.identity_headers``). There is
+        no per-provider header policy.
         """
         caller_headers: dict = {}
         if defaults and isinstance(defaults.get("default_headers"), dict):
             caller_headers = dict(defaults["default_headers"])
-
-        if provider.lower() == "kimi" and "User-Agent" not in caller_headers:
-            caller_headers["User-Agent"] = "LingTai-Agent/1.0"
 
         return caller_headers or None
 
@@ -299,8 +291,8 @@ class LLMService(LLMServiceABC):
         """Return cached adapter for *provider* + *base_url*, creating one on demand.
 
         The cache is keyed by ``(provider, base_url)`` so the same provider
-        with different base URLs (e.g. OpenRouter vs local vLLM) gets separate
-        adapter instances.
+        with different base URLs (e.g. a hosted endpoint vs local vLLM) gets
+        separate adapter instances.
 
         When *base_url* is None and multiple adapters are cached for
         *provider*, the returned adapter is chosen deterministically: the
@@ -394,6 +386,26 @@ class LLMService(LLMServiceABC):
         daemon-scoped services; callers must never log it.
         """
         return self._api_key
+
+    @property
+    def effective_base_url(self) -> str | None:
+        """The endpoint this service's primary adapter actually talks to.
+
+        A manifest may omit ``base_url``; the adapter then uses its own default
+        (the official OpenAI/Anthropic/Codex endpoint, or an SDK-level override).
+        Capabilities that reuse the active provider's credential (the default
+        Vision route) MUST send it only to this endpoint, never to a guessed
+        one. Returns the configured ``base_url`` when the adapter exposes no
+        effective endpoint (the CLI-backed ``claude-code`` route).
+        """
+        try:
+            adapter = self.get_adapter(self._provider, self._base_url)
+        except Exception:
+            return self._base_url
+        effective = getattr(adapter, "effective_base_url", None)
+        if isinstance(effective, str) and effective:
+            return effective
+        return self._base_url
 
     def static_adapter_comment(self) -> dict | None:
         """Return static adapter guidance before a ChatSession exists, if any."""

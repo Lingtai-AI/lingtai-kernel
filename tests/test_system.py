@@ -32,8 +32,8 @@ def _stub_preset_connectivity(monkeypatch):
 def make_mock_service():
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     return svc
 
 
@@ -271,8 +271,8 @@ def _make_test_agent_for_presets(tmp_path, presets_path=None, active_preset=None
     manifest = {
         "agent_name": "alice",
         "language": "en",
-        "llm": {"provider": "gemini", "model": "gemini-test",
-                "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+        "llm": {"provider": "anthropic", "model": "claude-test",
+                "api_key": None, "api_key_env": "ANTHROPIC_API_KEY"},
         "capabilities": {},
         "soul": {"delay": 120}, "stamina": 3600,
         "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
@@ -349,7 +349,7 @@ def test_refresh_with_unauthorized_preset_returns_error(tmp_path, monkeypatch):
     plib.mkdir()
     (plib / "minimax.json").write_text(json.dumps({
         "name": "minimax", "description": {"summary": "x"},
-        "manifest": {"llm": {"provider": "minimax", "model": "y",
+        "manifest": {"llm": {"provider": "anthropic", "model": "y",
                              "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
                      "capabilities": {"shell": {}}},
     }))

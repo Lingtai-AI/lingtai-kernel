@@ -261,10 +261,10 @@ def test_name_actions_preserve_identity_semantics(tmp_path: Path) -> None:
     migration entirely.
     """
     from lingtai.agent import Agent
-    from tests._service_helpers import make_gemini_mock_service
+    from tests._service_helpers import make_mock_llm_service
 
     workdir = tmp_path / "named"
-    agent = Agent(service=make_gemini_mock_service(), working_dir=workdir)
+    agent = Agent(service=make_mock_llm_service(), working_dir=workdir)
     try:
         before_dir = agent._working_dir
 

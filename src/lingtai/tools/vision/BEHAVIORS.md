@@ -1,6 +1,6 @@
 ---
 name: vision-behavior-tests
-behavior_version: 3
+behavior_version: 4
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -69,12 +69,18 @@ and invalid/cross-action calls are rejected before a child runs.
 
 ### Steps
 1. Run:
-   `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q -p no:cacheprovider tests/test_tool_family_vision_migration.py tests/test_vision_capability.py -k 'analyze or fallback or default_vision_failure'`.
+   `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q -p no:cacheprovider tests/test_tool_family_vision_migration.py tests/test_vision_capability.py -k 'analyze or fallback or default_vision_failure or default_route or credential or removed_provider'`.
 2. With a recording service, call `analyze` for an existing image and with
    `question: null`; record the exact success shape and one request.
 3. Make that service raise a provider error and call `analyze` without a
    `preset`; record that only the selected service was called, no borrowed
    service/factory/MCP action was invoked, and the result is sanitized guidance.
+4. Bind the default route over an active `openai` service whose manifest omits
+   `base_url`; record that the vision service targets the active effective
+   endpoint (`https://api.openai.com/v1`), and that a capability naming a
+   different `base_url` without its own key gets no credential (manual-only).
+   Bind a removed provider name (for example `gemini`) and record a manual-only
+   route with no service construction.
 
 ### Expected evidence
 - [ ] Success is exactly `{status: "ok", analysis: text}` and null question uses
@@ -83,6 +89,8 @@ and invalid/cross-action calls are rejected before a child runs.
   accepted full manual envelope pointer.
 - [ ] Alternatives in an error are instructions only: there is no automatic
   provider switch, legacy credential, preset borrow, or MCP invocation.
+- [ ] The default `openai`/`anthropic` route uses the active effective endpoint,
+  and the active credential never reaches a different endpoint.
 
 ### Pass / Fail
 Pass when the direct route is used once, result/error shapes remain exact, and a
@@ -210,7 +218,7 @@ gates, not parallel-lane evidence.
 1. Run:
    `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q -p no:cacheprovider tests/test_vision_settings.py tests/test_tool_settings_contract.py`.
 2. Bind a valid local route, change its owner file afterward, and record the
-   exact 13-key order, five-field order, applied current/default values, and
+   exact 12-key order, five-field order, applied current/default values, and
    unchanged second SHOW.
 3. Bind fake OpenAI and Codex routes carrying endpoint, key pointer/value,
    header, token-path, and instructions sentinels; verify none renders.

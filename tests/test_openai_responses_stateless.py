@@ -1,4 +1,10 @@
-"""Custom OpenAI-compatible Responses sessions replay canonical history."""
+"""``openai`` Responses sessions are stateless and replay canonical history.
+
+The Responses wire of the ``openai`` provider is ALWAYS stateless full-history
+replay — for a compatible endpoint (``base_url``) and for the official OpenAI
+endpoint alike: every request carries the canonical conversation and never
+sends ``previous_response_id``.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +21,6 @@ from lingtai.kernel.llm.interface import (
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai.llm.custom.adapter import create_custom_adapter
 import lingtai.llm.openai.adapter as openai_adapter_module
 from lingtai.llm.openai.adapter import OpenAIAdapter
 
@@ -441,31 +446,30 @@ def _tool() -> FunctionSchema:
     )
 
 
-def test_custom_factory_marks_openai_compatible_responses_stateless_for_explicit_and_legacy():
-    explicit = create_custom_adapter(
+def test_responses_wire_is_stateless_for_compatible_and_official_endpoints():
+    compat = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
-    legacy = create_custom_adapter(
-        api_key="fake",
-        api_compat="openai",
-        base_url="https://sub2api.example/v1",
-        use_responses=True,
-        force_responses=True,
+    official = OpenAIAdapter(api_key="fake", wire_api="responses")
+    legacy_auto = OpenAIAdapter(
+        api_key="fake", base_url="https://sub2api.example/v1", wire_api="auto"
     )
 
-    assert explicit._responses_stateless_replay is True
-    assert legacy._responses_stateless_replay is True
-    assert explicit._should_use_responses() is True
-    assert legacy._should_use_responses() is True
+    assert compat._should_use_responses() is True
+    assert official._should_use_responses() is True
+    # ``auto`` is the legacy spelling of "omitted": Chat Completions.
+    assert legacy_auto._should_use_responses() is False
+    for adapter in (compat, official):
+        session = adapter.create_chat("gpt-test", "system")
+        assert session._stateless_replay is True
+        assert session.session_resume_id is None
 
 
-def test_custom_responses_nonstreaming_replays_full_history_and_records_assistant():
-    adapter = create_custom_adapter(
+def test_compat_responses_nonstreaming_replays_full_history_and_records_assistant():
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -520,10 +524,9 @@ def test_custom_responses_nonstreaming_replays_full_history_and_records_assistan
     }
 
 
-def test_custom_responses_nonstreaming_parses_provider_forced_sse_without_retry():
-    adapter = create_custom_adapter(
+def test_compat_responses_nonstreaming_parses_provider_forced_sse_without_retry():
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -557,8 +560,8 @@ def test_custom_responses_nonstreaming_parses_provider_forced_sse_without_retry(
 def test_nonstream_noncompleted_status_does_not_commit_raw_snapshot(status):
     raw = _text_raw("resp_partial", "partial")
     raw.status = status
-    adapter = create_custom_adapter(
-        api_key="fake", api_compat="openai",
+    adapter = OpenAIAdapter(
+        api_key="fake",
         base_url="https://sub2api.example/v1", wire_api="responses",
     )
     adapter._client = _Client(_Responses([raw]))
@@ -570,9 +573,8 @@ def test_nonstream_noncompleted_status_does_not_commit_raw_snapshot(status):
 
 
 def test_forced_sse_partial_item_done_does_not_commit_partial_raw_replay():
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -599,9 +601,8 @@ def test_forced_sse_partial_item_done_does_not_commit_partial_raw_replay():
 
 def test_forced_sse_completed_without_usage_does_not_crash():
     """Gateway JSON has no guaranteed fields — a missing ``usage`` must not raise."""
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -617,8 +618,8 @@ def test_forced_sse_completed_without_usage_does_not_crash():
     assert result.usage.cached_tokens == 0
 
 
-def test_forced_sse_without_completed_still_latches_continuation_id():
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+def test_forced_sse_without_completed_never_chains_previous_response_id():
+    adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     adapter._client = _Client(
         _Responses([
             _forced_sse_without_completed("resp_created"),
@@ -628,14 +629,16 @@ def test_forced_sse_without_completed_still_latches_continuation_id():
     session = adapter.create_chat("gpt-test", "system")
 
     assert session.send("first").text == "Truncated."
-    assert session.session_resume_id == "resp_created"
+    assert session.session_resume_id is None
 
     session.send("second")
-    assert adapter._client.responses.kwargs[1]["previous_response_id"] == "resp_created"
+    second = adapter._client.responses.kwargs[1]
+    assert "previous_response_id" not in second
+    assert second["input"][0] == {"role": "user", "content": "first"}
 
 
-def test_stream_without_completed_latches_continuation_id_from_created():
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+def test_official_stream_without_completed_never_chains_previous_response_id():
+    adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     adapter._client = _Client(
         _StreamResponses([
             _stream_without_completed("resp_s_created"),
@@ -645,15 +648,17 @@ def test_stream_without_completed_latches_continuation_id_from_created():
     session = adapter.create_chat("gpt-test", "system")
 
     session.send_stream("first")
-    assert session.session_resume_id == "resp_s_created"
+    assert session.session_resume_id is None
 
     session.send_stream("second")
-    assert adapter._client.responses.kwargs[1]["previous_response_id"] == "resp_s_created"
+    second = adapter._client.responses.kwargs[1]
+    assert "previous_response_id" not in second
+    assert second["input"][0] == {"role": "user", "content": "first"}
 
 
-def test_stream_with_no_response_id_keeps_previous_continuation_id():
-    """An id-less stream must not silently wipe the server-side chain."""
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+def test_official_stream_with_no_response_id_still_replays_full_history():
+    """An id-less stream cannot break a stateless chain: history is local."""
+    adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     adapter._client = _Client(
         _StreamResponses([
             _stream_text("resp_first", "one"),
@@ -665,17 +670,20 @@ def test_stream_with_no_response_id_keeps_previous_continuation_id():
 
     session.send_stream("first")
     session.send_stream("second")
-
-    assert session.session_resume_id == "resp_first"
-
     session.send_stream("third")
-    assert adapter._client.responses.kwargs[2]["previous_response_id"] == "resp_first"
+
+    third = adapter._client.responses.kwargs[2]
+    assert "previous_response_id" not in third
+    user_inputs = [
+        item["content"] for item in third["input"]
+        if isinstance(item, dict) and item.get("role") == "user"
+    ]
+    assert user_inputs == ["first", "second", "third"]
 
 
-def test_custom_responses_streaming_replays_reasoning_tool_result_full_history():
-    adapter = create_custom_adapter(
+def test_compat_responses_streaming_replays_reasoning_tool_result_full_history():
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -800,10 +808,9 @@ def _stream_done_only_indexed(response_id: str, rows):
     return events
 
 
-def test_custom_stream_empty_completion_output_keeps_observed_projection():
-    adapter = create_custom_adapter(
+def test_compat_stream_empty_completion_output_keeps_observed_projection():
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -827,10 +834,9 @@ def test_custom_stream_empty_completion_output_keeps_observed_projection():
     assert session.interface.entries[2].provider_data["openai_responses_output_items"]
 
 
-def test_custom_stream_trailer_only_normalizes_visible_output_and_tool_call():
-    adapter = create_custom_adapter(
+def test_compat_stream_trailer_only_normalizes_visible_output_and_tool_call():
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -886,10 +892,9 @@ def test_custom_stream_trailer_only_normalizes_visible_output_and_tool_call():
     ],
     ids=["indexed_gap", "duplicate_id"],
 )
-def test_custom_stream_done_only_unsafe_identity_falls_back_to_canonical(rows):
-    adapter = create_custom_adapter(
+def test_compat_stream_done_only_unsafe_identity_falls_back_to_canonical(rows):
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -916,7 +921,7 @@ def test_custom_stream_done_only_unsafe_identity_falls_back_to_canonical(rows):
 
 
 @pytest.mark.parametrize("separate_messages", [False, True])
-def test_custom_stream_multiple_text_parts_preserve_raw_boundaries(separate_messages):
+def test_compat_stream_multiple_text_parts_preserve_raw_boundaries(separate_messages):
     parts = [
         SimpleNamespace(type="output_text", text="first"),
         SimpleNamespace(type="output_text", text="second"),
@@ -946,8 +951,8 @@ def test_custom_stream_multiple_text_parts_preserve_raw_boundaries(separate_mess
         type="response.completed",
         response=SimpleNamespace(id="resp_parts", output=output, usage=_usage()),
     ))
-    adapter = create_custom_adapter(
-        api_key="fake", api_compat="openai",
+    adapter = OpenAIAdapter(
+        api_key="fake",
         base_url="https://sub2api.example/v1", wire_api="responses",
     )
     adapter._client = _Client(_StreamResponses([events, _stream_text("resp_next", "done")]))
@@ -960,10 +965,9 @@ def test_custom_stream_multiple_text_parts_preserve_raw_boundaries(separate_mess
     assert adapter._client.responses.kwargs[1]["input"][1:-1] == expected
 
 
-def test_custom_stream_done_only_uses_output_index_order():
-    adapter = create_custom_adapter(
+def test_compat_stream_done_only_uses_output_index_order():
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -995,10 +999,9 @@ def test_custom_stream_done_only_uses_output_index_order():
     ]
 
 
-def test_custom_stream_replays_completion_output_items_without_projection_or_duplication():
-    adapter = create_custom_adapter(
+def test_compat_stream_replays_completion_output_items_without_projection_or_duplication():
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1048,9 +1051,8 @@ def test_raw_message_without_reasoning_stays_authoritative_across_three_calls(
     """Raw output remains an exact prefix; fallback only repairs canonical text."""
     # This exercises the shipped default rather than an explicit opt-out.
     monkeypatch.delenv("LINGTAI_INJECT_REASONING_FALLBACK", raising=False)
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1140,9 +1142,8 @@ def test_reasoning_fallback_only_repairs_legacy_string_assistant_items(content):
 
 
 def test_send_none_replays_pre_staged_notification_style_pair():
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1176,9 +1177,8 @@ def test_send_none_replays_pre_staged_notification_style_pair():
 
 
 def test_send_none_failure_preserves_pre_staged_notification_style_pair():
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1201,9 +1201,8 @@ def test_send_none_failure_preserves_pre_staged_notification_style_pair():
 
 
 def test_pre_request_hook_entries_replay_on_same_stateless_responses_request():
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1245,9 +1244,8 @@ def test_pre_request_hook_entries_replay_on_same_stateless_responses_request():
     ],
 )
 def test_stateless_send_rolls_back_staged_user_input_on_transport_or_parse_failure(failure):
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1265,9 +1263,8 @@ def test_stateless_send_rolls_back_if_enforce_or_serialize_fails_after_staging(
     monkeypatch,
     failure_point,
 ):
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1294,9 +1291,8 @@ def test_stateless_send_rolls_back_if_enforce_or_serialize_fails_after_staging(
 
 
 def test_stateless_stream_rolls_back_on_iteration_and_callback_failure():
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1314,9 +1310,8 @@ def test_stateless_stream_rolls_back_on_iteration_and_callback_failure():
 
 
 def test_stateless_rolls_back_replaced_synthesized_tool_result_on_record_failure(monkeypatch):
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1361,9 +1356,8 @@ def test_stateless_rolls_back_replaced_synthesized_tool_result_on_record_failure
 
 
 def test_stateless_history_round_trips_for_recreated_session_restart():
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1392,9 +1386,8 @@ def test_stateless_history_round_trips_for_recreated_session_restart():
 
 
 def test_stateless_prompt_and_tool_updates_affect_replayed_request():
-    adapter = create_custom_adapter(
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1412,10 +1405,9 @@ def test_stateless_prompt_and_tool_updates_affect_replayed_request():
     assert session.interface.current_tools == [_tool().to_dict()]
 
 
-def test_stateless_custom_responses_never_sends_context_management():
-    adapter = create_custom_adapter(
+def test_stateless_compat_responses_never_sends_context_management():
+    adapter = OpenAIAdapter(
         api_key="fake",
-        api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
     )
@@ -1427,23 +1419,24 @@ def test_stateless_custom_responses_never_sends_context_management():
     assert "context_management" not in adapter._client.responses.kwargs[0]
 
 
-def test_official_openai_responses_remains_stateful_nonstreaming_and_streaming():
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+def test_official_openai_responses_is_stateless_nonstreaming_and_streaming():
+    """Official OpenAI (no base_url) replays full history like every endpoint."""
+    adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     adapter._client = _Client(_Responses([_text_raw("resp_1"), _text_raw("resp_2")]))
     session = adapter.create_chat("gpt-test", "system")
 
     session.send("first")
     session.send("second")
 
-    assert "previous_response_id" not in adapter._client.responses.kwargs[0]
-    assert adapter._client.responses.kwargs[0]["input"] == [
-        {"role": "user", "content": "first"}
+    first, second = adapter._client.responses.kwargs
+    assert "previous_response_id" not in first
+    assert "previous_response_id" not in second
+    assert first["input"] == [{"role": "user", "content": "first"}]
+    assert [item.get("content") for item in second["input"] if item.get("role") == "user"] == [
+        "first",
+        "second",
     ]
-    assert adapter._client.responses.kwargs[1]["input"] == [
-        {"role": "user", "content": "second"}
-    ]
-    assert adapter._client.responses.kwargs[1]["previous_response_id"] == "resp_1"
-    assert session.session_resume_id == "resp_2"
+    assert session.session_resume_id is None
 
     adapter._client = _Client(
         _StreamResponses([_stream_text("resp_s1"), _stream_text("resp_s2")])
@@ -1452,9 +1445,11 @@ def test_official_openai_responses_remains_stateful_nonstreaming_and_streaming()
     stream_session.send_stream("first")
     stream_session.send_stream("second")
 
-    assert "previous_response_id" not in adapter._client.responses.kwargs[0]
-    assert adapter._client.responses.kwargs[1]["input"] == [
-        {"role": "user", "content": "second"}
+    first, second = adapter._client.responses.kwargs
+    assert "previous_response_id" not in first
+    assert "previous_response_id" not in second
+    assert [item.get("content") for item in second["input"] if item.get("role") == "user"] == [
+        "first",
+        "second",
     ]
-    assert adapter._client.responses.kwargs[1]["previous_response_id"] == "resp_s1"
-    assert stream_session.session_resume_id == "resp_s2"
+    assert stream_session.session_resume_id is None

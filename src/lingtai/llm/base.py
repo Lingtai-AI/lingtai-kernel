@@ -19,8 +19,7 @@ from .api_gate import APICallGate
 class _GatedSession:
     """Thin proxy that routes session.send / send_stream through the gate.
 
-    Hoisted from the MiniMax adapter so every provider gets rate gating
-    by inheritance. The proxy is transparent in *both* directions:
+    Every provider gets rate gating by inheritance. The proxy is transparent in *both* directions:
     attribute reads fall through to the inner session via ``__getattr__``
     and attribute writes forward to the inner session via ``__setattr__``
     (except the proxy's own two slots, ``_inner`` and ``_gate``). That
@@ -171,19 +170,20 @@ class LLMAdapter(ABC):
         """Create a new multi-turn chat session.
 
         Args:
-            model: Model identifier (e.g. ``"gemini-3-flash-preview"``).
+            model: Model identifier (e.g. ``"gpt-5.5"``).
             system_prompt: System instruction for the session.
             tools: Tool/function schemas available to the model.
             json_schema: If set, enforce JSON output conforming to this schema.
-            force_tool_call: If True, force the model to call a tool (Gemini
-                ``mode="ANY"``).
+            force_tool_call: If True, force the model to call a tool
+                (``tool_choice="required"`` / Anthropic ``{"type": "any"}``).
             interface: Previously saved ChatInterface to restore.
                 The session inherits this interface instance and converts
                 it to provider format for the initial API state.
             thinking: Thinking level — ``"low"``, ``"high"``, or ``"default"``
                 (adapter decides).
-            interaction_id: Gemini Interactions API session ID for server-side
-                history resume.  Ignored by providers that don't support it.
+            interaction_id: Opaque provider-side resume id. No current adapter
+                resumes server-side history (every wire replays the canonical
+                interface), so adapters ignore it.
             context_window: Total context window in tokens for this model.
                 0 = unknown.  Provided by LLMService.
         """

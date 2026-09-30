@@ -54,8 +54,8 @@ def _refresh_tool_inventory_section(agent) -> None:
     OPT-IN, DEFAULT OFF. The prose this section renders is the same text the
     tool-calling schema already carries as its top-level ``description``, so
     rendering both puts two copies of every tool's prose into one turn's
-    context — byte-identical duplication on the CLI-backed adapters
-    (``claude_code``/``kimi_code``), which serialise the full schema
+    context — byte-identical duplication on the CLI-backed adapter
+    (``claude-code``), which serialises the full schema
     description into their ``# AVAILABLE TOOLS`` block right next to this
     section. Unless ``LINGTAI_TOOL_PROSE_SECTION_ENABLED`` is truthy
     (:func:`lingtai.kernel.config.tool_prose_section_enabled`) the section is

@@ -15,7 +15,8 @@ def _make_workdir(tmp_path: Path, active_preset: str | None = None,
     manifest = {
         "agent_name": "alice",
         "language": "en",
-        "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
+        "llm": {"provider": "openai", "model": "deepseek-v4-flash",
+                "base_url": "https://api.deepseek.com",
                 "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
         "capabilities": {"shell": {}},
         "soul": {"delay": 120},
@@ -87,9 +88,10 @@ def test_materialize_substitutes_llm_and_capabilities(tmp_path, monkeypatch):
             "name": "minimax",
             "description": {"summary": "MiniMax M2.7"},
             "manifest": {
-                "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
+                "llm": {"provider": "anthropic", "model": "MiniMax-M2.7-highspeed",
+                        "base_url": "https://api.minimax.io/anthropic",
                         "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
-                "capabilities": {"shell": {}, "vision": {"provider": "minimax",
+                "capabilities": {"shell": {}, "vision": {"provider": "anthropic",
                                                         "api_key_env": "MINIMAX_API_KEY"}},
             },
         },
@@ -101,7 +103,7 @@ def test_materialize_substitutes_llm_and_capabilities(tmp_path, monkeypatch):
     a = _make_probe_agent(wd)
     data = a._read_init()
     assert data is not None
-    assert data["manifest"]["llm"]["provider"] == "minimax"
+    assert data["manifest"]["llm"]["provider"] == "anthropic"
     assert data["manifest"]["llm"]["model"] == "MiniMax-M2.7-highspeed"
     assert "vision" in data["manifest"]["capabilities"]
 
@@ -135,7 +137,7 @@ def test_materialize_no_preset_field_unchanged(tmp_path):
     wd = _make_workdir(tmp_path)
     a = _make_probe_agent(wd)
     data = a._read_init()
-    assert data["manifest"]["llm"]["provider"] == "deepseek"  # original
+    assert data["manifest"]["llm"]["provider"] == "openai"  # original
 
 
 def test_refresh_preset_thinking_reaches_session_path(tmp_path):
@@ -238,13 +240,14 @@ def test_refresh_preset_omitted_thinking_defaults_to_xhigh(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize(
-    ("manifest_thinking", "expected_thinking"),
-    [(None, "high"), ("minimal", "minimal")],
+    ("manifest_thinking", "expected_thinking", "expected_reasoning"),
+    [(None, "default", None), ("minimal", "minimal", {"effort": "minimal"})],
 )
-def test_refresh_custom_responses_thinking_reaches_session_path(
-    tmp_path, monkeypatch, manifest_thinking, expected_thinking
+def test_refresh_compatible_responses_thinking_reaches_session_path(
+    tmp_path, monkeypatch, manifest_thinking, expected_thinking, expected_reasoning
 ):
-    """Custom Responses keeps high on omission and forwards explicit effort."""
+    """``openai`` Responses on a compatible endpoint omits ``reasoning`` when
+    thinking is unset and forwards an explicit effort verbatim."""
     from unittest.mock import MagicMock
 
     from lingtai.agent import Agent
@@ -252,9 +255,8 @@ def test_refresh_custom_responses_thinking_reaches_session_path(
 
     monkeypatch.setenv("CUSTOM_RESPONSES_API_KEY", "fake-key")
     llm = {
-        "provider": "custom",
+        "provider": "openai",
         "model": "custom-model",
-        "api_compat": "openai",
         "base_url": "https://gateway.example.test/v1",
         "api_key_env": "CUSTOM_RESPONSES_API_KEY",
         "wire_api": "responses",
@@ -277,10 +279,10 @@ def test_refresh_custom_responses_thinking_reaches_session_path(
     )
 
     svc = MagicMock()
-    svc.provider = "deepseek"
-    svc.model = "deepseek-v4-flash"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     svc._base_url = None
-    svc._provider_defaults = {"deepseek": {"max_rpm": 60}}
+    svc._provider_defaults = {"anthropic": {"max_rpm": 60}}
     svc.create_session.return_value = MagicMock()
     svc.make_tool_result = MagicMock()
     agent = Agent(svc, working_dir=wd, config=AgentConfig())
@@ -289,7 +291,7 @@ def test_refresh_custom_responses_thinking_reaches_session_path(
     chat = agent._session.ensure_session()
 
     assert agent._config.thinking == expected_thinking
-    assert chat._extra_kwargs.get("reasoning") == {"effort": expected_thinking}
+    assert chat._extra_kwargs.get("reasoning") == expected_reasoning
 
 
 def test_materialize_unknown_preset_returns_none_and_logs(tmp_path):
@@ -461,14 +463,14 @@ def test_materialize_preserves_init_capability_overrides(tmp_path, monkeypatch):
             "name": "smart",
             "description": {"summary": "smart preset with daemon"},
             "manifest": {
-                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
-                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+                "llm": {"provider": "anthropic", "model": "claude-sonnet-4-5",
+                        "api_key": None, "api_key_env": "ANTHROPIC_API_KEY"},
                 # Preset enables daemon with its own (default-ish) ceiling.
                 "capabilities": {"shell": {}, "daemon": {"manager_pool_size": 10}},
             },
         },
     })
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     # init.json declares daemon with a per-agent override of 30.
     wd = _make_workdir(
         tmp_path, active_preset=str(plib / "smart.json"),
@@ -495,13 +497,13 @@ def test_materialize_preset_only_capability_kwargs_kept(tmp_path, monkeypatch):
             "name": "smart",
             "description": {"summary": "smart preset"},
             "manifest": {
-                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
-                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+                "llm": {"provider": "anthropic", "model": "claude-sonnet-4-5",
+                        "api_key": None, "api_key_env": "ANTHROPIC_API_KEY"},
                 "capabilities": {"daemon": {"manager_pool_size": 50, "max_turns": 99}},
             },
         },
     })
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     # init.json overrides only manager_pool_size; max_turns must come from preset.
     wd = _make_workdir(
         tmp_path, active_preset=str(plib / "smart.json"),
@@ -532,19 +534,19 @@ def test_materialize_preserves_core_default_override_when_preset_omits_it(tmp_pa
             "name": "codex",
             "description": {"summary": "codex preset — no daemon entry"},
             "manifest": {
-                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
-                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+                "llm": {"provider": "anthropic", "model": "claude-sonnet-4-5",
+                        "api_key": None, "api_key_env": "ANTHROPIC_API_KEY"},
                 # Note: NO daemon key. Has a non-core optional cap instead.
                 "capabilities": {"shell": {}, "web_search": {"provider": "inherit"}},
             },
         },
     })
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     wd = _make_workdir(
         tmp_path, active_preset=str(plib / "codex.json"),
         manifest_extra={"capabilities": {
             "daemon": {"manager_pool_size": 30},   # core default — must survive
-            "vision": {"provider": "custom"},   # core default — must survive
+            "vision": {"provider": "local"},   # core default — must survive
         }},
     )
     a = _make_probe_agent(wd)
@@ -555,7 +557,7 @@ def test_materialize_preserves_core_default_override_when_preset_omits_it(tmp_pa
     assert caps["daemon"]["manager_pool_size"] == 30
     # Core-default vision override is carried forward the same way.
     assert "vision" in caps
-    assert caps["vision"] == {"provider": "custom"}
+    assert caps["vision"] == {"provider": "local"}
     # Preset still owns the explicit opt-in set, emitted canonically.
     assert "web" in caps
 
@@ -569,13 +571,13 @@ def test_materialize_core_default_no_init_override_left_to_apply_core_defaults(t
             "name": "codex",
             "description": {"summary": "codex preset"},
             "manifest": {
-                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
-                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+                "llm": {"provider": "anthropic", "model": "claude-sonnet-4-5",
+                        "api_key": None, "api_key_env": "ANTHROPIC_API_KEY"},
                 "capabilities": {"shell": {}},
             },
         },
     })
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     # init.json declares only file (no daemon kwargs).
     wd = _make_workdir(
         tmp_path, active_preset=str(plib / "codex.json"),
@@ -600,7 +602,8 @@ def test_refresh_preset_omitting_daemon_keeps_override_in_manager(tmp_path, monk
             "name": "codex",
             "description": {"summary": "codex preset, no daemon"},
             "manifest": {
-                "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
+                "llm": {"provider": "openai", "model": "deepseek-v4-flash",
+                        "base_url": "https://api.deepseek.com",
                         "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
                 "capabilities": {"shell": {}},   # no daemon entry
             },
@@ -644,7 +647,8 @@ def test_refresh_preset_keeps_daemon_override_in_manager(tmp_path, monkeypatch):
             "name": "smart",
             "description": {"summary": "smart preset enabling daemon"},
             "manifest": {
-                "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
+                "llm": {"provider": "openai", "model": "deepseek-v4-flash",
+                        "base_url": "https://api.deepseek.com",
                         "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
                 "capabilities": {"daemon": {"manager_pool_size": 10}},
             },
@@ -695,8 +699,9 @@ def test_refresh_preset_omitting_mcp_keeps_channel_reply_surface(tmp_path, monke
             "description": {"summary": "codex preset without channel caps"},
             "manifest": {
                 "llm": {
-                    "provider": "deepseek",
+                    "provider": "openai",
                     "model": "deepseek-v4-flash",
+                    "base_url": "https://api.deepseek.com",
                     "api_key": None,
                     "api_key_env": "DEEPSEEK_API_KEY",
                 },
@@ -779,7 +784,8 @@ def _build_init_with_active_and_default(
         "manifest": {
             "agent_name": "alice",
             "language": "en",
-            "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
+            "llm": {"provider": "openai", "model": "deepseek-v4-flash",
+                    "base_url": "https://api.deepseek.com",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
             "capabilities": {"shell": {}},
             "soul": {"delay": 120},
@@ -809,7 +815,8 @@ def test_materialize_missing_active_falls_back_to_default(tmp_path, monkeypatch)
             "name": "minimax_cn",
             "description": {"summary": "MiniMax fallback"},
             "manifest": {
-                "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
+                "llm": {"provider": "anthropic", "model": "MiniMax-M2.7-highspeed",
+                        "base_url": "https://api.minimax.io/anthropic",
                         "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
                 "capabilities": {"shell": {}},
             },
@@ -827,7 +834,7 @@ def test_materialize_missing_active_falls_back_to_default(tmp_path, monkeypatch)
     materialize_active_preset(data, tmp_path)
 
     assert data["manifest"]["preset"]["active"] == default_present
-    assert data["manifest"]["llm"]["provider"] == "minimax"
+    assert data["manifest"]["llm"]["provider"] == "anthropic"
     assert data["manifest"]["llm"]["model"] == "MiniMax-M2.7-highspeed"
 
 
@@ -911,7 +918,8 @@ def test_read_init_recovers_when_active_preset_missing(tmp_path, monkeypatch):
             "name": "minimax_cn",
             "description": {"summary": "fallback target"},
             "manifest": {
-                "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
+                "llm": {"provider": "anthropic", "model": "MiniMax-M2.7-highspeed",
+                        "base_url": "https://api.minimax.io/anthropic",
                         "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
                 "capabilities": {"shell": {}},
             },
@@ -933,4 +941,4 @@ def test_read_init_recovers_when_active_preset_missing(tmp_path, monkeypatch):
     a = _make_probe_agent(wd)
     data = a._read_init()
     assert data is not None
-    assert data["manifest"]["llm"]["provider"] == "minimax"
+    assert data["manifest"]["llm"]["provider"] == "anthropic"

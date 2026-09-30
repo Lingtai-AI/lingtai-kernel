@@ -132,7 +132,7 @@ class StreamingAccumulator:
             )
         self._pending_tools_by_index.clear()
 
-    # -- Atomic tool call (Gemini Interactions) -----------------------------
+    # -- Atomic tool call (providers that emit whole tool calls) ------------
 
     def add_tool(self, tool_call: ToolCall) -> None:
         """Add a fully-formed tool call (no accumulation needed)."""

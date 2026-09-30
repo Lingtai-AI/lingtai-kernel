@@ -73,7 +73,7 @@ Reading it:
   count; `out` is the provider-billable output (thinking included exactly
   once). `<$0.0001` is a nonzero amount that rounds below the display precision.
 - **Unknowns are never zero.** A bucket shows `?` when the provider wire did not
-  state its count (for example OpenAI/Gemini/Codex do not report cache-write
+  state its count (for example OpenAI/Codex do not report cache-write
   tokens, so `write` and the uncached `input` stay `?`), when the catalog lacks
   that rate, or when the counts are incoherent (for example a 1-hour cache-write
   part larger than the whole write). If any bucket is unknown the total is NOT

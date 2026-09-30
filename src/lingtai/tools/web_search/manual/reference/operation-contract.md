@@ -96,7 +96,8 @@ or either settings document.
 
 ### engines
 `engines` reports sorted immutable admitted names. Displayed no-config default
-is `anthropic`, `duckduckgo`, `gemini`, `openai`; admission is not availability.
+is `anthropic`, `duckduckgo`, `openai`; admission is not availability (the
+gated engines also need a matching agent LLM provider).
 The map has no environment peer and the selector cannot install/add an engine.
 An authorized composition edit requires recomposing/relaunching the owner.
 
@@ -105,7 +106,8 @@ An authorized composition edit requires recomposing/relaunching the owner.
 `<agent-workdir>/settings/web.search.json`, then the composed runtime fallback.
 The exact file is `{"schema_version":1,"engine":"<admitted>"}`. The displayed
 default is that composed fallback, not necessarily DuckDuckGo. If no fallback
-can be selected (for example only settings-gated engines without a selector),
+can be selected (for example only backend-gated engines this agent is not
+eligible for, without a selector),
 SHOW returns `SETTINGS_UNAVAILABLE` rather than a partial row with null engine.
 Invalid env/file selection fails without falling through; unavailable or
 credential-missing selections fail search. Browse/manual never read this file.
@@ -138,15 +140,16 @@ Changing a key does not replace a cached service: recompose/relaunch through
 the authorized owner procedure, then verify SHOW redaction and a permitted
 search. SHOW cannot prove that a replacement key is in use.
 
+Credentials do not bypass OpenAI backend eligibility: the engine runs only
+when this agent's own LLM provider is `openai`.
+
 ### anthropic-api-key
 Same redaction, authorized private change and cached service lifetime as above;
 the canonical route is `ANTHROPIC_API_KEY`. Credentials do not bypass explicit
-hot selection or canonical Anthropic backend eligibility.
+hot selection or Anthropic backend eligibility.
 
-### gemini-api-key
-Same redaction, authorized private change and cached service lifetime as above;
-the canonical route is `GEMINI_API_KEY`. Credentials do not bypass explicit hot
-selection or canonical Gemini backend eligibility.
+There is no Gemini engine or `credentials.gemini_api_key` row: the Gemini
+search route was removed with the Gemini LLM provider.
 
 The zero-input manual action reads the installed `capabilities/web/SKILL.md`
 and performs no provider construction, network request, or settings read. It
@@ -180,19 +183,24 @@ the generic preventive spill does not re-spill this envelope.
 
 ## Provider routing and explicit fallback
 
-Admission is exactly `openai`, `anthropic`, `gemini`, and `duckduckgo`.
-Anthropic/Gemini are active settings-only opt-ins: a valid hot selection also
-requires exact matching canonical Agent backend identity. Aliases, Claude Code,
-`custom`, OpenRouter, and other wire-compatible names fail
-`PROVIDER_BACKEND_INELIGIBLE`. Composition kwargs selecting them raise
-`SettingsOnlyProviderError`; retired MiniMax/Zhipu raise
-`RetiredProviderError`. No provider selection infers another Agent's service
-or credential.
+Admission is exactly `duckduckgo` (default), `openai`, and `anthropic`.
+`openai` and `anthropic` are backend-gated: however selected, each runs only
+when this Agent's own LLM provider label is exactly that family (`openai` or
+`anthropic`); `codex`, `claude-code`, and any other label fail
+`PROVIDER_BACKEND_INELIGIBLE` with no provider construction and no search.
+Anthropic is additionally a settings-only opt-in: composition kwargs
+(`provider=`/`default_engine=`) selecting it raise `SettingsOnlyProviderError`,
+while `openai` stays composable. Retired MiniMax/Zhipu raise
+`RetiredProviderError`. Any other unrecognized name composed through
+`provider=`/`engines={}` — including the removed `gemini` — never raises: it
+searches DuckDuckGo and reports `current_setting.legacy_fallback_from`. No
+provider selection infers another Agent's service or credential.
 
-In true no-config setup, canonical OpenAI is the live default when its standard
-credential route is available; otherwise DuckDuckGo. Custom composition remains
-bounded by its admitted set and declared default; a settings-gated-only set can
-have no default. Injected services can also make a composed engine available.
+In true no-config setup, OpenAI is the live default when its standard
+credential route is available and this agent's provider is `openai`;
+otherwise DuckDuckGo. Custom composition remains bounded by its admitted set
+and declared default; a set holding only gated engines this agent cannot use
+can have no default. Injected services can also make a composed engine available.
 Only typed `OpenAISearchError` on the selected `openai` engine triggers exactly
 one DuckDuckGo runtime attempt. This fallback constructs the no-key DDG service
 if no injected DDG service exists, even when DDG is absent from the admitted map.

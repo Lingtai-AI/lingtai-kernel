@@ -113,7 +113,7 @@ def _settings_input_schema() -> dict[str, Any]:
 #: plus its Web-owned typed ``web_runtime`` composition value (browser
 #: transport, immutable engine specs, default provenance — granted by its own
 #: setup, like Email's ``email_runtime``) and the narrow read-only
-#: ``provider_identity`` label that gates its explicit Anthropic/Gemini opt-in.
+#: ``provider_identity`` label that gates its backend-gated OpenAI/Anthropic engines.
 #: Root ``CONTRACT.md`` rules 10-11
 #: forbid a speculative port taxonomy, so a
 #: later family adds the port it actually needs together with its own slice.
@@ -547,8 +547,8 @@ class ProviderIdentityPort(Protocol):
     """Read only the current canonical LLM provider *label*, if one exists.
 
     Deliberately narrower than :class:`ActiveProviderPort`: Web needs one
-    truthful string to decide whether an explicit Anthropic/Gemini opt-in is
-    eligible, and nothing else. The port grants neither the provider service,
+    truthful string to decide whether a backend-gated OpenAI/Anthropic engine
+    is eligible, and nothing else. The port grants neither the provider service,
     its credentials or model configuration, the Agent, nor any provider
     registry; the adapter reads the label through on every access so a refresh
     never leaves a stale identity. Web is the one consumer today.

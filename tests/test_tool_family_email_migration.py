@@ -35,7 +35,7 @@ from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 from tests._agent_presence_helpers import make_test_presence_store
 from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 from tests._snapshot_helpers import (
     make_test_snapshot_port,
     make_test_source_revision_port,

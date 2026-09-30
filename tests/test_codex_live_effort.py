@@ -215,8 +215,7 @@ def _make_codex_session(
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url=base_url,
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         max_rpm=max_rpm,
         codex_compact_token_limit=compact_token_limit,
         codex_base_urls=codex_base_urls,
@@ -818,7 +817,7 @@ def test_effort_evidence_is_allowlisted_for_the_kernel_event_seam():
 
 
 def test_generic_openai_responses_session_exposes_no_effort_capability():
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True, force_responses=True)
+    adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     session = adapter.create_chat("gpt-5.1", "system prompt", tools=None)
 
     capability = session.reasoning_effort_capability()

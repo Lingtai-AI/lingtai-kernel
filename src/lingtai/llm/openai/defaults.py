@@ -1,12 +1,14 @@
+"""Provider metadata for the ``openai`` family (any OpenAI-compatible endpoint).
+
+``base_url`` ``None`` means the official endpoint
+(``lingtai.llm.openai.adapter.OPENAI_OFFICIAL_BASE_URL``); ``wire_api`` is
+``chat_completions`` unless a manifest selects ``responses`` (stateless
+full-history replay).
+"""
+
 DEFAULTS = {
-    "api_compat": "openai",
     "base_url": None,
     "api_key_env": "OPENAI_API_KEY",
     "model": "",
-    # Preserve the existing Responses preference for consumers that inject this
-    # provider metadata. ``wire_api=auto`` delegates to that legacy flag, while
-    # an explicit selector wins. Bare LLMService/OpenAIAdapter construction does
-    # not load this mapping and therefore keeps its existing Chat default.
-    "use_responses_api": True,
-    "wire_api": "auto",
+    "wire_api": "chat_completions",
 }

@@ -246,8 +246,7 @@ def _make_dynamic_session(
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_compact_token_limit=compact_token_limit,
     )
     client = DynamicFakeClient(scale=scale)
@@ -271,8 +270,7 @@ def _make_session(
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_compact_token_limit=compact_token_limit,
     )
     adapter._client = FakeClient(turns or [], compact_output)
@@ -1138,8 +1136,7 @@ def test_compact_failure_is_non_fatal_and_skips_compaction():
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_compact_token_limit=150,
     )
     client = FakeClient([])
@@ -1198,8 +1195,7 @@ def test_self_heal_invalidates_compaction_when_compacted_replay_rejected():
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_compact_token_limit=150,
     )
     client = FakeClient([])

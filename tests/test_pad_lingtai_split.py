@@ -15,7 +15,7 @@ from lingtai.agent import Agent
 from lingtai.tools import context as context_tool
 from lingtai.tools import lingtai as lingtai_tool
 from lingtai.tools import pad as pad_tool
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 def _agent(tmp_path, **kwargs):

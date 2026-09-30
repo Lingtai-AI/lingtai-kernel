@@ -49,126 +49,49 @@ def test_anthropic_adapter_builds_client_with_identity_headers(monkeypatch):
     assert headers["X-Test"] == "1"
 
 
-def test_gemini_adapter_builds_client_with_identity_headers(monkeypatch):
-    from lingtai.llm.gemini import adapter as mod
-
-    captured = {}
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr(mod.genai, "Client", FakeClient)
-    monkeypatch.setattr("lingtai.llm.identity_headers.lingtai_version", lambda: "9.8.7")
-
-    mod.GeminiAdapter(api_key="sk-test", default_headers={"X-Test": "1"})
-
-    headers = captured["http_options"].headers
-    assert "User-Agent" not in headers
-    assert headers["X-LingTai-Client"] == "LingTai"
-    assert headers["X-LingTai-Version"] == "9.8.7"
-    assert headers["X-Test"] == "1"
-
-
-def test_openai_compatible_subclasses_forward_identity_headers(monkeypatch):
+def test_openai_and_anthropic_factories_forward_identity_headers_for_any_endpoint(monkeypatch):
+    """Identity headers reach both generic families for official and compatible
+    endpoints alike; caller ``default_headers`` merge over them."""
+    from lingtai.llm.anthropic import adapter as anthropic_mod
     from lingtai.llm.openai import adapter as openai_mod
-    from lingtai.llm.openai.adapter import OpenAIAdapter
-    from lingtai.llm.mimo.adapter import MimoAdapter
-    from lingtai.llm.openrouter.adapter import OpenRouterAdapter
-    from lingtai.llm.zhipu.adapter import ZhipuAdapter
+    from lingtai.llm.service import LLMService
 
-    captured = []
+    openai_captured: list[dict] = []
+    anthropic_captured: list[dict] = []
 
     class FakeOpenAI:
         def __init__(self, **kwargs):
-            captured.append(kwargs)
-
-    monkeypatch.setattr(openai_mod.openai, "OpenAI", FakeOpenAI)
-    monkeypatch.setattr("lingtai.llm.identity_headers.lingtai_version", lambda: "9.8.7")
-
-    for adapter_cls in (OpenAIAdapter, MimoAdapter, OpenRouterAdapter, ZhipuAdapter):
-        adapter_cls(api_key="sk-test", default_headers={"X-Test": "1"})
-        headers = captured[-1]["default_headers"]
-        assert headers["User-Agent"] == "LingTai/9.8.7"
-        assert headers["X-LingTai-Client"] == "LingTai"
-        assert headers["X-LingTai-Version"] == "9.8.7"
-        assert headers["X-Test"] == "1"
-
-
-def test_minimax_adapter_forwards_identity_headers(monkeypatch):
-    from lingtai.llm.anthropic import adapter as anthropic_mod
-    from lingtai.llm.minimax.adapter import MiniMaxAdapter
-
-    captured = {}
+            openai_captured.append(kwargs)
 
     class FakeAnthropic:
         def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr(anthropic_mod.anthropic, "Anthropic", FakeAnthropic)
-    monkeypatch.setattr("lingtai.llm.identity_headers.lingtai_version", lambda: "9.8.7")
-
-    MiniMaxAdapter(api_key="sk-test", default_headers={"X-Test": "1"})
-
-    headers = captured["default_headers"]
-    assert headers["User-Agent"] == "LingTai/9.8.7"
-    assert headers["X-LingTai-Client"] == "LingTai"
-    assert headers["X-LingTai-Version"] == "9.8.7"
-    assert headers["X-Test"] == "1"
-
-
-def test_custom_adapter_forwards_identity_headers_to_all_compat_paths(monkeypatch):
-    from lingtai.llm.anthropic import adapter as anthropic_mod
-    from lingtai.llm.custom.adapter import create_custom_adapter
-    from lingtai.llm.gemini import adapter as gemini_mod
-    from lingtai.llm.openai import adapter as openai_mod
-
-    openai_captured = {}
-    anthropic_captured = {}
-    gemini_captured = {}
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):
-            openai_captured.update(kwargs)
-
-    class FakeAnthropic:
-        def __init__(self, **kwargs):
-            anthropic_captured.update(kwargs)
-
-    class FakeGeminiClient:
-        def __init__(self, **kwargs):
-            gemini_captured.update(kwargs)
+            anthropic_captured.append(kwargs)
 
     monkeypatch.setattr(openai_mod.openai, "OpenAI", FakeOpenAI)
     monkeypatch.setattr(anthropic_mod.anthropic, "Anthropic", FakeAnthropic)
-    monkeypatch.setattr(gemini_mod.genai, "Client", FakeGeminiClient)
     monkeypatch.setattr("lingtai.llm.identity_headers.lingtai_version", lambda: "9.8.7")
 
-    create_custom_adapter(
-        api_compat="openai",
-        api_key="sk-test",
-        base_url="https://example.invalid/openai",
-        default_headers={"X-Test": "openai"},
-    )
-    assert openai_captured["default_headers"]["X-LingTai-Version"] == "9.8.7"
-    assert openai_captured["default_headers"]["X-Test"] == "openai"
+    for provider, captured in (("openai", openai_captured), ("anthropic", anthropic_captured)):
+        for base_url in (None, "https://example.invalid/v1"):
+            LLMService(
+                provider=provider,
+                model="m",
+                api_key="sk-test",
+                base_url=base_url,
+                provider_defaults={provider: {"default_headers": {"X-Test": provider}}},
+            )
+            headers = captured[-1]["default_headers"]
+            assert headers["User-Agent"] == "LingTai/9.8.7"
+            assert headers["X-LingTai-Client"] == "LingTai"
+            assert headers["X-LingTai-Version"] == "9.8.7"
+            assert headers["X-Test"] == provider
 
-    create_custom_adapter(
-        api_compat="anthropic",
-        api_key="sk-test",
-        base_url="https://example.invalid/anthropic",
-        default_headers={"X-Test": "anthropic"},
-    )
-    assert anthropic_captured["default_headers"]["X-LingTai-Version"] == "9.8.7"
-    assert anthropic_captured["default_headers"]["X-Test"] == "anthropic"
 
-    create_custom_adapter(
-        api_compat="gemini",
-        api_key="sk-test",
-        default_headers={"X-Test": "gemini"},
-    )
-    gemini_headers = gemini_captured["http_options"].headers
-    assert "User-Agent" not in gemini_headers
-    assert gemini_headers["X-LingTai-Client"] == "LingTai"
-    assert gemini_headers["X-LingTai-Version"] == "9.8.7"
-    assert gemini_headers["X-Test"] == "gemini"
+def test_no_provider_specific_user_agent_policy():
+    """The retired ``kimi`` User-Agent special case is gone: only caller
+    headers are forwarded (identity headers are merged inside adapters)."""
+    from lingtai.llm.service import LLMService
+
+    svc = object.__new__(LLMService)
+    assert svc._default_headers_for("openai", None) is None
+    assert svc._default_headers_for("openai", {"default_headers": {"A": "1"}}) == {"A": "1"}

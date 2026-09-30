@@ -15,7 +15,6 @@ from lingtai.tools.web_search.settings import (
     API_KEY,
     DEFAULT_ENGINE_NAMES,
     ENGINES_KEY,
-    GEMINI_API_KEY,
     MODEL_KEY,
     OPENAI_API_KEY,
     OUTPUT_MAX_CHARS_KEY,
@@ -30,7 +29,6 @@ _WEB_ENV = (
     WEB_MAX_CHARS_ENV,
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
-    "GEMINI_API_KEY",
 )
 _ROW_KEYS = (
     PROVIDER_KEY,
@@ -41,7 +39,6 @@ _ROW_KEYS = (
     OUTPUT_MAX_CHARS_KEY,
     OPENAI_API_KEY,
     ANTHROPIC_API_KEY,
-    GEMINI_API_KEY,
 )
 _COMMENTS = {
     PROVIDER_KEY: "web-manual#provider",
@@ -52,13 +49,11 @@ _COMMENTS = {
     OUTPUT_MAX_CHARS_KEY: "web-manual#output-max-chars",
     OPENAI_API_KEY: "web-manual#openai-api-key",
     ANTHROPIC_API_KEY: "web-manual#anthropic-api-key",
-    GEMINI_API_KEY: "web-manual#gemini-api-key",
 }
 _SENSITIVE_KEYS = (
     API_KEY,
     OPENAI_API_KEY,
     ANTHROPIC_API_KEY,
-    GEMINI_API_KEY,
 )
 
 
@@ -361,3 +356,10 @@ def test_web_legacy_helper_limitations_are_explicit():
                    "WEB_BROWSING_CACHE_DIR", "clear_cache", "no automatic purge",
                    "--fallback", "Jina", "preview", "authorization"):
         assert phrase.lower() in " ".join(maintenance.lower().split())
+
+
+def test_default_engine_inventory_is_exactly_three_engines() -> None:
+    # The admitted-engine default and the credential rows cover exactly the
+    # three built-in engines; the removed ``gemini`` engine has neither.
+    assert DEFAULT_ENGINE_NAMES == ("anthropic", "duckduckgo", "openai")
+    assert all("gemini" not in key for key in _ROW_KEYS)

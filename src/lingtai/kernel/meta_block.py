@@ -3296,8 +3296,8 @@ def _notification_attention_envelope_chars(attention: dict) -> int:
     """Return the serialized size of the model-visible attention lane.
 
     Measures exactly what the provider sees under
-    ``_meta.agent_meta.notifications.attention``.  The canonical Anthropic,
-    OpenAI Chat/Responses, and Gemini ToolResultBlock converters re-serialize
+    ``_meta.agent_meta.notifications.attention``.  The canonical Anthropic and
+    OpenAI Chat/Responses ToolResultBlock converters re-serialize
     projected dictionaries with default ASCII escaping
     (``json.dumps(..., default=str)``, i.e. ``ensure_ascii=True``), so the
     ruler uses the same escaping: multilingual content is counted exactly as

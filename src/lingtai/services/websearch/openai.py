@@ -27,7 +27,7 @@ class OpenAISearchError(SearchProviderError):
     exception text that may embed request/response bodies. Subclasses the
     shared :class:`SearchProviderError`; the ``web`` capability's OpenAI-only
     DuckDuckGo fallback still keys on this exact subclass, not the shared
-    base, so Anthropic/Gemini provider failures never trigger that fallback.
+    base, so Anthropic provider failures never trigger that fallback.
     """
 
     def __init__(self, failure_class: str) -> None:

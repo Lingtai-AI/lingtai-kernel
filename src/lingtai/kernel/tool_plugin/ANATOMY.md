@@ -323,8 +323,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `host.web_runtime` is granted and is a typed `WebComposition` — there is no
   fallback carrier, default transport, or default engine set at bind. The
   manager retains only the granted workdir and provider-identity ports;
-  `_same_provider_identity` compares the port's label exactly for the explicit
-  Anthropic/Gemini opt-in. The package manual installs at
+  `_same_provider_identity` compares the port's label exactly for the backend-gated
+  OpenAI/Anthropic engines. The package manual installs at
   `capabilities/web/SKILL.md`.
 
 ## Connections

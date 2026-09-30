@@ -193,26 +193,27 @@ values, or if the closed root gains a field.
    responds to that text — the text reached the provider, not a tool result.
 
 ### Expected evidence
-- [ ] Exit code 0 and the summary line reads `10 passed`.
-- [ ] The ten conforming regime rows all ran and passed: `openai_chat`,
-      `deepseek_chat`, `mimo_chat`, `zhipu_chat`, `anthropic`, `claude_code`,
-      `gemini_interactions`, `openai_responses`, `codex_responses`,
+- [ ] Exit code 0 and the summary line reads `7 passed`.
+- [ ] The seven conforming regime rows (one or more per registered provider
+      family: `openai`, `anthropic`, `codex`, `claude-code`) all ran and
+      passed: `openai_chat`, `openai_chat_reasoning_fallback`, `anthropic`,
+      `claude_code`, `openai_responses`, `codex_responses`,
       `gated_openai_chat`.
 - [ ] Each row proves, for `USER_TEXT = "characterization text turn"`: the
       text appears in the captured provider wire in that regime's shape — the
       OpenAI-family dict `{"role": "user", "content": "characterization text
-      turn"}` (openai_chat, deepseek_chat, mimo_chat, zhipu_chat,
-      openai_responses, codex_responses, gated_openai_chat), the Anthropic
-      messages array (anthropic), the rendered CLI prompt string
-      (claude_code), or the Gemini Interactions `input` array
-      (gemini_interactions) — and `send` returns an `LLMResponse` whose
+      turn"}` (openai_chat, openai_chat_reasoning_fallback, openai_responses,
+      codex_responses, gated_openai_chat), the Anthropic messages array
+      (anthropic), or the
+      rendered CLI prompt string (claude_code) — and `send` returns an
+      `LLMResponse` whose
       `UsageMetadata` carries the concrete mocked counts `input_tokens=10`,
       `output_tokens=5` (never zeroed).
 - [ ] Step 3: the provider reply engages with your plain text (no error, no
       dropped turn).
 
 ### Pass / Fail
-Pass when `10 passed` and the wire/envelope facts above hold. Fail if any
+Pass when `7 passed` and the wire/envelope facts above hold. Fail if any
 conforming regime drops or rewrites the user text, returns no concrete
 `UsageMetadata`, or the suite reports a failure.
 

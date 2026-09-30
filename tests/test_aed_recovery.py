@@ -423,8 +423,7 @@ def test_codex_provider_retry_budget_is_terminal_in_run_loop(tmp_path, monkeypat
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
     )
@@ -514,8 +513,7 @@ def test_codex_terminal_wrapper_survives_watchdog_settle_boundary(
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
     )
@@ -687,8 +685,7 @@ def test_codex_adapter_run_loop_uses_non_dispatching_replay_markers(
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
     )
@@ -820,8 +817,7 @@ def test_codex_post_recovery_tail_failure_is_terminal_in_run_loop(
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
     )
@@ -951,8 +947,7 @@ def test_codex_post_recovery_snapshot_failure_is_terminal_in_run_loop(
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
     )

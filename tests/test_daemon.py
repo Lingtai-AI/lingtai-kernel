@@ -736,8 +736,11 @@ def test_daemon_schema_context_token_limit_description_matches_contract():
     child = Path(__file__).parents[1] / "src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/lingtai/SKILL.md"
     body = " ".join(child.read_text(encoding="utf-8").split())
     for phrase in ("manifest.llm.context_limit", "inherited parent effective window",
-                   "non-fatal", "hard failure", "mimocode"):
+                   "non-fatal", "mimocode"):
         assert phrase in body
+    # Native MiMo compaction was removed with the four-family collapse:
+    # ``context_token_limit`` is Codex-only.
+    assert "hard failure" not in body
 
 
 def test_cli_backend_serializes_task_mcp_context(tmp_path, monkeypatch):
@@ -2883,7 +2886,7 @@ def test_run_emanation_inherits_parent_noncanonical_api_key(tmp_path, monkeypatc
     one), not None.
     """
     agent = _make_agent(tmp_path, ["shell", "daemon"])
-    agent.service.provider = "custom"
+    agent.service.provider = "openai"
     agent.service.model = "glm-5.1"
     agent.service._base_url = "https://proxy.example/v1"
     agent.service._context_window = 200000
@@ -2896,7 +2899,7 @@ def test_run_emanation_inherits_parent_noncanonical_api_key(tmp_path, monkeypatc
     # the ``api_key`` property backed by ``_api_key``; the mock models both.
     agent.service._api_key = "sk-from-LLM_API_KEY"
     agent.service.api_key = "sk-from-LLM_API_KEY"
-    agent.service._provider_defaults = {"custom": {"api_compat": "openai"}}
+    agent.service._provider_defaults = {"openai": {"wire_api": "chat_completions"}}
 
     captured = {}
 
@@ -2938,10 +2941,10 @@ def test_run_emanation_inherits_parent_noncanonical_api_key(tmp_path, monkeypatc
     agent.service.create_session.assert_not_called()
     # The whole point: the daemon-scoped service gets a present, correct key.
     assert captured["init"]["api_key"] == "sk-from-LLM_API_KEY"
-    assert captured["init"]["provider"] == "custom"
+    assert captured["init"]["provider"] == "openai"
     assert captured["init"]["base_url"] == "https://proxy.example/v1"
     # Provider defaults still inherited verbatim (no Codex anchor for custom).
-    assert captured["init"]["provider_defaults"] == {"custom": {"api_compat": "openai"}}
+    assert captured["init"]["provider_defaults"] == {"openai": {"wire_api": "chat_completions"}}
 
 
 def test_run_emanation_codex_preset_gets_daemon_cache_anchor(tmp_path, monkeypatch):
@@ -4416,8 +4419,8 @@ def test_run_emanation_manual_reclaim_calls_mark_cancelled(tmp_path):
 # Per-emanation preset tests
 # ---------------------------------------------------------------------------
 
-def _write_preset_file(presets_dir, name, provider="deepseek", model="deepseek-v3",
-                        api_key_env="DEEPSEEK_API_KEY", base_url=None):
+def _write_preset_file(presets_dir, name, provider="openai", model="deepseek-v3",
+                        api_key_env="DEEPSEEK_API_KEY", base_url="https://api.deepseek.com"):
     """Write a minimal preset JSON file to the presets directory."""
     import json
     preset = {
@@ -4716,7 +4719,7 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
-    _write_preset_file(presets_dir, "deepseek", provider="deepseek",
+    _write_preset_file(presets_dir, "deepseek", provider="openai",
                        model="deepseek-v3", api_key_env="DEEPSEEK_API_KEY_TEST")
 
     monkeypatch.setenv("DEEPSEEK_API_KEY_TEST", "sk-test-key")
@@ -4758,7 +4761,7 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
     assert len(folders) == 1
     data = json.loads((folders[0] / "daemon.json").read_text())
     assert data.get("preset_name") == preset_path
-    assert data.get("preset_provider") == "deepseek"
+    assert data.get("preset_provider") == "openai"
     assert data.get("preset_model") == "deepseek-v3"
 
 
@@ -5614,7 +5617,7 @@ def test_run_emanation_no_preset_uses_parent_api_key_without_resolver(
     any primary-key resolution attempt fails the test.
     """
     agent = _make_agent(tmp_path, ["shell", "daemon"])
-    agent.service.provider = "custom"
+    agent.service.provider = "openai"
     agent.service.model = "glm-5.1"
     agent.service._base_url = "https://proxy.example/v1"
     agent.service._context_window = 200000
@@ -5629,7 +5632,7 @@ def test_run_emanation_no_preset_uses_parent_api_key_without_resolver(
     # fall back to calling the resolver here. The effective-preset path must not.
     agent.service._api_key = None
     agent.service.api_key = None
-    agent.service._provider_defaults = {"custom": {"api_compat": "openai"}}
+    agent.service._provider_defaults = {"openai": {"wire_api": "chat_completions"}}
 
     captured = {}
     import lingtai.llm.service as service_mod
@@ -5670,7 +5673,7 @@ def test_run_emanation_no_preset_preserves_parent_provider_defaults(
     re-deriving it through ``_llm_defaults_from_manifest``.
     """
     agent = _make_agent(tmp_path, ["shell", "daemon"])
-    agent.service.provider = "custom"
+    agent.service.provider = "openai"
     agent.service.model = "glm-5.1"
     agent.service._base_url = "https://proxy.example/v1"
     agent.service._context_window = 200000
@@ -5678,8 +5681,7 @@ def test_run_emanation_no_preset_preserves_parent_provider_defaults(
     agent.service._api_key = "sk-effective"
     agent.service.api_key = "sk-effective"
     agent.service._provider_defaults = {
-        "custom": {
-            "api_compat": "openai",
+        "openai": {
             "max_rpm": 9,
             "default_headers": {"x-test": "1"},
             # Outside the _llm_defaults_from_manifest allowlist on purpose.
@@ -5708,8 +5710,7 @@ def test_run_emanation_no_preset_preserves_parent_provider_defaults(
     # The whole parent bucket survives — including codex_base_urls, which the
     # manifest allowlist would have dropped (no Codex anchor for non-codex).
     assert captured["init"]["provider_defaults"] == {
-        "custom": {
-            "api_compat": "openai",
+        "openai": {
             "max_rpm": 9,
             "default_headers": {"x-test": "1"},
             "codex_base_urls": ["https://a.example", "https://b.example"],
@@ -5731,7 +5732,7 @@ def test_run_emanation_detached_child_merges_public_provider_defaults(
     Responses provider is misrouted to Chat Completions.
     """
     agent = _make_agent(tmp_path, ["shell", "daemon"])
-    agent.service.provider = "custom"
+    agent.service.provider = "openai"
     agent.service.model = "glm-5.1"
     agent.service._base_url = "https://proxy.example/v1"
     agent.service._context_window = 200000
@@ -5739,8 +5740,7 @@ def test_run_emanation_detached_child_merges_public_provider_defaults(
     agent.service._api_key = "sk-effective"
     agent.service.api_key = "sk-effective"
     agent.service._provider_defaults = {
-        "custom": {
-            "api_compat": "openai",
+        "openai": {
             "wire_api": "responses",
             "max_rpm": 9,
             "default_headers": {"x-test": "1"},
@@ -5766,14 +5766,13 @@ def test_run_emanation_detached_child_merges_public_provider_defaults(
     # block whose provider bucket lives under the PUBLIC ``provider_defaults``
     # key (no ``_provider_defaults`` alias survives serialization).
     child_preset_llm = {
-        "provider": "custom",
+        "provider": "openai",
         "model": "glm-5.1",
         "api_key": "sk-effective",
         "base_url": "https://proxy.example/v1",
         "context_window": 200000,
         "provider_defaults": {
-            "custom": {
-                "api_compat": "openai",
+            "openai": {
                 "wire_api": "responses",
                 "max_rpm": 9,
                 "default_headers": {"x-test": "1"},
@@ -5791,8 +5790,7 @@ def test_run_emanation_detached_child_merges_public_provider_defaults(
     # base_url), so the adapter selects OpenAIResponsesSession instead of
     # degrading to auto/Chat Completions.
     assert captured["init"]["provider_defaults"] == {
-        "custom": {
-            "api_compat": "openai",
+        "openai": {
             "base_url": "https://proxy.example/v1",
             "wire_api": "responses",
             "max_rpm": 9,

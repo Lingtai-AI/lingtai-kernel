@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lingtai.kernel.config import AgentConfig, llm_supports_thinking
+from lingtai.kernel.config import AgentConfig
 from lingtai.kernel.llm.reasoning_effort import (
     ReasoningEffortCapability,
     ReasoningEffortController,
@@ -215,6 +215,11 @@ def test_claude_effort_evidence_is_safe_for_llm_events():
 
 
 def test_claude_code_is_manifest_thinking_capable_without_global_vocab_claim():
-    assert llm_supports_thinking({"provider": "claude-code"}) is True
-    assert llm_supports_thinking({"provider": "claude_code"}) is True
-    assert llm_supports_thinking({"provider": "gemini"}) is False
+    from lingtai.init_schema import validate_init
+
+    base = {"manifest": {"llm": {"provider": "claude-code", "model": "sonnet"}}, "pad": ""}
+    base["manifest"]["llm"]["thinking"] = "high"
+    validate_init(base)
+    base["manifest"]["llm"]["provider"] = "claude_code"
+    with pytest.raises(ValueError, match="use provider claude-code"):
+        validate_init(base)

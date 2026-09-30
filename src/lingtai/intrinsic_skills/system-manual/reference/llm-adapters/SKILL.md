@@ -1,67 +1,110 @@
 ---
 name: llm-adapters
 description: >
-  Nested system-manual reference for the built-in LLM adapters: what each
-  named adapter is, how it is configured and dispatched, its special transport
-  or protocol behaviors, and the environment variables that control it.
-version: 0.1.0
-last_changed_at: "2026-08-06T00:00:00Z"
+  Nested system-manual reference for LingTai's four built-in LLM provider
+  families (openai, anthropic, codex, claude-code): what each adapter is, how
+  it is configured and dispatched, its standard parameters (wire_api,
+  thinking, service_tier), how other vendors are reached through the
+  OpenAI/Anthropic-compatible families, and which removed provider names now
+  fail validation.
+version: 0.2.0
+last_changed_at: "2026-09-29T00:00:00Z"
 related_files:
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/service.py
 - src/lingtai/llm/openai/adapter.py
 - src/lingtai/llm/openai/codex_ws.py
-- src/lingtai/llm/custom/adapter.py
+- src/lingtai/llm/anthropic/adapter.py
+- src/lingtai/llm/claude_code/adapter.py
+- src/lingtai/init_schema.py
+- src/lingtai/intrinsic_skills/system-manual/reference/subs-pool/SKILL.md
 - ENVIRONMENT_VARIABLES.md
 maintenance: |
-  Keep one entry per named adapter. Add a section when a new adapter ships;
-  keep each section to the adapter's concrete operating facts (dispatch, wire,
-  special behavior, env vars) and point to source rather than restating code.
+  Keep one entry per registered provider family and keep the inventory table
+  in parity with `LLMService._adapter_registry` (tests/test_llm_adapters_manual.py).
+  Keep each section to the adapter's concrete operating facts (dispatch, wire,
+  standard parameters, env vars) and point to source rather than restating
+  code. The removed-provider list mirrors `init_schema.REMOVED_LLM_PROVIDERS`.
 ---
 # LLM Adapters Manual
 
-This reference documents LingTai's built-in LLM adapters. Adapters are the
-per-provider implementations that turn a provider's wire protocol into the
-kernel's session/stream contract. The canonical registration and dispatch table
-lives in `src/lingtai/llm/_register.py` and `src/lingtai/llm/service.py`;
-provider-defaults presets are configured through presets / `init.json` `llm`
-blocks. This page is the progressive-disclosure route from the system manual;
-source remains the behavioral authority.
+This reference documents LingTai's built-in LLM adapters. Adapters turn a
+provider wire protocol into the kernel's session/stream contract. The canonical
+registration and dispatch table lives in `src/lingtai/llm/_register.py` and
+`src/lingtai/llm/service.py`; providers are configured through presets /
+`init.json` `llm` blocks. This page is the progressive-disclosure route from
+the system manual; source remains the behavioral authority.
 
 ## Named adapters
 
-LingTai registers the following provider keys (each usable in presets / `init.json`
-`llm` blocks; source of truth: `src/lingtai/llm/_register.py`):
+LingTai ships exactly four LLM provider families (source of truth:
+`src/lingtai/llm/_register.py`, `LLM_PROVIDERS`):
 
-| Provider keys (aliases) | Factory / adapter | Transport(s) | Notes |
+| Provider keys | Factory / adapter | Transport(s) | Notes |
 |---|---|---|---|
-| `codex` | `CodexOpenAIAdapter` (in `openai/adapter.py`) | REST (default), WebSocket (opt-in) | Official ChatGPT Codex backend; one OAuth account (`codex_auth_path` or default) with token refresh; `store=false` forced; streaming forced. No built-in account pool — see [subs-pool](../subs-pool/SKILL.md) |
-| `openai` | `OpenAIAdapter` | REST (Chat Completions / Responses) | Responses API optional via `wire_api` / `use_responses_api` |
-| `anthropic` | `AnthropicAdapter` | REST | Anthropic Messages API |
-| `gemini` | `GeminiAdapter` | REST | Google Gemini API |
-| `minimax` | `MiniMaxAdapter` | REST | MiniMax API |
-| `deepseek` | `OpenAIAdapter` (generic transport; provider-local `deepseek.policy.apply_reasoning`, `inject_reasoning_fallback=True`, `prompt_cache_namespace="deepseek"`) | REST | DeepSeek API; current Flash/Pro × Chat/Responses effort policy is provider-owned |
-| `glm`, `zhipu` | `ZhipuAdapter` | REST | Zhipu / GLM API |
-| `mimo` | `MimoAdapter` | REST | Xiaomi MiMo API |
-| `custom`, `grok`, `qwen`, `kimi` | `create_custom_adapter` (in `custom/adapter.py`) | REST | Generic OpenAI-compatible endpoint (`custom` is the canonical key; `grok`/`qwen`/`kimi` are custom-backed aliases) |
-| `openrouter` | `OpenRouterAdapter` | REST | OpenRouter-compatible endpoint |
-| `claude-code`, `claude_code` | `ClaudeCodeAdapter` (in `claude_code/adapter.py`) | n/a (external CLI) | Local CLI-backed LLM provider (Claude Code harness); used as a main-agent/preset provider |
-| `kimi-code`, `kimi_code` | `KimiCodeAdapter` (in `kimi_code/adapter.py`) | n/a (external CLI) | Local CLI-backed LLM provider (Kimi Code harness); used as a main-agent/preset provider |
+| `openai` | `OpenAIAdapter` (`openai/adapter.py`) | REST: Chat Completions (default) or Responses | Any OpenAI-compatible endpoint. `base_url` optional (default official `https://api.openai.com/v1`). `wire_api`: `chat_completions` (default; legacy `auto` means the same) or `responses` (always stateless full-history replay) |
+| `anthropic` | `AnthropicAdapter` (`anthropic/adapter.py`) | REST (Messages API) | Any Anthropic-compatible endpoint. `base_url` optional (default official `https://api.anthropic.com`) |
+| `codex` | `CodexOpenAIAdapter` (`openai/adapter.py`) | REST (default), WebSocket (opt-in) | Official ChatGPT Codex backend; one OAuth account (`codex_auth_path` or default) with token refresh; `store=false` forced; streaming forced. No built-in account pool — see [subs-pool](../subs-pool/SKILL.md) |
+| `claude-code` | `ClaudeCodeAdapter` (`claude_code/adapter.py`) | n/a (local `claude` CLI) | Local Claude Code CLI login used as a main-agent/preset provider |
 
 Each adapter is lazy-imported on first use, so an unconfigured provider's SDK
-is never loaded. Prefer the provider's own section below when operating a
-specific provider. The CLI-backed providers above (`claude-code`, `kimi-code`)
-are registered LLM providers/preset paths; they are distinct from the daemon
-CLI backend dispatch system (see `daemon-manual`), which can run external
+is never loaded. The CLI-backed `claude-code` provider is distinct from the
+daemon CLI backend dispatch system (see `daemon-manual`), which can run external
 coding CLIs as subprocesses for a task.
+
+### Other vendors, subscriptions, and pools
+
+LingTai ships no per-vendor adapters. Reach any other vendor by pointing a
+family at that vendor's compatible endpoint:
+
+- OpenAI-compatible vendor, gateway, or local server → `provider: "openai"`
+  with `base_url` (+ `wire_api: "responses"` when the endpoint serves the
+  Responses API).
+- Anthropic-compatible vendor or proxy → `provider: "anthropic"` with
+  `base_url`.
+- Subscription accounts → an external pool such as sub2api or
+  [subs-pool](../subs-pool/SKILL.md), reached the same way.
+
+### Removed provider names
+
+`init.json` and preset validation reject these names on `manifest.llm.provider`
+and on any capability `provider` that names an LLM route (`web`/`web_search`
+engine names are exempt) with a pointer to `openai`/`anthropic` or an external
+pool: `deepseek`, `zhipu`, `glm`, `mimo`, `minimax`, `openrouter`, `grok`,
+`qwen`, `kimi`, `gemini`, `kimi-code`, `kimi_code`, `custom`, `claude_code`,
+`codex-pool`, `codex_pool` (`init_schema.REMOVED_LLM_PROVIDERS`). The retired
+manifest keys `api_compat`, `reasoning_effort_vocab`, and `use_responses_api`
+are recognized and ignored.
+
+## Standard parameters
+
+- **`thinking`** (`none|minimal|low|medium|high|xhigh|max`, every family) is
+  sent verbatim as the standard field: Responses `reasoning: {effort}`, Chat
+  Completions `reasoning_effort`. Omitted (`default`) sends no field on
+  `openai`; `codex` sends its own explicit `xhigh`; `anthropic` maps the level
+  to a Messages thinking budget (omitted hydrates the legacy `high`);
+  `claude-code` maps it to `--effort`.
+- **`service_tier`** (`openai` and `codex`, one normalizer
+  `_normalize_service_tier`): `fast` → wire `priority`; `auto`, `default`,
+  `flex`, `priority` pass through verbatim; any other value fails init
+  validation. `anthropic`/`claude-code` do not forward it.
+- **`wire_api`** belongs to `openai` only; a non-`auto` value on another
+  provider fails validation. `codex` always uses Responses.
+- Generic `openai` knobs: `inject_reasoning_fallback` (Chat Completions
+  `reasoning_content` round-trip stub, default on,
+  `LINGTAI_INJECT_REASONING_FALLBACK`), `default_headers`,
+  `prompt_cache_namespace` (auto-derived `prompt_cache_key` namespace),
+  `max_rpm`, and host-keyed tool-schema quirks.
 
 ## Codex adapter
 
 The Codex adapter (`CodexOpenAIAdapter` → `CodexResponsesSession`, both in
 `src/lingtai/llm/openai/adapter.py`) talks to ChatGPT's official Codex
 `/backend-api/codex/responses` endpoint. It is the single native Codex
-provider: account selection, token-pool rotation, and `store=false` semantics
+provider: single-account binding, token refresh, and `store=false` semantics
 are all handled inside the adapter (see `_register.py` and `service.py`).
+Omitted/`default` thinking sends an explicit `reasoning.effort = "xhigh"`
+(Codex-only default); `service_tier` shares the `openai` normalizer.
 
 ### Transport: REST vs WebSocket
 
@@ -128,34 +171,31 @@ effort).
 ## OpenAI adapter
 
 The `openai` adapter (`OpenAIAdapter` in `src/lingtai/llm/openai/adapter.py`)
-serves OpenAI-compatible endpoints over Chat Completions or the Responses API.
-The Responses API can be selected with `wire_api=responses` or the legacy
-`use_responses_api=true` provider default. The adapter never sends the
-Responses `context_management` auto-compaction field; it would rewrite the
-context prefix every turn and defeat prompt caching.
+serves any OpenAI-compatible endpoint over Chat Completions (default) or the
+Responses API (`wire_api: "responses"`). The Responses wire is always
+stateless: every request replays the full canonical history and never sends
+`previous_response_id`, on every endpoint including official OpenAI. The
+adapter never sends the Responses `context_management` auto-compaction field; it
+would rewrite the context prefix every turn and defeat prompt caching.
+`effective_base_url` reports the endpoint the adapter really reaches (the
+configured `base_url`, else the SDK default); credential-reusing capabilities
+such as default Vision use it instead of guessing.
 
-## Anthropic / Gemini / MiniMax / DeepSeek / Zhipu / MiMo
+## Anthropic adapter
 
-Each of these adapters is a straightforward REST provider adapter in
-`src/lingtai/llm/<provider>/adapter.py`. They are configured through the
-standard provider fields (model, api_key / auth, base_url where applicable) and
-have no transport env-var selectors today. See the per-provider source for
-constructor details.
+The `anthropic` adapter (`AnthropicAdapter` in
+`src/lingtai/llm/anthropic/adapter.py`) serves the Anthropic Messages API and
+any Anthropic-compatible endpoint through `base_url`. It maps `thinking` to an
+extended-thinking budget and exposes `effective_base_url` like the OpenAI
+adapter. It has no transport env-var selectors.
 
-## Custom / OpenRouter adapters
+## CLI-backed LLM provider (`claude-code`)
 
-`custom` (`src/lingtai/llm/custom/adapter.py`) and `openrouter` target
-generic OpenAI-compatible endpoints. `custom` is the provider used for
-user-defined third-party routers (see the provider-additions rule: do not
-propose adding such intermediaries as core built-in providers; use
-custom/user-defined presets).
-
-## CLI-backed LLM providers (`claude-code`, `kimi-code`)
-
-`claude_code` and `kimi_code` are registered LLM providers whose adapters wrap
-local code-workspace CLIs (`ClaudeCodeAdapter`, `KimiCodeAdapter`) rather than
-speaking a wire protocol directly — valid main-agent/preset providers,
-lazy-imported like every other adapter. (Not the daemon backend axis; see above.)
+`claude-code` is a registered LLM provider whose adapter wraps the local
+`claude` CLI (`ClaudeCodeAdapter`) rather than speaking a wire protocol
+directly — a valid main-agent/preset provider, lazy-imported like every other
+adapter. Auth is owned by the CLI login. (Not the daemon backend axis; see
+above.)
 
 ### External CLI harnesses (daemon backends)
 

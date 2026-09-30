@@ -2,7 +2,10 @@
 
 This is the **only** module that imports the ``anthropic`` package.
 
-Key Anthropic API differences from OpenAI/Gemini:
+Backs the ``anthropic`` provider: the official Anthropic API by default, or
+any Anthropic-compatible (Messages API) endpoint through ``base_url``.
+
+Key Anthropic API differences from OpenAI:
 - System prompt is a separate ``system`` parameter, not a message.
 - Strict user/assistant alternation required — consecutive same-role messages
   must be merged.
@@ -25,6 +28,10 @@ import httpx
 from lingtai.kernel.logging import get_logger
 
 logger = get_logger()
+
+#: The official Anthropic endpoint — the ``anthropic`` provider's default when a
+#: manifest omits ``base_url``.
+ANTHROPIC_OFFICIAL_BASE_URL = "https://api.anthropic.com"
 
 
 _READ_TIMEOUT_ENV = "LINGTAI_LLM_READ_TIMEOUT"
@@ -232,7 +239,7 @@ def _parse_response(raw) -> LLMResponse:
     # Anthropic's input_tokens only counts tokens AFTER the last cache
     # breakpoint.  The true total is: input_tokens + cache_read + cache_write.
     # We normalise here so the rest of the system sees the same semantics as
-    # OpenAI (prompt_tokens = total) and Gemini (prompt_token_count = total).
+    # OpenAI (prompt_tokens = total).
     usage = UsageMetadata()
     if raw.usage:
         cache_read = getattr(raw.usage, "cache_read_input_tokens", 0) or 0
@@ -714,6 +721,23 @@ class AnthropicAdapter(LLMAdapter):
         self._client = anthropic.Anthropic(**kwargs)
         self._setup_gate(max_rpm)
 
+    @property
+    def effective_base_url(self) -> str:
+        """The endpoint this adapter's requests actually reach.
+
+        The configured ``base_url`` when set; otherwise the SDK client's
+        resolved endpoint (the official ``https://api.anthropic.com`` unless
+        the SDK's own environment override applies). Credential-reusing
+        capabilities read this instead of the raw manifest ``base_url``.
+        """
+        if self._base_url:
+            return self._base_url
+        try:
+            resolved = str(self._client.base_url).rstrip("/")
+        except Exception:
+            resolved = ""
+        return resolved or ANTHROPIC_OFFICIAL_BASE_URL
+
     # Extended-thinking budget per kernel THINKING_LEVELS tier. Every level a
     # manifest can select is mapped, so a user-chosen effort never silently
     # disables thinking; explicit ``"none"`` is the one level that means off.
@@ -752,7 +776,7 @@ class AnthropicAdapter(LLMAdapter):
         force_tool_call: bool = False,
         interface: ChatInterface | None = None,
         thinking: str = "default",
-        interaction_id: str | None = None,  # ignored — Gemini-specific
+        interaction_id: str | None = None,  # ignored — no server-side resume
         context_window: int = 0,
     ) -> AnthropicChatSession:
         # Create interface from scratch or from history

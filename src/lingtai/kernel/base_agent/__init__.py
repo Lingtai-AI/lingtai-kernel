@@ -1480,20 +1480,19 @@ class BaseAgent:
 
         Wire-state semantic, in two regimes:
 
-        * **Canonical-interface adapters** (anthropic, openai-CC,
-          codex-Responses, deepseek): the hook splices into the same
-          interface the adapter is about to serialize for the wire, so
-          the spliced pair appears in the *current* API request.
-          Mail notifications enqueued during a long bash chain reach
-          the LLM within one tool round.
+        * **Canonical-interface sessions** (anthropic, openai Chat
+          Completions, the stateless openai Responses replay, and
+          codex-Responses): the hook splices into the same interface the
+          adapter is about to serialize for the wire, so the spliced pair
+          appears in the *current* API request. Mail notifications enqueued
+          during a long bash chain reach the LLM within one tool round.
 
-        * **Server-state adapters** (OpenAIResponsesSession, both
-          GeminiChatSession and InteractionsChatSession): the hook
-          splices into the canonical interface, but the wire payload
-          for the current request is built from server-side state
-          (``previous_response_id`` / ``previous_interaction_id``) or
-          the genai SDK's own chat history. The spliced pair is only
-          visible to the LLM on the *next* turn after the agent
+        * **Server-state sessions** (an ``OpenAIResponsesSession`` in its
+          non-replay mode, which no production adapter builds for a plain
+          ``openai`` provider): the hook splices into the canonical
+          interface, but the wire payload for the current request is built
+          from server-side state (``previous_response_id``). The spliced
+          pair is only visible to the LLM on the *next* turn after the agent
           re-syncs. The agent-side persistence and inspection paths
           (chat_history.jsonl, .status.json, /codex view) update
           immediately either way.

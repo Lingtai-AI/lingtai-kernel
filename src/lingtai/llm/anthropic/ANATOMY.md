@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/llm/ANATOMY.md
   - src/lingtai/llm/anthropic/__init__.py
   - src/lingtai/llm/anthropic/adapter.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -15,7 +16,7 @@ maintenance: |
 ---
 # src/lingtai/llm/anthropic
 
-Anthropic Claude adapter — Messages API with prompt caching, tool use, and extended thinking.
+Anthropic adapter for the `anthropic` provider — the official Anthropic Messages API by default, or any Anthropic-compatible endpoint through `base_url` — with prompt caching, tool use, and extended thinking.
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues.
 
@@ -24,32 +25,32 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `AnthropicAdapter`, `AnthropicChatSession` |
-| `adapter.py` | 823 | Adapter + session + helpers |
+| `adapter.py` | 902 | Adapter + session + helpers |
 
 ### Classes
 
-- **`AnthropicAdapter(LLMAdapter)`** — `adapter.py:653` — wraps `anthropic.Anthropic` SDK and supplies merged LingTai identity/version default headers.
-- **`AnthropicChatSession(ChatSession)`** — `adapter.py:279` — per-session state, owns `ChatInterface`.
+- **`AnthropicAdapter(LLMAdapter)`** — `adapter.py:699` — wraps `anthropic.Anthropic` SDK and supplies merged LingTai identity/version default headers. `effective_base_url` (`adapter.py:725`) reports the configured `base_url`, else the SDK-resolved endpoint, else `ANTHROPIC_OFFICIAL_BASE_URL` (`adapter.py:34`), so credential-reusing capabilities (default Vision) send the key only to the endpoint the adapter really uses.
+- **`AnthropicChatSession(ChatSession)`** — `adapter.py:318` — per-session state, owns `ChatInterface`.
 
 ### Helper functions (module-level)
 
 | Function | Line | Purpose |
 |----------|------|---------|
-| `_build_http_timeout` | 29 | Per-phase timeout from `request_timeout`, built from the SDK's own `anthropic.Timeout` (httpx/httpx2 per installed SDK), never a foreign `httpx.Timeout` — httpx2-fork SDKs mishandle that version-dependently (fail-fast TypeError e.g. 1.4/1.5, or silent mis-coercion into every phase e.g. 1.2.0) |
-| `_build_tools` | 60 | `FunctionSchema` → Anthropic tool dicts (`input_schema`, not `parameters`) |
-| `_build_system_with_cache` | 79 | System prompt → single text block with `cache_control: ephemeral` |
-| `_build_system_batches_with_cache` | 97 | Multi-batch system prompt with per-batch breakpoints (≤3 markers, last batch un-marked) |
-| `_parse_response` | 136 | Raw response → `LLMResponse`; extracts `text`, `tool_use`, `thinking` blocks |
+| `_build_http_timeout` | 60 | Per-phase timeout from `request_timeout`, built from the SDK's own `anthropic.Timeout` (httpx/httpx2 per installed SDK), never a foreign `httpx.Timeout` — httpx2-fork SDKs mishandle that version-dependently (fail-fast TypeError e.g. 1.4/1.5, or silent mis-coercion into every phase e.g. 1.2.0) |
+| `_build_tools` | 112 | `FunctionSchema` → Anthropic tool dicts (`input_schema`, not `parameters`) |
+| `_build_system_with_cache` | 138 | System prompt → single text block with `cache_control: ephemeral` |
+| `_build_system_batches_with_cache` | 156 | Multi-batch system prompt with per-batch breakpoints (≤3 markers, last batch un-marked) |
+| `_parse_response` | 216 | Raw response → `LLMResponse`; extracts `text`, `tool_use`, `thinking` blocks |
 | `_tool_result_to_dict` | 192 | `ToolResultBlock` → Anthropic `tool_result` dict |
-| `_ensure_alternation` | 201 | Merge consecutive same-role messages (Anthropic requires strict alternation) |
+| `_ensure_alternation` | 273 | Merge consecutive same-role messages (Anthropic requires strict alternation) |
 
 ## Connections
 
 - **Imports from `lingtai.kernel`**: `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata`, `ToolResultBlock`, `ChatInterface`, `TextBlock`, `ThinkingBlock`, `ToolCallBlock`, `StreamingAccumulator`
 - **Imports from `lingtai`**: `LLMAdapter` (ABC in `llm/base.py`), `to_anthropic` converter (`llm/interface_converters.py`)
 - **External**: `anthropic` SDK, `httpx`
-- **Consumers**: `MiniMaxAdapter` inherits from `AnthropicAdapter`; `custom` factory delegates here for `api_compat="anthropic"`
-- **`_build_tools`** at `adapter.py:60`: key shape difference — Anthropic uses `input_schema` (not OpenAI's nested `function.parameters`)
+- **Consumers**: the `anthropic` factory in `llm/_register.py` (the only route here; Anthropic-compatible vendors use `provider: "anthropic"` + `base_url`). The former `MiniMaxAdapter` subclass and `custom` `api_compat="anthropic"` route were removed.
+- **`_build_tools`** at `adapter.py:112`: key shape difference — Anthropic uses `input_schema` (not OpenAI's nested `function.parameters`)
 
 ## Composition
 
@@ -57,7 +58,7 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 
 | Method | Line | Notes |
 |--------|------|-------|
-| `create_chat` | 699 | Builds tools, tool_choice, thinking config; wraps in `_GatedSession` via `_wrap_with_gate` |
+| `create_chat` | 769 | Builds tools, tool_choice, thinking config; wraps in `_GatedSession` via `_wrap_with_gate` |
 | `generate` | 768 | One-shot via `self._client.messages.create`; gated by `_gated_call` |
 | `make_tool_result_message` | 813 | Returns canonical `ToolResultBlock` with `toolu_` prefix ID |
 | `is_quota_error` | 823 | `isinstance(exc, anthropic.RateLimitError)` |
@@ -112,7 +113,7 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 
 ### Usage normalization (`adapter.py:163-173`)
 
-Anthropic's `input_tokens` only counts tokens after the last cache breakpoint. We normalize to `input_tokens + cache_read + cache_write` so the rest of the system sees total prompt tokens (matching OpenAI/Gemini semantics). `cached_tokens` = `cache_read_input_tokens`.
+Anthropic's `input_tokens` only counts tokens after the last cache breakpoint. We normalize to `input_tokens + cache_read + cache_write` so the rest of the system sees total prompt tokens (matching OpenAI semantics). `cached_tokens` = `cache_read_input_tokens`.
 
 ### Error recovery
 
@@ -120,10 +121,10 @@ Both `send` and `send_stream` revert the interface on API error via `interface.d
 
 ## Notes
 
-- **Strict alternation**: Anthropic rejects consecutive same-role messages. `_ensure_alternation()` at `adapter.py:201` merges them by combining content lists.
+- **Strict alternation**: Anthropic rejects consecutive same-role messages. `_ensure_alternation()` at `adapter.py:273` merges them by combining content lists.
 - **JSON schema enforcement**: Implemented as a synthetic tool with `tool_choice: {"type": "tool", "name": ...}` (`adapter.py:726-737`).
-- **`client` property**: Escape hatch to raw SDK at `adapter.py:820`.
-- **MiniMax inheritance**: `MiniMaxAdapter` subclasses `AnthropicAdapter` directly, overriding only `__init__` to set `base_url`. Inherits the pre-request hook automatically.
+- **`client` property**: Escape hatch to raw SDK at `adapter.py:900`.
+- **Thinking**: `_THINKING_BUDGETS` / `_resolve_thinking_budget` (`adapter.py:744-765`) map every `THINKING_LEVELS` value to a Messages extended-thinking budget; `none`/`default` send no thinking block. `service_tier` is not forwarded on this provider.
 - **`send(None)` contract** (`f596ec1`): both `send` and `send_stream` accept `None` as the "continue from wire" signal — caller has already pre-staged the canonical interface (e.g. `BaseAgent._inject_notification_pair` spliced a synthesized `notification(action="check")` `(call, result)` pair). The input-dispatch ladder tests `if message is None: pass` first; the error-path `drop_trailing(lambda e: e.role == "user")` is guarded with `if message is not None` so an API failure during a `send(None)` cannot corrupt the pre-staged pair. Driven from `base_agent/turn.py:_handle_tc_wake`. From the LLM's viewpoint, the wake is indistinguishable from the agent voluntarily calling the tool itself.
 - **Pre-request hook** (`f46b346`, dormant after notification redesign): both `send` and `send_stream` fire `self.pre_request_hook(self._interface)` after committing the message but before the API call. Historically used for mid-turn tc_inbox drain (canonical-interface regime, same-turn delivery). Post-`fadbabf`/`d2da97e` the hook still fires but the queue is always empty — ACTIVE notifications now defer to the post-turn IDLE synthetic-pair path rather than mutating tool results at send time. Phase 3 will remove the hook. See root `ANATOMY.md` "Notifications".
 - Git history: 10 commits, active development on caching, timeout, rate gating, mid-turn hook, `send(None)` continue-from-wire contract.
