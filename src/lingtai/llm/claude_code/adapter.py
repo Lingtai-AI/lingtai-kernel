@@ -23,6 +23,7 @@ from lingtai.kernel.llm.base import (
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    checked_count,
 )
 from lingtai.kernel.llm.reasoning_effort import (
     ReasoningEffortCapability,
@@ -173,6 +174,10 @@ def _map_usage(usage: dict | None) -> UsageMetadata:
         output_tokens=int(usage.get("output_tokens", 0) or 0),
         thinking_tokens=0,
         cached_tokens=cache_read,
+        # Anthropic-style wire: explicit write count when present; output_tokens
+        # already includes thinking. Absent fields stay unknown (None), not 0.
+        cache_write_tokens=checked_count(usage.get("cache_creation_input_tokens")),
+        billable_output_tokens=checked_count(usage.get("output_tokens")),
     )
 
 

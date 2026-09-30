@@ -23,6 +23,8 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/_family.py
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
   - src/lingtai/mcp_servers/telegram/task_card/interface.py
+  - src/lingtai/mcp_servers/telegram/task_card/api_cost.py
+  - tests/test_telegram_task_card_api_cost.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this Anatomy reciprocal with its paired CONTRACT.md and packaged manual.
@@ -112,6 +114,23 @@ onto its one tracked resident Task Card target per account+chat.
   `TelegramManager` derives that label for canonical `shell.run` from literal
   `input.async`, so no command/path/environment argument enters the row
   (`src/lingtai/mcp_servers/telegram/manager.py:2972-2989`).
+- `api_cost.py` — Telegram-owned pure `usage_line` formatter (passed to
+  `render_event_groups(usage_line=...)` by both automatic render sites) and a
+  small process-local `PriceCatalog` of LiteLLM public standard list prices with
+  one bounded background refresh (`_http_fetch`: fixed URL, `read1` chunks under
+  an 8 MiB cap and a monotonic total deadline; a failed fetch or thread start
+  releases the single in-flight slot and paces the retry). It consumes only
+  `usage["bill"]` facts that `TaskCardEventProjection.project_llm_response_usage`
+  validated from `llm_response.usage_billing` (kernel `session.py`, adapter-set
+  `UsageMetadata.cache_write_*`/`billable_output_tokens`, checked with the shared
+  `checked_count`/`safe_billing_model` in `kernel/llm/base.py`; absent, negative
+  or bool counts are unknown, never zero) and never blocks rendering on I/O.
+  Catalog entries keep a present-but-invalid tier rate as `None` so a bad tier
+  price cannot fall back to the cheaper base rate; every charge/average is
+  finite-checked and unknown on overflow. Providers that state the counts on
+  their wire: Anthropic (write, 1h TTL, output), Claude Code and Kimi (write,
+  output), OpenAI chat/Responses and native Codex/pool (output only), Gemini
+  generateContent (candidates + thoughts); Gemini Interactions stays unknown.
 - `SKILL.md` — packaged Telegram-facing manual/procedure material for this
   component.
 - Retained legacy files in this package (`controller.py`, `_family.py`,

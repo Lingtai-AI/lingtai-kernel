@@ -367,6 +367,7 @@ related_files:
   - tests/test_telegram_slash_commands.py
   - tests/test_telegram_task_card.py
   - tests/test_telegram_task_card_blockers.py
+  - tests/test_telegram_task_card_api_cost.py
   - tests/test_telegram_task_card_event_tail.py
   - tests/test_telegram_task_card_in_place.py
   - tests/test_telegram_task_card_last_message.py

@@ -86,6 +86,7 @@ from lingtai.kernel.llm.base import (
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    checked_count,
     wire_tool_description,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
@@ -184,6 +185,27 @@ def _build_system_batches_with_cache(
     return blocks
 
 
+def _anthropic_billing_fields(usage: object) -> dict[str, int]:
+    """Billing evidence the Anthropic wire states explicitly (absent = unknown).
+
+    ``output_tokens`` already includes thinking, so it is the billable output.
+    Cache writes come from ``cache_creation_input_tokens``; the 1h-TTL part
+    only from the ``cache_creation`` breakdown when the wire provides it.
+    """
+    fields: dict[str, int] = {}
+    write = checked_count(getattr(usage, "cache_creation_input_tokens", None))
+    if write is not None:
+        fields["cache_write_tokens"] = write
+        creation = getattr(usage, "cache_creation", None)
+        one_hour = checked_count(getattr(creation, "ephemeral_1h_input_tokens", None))
+        if one_hour is not None and one_hour <= write:
+            fields["cache_write_1h_tokens"] = one_hour
+    output = checked_count(getattr(usage, "output_tokens", None))
+    if output is not None:
+        fields["billable_output_tokens"] = output
+    return fields
+
+
 def _parse_response(raw) -> LLMResponse:
     """Parse an Anthropic Messages response into a provider-agnostic LLMResponse."""
     text_parts: list[str] = []
@@ -221,6 +243,7 @@ def _parse_response(raw) -> LLMResponse:
             output_tokens=getattr(raw.usage, "output_tokens", 0) or 0,
             thinking_tokens=getattr(raw.usage, "thinking_tokens", 0) or 0,
             cached_tokens=cache_read,
+            **_anthropic_billing_fields(raw.usage),
         )
         if cache_read or cache_write:
             logger.debug(
@@ -559,6 +582,7 @@ class AnthropicChatSession(ChatSession):
                 output_tokens=getattr(u, "output_tokens", 0) or 0,
                 thinking_tokens=getattr(u, "thinking_tokens", 0) or 0,
                 cached_tokens=cache_read,
+                **_anthropic_billing_fields(u),
             )
             if cache_read or cache_write:
                 logger.debug(

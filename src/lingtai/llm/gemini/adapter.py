@@ -21,6 +21,7 @@ from lingtai.kernel.llm.base import (
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    checked_count,
     wire_tool_description,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
@@ -30,6 +31,21 @@ from lingtai.kernel.llm.streaming import StreamingAccumulator
 from lingtai.llm.identity_headers import merge_lingtai_identity_headers
 
 logger = get_logger()
+
+
+def _gemini_billable_output(meta: object) -> int | None:
+    """generateContent billable output: candidates + thoughts, both explicit.
+
+    Gemini candidates exclude thoughts and both are billed as output. An
+    absent count cannot be told apart from zero on the wire, so it is unknown.
+    The Interactions ``total_output_tokens`` semantics (thoughts in or out) are
+    not established by owner docs, so those paths leave billable output unknown.
+    """
+    candidates = checked_count(getattr(meta, "candidates_token_count", None))
+    thoughts = checked_count(getattr(meta, "thoughts_token_count", None))
+    if candidates is None or thoughts is None:
+        return None
+    return candidates + thoughts
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +117,7 @@ def _parse_response(raw) -> LLMResponse:
             output_tokens=getattr(meta, "candidates_token_count", 0) or 0,
             thinking_tokens=getattr(meta, "thoughts_token_count", 0) or 0,
             cached_tokens=getattr(meta, "cached_content_token_count", 0) or 0,
+            billable_output_tokens=_gemini_billable_output(meta),
         )
         if meta
         else UsageMetadata()

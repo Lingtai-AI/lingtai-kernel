@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from lingtai.kernel.llm.base import checked_count, safe_billing_model
 from lingtai.kernel.session_stats import ASYNC_WORK_STATUS_KEYS
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.trace_redaction import redact_text
@@ -874,7 +876,35 @@ class TaskCardEventProjection:
             usage["thinking"] = thinking
         if cached > 0:
             usage["cache_rate"] = min(cached / total, 1.0)
+        bill = TaskCardEventProjection._project_billing_facts(event, total, cached)
+        if bill:
+            usage["bill"] = bill
         return (call_id, usage)
+
+    @staticmethod
+    def _project_billing_facts(
+        event: dict[str, Any], total: int, cached: int,
+    ) -> dict[str, Any]:
+        """Validated per-round pricing facts from one ``llm_response``.
+
+        Only the round's own model and adapter-established counts are kept;
+        anything invalid is dropped (unknown), never coerced to zero. Estimated
+        rounds keep just the flag so no cost is asserted for them.
+        """
+        if event.get("estimated") is True:
+            return {"estimated": True}
+        raw = event.get("usage_billing")
+        if not isinstance(raw, dict):
+            return {}
+        bill: dict[str, Any] = {"input": total, "cached": cached}
+        model = safe_billing_model(raw.get("model"))
+        if model is not None:
+            bill["model"] = model
+        for key in ("cache_write_tokens", "cache_write_1h_tokens", "billable_output_tokens"):
+            value = checked_count(raw.get(key))
+            if value is not None:
+                bill[key] = value
+        return bill
 
     @staticmethod
     def apply_tool_usages(
@@ -894,10 +924,20 @@ class TaskCardEventProjection:
         for group in groups:
             for row in group.get("events", []):
                 usage = usages.get(row.get("_tool_call_id"))
+                by_api = usages.get(row.get("_api_call_id"))
                 if usage is None:
-                    usage = usages.get(row.get("_api_call_id"))
+                    usage = by_api
                 if usage is None:
                     continue
+                if "bill" not in usage:
+                    # Pricing facts ride only llm_response usage; a later
+                    # carrier must not erase them. Match by this row's own ids.
+                    previous = row.get("_usage")
+                    bill = (by_api or {}).get("bill") or (
+                        previous.get("bill") if isinstance(previous, dict) else None
+                    )
+                    if bill:
+                        usage = {**usage, "bill": bill}
                 if row.get("_usage") == usage:
                     continue
                 row["_usage"] = usage
@@ -1043,7 +1083,11 @@ class TaskCardEventProjection:
         now: datetime | None = None,
         locale: str = "en",
         display_expression: tuple[str, ...] | None = None,
+        usage_line: Callable[[float | None, dict[str, Any] | None], str] | None = None,
     ) -> str:
+        """Render grouped rows; ``usage_line`` is an opt-in per-group formatter
+        (pure, called once per group with ``(api_delay_s, usage)``) whose
+        non-empty text becomes one extra line right after the metrics row."""
         rows: list[dict[str, Any]] = []
         for group in groups[-normal_rows:]:
             # One wall-clock stamp per API call sits centered in the divider
@@ -1083,6 +1127,10 @@ class TaskCardEventProjection:
             info = cls.format_divider_info(api_delay_s, usage)
             if info:
                 rows.append({"kind": "api_info", "text": info})
+            if usage_line is not None:
+                extra = usage_line(api_delay_s, usage)
+                if extra:
+                    rows.append({"kind": "api_info", "text": extra})
             rows.extend(group.get("events", []))
         text = cls.format_task_card_text(
             "",
