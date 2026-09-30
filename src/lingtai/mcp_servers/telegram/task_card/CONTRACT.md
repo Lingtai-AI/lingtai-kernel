@@ -122,7 +122,9 @@ semantics live here. The public producer contract lives in
     model-unknown/unlisted/catalog-unavailable/estimated rounds. When any
     part is unknown the line shows the known subtotal with a trailing `+`
     (every part is non-negative, so the subtotal is a lower bound) and the
-    unknown parts as `?`; with no known bucket it shows `cost ?`. The catalog
+    unknown parts as `?`; when writes are priced separately but a round has no
+    recorded write count, `↑` is instead a lower bound `$x+` (all cache-miss
+    tokens at the cheapest applicable rate) and the total also ends in `+`; with no known bucket it shows `cost ?`. The catalog
     date is not rendered; `stale prices` is appended once the snapshot is stale.
     Prices come from a process-local
     background-refreshed LiteLLM snapshot fetched from one fixed URL with an
