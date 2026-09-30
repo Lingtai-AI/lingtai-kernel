@@ -5,6 +5,11 @@ from __future__ import annotations
 import pytest
 
 from ._agent_dir_helpers import make_agent_dir as _make_agent_dir
+from ._daemon_manager_reaper import (
+    daemon_manager_state_present,
+    find_daemon_managers,
+    reap_daemon_managers,
+)
 
 
 @pytest.fixture
@@ -108,6 +113,55 @@ def _isolate_notification_hook_registry():
         {key: set(channels) for key, channels in snapshot_warned.items()}
     )
     _invalidate_allow_predicates()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    """Stop any resident daemon manager this test started under its ``tmp_path``.
+
+    A real ``emanate`` through the default ``manager_pool_size`` spawns the
+    POSIX central manager in its own session, and it stays resident by design
+    (production managers outlive their agent). Without this teardown every
+    such test leaves one live manager behind for as long as the machine runs.
+    It runs after every fixture of the item is torn down, so a test's
+    ``monkeypatch`` of ``subprocess``/``os`` is already undone. The
+    ``manager.lock`` gate keeps the process-table scan off tests that never
+    reached the manager spawn path.
+    """
+    tmp_path = (getattr(item, "funcargs", None) or {}).get("tmp_path")
+    try:
+        return (yield)
+    finally:
+        if tmp_path is not None and (
+            not tmp_path.exists() or daemon_manager_state_present(tmp_path)
+        ):
+            reap_daemon_managers(find_daemon_managers(under=[tmp_path]))
+
+
+def _session_basetemp(config):
+    """Return this session's pytest basetemp, or ``None`` if never created."""
+    factory = getattr(config, "_tmp_path_factory", None)
+    if factory is None:
+        return None
+    try:
+        return factory._basetemp
+    except AttributeError:  # pragma: no cover - future pytest layout
+        return factory.getbasetemp()
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    """Session safety net for daemon managers the per-test teardown missed.
+
+    Runs on pass, failure, ``-x``, and Ctrl-C alike. It reaps managers whose
+    agent directory lies under this session's basetemp (covering
+    ``tmp_path_factory`` directories and managers spawned by child CLI
+    processes) and managers left by an earlier pytest session whose ``.lock``
+    proves that session's process was killed before it could clean up.
+    """
+    basetemp = _session_basetemp(session.config)
+    roots = [basetemp] if basetemp is not None else []
+    reap_daemon_managers(find_daemon_managers(under=roots, dead_pytest_sessions=True))
 
 
 @pytest.fixture(autouse=True)

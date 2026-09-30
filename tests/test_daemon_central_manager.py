@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import socket
 import threading
@@ -21,6 +22,11 @@ from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_p
 from lingtai.tools.daemon import DaemonManager
 from lingtai.tools.daemon.run_dir import DaemonRunDir
 from tests._daemon_helpers import install_fake_detached_owner, make_daemon_agent
+from tests._daemon_manager_reaper import (
+    find_daemon_managers,
+    process_exited,
+    reap_daemon_managers_under,
+)
 
 
 def test_capsule_socket_fallback_ignores_overlong_ambient_temp_roots() -> None:
@@ -657,19 +663,8 @@ def _wait_for(predicate, *, timeout: float = 5.0, message: str = "condition") ->
 
 
 def _terminate_resident_manager(agent) -> None:
-    pid_path = agent._working_dir / MANAGER_DIR / "manager.pid"
-    if not pid_path.exists():
-        return
-    try:
-        info = json.loads(pid_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
-    pid = info.get("pid")
-    if isinstance(pid, int) and not isinstance(pid, bool):
-        try:
-            os.kill(pid, 15)
-        except OSError:
-            pass
+    """Stop this agent's resident manager and its process group, and wait."""
+    reap_daemon_managers_under(agent._working_dir)
 
 
 def _manager_runtime_identity(code_head: str) -> dict[str, str]:
@@ -853,6 +848,118 @@ def test_concurrent_ensure_manager_callers_reserve_and_spawn_one_manager(tmp_pat
     assert record["state"] == "starting"
     assert record["manager_token"] == spawned_tokens[0]
     assert record["manager_runtime_identity"] == expected
+
+
+def _run_resident_manager(manager: _DaemonManagerProcess) -> threading.Thread:
+    thread = threading.Thread(
+        target=manager.run,
+        kwargs={"idle_exit_s": None},
+        name="resident-manager-under-test",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def test_idle_resident_manager_exits_once_registration_is_withdrawn(tmp_path, monkeypatch):
+    """With ``manager.pid`` gone no submitter can reach the manager again."""
+    monkeypatch.setattr(daemon_manager, "_REGISTRATION_GONE_GRACE_S", 0.2)
+    root = tmp_path / "agent" / MANAGER_DIR
+    root.mkdir(parents=True)
+    registration = root / "manager.pid"
+    registration.write_text("{}", encoding="utf-8")
+    manager = _DaemonManagerProcess(
+        root / "queue",
+        root / "journal",
+        pool_size=1,
+        registration_path=registration,
+    )
+
+    thread = _run_resident_manager(manager)
+    time.sleep(0.6)
+    assert thread.is_alive(), "a registered idle manager must stay resident"
+
+    shutil.rmtree(tmp_path / "agent")
+    thread.join(timeout=5.0)
+
+    assert not thread.is_alive()
+
+
+def test_resident_manager_with_pending_capsule_ignores_withdrawn_registration(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(daemon_manager, "_REGISTRATION_GONE_GRACE_S", 0.1)
+    root = tmp_path / "agent" / MANAGER_DIR
+    manager = _manager_with_capsules(
+        root / "queue",
+        root / "journal",
+        pool_size=1,
+        capsules={"em-pending": {}},
+    )
+    manager.registration_path = root / "manager.pid"
+
+    thread = _run_resident_manager(manager)
+    try:
+        time.sleep(0.5)
+        assert thread.is_alive(), "a pending capsule keeps the manager resident"
+    finally:
+        with manager.lock:
+            pending = list(manager.capsules.values())
+            manager.capsules.clear()
+        for capsule in pending:
+            capsule.close()
+    thread.join(timeout=5.0)
+
+    assert not thread.is_alive()
+
+
+def test_registration_withdrawal_requires_definite_absence(tmp_path, monkeypatch):
+    monkeypatch.setattr(daemon_manager, "_REGISTRATION_GONE_GRACE_S", 0.0)
+    manager = _DaemonManagerProcess(
+        tmp_path / "queue",
+        tmp_path / "journal",
+        pool_size=1,
+        registration_path=None,
+    )
+    assert manager._registration_withdrawn() is False
+
+    def unreadable_stat():
+        raise PermissionError("registration temporarily unreadable")
+
+    manager.registration_path = SimpleNamespace(stat=unreadable_stat)
+    assert manager._registration_withdrawn() is False
+
+    manager.registration_path = tmp_path / "missing" / "manager.pid"
+    assert manager._registration_withdrawn() is True
+
+
+@pytest.mark.skipif(os.name != "posix", reason="central daemon manager is POSIX-only")
+def test_real_idle_manager_exits_after_agent_directory_is_deleted(tmp_path):
+    """End to end: a spawned resident manager retires once its agent dir is gone."""
+    agent_working_dir = tmp_path / "agent"
+    pid_path = agent_working_dir / MANAGER_DIR / "manager.pid"
+
+    def registered_pid() -> int | None:
+        try:
+            pid = json.loads(pid_path.read_text(encoding="utf-8")).get("pid")
+        except (OSError, json.JSONDecodeError):
+            return None
+        return pid if isinstance(pid, int) and not isinstance(pid, bool) else None
+
+    try:
+        daemon_manager._ensure_manager(agent_working_dir, pool_size=1)
+        pid = _wait_for(registered_pid, timeout=15.0, message="manager registration")
+        assert [proc.pid for proc in find_daemon_managers(under=[tmp_path])] == [pid]
+
+        shutil.rmtree(agent_working_dir)
+
+        _wait_for(
+            lambda: process_exited(pid),
+            timeout=15.0,
+            message="resident manager to exit after its agent directory was deleted",
+        )
+    finally:
+        reap_daemon_managers_under(tmp_path)
 
 
 def test_central_manager_completes_run_and_notifies(tmp_path, monkeypatch):
