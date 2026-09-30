@@ -309,34 +309,14 @@ def _money(value: float) -> str:
     return f"${value:.4f}" if value < 1 else f"${value:,.2f}"
 
 
-def _avg_tps(api_delay_s: float | None, usage: dict[str, Any], bill: dict[str, Any]) -> str | None:
-    if bill.get("estimated") is True:
-        return None
-    tokens = _count(bill.get("billable_output_tokens"))
-    if tokens is None:
-        tokens = _count(usage.get("output"))
-    if (
-        tokens is None
-        or type(api_delay_s) not in (int, float)
-        or not math.isfinite(api_delay_s)
-        or api_delay_s <= 0
-    ):
-        return None
-    try:
-        speed = _finite(tokens / api_delay_s)
-    except (OverflowError, ZeroDivisionError):
-        return None
-    return None if speed is None else f"{speed:.1f}"
-
-
 def usage_line(
     api_delay_s: float | None,
     usage: dict[str, Any] | None,
     catalog: PriceCatalog | None = None,
 ) -> str:
-    """One compact line: output tok/s plus a list-price estimate, or ``""``.
+    """One compact list-price estimate line, or ``""``.
 
-    ``6.2 tok/s · ≈$0.0310 · ↓$0.0006 ↑$0.0070 | $0.0234`` mirrors the metrics
+    ``≈$0.0310 · ↓$0.0006 ↑$0.0070 | $0.0234`` mirrors the metrics
     row (``↓`` output, ``↑`` cache-miss input, ``|`` cache hits). ``≈`` marks a
     STANDARD list-price estimate; a trailing ``+`` means some parts are
     unknown, so the figure is the known subtotal (every part is non-negative,
@@ -346,10 +326,10 @@ def usage_line(
         return ""
     bill = usage.get("bill")
     bill = bill if isinstance(bill, dict) else {}
-    tps = _avg_tps(api_delay_s, usage, bill)
+    # ``api_delay_s`` is part of the shared hook signature but unused: a
+    # tokens/second figure over the displayed API gap (which includes waiting,
+    # prefill and streaming) would not be a real generation speed.
     parts = []
-    if tps is not None:
-        parts.append(f"{tps} tok/s")
     if bill.get("estimated") is True:
         parts.append("cost n/a (estimated tokens)")
     elif not isinstance(bill.get("model"), str):

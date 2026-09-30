@@ -102,7 +102,7 @@ semantics live here. The public producer contract lives in
    preserving old-event rendering and never exposing reasoning text.
     Telegram alone also opts into one extra plain line immediately after that
     metrics row per API call, compact on one line and mirroring that row's
-    symbols: `<n> tok/s · ≈$<total>[+] · ↓<$> ↑<$> | <$>[ stale prices]` where
+    symbols: `≈$<total>[+] · ↓<$> ↑<$> | <$>[ stale prices]` (no tokens/second figure) where
     `↓` prices the billable output, `↑` the cache-miss input (uncached input
     plus any cache writes: at the catalog's cache-write rate when it prices
     writes separately and the wire reports the write count, else — when the

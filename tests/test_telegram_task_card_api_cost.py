@@ -196,16 +196,6 @@ def test_line_never_leaks_inf_or_nan_and_total_overflow_is_unknown():
     assert "cost ?" in line and "≈" not in line  # finite parts sum to inf: unknown
 
 
-@pytest.mark.parametrize("delay", [1e-320, 5e-324, 1e-300])
-def test_tiny_positive_elapsed_or_huge_count_never_escapes_tps(delay):
-    catalog = api_cost.PriceCatalog(lambda *a: b"")
-    for tokens in (10, 10**400):
-        line = api_cost.usage_line(delay, {"output": tokens}, catalog)
-        assert "inf" not in line.lower()
-        assert isinstance(line, str)
-    assert "tok/s" not in api_cost.usage_line(5e-324, {"output": 10}, catalog)
-
-
 # ---------------------------------------------------------------- catalog
 
 
@@ -227,7 +217,7 @@ def test_line_complete_partial_and_unknown():
     full = {"output": 50, "bill": {"model": "sol", "input": 1000, "cached": 400,
                                     "cache_write_tokens": 120, "billable_output_tokens": 50}}
     line = api_cost.usage_line(2.0, full, catalog)
-    assert line == "25.0 tok/s · ≈$0.0018 · ↓$0.0005 ↑$0.0013 | <$0.0001"
+    assert line == "≈$0.0018 · ↓$0.0005 ↑$0.0013 | <$0.0001"
     assert "?" not in line and "+" not in line
     partial = {"output": 50, "bill": {"model": "sol", "input": 1000, "cached": 400, "billable_output_tokens": 50}}
     text = api_cost.usage_line(2.0, partial, catalog)
@@ -259,9 +249,16 @@ def test_line_marks_estimate_and_never_invoice_or_routing_claims():
             assert forbidden not in line.lower()
 
 
-@pytest.mark.parametrize("delay", [None, 0, -1, True, float("inf"), float("nan")])
-def test_tps_unknown_for_invalid_timing(delay):
-    assert "tok/s" not in api_cost.usage_line(delay, {"output": 10}, api_cost.PriceCatalog(lambda *a: b""))
+@pytest.mark.parametrize("delay", [None, 0, 2.0, 5e-324, float("inf"), float("nan")])
+def test_line_never_shows_a_speed(delay):
+    # The displayed API gap includes waiting/prefill/streaming, so no tok/s
+    # figure is ever rendered, whatever the delay or token count.
+    catalog = _ready_catalog({"sol": SOL})
+    for usage in ({"output": 10}, {"output": 10**400},
+                  {"output": 50, "bill": {"model": "sol", "input": 1000, "cached": 400,
+                                          "cache_write_tokens": 120, "billable_output_tokens": 50}}):
+        line = api_cost.usage_line(delay, usage, catalog)
+        assert "tok/s" not in line and "inf" not in line.lower()
 
 
 def test_catalog_first_use_is_nonblocking_and_single_flight():
@@ -505,7 +502,7 @@ def test_render_pure_text_group_with_bill_gets_line():
     text = TaskCardEventProjection.render_event_groups(
         [{"events": [{"kind": "text", "text": "hello", "_ts": 1.0, "api_delay_s": 2.0, "_usage": usage}]}],
         normal_rows=3, usage_line=lambda d, u: api_cost.usage_line(d, u, catalog))
-    assert "25.0 tok/s · ≈$" in text and " · ↓$" in text and " ↑" in text and " | " in text
+    assert "≈$" in text and " · ↓$" in text and " ↑" in text and " | " in text
 
 
 # ---------------------------------------------------------------- providers

@@ -53,7 +53,7 @@ Under each API-call metrics row (`↻ <delay> ↓out ↑miss ◌ ctx | cache%`) 
 automatic Telegram card adds one plain line, for example:
 
 ```text
-250.0 tok/s · ≈$0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004
+≈$0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004
 ```
 
 Reading it:
@@ -82,11 +82,9 @@ Reading it:
   cache-write part larger than the whole write). If any part is unknown the
   total is NOT a full sum: the headline is the known subtotal with a trailing
   `+` (`≈$0.0249+`, a lower bound), or `cost ?` when nothing is known.
-- **`tok/s` vs decode speed.** The leading `<n> tok/s` is billable output tokens
-  divided by the existing displayed API gap. That gap may include waiting,
-  prefill, streaming and orchestration; it is not an independently measured
-  decode interval, and no universal speed comparison is claimed. It is omitted
-  when the delay or token count is unknown.
+- **No speed figure.** The line shows no tokens/second: the displayed API
+  gap includes waiting, prefill, streaming and orchestration, so dividing by it
+  would not be a real generation speed.
 - **Async cache, offline, old history.** The card never waits for the network:
   the first render may show `cost loading`, one bounded background refresh (fixed
   URL, 8 MiB cap, per-read timeout plus a total deadline, no credentials)
