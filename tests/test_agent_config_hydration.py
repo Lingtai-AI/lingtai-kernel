@@ -186,13 +186,13 @@ def test_build_agent_config_ignores_runtime_manifest_values_and_stale_molt():
     assert not hasattr(cfg, "molt_prompt")
 
 
-@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool", "CODEX"])
+@pytest.mark.parametrize("provider", ["codex", "CODEX"])
 def test_build_agent_config_codex_omitted_thinking_stays_default_sentinel(provider):
-    """Codex-family omitted thinking hydrates to the "default" sentinel.
+    """Codex omitted thinking hydrates to the "default" sentinel.
 
     The Codex adapter owns the omitted-thinking default (it sends
     ``reasoning.effort = "xhigh"``), so hydration must not promote an omitted
-    manifest value to the legacy cross-provider "high" for these providers.
+    manifest value to the legacy cross-provider "high" for this provider.
     """
     manifest = _init_data({
         "llm": {"provider": provider, "model": "gpt-5.5", "api_key": None},

@@ -4062,7 +4062,6 @@ class _CodexAccountContext:
     client: Any
     binding: dict[str, Any] = field(default_factory=dict)
     binding_generation: int = 0
-    selection: dict[str, Any] = field(default_factory=dict)
     bound_molt_count: int | None = None
     excluded_accounts: set[str] = field(default_factory=set)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
@@ -4097,7 +4096,6 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         account_id: str | None = None,
         codex_auth_path_sha8: str | None = None,
         codex_auth_path_source: str | None = None,
-        codex_pool_selection: dict[str, Any] | None = None,
         codex_account_error_callback: Callable[[Exception, bool], None] | None = None,
         codex_account_success_callback: Callable[[], dict[str, Any] | None] | None = None,
         codex_account_request_callback: Callable[
@@ -4264,14 +4262,10 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         # It is a non-secret account identifier and is never copied into usage
         # metadata or logs.
         self._account_id = account_id if isinstance(account_id, str) and account_id else None
-        # Native Codex account selection is owned by this session's provider
+        # Native Codex account binding is owned by this session's provider
         # request path.  The callbacks never receive canonical history or
-        # provider policy; they only refresh auth and report a safe selection /
-        # structural failure to the ordinary Codex adapter.
-        self._codex_pool_selection = (
-            dict(codex_pool_selection) if isinstance(codex_pool_selection, dict) else {}
-        )
-        self.codex_pool_selection = dict(self._codex_pool_selection)
+        # provider policy; they only refresh auth and report a structural
+        # failure to the ordinary Codex adapter.
         # A deliberate context epoch reset already rebases the continuation
         # state. If the fresh draw chooses another account, do not emit a second
         # technical account-switch reset and overwrite the approved boundary
@@ -4576,23 +4570,6 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             extra["codex_auth_path_sha8"] = self._codex_auth_path_sha8[:64]
         if self._codex_auth_path_source:
             extra["codex_auth_path_source"] = self._codex_auth_path_source[:64]
-        pool_selection = getattr(self, "codex_pool_selection", None)
-        if isinstance(pool_selection, dict):
-            pool_fields = {
-                "source_ref": "codex_pool_source_ref",
-                "source_index": "codex_pool_source_index",
-                "pool_size": "codex_pool_size",
-                "weight": "codex_pool_weight",
-                "auth_path_sha8": "codex_auth_path_sha8",
-                "quota_left": "codex_pool_quota_left",
-                "model_scope": "codex_pool_model_scope",
-                "failover": "codex_pool_failover",
-                "fallback": "codex_pool_fallback",
-            }
-            for source_key, ledger_key in pool_fields.items():
-                value = pool_selection.get(source_key)
-                if value is not None and ledger_key not in extra:
-                    extra[ledger_key] = str(value)[:240]
         if affinity_headers.get("session_id"):
             extra["codex_session_id"] = affinity_headers["session_id"]
         if affinity_headers.get("thread_id"):
@@ -5675,10 +5652,6 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         self._codex_binding_api_key = (
             next_api_key if isinstance(next_api_key, str) and next_api_key else None
         )
-        selection = binding.get("selection")
-        if isinstance(selection, dict):
-            self._codex_pool_selection = dict(selection)
-            self.codex_pool_selection = dict(selection)
 
     def _codex_refresh_account_for_request(self) -> None:
         """Bind and publish the current epoch account as one owned transaction."""
@@ -6606,8 +6579,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
     Use this with `provider=codex` only. Always set `use_responses=True,
     force_responses=True`. `base_url` defaults to the official Codex endpoint
     (`https://chatgpt.com/backend-api/codex`) but is configurable — the `codex`
-    factory forwards an explicit `manifest.llm['base_url']`. Account selection
-    remains inside this adapter; aliases do not create a second implementation.
+    factory forwards an explicit `manifest.llm['base_url']`. It binds one
+    OAuth account (``FixedAccountSource``); account pooling is external.
     """
 
     def __init__(
@@ -6624,7 +6597,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         codex_service_tier: str | None = None,
         codex_account_source: Any = None,
         codex_token_manager_factory: Callable[..., Any] | None = None,
-        codex_fallback_auth_path: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -6683,24 +6655,18 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         self.codex_auth_path_source: str | None = (
             str(codex_auth_path_source) if codex_auth_path_source else None
         )
-        # Account selection is a native Codex adapter concern.  The source is
-        # deliberately retained as a live object so a weighted pool re-reads its
-        # snapshot for every request; no session manager or pool chat wrapper is
-        # involved.
+        # Account binding is a native Codex adapter concern: one fixed account
+        # (``FixedAccountSource``). Pooling is external (subs-pool).
         self._codex_account_source = codex_account_source
         self._codex_token_manager_factory = codex_token_manager_factory
-        self._codex_fallback_auth_path = codex_fallback_auth_path
         self._codex_account_resolution_enabled = not (
-            codex_account_source is None
-            and codex_token_manager_factory is None
-            and codex_fallback_auth_path is None
+            codex_account_source is None and codex_token_manager_factory is None
         )
         # Account state is owned by ``_CodexAccountContext`` instances created
         # below, never by this cached adapter.  This exclusion set is retained
         # only as a construction-time compatibility seam for older callers;
         # live failover state is copied into and kept on each context.
         self._codex_excluded_accounts: set[str] = set()
-        self._codex_current_selection: dict[str, Any] = {}
         self._codex_selection_lock = threading.Lock()
         self._codex_context_owner = object()
         # Optional Codex-only endpoint POOL (molt-boundary shuffle). When this
@@ -6735,7 +6701,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         # on purpose: the offset must not move with molt_count or the pool index
         # would advance twice per molt.
         offset_seed = self._codex_session_anchor or "codex"
-        self._codex_pool_offset = int(
+        self._codex_endpoint_offset = int(
             hashlib.sha256(offset_seed.encode("utf-8")).hexdigest(), 16
         )
 
@@ -6790,8 +6756,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         owned = dict(binding)
         owned["binding_generation"] = context.binding_generation
         context.binding = owned
-        selection = owned.get("selection")
-        context.selection = dict(selection) if isinstance(selection, dict) else {}
         return dict(owned)
 
     @staticmethod
@@ -6799,7 +6763,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         """Forget only this context's account for its next approved epoch."""
         context.binding_generation += 1
         context.binding = {}
-        context.selection = {}
         context.bound_molt_count = None
 
     def _codex_account_epoch_reset(
@@ -6809,99 +6772,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         if reason in {"summarize_delayed", "summarize_rebuild_only"}:
             with context.lock:
                 self._clear_codex_account_binding(context)
-
-    @staticmethod
-    def _valid_codex_quota_percent(value: object) -> bool:
-        return (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and value == value
-            and 0.0 <= float(value) <= 100.0
-        )
-
-    @staticmethod
-    def _codex_snapshot_identity(candidate: object) -> str | None:
-        identity = getattr(candidate, "sha8", None)
-        if not isinstance(identity, str):
-            identity = getattr(candidate, "auth_path_sha8", None)
-        return identity if isinstance(identity, str) else None
-
-    @classmethod
-    def _codex_count_snapshot_matches(
-        cls,
-        snapshot: object,
-        identities: set[str],
-    ) -> int:
-        if not isinstance(snapshot, (list, tuple)):
-            return 0
-        return sum(
-            cls._codex_snapshot_identity(candidate) in identities
-            for candidate in snapshot
-        )
-
-    @classmethod
-    def _codex_no_candidate_diagnostics(
-        cls,
-        *,
-        snapshot: object,
-        context: _CodexAccountContext,
-        zero_accounts: set[str],
-        quota_target_count: int,
-        quota_observed_count: int,
-        quota_read_error_count: int,
-        quota_invalid_count: int,
-        quota_left: dict[str, float] | None,
-        fallback_auth_path: str | None,
-    ) -> dict[str, int | bool]:
-        combined_exclusions = context.excluded_accounts | zero_accounts
-        if snapshot is None:
-            pool_size = 1
-            excluded = min(len(combined_exclusions), 1)
-            zero_quota = 0
-        else:
-            pool_size = len(snapshot) if isinstance(snapshot, (list, tuple)) else 0
-            excluded = cls._codex_count_snapshot_matches(
-                snapshot, combined_exclusions
-            )
-            zero_quota = cls._codex_count_snapshot_matches(snapshot, zero_accounts)
-        return {
-            "codex_account_pool_size": pool_size,
-            "codex_account_excluded_count": excluded,
-            "codex_account_zero_quota_count": zero_quota,
-            "codex_account_eligible_count": max(pool_size - excluded, 0),
-            "codex_account_quota_target_count": quota_target_count,
-            "codex_account_quota_observed_count": quota_observed_count,
-            "codex_account_quota_read_error_count": quota_read_error_count,
-            "codex_account_quota_invalid_count": quota_invalid_count,
-            "codex_account_quota_snapshot_complete": quota_left is not None,
-            "codex_account_legacy_fallback_allowed": (
-                fallback_auth_path is not None
-                and isinstance(snapshot, (list, tuple))
-                and not snapshot
-            ),
-        }
-
-    def _refresh_codex_bound_quota(
-        self, context: _CodexAccountContext
-    ) -> dict[str, Any]:
-        """Refresh safe quota telemetry without redrawing this context."""
-        binding = dict(context.binding)
-        selection = dict(binding.get("selection") or {})
-        auth_ref = binding.get("auth_ref")
-        if auth_ref:
-            try:
-                from lingtai.llm.openai.codex_quota import read_remaining_percent
-                percent = read_remaining_percent(auth_ref)
-            except Exception:
-                percent = None
-            if self._valid_codex_quota_percent(percent):
-                selection["quota_left"] = round(float(percent), 3)
-            else:
-                selection.pop("quota_left", None)
-        binding["selection"] = selection
-        context.binding = binding
-        context.selection = dict(selection)
-        return binding
 
     def _publish_legacy_codex_binding(self, binding: dict[str, Any]) -> None:
         """Preserve the old private direct-selection test seam.
@@ -6928,22 +6798,16 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 client=self._client,
                 excluded_accounts=set(self._codex_excluded_accounts),
             )
-        model = context.model
-        # AccountSource/token refresh may touch shared pool/auth files. Serialize
-        # that narrow operation, but keep all resulting state on ``context``.
+        # Token refresh may touch the shared auth file. Serialize that narrow
+        # operation, but keep all resulting state on ``context``.
         with self._codex_selection_lock:
             source = self._codex_account_source
-            if (
-                source is None
-                and self._codex_fallback_auth_path is None
-                and self._codex_token_manager_factory is None
-            ):
+            if source is None and self._codex_token_manager_factory is None:
                 binding = {
                     "api_key": self._client_kwargs.get("api_key"),
                     "account_id": self.codex_account_id,
                     "auth_path_sha8": self.codex_auth_path_sha8,
                     "auth_path_source": self.codex_auth_path_source,
-                    "selection": dict(context.selection),
                 }
                 binding = self._set_codex_account_binding(context, binding)
                 context.bound_molt_count = self._current_molt_count()
@@ -6951,110 +6815,15 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                     self._publish_legacy_codex_binding(binding)
                 return binding
             if source is None:
+                from lingtai.auth.codex import default_codex_token_path
                 from lingtai.auth.codex_account_source import FixedAccountSource
-                source = FixedAccountSource(self._codex_fallback_auth_path or "")
+                source = FixedAccountSource(str(default_codex_token_path()))
 
-            quota_left: dict[str, float] | None = None
-            observed_quota: dict[str, float] = {}
-            zero_accounts: set[str] = set()
-            quota_target_count = 0
-            quota_read_error_count = 0
-            quota_invalid_count = 0
-            snapshot = None
-            if callable(getattr(source, "snapshot", None)):
-                snapshot = source.snapshot()
-                targets = source.quota_targets(
-                    exclude=context.excluded_accounts,
-                    snapshot=snapshot,
-                )
-                quota_target_count = len(targets)
-                complete = bool(targets)
-                quota_left = {}
-                try:
-                    from lingtai.llm.openai.codex_quota import read_remaining_percent
-                    for auth_ref, auth_sha8 in targets:
-                        try:
-                            percent = read_remaining_percent(auth_ref)
-                        except Exception:
-                            quota_read_error_count += 1
-                            complete = False
-                            continue
-                        if not self._valid_codex_quota_percent(percent):
-                            quota_invalid_count += 1
-                            complete = False
-                            continue
-                        fraction = float(percent) / 100.0
-                        observed_quota[auth_sha8] = fraction
-                        quota_left[auth_sha8] = fraction
-                        if fraction <= 0.0:
-                            zero_accounts.add(auth_sha8)
-                except Exception:
-                    complete = False
-                if not complete:
-                    quota_left = None
-
-            excluded = context.excluded_accounts | zero_accounts
-            try:
-                if snapshot is None:
-                    candidate = source.select(exclude=excluded or None)
-                    pool_size = 1
-                else:
-                    candidate = source.select(
-                        exclude=excluded or None,
-                        quota_left_snapshot=quota_left,
-                        snapshot=snapshot,
-                    )
-                    pool_size = len(snapshot)
-            except Exception as exc:
-                # Only a truly empty configured pool may use the legacy account.
-                if (
-                    self._codex_fallback_auth_path is None
-                    or snapshot is None
-                    or not isinstance(snapshot, (list, tuple))
-                    or snapshot
-                ):
-                    from lingtai.auth.codex_account_source import NoCandidateError
-
-                    if isinstance(exc, NoCandidateError):
-                        diagnostics = self._codex_no_candidate_diagnostics(
-                            snapshot=snapshot,
-                            context=context,
-                            zero_accounts=zero_accounts,
-                            quota_target_count=quota_target_count,
-                            quota_observed_count=len(observed_quota),
-                            quota_read_error_count=quota_read_error_count,
-                            quota_invalid_count=quota_invalid_count,
-                            quota_left=quota_left,
-                            fallback_auth_path=self._codex_fallback_auth_path,
-                        )
-                        raise exc.with_diagnostics(diagnostics) from exc
-                    raise
-                from lingtai.auth.codex_account_source import FixedAccountSource
-                fallback = FixedAccountSource(self._codex_fallback_auth_path)
-                candidate = fallback.select()
-                pool_size = 1
-                quota_left = None
-                selection_fallback = "legacy_default"
-            else:
-                selection_fallback = None
-
+            # Raises NoCandidateError when the one account is excluded.
+            candidate = source.select(exclude=context.excluded_accounts or None)
             manager = self._new_codex_token_manager(candidate.auth_ref)
             access_token = manager.get_access_token()
             account_id = manager.get_account_id()
-            auth_source = "configured" if selection_fallback is None else selection_fallback
-            selection: dict[str, Any] = {
-                "source_ref": candidate.source_ref,
-                "source_index": candidate.source_index,
-                "pool_size": pool_size,
-                "weight": candidate.weight,
-                "auth_path_sha8": candidate.auth_path_sha8,
-                "model_scope": model if pool_size > 1 else None,
-            }
-            fraction = (quota_left or observed_quota).get(candidate.auth_path_sha8)
-            if fraction is not None:
-                selection["quota_left"] = round(fraction * 100.0, 3)
-            if selection_fallback is not None:
-                selection["fallback"] = selection_fallback
             context.client.api_key = access_token
             binding = self._set_codex_account_binding(
                 context,
@@ -7062,9 +6831,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                     "api_key": access_token,
                     "account_id": account_id,
                     "auth_path_sha8": candidate.auth_path_sha8,
-                    "auth_path_source": auth_source,
+                    "auth_path_source": "configured",
                     "auth_ref": candidate.auth_ref,
-                    "selection": dict(selection),
                 },
             )
             context.bound_molt_count = self._current_molt_count()
@@ -7085,7 +6853,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             if not context.binding:
                 binding = self._select_codex_account(context)
             else:
-                binding = self._refresh_codex_bound_quota(context)
+                binding = dict(context.binding)
             if apply_binding is not None:
                 apply_binding(binding)
             return binding
@@ -7163,7 +6931,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         from lingtai.auth.codex import _is_usage_limit_reached_error
         if _is_usage_limit_reached_error(exc):
             with context.lock:
-                identity = context.selection.get("auth_path_sha8")
+                identity = context.binding.get("auth_path_sha8")
                 if identity:
                     context.excluded_accounts.add(str(identity))
                 # AED rebuild/replay may reuse this interface/context and will
@@ -7243,7 +7011,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             return self._codex_fixed_base_url
         if len(pool) == 1:
             return pool[0]
-        idx = (self._codex_pool_offset + self._current_molt_count()) % len(pool)
+        idx = (self._codex_endpoint_offset + self._current_molt_count()) % len(pool)
         return pool[idx]
 
     def _repoint_client_if_needed(self, endpoint: str | None) -> None:
@@ -7419,7 +7187,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             account_id=self.codex_account_id,
             codex_auth_path_sha8=self.codex_auth_path_sha8,
             codex_auth_path_source=self.codex_auth_path_source,
-            codex_pool_selection=context.selection,
             codex_account_error_callback=(
                 (lambda exc, partial: self._codex_account_error(context, exc, partial))
                 if self._codex_account_resolution_enabled

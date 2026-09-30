@@ -51,7 +51,7 @@ def _is_reference_key(key: object) -> bool:
     if key.lower() in {"env", "headers", "default_headers"}:
         return False
     return key.lower() in {
-        "api_key_env", "base_url", "codex_auth_path", "codex_auth_pool_path"
+        "api_key_env", "base_url", "codex_auth_path"
     } or bool(_REFERENCE_KEY_RE.search(key))
 
 

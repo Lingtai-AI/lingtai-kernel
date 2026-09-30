@@ -165,10 +165,10 @@ route, and performs no provider or image operation.
 
 ## Provider and wire boundaries
 
-Codex spellings (`codex`, `codex-pool`, `codex_pool`) are one family gate; spelling
-does not choose direct versus pool. The active Codex default bucket chooses the
-route: a nonblank trimmed `codex_auth_path` is direct, otherwise the active
-Codex pool selects its current OAuth identity. An unrelated active provider may
+The Codex provider (`codex`) uses one OAuth identity, mirroring the Codex
+factory: an explicit capability `token_path`, else the active Codex bucket's
+nonblank trimmed `codex_auth_path`, else (active Codex service only) the default
+`codex-auth.json`. An unrelated active provider may
 not lend its model, endpoint, or credential to a Codex request. Claude-family
 vision is manual-only guidance to the explicit Claude CLI. OpenAI-compatible
 routes preserve their current endpoint/model/wire, and unsupported wires remain

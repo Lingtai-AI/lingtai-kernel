@@ -13,12 +13,11 @@ from dataclasses import dataclass
 # own a default map it to ``"xhigh"``.
 THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
-# Codex-family providers that accept manifest.llm.thinking. ``codex-pool``
-# reuses the Codex adapter (both dash/underscore spellings). This list stays
+# Codex providers that accept manifest.llm.thinking. This list stays
 # Codex-only; the complete acceptance rule (Anthropic and every
 # OpenAI-compatible block too) lives in ``llm_supports_thinking`` so validators
 # share it.
-THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
+THINKING_PROVIDERS = ("codex",)
 
 # Non-Codex providers whose adapter is thinking-capable on its own, even when
 # the manifest omits ``api_compat``: the Anthropic adapter maps thinking to an

@@ -556,8 +556,6 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
              "RecentAsyncWorkSnapshot.schedule", "Thread"): 1,
             ("src/lingtai/kernel/tool_executor.py",
              "ToolExecutor._execute_parallel", "ThreadPoolExecutor"): 1,
-            ("src/lingtai/llm/openai/codex_quota.py", "_stdout_reader_thread",
-             "Thread"): 1,
             ("src/lingtai/mcp_servers/cloud_mail/manager.py",
              "CloudMailManager.start", "Thread"): 1,
             ("src/lingtai/mcp_servers/cloud_mail/server.py",

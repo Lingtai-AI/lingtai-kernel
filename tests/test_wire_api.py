@@ -48,7 +48,7 @@ def test_schema_rejects_non_string_wire_api_value():
         validate_init(_minimal_init({"wire_api": 123}))
 
 
-@pytest.mark.parametrize("provider", ["anthropic", "gemini", "minimax", "claude-code", "codex", "codex-pool"])
+@pytest.mark.parametrize("provider", ["anthropic", "gemini", "minimax", "claude-code", "codex"])
 def test_schema_rejects_non_auto_wire_api_for_non_openai_providers(provider):
     with pytest.raises(ValueError, match="OpenAI-compatible"):
         validate_init(_minimal_init({"provider": provider, "wire_api": "responses"}))

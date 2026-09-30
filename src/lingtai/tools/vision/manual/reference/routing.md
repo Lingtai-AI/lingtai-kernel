@@ -20,10 +20,10 @@ provider's own compatible model, endpoint, wire, and credential. An unsupported
 or incomplete identity fails closed with sanitized guidance. There is no hidden
 model, legacy credential, provider switch, or automatic MCP/provider fallback.
 
-Codex spellings `codex`, `codex-pool`, and `codex_pool` are one compatibility
-family; spelling does not choose direct versus pool. A nonblank active
-`codex_auth_path` selects direct auth, otherwise the active Codex pool identity is
-used. An unrelated active provider cannot lend its model, endpoint, or credential.
+The Codex provider (`codex`) uses one OAuth identity: an explicit `token_path`,
+else the active `codex_auth_path`, else (active Codex service only) the default
+`codex-auth.json`. An unrelated active provider cannot lend its model, endpoint,
+or credential.
 Unsupported wires remain manual-only.
 
 ## Borrow one authorized route

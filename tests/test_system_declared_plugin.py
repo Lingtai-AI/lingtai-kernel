@@ -55,7 +55,6 @@ _EXPECTED_SYSTEM_SETTING_KEYS = (
     "llm.api_compat",
     "llm.codex_session_anchor",
     "llm.codex_auth_path",
-    "llm.codex_auth_pool_path",
     "llm.codex_base_urls",
     "llm.default_headers",
     "nudge.enabled",
@@ -113,7 +112,6 @@ _EXPECTED_GEMINI_DEFAULTS = {
     "llm.api_compat": None,
     "llm.codex_session_anchor": "<redacted>",
     "llm.codex_auth_path": "<redacted>",
-    "llm.codex_auth_pool_path": "<redacted>",
     "llm.codex_base_urls": "<redacted>",
     "llm.default_headers": "<redacted>",
     "nudge.enabled": True,
@@ -362,7 +360,7 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
     rows = result["settings"]
     assert system_settings.SYSTEM_SETTING_KEYS == _EXPECTED_SYSTEM_SETTING_KEYS
     assert tuple(row["key"] for row in rows) == _EXPECTED_SYSTEM_SETTING_KEYS
-    assert len(rows) == len({row["key"] for row in rows}) == 55
+    assert len(rows) == len({row["key"] for row in rows}) == 54
     for row in rows:
         assert tuple(row) == (
             "key", "current", "default", "configurable", "comment",
@@ -960,7 +958,7 @@ def test_system_settings_nullable_llm_gemini_ignored_route(
     )
 
 
-@pytest.mark.parametrize("provider", ("codex", "codex-pool", "codex_pool"))
+@pytest.mark.parametrize("provider", ("codex",))
 @pytest.mark.parametrize(
     "authored",
     (
@@ -1001,8 +999,6 @@ _BUILT_IN_SELECTED_FACTORY_AXES = {
     "openrouter": ("openrouter", None, None, None, None, None),
     "custom": ("custom", "chat_completions", True, None, False, "authored-ns"),
     "codex": ("codex", "responses", None, None, None, None),
-    "codex-pool": ("codex", "responses", None, None, None, None),
-    "codex_pool": ("codex", "responses", None, None, None, None),
     "claude-code": ("claude-code", None, None, None, None, None),
     "claude_code": ("claude-code", None, None, None, None, None),
     "kimi-code": ("kimi-code", None, None, None, None, None),
@@ -1296,19 +1292,20 @@ def test_custom_adapter_finite_fallback_selects_openai_without_client(
 
 
 def test_codex_wire_default_matches_real_shared_registered_factory():
-    """All Codex spellings share one constructor that forces Responses."""
+    """The one registered Codex constructor forces Responses; the removed
+    in-kernel pool spellings are no longer registered aliases."""
     from lingtai.llm.service import LLMService
 
     codex_factory = LLMService._adapter_registry["codex"]
-    assert codex_factory is LLMService._adapter_registry["codex-pool"]
-    assert codex_factory is LLMService._adapter_registry["codex_pool"]
+    assert "codex-pool" not in LLMService._adapter_registry
+    assert "codex_pool" not in LLMService._adapter_registry
     codex = codex_factory(
         model="codex-test", defaults={}, api_key="ignored-disposable-key"
     )
     assert codex._should_use_responses() is True
 
 
-@pytest.mark.parametrize("provider", ("codex", "codex-pool", "codex_pool"))
+@pytest.mark.parametrize("provider", ("codex",))
 def test_system_settings_service_tier_is_codex_only(
     monkeypatch, tmp_path, provider
 ):
@@ -1416,12 +1413,28 @@ def test_system_settings_invalid_codex_service_tier_fails_complete_inventory(
     }
 
 
+@pytest.mark.parametrize("provider", ("codex-pool", "codex_pool"))
+def test_system_settings_removed_codex_pool_provider_fails_complete_inventory(
+    monkeypatch, tmp_path, provider
+):
+    """A removed in-kernel pool spelling is an invalid init, so the settings
+    inventory fails closed instead of projecting a Codex route for it."""
+    _clear_system_setting_env(monkeypatch)
+    _write_init(
+        tmp_path,
+        manifest={"llm": {"provider": provider, "model": "pool-test"}},
+    )
+    assert _settings_call(tmp_path, {}) == {
+        "status": "failed",
+        "error_code": "SETTINGS_UNAVAILABLE",
+        "message": "settings inventory is unavailable",
+    }
+
+
 @pytest.mark.parametrize(
     "provider,expected_default",
     (
         ("codex", "default"),
-        ("codex-pool", "default"),
-        ("codex_pool", "default"),
         ("deepseek", "default"),
         ("openai", "high"),
         ("custom", "high"),
@@ -1532,6 +1545,7 @@ def test_system_settings_redacts_sensitive_effective_values(monkeypatch, tmp_pat
                 "base_url": f"https://user:{credential_secret}@example.invalid/v1",
                 "api_compat": "openai",
                 "codex_auth_path": f"secrets/{path_secret}.json",
+                # Retired and legacy-ignored: no row, and never echoed.
                 "codex_auth_pool_path": f"secrets/{path_secret}-pool.json",
                 "codex_base_urls": [f"https://{credential_secret}@example.invalid"],
                 "default_headers": {"Authorization": header_secret},
@@ -1566,12 +1580,12 @@ def test_system_settings_redacts_sensitive_effective_values(monkeypatch, tmp_pat
         "llm.api_key",
         "llm.base_url",
         "llm.codex_auth_path",
-        "llm.codex_auth_pool_path",
         "llm.codex_base_urls",
         "llm.default_headers",
     ):
         assert rows[key]["current"] == "<redacted>"
         assert rows[key]["default"] == "<redacted>"
+    assert "llm.codex_auth_pool_path" not in rows
     assert "pseudo_agent_subscriptions" not in rows
 
 
@@ -1916,8 +1930,12 @@ def test_system_settings_classification_covers_init_and_environment_registries()
         "/manifest/context_serialization_enabled",
         "/manifest/llm/codex_thread_salt",
         "/manifest/llm/context_limit",
+        "/manifest/llm/codex_auth_pool_path",
     ):
         assert required_non_setting in init_excluded
+    assert "/manifest/llm/codex_auth_pool_path" in (
+        system_settings.SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS
+    )
 
     classification = system_settings.SYSTEM_ENVIRONMENT_CLASSIFICATION
     assert classification["system"] == set(
@@ -1961,6 +1979,7 @@ def test_system_settings_classification_covers_init_and_environment_registries()
         "LINGTAI_TUI_DIR"
     ] == "llm.codex_tui_dir"
     assert "llm.codex_thread_salt" not in system_settings.SYSTEM_SETTING_KEYS
+    assert "llm.codex_auth_pool_path" not in system_settings.SYSTEM_SETTING_KEYS
     assert "pseudo_agent_subscriptions" not in system_settings.SYSTEM_SETTING_KEYS
     assert not any(
         key.startswith(("soul.", "shell.", "daemon.", "notification."))
@@ -2039,6 +2058,7 @@ def test_system_manual_routes_declared_ltp_and_settings_owners():
         "reference/settings-inventory/SKILL.md",
         "reference/environment-variables/SKILL.md",
         "reference/llm-adapters/SKILL.md",
+        "reference/subs-pool/SKILL.md",
         "reference/sqlite-log-query/SKILL.md",
         "reference/trajectory-mining/SKILL.md",
         "reference/goal-manual/SKILL.md",

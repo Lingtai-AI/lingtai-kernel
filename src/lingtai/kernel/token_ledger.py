@@ -54,29 +54,22 @@ from pathlib import Path
 from ._fsutil import append_jsonl, iter_jsonl_records
 
 
-_SAFE_CODEX_POOL_USAGE_EXTRA_KEYS = (
-    "codex_auth_path_sha8",
-    "codex_pool_source_index",
-    "codex_pool_size",
-    "codex_pool_weight",
-    "codex_pool_model_scope",
-)
+_SAFE_CODEX_USAGE_EXTRA_KEYS = ("codex_auth_path_sha8",)
 
 
-def safe_codex_pool_usage_extra(extra: object) -> dict:
-    """Project ``UsageMetadata.extra`` onto safe pool-attribution scalars.
+def safe_codex_usage_extra(extra: object) -> dict:
+    """Project ``UsageMetadata.extra`` onto safe Codex account attribution.
 
     Manual child/helper ledger writers must not merge arbitrary provider
-    metadata.  Keep only the five non-secret fields required to attribute a
-    codex-pool call, preserve their existing JSON-scalar types, and omit null or
-    container values. ``codex_pool_source_ref`` is intentionally excluded: stable
-    hash/index attribution does not need a source locator.
+    metadata.  Keep only the non-secret account hash required to attribute a
+    Codex call, preserve its JSON-scalar type, and omit null or container
+    values.
     """
     if not isinstance(extra, dict):
         return {}
     return {
         key: value
-        for key in _SAFE_CODEX_POOL_USAGE_EXTRA_KEYS
+        for key in _SAFE_CODEX_USAGE_EXTRA_KEYS
         if (value := extra.get(key)) is not None
         and isinstance(value, (str, int, float, bool))
     }

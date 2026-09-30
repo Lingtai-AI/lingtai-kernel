@@ -184,13 +184,31 @@ LLM_LEGACY_IGNORED: set[str] = {
     # above the threshold and defeated prompt caching. No adapter sends
     # ``context_management`` any more.
     "compact_threshold",
+    # The in-kernel Codex account pool was removed; pooling is provided by the
+    # external subs-pool proxy (see ``REMOVED_CODEX_POOL_PROVIDERS``).
+    "codex_auth_pool_path",
 }
+
+# Provider spellings of the removed in-kernel Codex account pool. Configs that
+# still name them fail validation with a pointer to the external subs-pool.
+REMOVED_CODEX_POOL_PROVIDERS = frozenset({"codex-pool", "codex_pool"})
+
+
+def _removed_codex_pool_message(path: str, provider: str) -> str:
+    return (
+        f"{path}: provider {provider!r} was removed from LingTai. Codex account "
+        "pooling is provided by the external subs-pool proxy "
+        "(https://github.com/Lingtai-AI/subs-pool): point this agent at it with "
+        "provider 'custom', api_compat 'openai', wire_api 'responses', "
+        "base_url 'http://127.0.0.1:<port>/v1', and api_key_env naming the "
+        "subs-pool access key, or use provider 'codex' for a single account. "
+        "See the subs-pool skill."
+    )
 LLM_PASS_THROUGH_KNOWN: set[str] = {
     "api_compat",
     "codex_session_anchor",
     "codex_thread_salt",
     "codex_auth_path",
-    "codex_auth_pool_path",
     "codex_base_urls",
     "default_headers",
     "service_tier",
@@ -394,6 +412,10 @@ def validate_init(data: dict) -> list[str]:
 
     llm = manifest["llm"]
     _require_keys(llm, LLM_REQUIRED, prefix="manifest.llm")
+    if str(llm["provider"]).lower() in REMOVED_CODEX_POOL_PROVIDERS:
+        raise ValueError(
+            _removed_codex_pool_message("manifest.llm.provider", llm["provider"])
+        )
     _optional_keys(llm, LLM_OPTIONAL, prefix="manifest.llm")
     if "api_compat" in llm and not _is_json_finite(llm["api_compat"]):
         raise ValueError(
@@ -488,6 +510,19 @@ def validate_init(data: dict) -> list[str]:
     # Validate manifest.capabilities.skills shape if present.
     caps = manifest.get("capabilities") or {}
     if isinstance(caps, dict):
+        for cap_name, cap_cfg in caps.items():
+            if not isinstance(cap_cfg, dict):
+                continue
+            cap_provider = cap_cfg.get("provider")
+            if (
+                isinstance(cap_provider, str)
+                and cap_provider.lower() in REMOVED_CODEX_POOL_PROVIDERS
+            ):
+                raise ValueError(
+                    _removed_codex_pool_message(
+                        f"manifest.capabilities.{cap_name}.provider", cap_provider
+                    )
+                )
         cap_name = "skills"
         cfg = caps.get(cap_name)
         if cfg is not None:

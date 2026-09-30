@@ -664,7 +664,7 @@ def test_append_tokens_writes_parent_ledger_tagged(tmp_path):
     assert entry["run_id"] == rd.run_id
 
 
-def test_append_tokens_mirrors_only_safe_pool_usage_extra(tmp_path):
+def test_append_tokens_mirrors_only_safe_codex_usage_extra(tmp_path):
     rd = _make_run_dir(tmp_path)
     rd.append_tokens(
         input=100, output=20, thinking=5, cached=10,
@@ -686,11 +686,8 @@ def test_append_tokens_mirrors_only_safe_pool_usage_extra(tmp_path):
     ]
     for row in rows:
         assert row["codex_auth_path_sha8"] == "a1b2c3d4"
-        assert row["codex_pool_source_index"] == 1
-        assert row["codex_pool_size"] == 2
-        assert row["codex_pool_weight"] == 1
-        assert row["codex_pool_model_scope"] == "gpt-5.6"
-        assert "codex_pool_source_ref" not in row
+        # Retired in-kernel pool attribution keys are never mirrored.
+        assert not any(key.startswith("codex_pool") for key in row)
         assert "codex_account_id_sha8" not in row
         assert "unsafe" not in row
 
@@ -708,7 +705,7 @@ def test_append_tokens_skipped_when_all_zero(tmp_path):
     rd = _make_run_dir(tmp_path)
     rd.append_tokens(
         input=0, output=0, thinking=0, cached=0,
-        usage_extra={"codex_pool_size": 2, "unsafe": "must-not-copy"},
+        usage_extra={"codex_auth_path_sha8": "a1b2c3d4", "unsafe": "must-not-copy"},
     )
     assert not rd.token_ledger_path.exists() or rd.token_ledger_path.read_text() == ""
     parent_ledger = tmp_path / "parent" / "logs" / "token_ledger.jsonl"

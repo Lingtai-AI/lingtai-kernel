@@ -170,13 +170,6 @@ SYSTEM_INIT_SETTING_SPECS: tuple[_InitSettingSpec, ...] = (
         sensitive=True,
     ),
     _init(
-        "llm.codex_auth_pool_path",
-        "/manifest/llm/codex_auth_pool_path",
-        None,
-        comment=_LLM_COMMENT,
-        sensitive=True,
-    ),
-    _init(
         "llm.codex_base_urls",
         "/manifest/llm/codex_base_urls",
         None,
@@ -255,6 +248,8 @@ SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
         "/manifest/llm/context_limit",
         # Retired generic Responses auto-compaction; recognized-and-ignored.
         "/manifest/llm/compact_threshold",
+        # Retired in-kernel Codex account pool; pooling is external (subs-pool).
+        "/manifest/llm/codex_auth_pool_path",
     }
 )
 
@@ -1111,11 +1106,7 @@ def _init_current(spec: _InitSettingSpec, data: dict[str, Any], root: Path) -> A
         configured = llm.get("codex_session_anchor")
         if configured is not None:
             return configured
-        if str(llm.get("provider") or "").lower() in {
-            "codex",
-            "codex-pool",
-            "codex_pool",
-        }:
+        if str(llm.get("provider") or "").lower() == "codex":
             return str((root / "init.json").resolve())
         return None
 
@@ -1208,7 +1199,7 @@ def _environment_current(resolver: str, root: Path) -> Any:
 
         return enabled()
     if resolver == "codex_tui_dir":
-        from lingtai.auth.codex_pool import resolve_codex_tui_dir
+        from lingtai.auth.codex import resolve_codex_tui_dir
 
         return str(resolve_codex_tui_dir())
     if resolver in {

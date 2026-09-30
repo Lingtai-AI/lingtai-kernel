@@ -27,6 +27,20 @@ REFRESH_BUFFER_SECONDS = 300  # refresh if within 5 minutes of expiry
 _OAUTH_AUTH_CLAIM = "https://api.openai.com/auth"
 _ACCOUNT_ID_CLAIM = "chatgpt_account_id"
 
+# Default single-account token file name inside the TUI dir.
+_DEFAULT_TOKEN_FILENAME = "codex-auth.json"
+
+
+def resolve_codex_tui_dir() -> Path:
+    """Return the LingTai TUI base directory (``$LINGTAI_TUI_DIR`` or default)."""
+    tui_dir = os.environ.get("LINGTAI_TUI_DIR", "~/.lingtai-tui")
+    return Path(tui_dir).expanduser()
+
+
+def default_codex_token_path() -> Path:
+    """The default Codex OAuth token file (``<tui_dir>/codex-auth.json``)."""
+    return resolve_codex_tui_dir() / _DEFAULT_TOKEN_FILENAME
+
 
 def _decode_jwt_payload(token: str) -> dict:
     """Decode a JWT's payload segment locally (NO signature verification).
@@ -64,8 +78,7 @@ class CodexTokenManager:
 
     def __init__(self, token_path: str | None = None) -> None:
         if token_path is None:
-            tui_dir = os.environ.get("LINGTAI_TUI_DIR", "~/.lingtai-tui")
-            token_path = str(Path(tui_dir).expanduser() / "codex-auth.json")
+            token_path = str(default_codex_token_path())
         self._path = Path(token_path).expanduser()
         self._lock_path = self._path.with_suffix(".json.lock")
         self._cache: dict | None = None

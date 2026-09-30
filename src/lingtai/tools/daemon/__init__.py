@@ -3061,11 +3061,9 @@ class DaemonManager:
         """
         provider_key = str(provider).lower()
         bucket = dict(base_defaults or {})
-        if provider_key in ("codex", "codex-pool", "codex_pool"):
+        if provider_key == "codex":
             # Daemon traffic must use the daemon run identity so it gets its own
-            # cache slot, not the parent agent's anchor. ``codex-pool`` reuses the
-            # Codex adapter and also seeds its sticky auth-pool choice off this
-            # anchor, so a daemon run selects independently of its parent.
+            # cache slot, not the parent agent's anchor.
             bucket["codex_session_anchor"] = self._daemon_codex_session_anchor(run_dir)
             if context_token_limit is not None:
                 bucket["codex_compact_token_limit"] = context_token_limit
@@ -3082,7 +3080,6 @@ class DaemonManager:
             "api_compat",
             "base_url",
             "codex_auth_path",
-            "codex_auth_pool_path",
             "codex_session_anchor",
             "codex_thread_salt",
             "default_headers",

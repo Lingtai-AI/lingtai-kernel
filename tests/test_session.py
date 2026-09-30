@@ -25,7 +25,7 @@ def make_session_manager(**kw):
             extra={
                 "codex_account_id_sha8": "abc12345",
                 "codex_auth_path_sha8": "def67890",
-                "codex_pool_source_index": 1,
+                "codex_pool_source_index": 1,  # retired in-kernel pool key
                 "unsafe_provider_blob": "should-not-log",
             },
         ),
@@ -123,55 +123,50 @@ def test_send_tracks_usage():
     assert latest["api_call_id"].startswith("api_")
 
 
-def test_send_does_not_log_stale_pre_request_codex_selection():
-    """llm_call precedes native selection, so an old chat breadcrumb is omitted."""
+def test_send_llm_call_never_carries_codex_pool_field():
+    """The in-kernel Codex pool was removed: even a stale dict breadcrumb on
+    the chat never surfaces as a ``codex_pool`` field on ``llm_call``."""
     events = []
 
     def log_fn(event_type, **fields):
         events.append((event_type, fields))
 
     sm, _, mock_session = make_session_manager(logger_fn=log_fn)
-    selection = {
+    mock_session.codex_pool_selection = {
         "source_ref": "codex-auth/work.json",
         "source_index": 0,
         "pool_size": 2,
         "weight": 3,
         "auth_path_sha8": "0abc1234",
     }
-    mock_session.codex_pool_selection = selection
     sm.send("hello")
 
     llm_call = next(fields for event, fields in events if event == "llm_call")
     assert "codex_pool" not in llm_call
 
 
-def test_send_llm_call_omits_codex_pool_for_other_providers():
-    """No dict breadcrumb on the chat -> no codex_pool field on llm_call."""
-    events = []
+def test_safe_usage_extra_event_filter_drops_retired_codex_pool_keys():
+    """The retired in-kernel pool attribution keys no longer pass the
+    ``llm_response`` usage-extra allowlist; Codex account hashes still do."""
+    from lingtai.kernel.session import (
+        _SAFE_USAGE_EXTRA_EVENT_KEYS,
+        _safe_usage_extra_for_event,
+    )
 
-    def log_fn(event_type, **fields):
-        events.append((event_type, fields))
-
-    # The default MagicMock chat auto-creates a codex_pool_selection attribute
-    # that is NOT a dict — the field must still be omitted (dict-only guard).
-    sm, _, _ = make_session_manager(logger_fn=log_fn)
-    sm.send("hello")
-
-    llm_call = next(fields for event, fields in events if event == "llm_call")
-    assert "codex_pool" not in llm_call
-
-
-def test_safe_usage_extra_event_filter_allows_pool_model_scope():
-    """``codex_pool_model_scope`` (model-classified pools) passes the
-    ``llm_response`` usage-extra allowlist; unknown keys still don't."""
-    from lingtai.kernel.session import _safe_usage_extra_for_event
+    assert not any(key.startswith("codex_pool") for key in _SAFE_USAGE_EXTRA_EVENT_KEYS)
 
     extra = {
+        "codex_auth_path_sha8": "def67890",
+        "codex_pool_fallback": True,
+        "codex_pool_source_ref": "codex-auth/work.json",
+        "codex_pool_source_index": 1,
+        "codex_pool_size": 2,
+        "codex_pool_weight": 3,
         "codex_pool_model_scope": "gpt-5.6-sol",
         "not_allowlisted": "dropped",
     }
     assert _safe_usage_extra_for_event(extra) == {
-        "codex_pool_model_scope": "gpt-5.6-sol",
+        "codex_auth_path_sha8": "def67890",
     }
 
 
@@ -229,7 +224,6 @@ def test_send_logs_llm_call_with_api_call_id():
     assert llm_response["usage_extra"] == {
         "codex_account_id_sha8": "abc12345",
         "codex_auth_path_sha8": "def67890",
-        "codex_pool_source_index": "1",
     }
     for field in (
         "prompt_build_ms",
