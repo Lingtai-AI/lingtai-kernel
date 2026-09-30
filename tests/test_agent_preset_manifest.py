@@ -12,6 +12,8 @@ from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
 import json
 from pathlib import Path
+
+import pytest
 from unittest.mock import MagicMock
 
 from lingtai.agent import Agent
@@ -104,7 +106,9 @@ def test_kernel_manifest_omits_base_url_when_none(tmp_path):
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "bob"),
     )
     data = _build_manifest(agent)
-    assert data["llm"] == {"provider": "openai", "model": "gpt-4.6"}
+    # No base_url key; official OpenAI forwards service_tier, so the omitted
+    # tier is labeled with the request-side default.
+    assert data["llm"] == {"provider": "openai", "model": "gpt-4.6", "service_tier": "default"}
     agent.stop(timeout=1.0)
 
 
@@ -178,6 +182,51 @@ def test_safe_llm_from_service_labels_omitted_codex_service_tier_default():
     agent.service = svc
 
     assert _safe_llm_from_service(agent)["service_tier"] == "default"
+
+
+@pytest.mark.parametrize(
+    "provider,defaults,expected",
+    [
+        ("custom", {"api_compat": "openai", "service_tier": " fast "}, "fast"),
+        ("custom", {"api_compat": "openai"}, "default"),
+        ("custom", {}, "default"),
+        ("custom", {"api_compat": "openai", "service_tier": "unsupported"}, "default"),
+        ("openai", {"service_tier": "fast"}, "fast"),
+        ("openai", {}, "default"),
+    ],
+    ids=["custom-fast", "custom-omitted", "custom-compat-default", "custom-unrecognized-ignored", "openai-fast", "openai-omitted"],
+)
+def test_safe_llm_from_service_reports_tier_on_openai_compatible_routes(provider, defaults, expected):
+    from lingtai.llm._register import register_all_adapters
+
+    register_all_adapters()
+    agent = MagicMock()
+    svc = _mock_service(provider, "gpt-6.1-sol", None)
+    svc._provider_defaults = {provider: dict(defaults)}
+    agent.service = svc
+
+    assert _safe_llm_from_service(agent)["service_tier"] == expected
+
+
+@pytest.mark.parametrize(
+    "provider,defaults",
+    [
+        ("custom", {"api_compat": "anthropic", "service_tier": "fast"}),
+        ("gemini", {"service_tier": "fast"}),
+        ("mimo", {"service_tier": "fast"}),
+    ],
+    ids=["custom-anthropic", "gemini", "mimo"],
+)
+def test_safe_llm_from_service_omits_tier_where_not_forwarded(provider, defaults):
+    from lingtai.llm._register import register_all_adapters
+
+    register_all_adapters()
+    agent = MagicMock()
+    svc = _mock_service(provider, "m", None)
+    svc._provider_defaults = {provider: dict(defaults)}
+    agent.service = svc
+
+    assert "service_tier" not in _safe_llm_from_service(agent)
 
 
 def test_safe_llm_from_service_with_no_service():
