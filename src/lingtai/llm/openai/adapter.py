@@ -1039,6 +1039,34 @@ def _text_fingerprint(text: str | None) -> dict[str, Any]:
     }
 
 
+def _codex_output_shape_value(value: Any, name: str) -> Any:
+    """Read an SDK object or wire dict without serializing its content."""
+    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+
+def _codex_output_item_shape(item: Any) -> dict[str, Any]:
+    """Describe a final output item using bounded, content-free metadata."""
+    content = _codex_output_shape_value(item, "content") or []
+    if not isinstance(content, (list, tuple)):
+        content = []
+    parts = []
+    for part in content[:16]:
+        text = _codex_output_shape_value(part, "text")
+        refusal = _codex_output_shape_value(part, "refusal")
+        parts.append({
+            "type": _codex_output_shape_value(part, "type"),
+            "text_length": len(text) if isinstance(text, str) else 0,
+            "refusal_length": len(refusal) if isinstance(refusal, str) else 0,
+        })
+    arguments = _codex_output_shape_value(item, "arguments")
+    return {
+        "type": _codex_output_shape_value(item, "type"),
+        "content_count": len(content),
+        "content_parts": parts,
+        "arguments_length": len(arguments) if isinstance(arguments, str) else 0,
+    }
+
+
 def _codex_responses_trace_record(
     *,
     event: Any,
@@ -1081,6 +1109,7 @@ def _codex_responses_trace_record(
             "call_id": getattr(item, "call_id", None),
             "name": getattr(item, "name", None),
             "summary": summaries,
+            "output_shape": _codex_output_item_shape(item),
         },
         "item_id": getattr(event, "item_id", None),
         "delta": _text_fingerprint(getattr(event, "delta", None)),
@@ -1101,6 +1130,14 @@ def _codex_responses_trace_record(
             "cached_tokens": getattr(input_details, "cached_tokens", None),
             "reasoning_tokens": getattr(output_details, "reasoning_tokens", None),
         }
+    if response is not None:
+        output = getattr(response, "output", None)
+        if isinstance(output, (list, tuple)):
+            record["response_output"] = {
+                "count": len(output),
+                "items": [_codex_output_item_shape(value) for value in output[:16]],
+            }
+        record["response_status"] = getattr(response, "status", None)
 
     try:
         trace_path.parent.mkdir(parents=True, exist_ok=True)

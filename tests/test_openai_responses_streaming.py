@@ -14,6 +14,7 @@ from lingtai.llm.openai.adapter import (
     CodexOpenAIAdapter,
     OpenAIAdapter,
     OpenAIResponsesSession,
+    _codex_responses_trace_record,
 )
 from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
@@ -687,6 +688,43 @@ def test_codex_responses_trace_records_safe_metadata_when_enabled(tmp_path, monk
         "reasoning_tokens": 7,
     }
     assert completed["thoughts"]["after_count"] == 1
+
+
+def test_codex_responses_trace_records_complete_output_shape_without_content(tmp_path):
+    trace_path = tmp_path / "trace.jsonl"
+    secret_text = "private final answer 314159"
+    secret_args = '{"private":"value"}'
+    message = SimpleNamespace(
+        type="message",
+        content=[SimpleNamespace(type="output_text", text=secret_text)],
+    )
+    tool = SimpleNamespace(type="function_call", arguments=secret_args)
+    response = SimpleNamespace(status="completed", output=[message, tool])
+
+    for event in (
+        Event("response.output_item.done", item=message),
+        Event("response.completed", response=response),
+    ):
+        _codex_responses_trace_record(
+            event=event,
+            accepted_reasoning=False,
+            thoughts_before=[],
+            thoughts_after=[],
+            pending_thought_chars_before=0,
+            pending_thought_chars_after=0,
+            trace_path=trace_path,
+        )
+
+    raw = trace_path.read_text()
+    item_done, completed = [json.loads(line) for line in raw.splitlines()]
+    assert item_done["item"]["output_shape"]["content_parts"] == [
+        {"type": "output_text", "text_length": len(secret_text), "refusal_length": 0}
+    ]
+    assert completed["response_status"] == "completed"
+    assert completed["response_output"]["count"] == 2
+    assert completed["response_output"]["items"][1]["arguments_length"] == len(secret_args)
+    assert secret_text not in raw
+    assert secret_args not in raw
 
 
 def test_openai_responses_stream_captures_summary_thoughts():
