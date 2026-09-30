@@ -1056,3 +1056,57 @@ def test_removed_provider_pointer_survives_init_reader_redaction():
     assert "use provider openai (OpenAI-compatible" in excerpt
     assert "or anthropic (Anthropic-compatible: base_url)" in excerpt
     assert "sub2api/subs-pool" in excerpt
+
+
+# ---------------------------------------------------------------------------
+# manifest.llm.model: optional only for the CLI-backed claude-code provider
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("model", [None, "", "opus"], ids=["null", "empty", "set"])
+def test_claude_code_model_is_optional(model):
+    data = _valid_init()
+    data["manifest"]["llm"] = {"provider": "claude-code", "model": model}
+    validate_init(data)
+    del data["manifest"]["llm"]["model"]
+    validate_init(data)
+
+
+def test_claude_code_model_must_still_be_a_string_when_set():
+    data = _valid_init()
+    data["manifest"]["llm"] = {"provider": "claude-code", "model": 7}
+    with pytest.raises(ValueError, match="manifest.llm.model"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "codex"])
+def test_model_stays_required_for_api_families(provider):
+    data = _valid_init()
+    data["manifest"]["llm"] = {"provider": provider}
+    with pytest.raises(ValueError, match="missing required field: manifest.llm.model"):
+        validate_init(data)
+
+
+def test_claude_code_api_key_env_is_an_optional_credential():
+    """The TUI Claude template declares ``api_key_env`` even for local-login
+    users; without an ``env_file`` that is not a validation error for
+    ``claude-code`` (env fallback, then local login) but still is elsewhere."""
+    data = _valid_init()
+    data["manifest"]["llm"] = {
+        "provider": "claude-code",
+        "api_key": None,
+        "api_key_env": "CLAUDE_CODE_OAUTH_TOKEN",
+    }
+    data.pop("env_file", None)
+    validate_init(data)
+    data["manifest"]["llm"]["api_key_env"] = ""
+    validate_init(data)
+
+    data["manifest"]["llm"] = {
+        "provider": "anthropic",
+        "model": "m",
+        "api_key": None,
+        "api_key_env": "ANTHROPIC_API_KEY",
+    }
+    with pytest.raises(ValueError, match="no env_file provided"):
+        validate_init(data)

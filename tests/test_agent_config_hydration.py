@@ -245,13 +245,30 @@ def test_build_agent_config_openai_omitted_thinking_stays_default_sentinel(wire_
     assert cfg.thinking == "default"
 
 
-@pytest.mark.parametrize("provider", ["anthropic", "claude-code"])
-def test_build_agent_config_anthropic_family_omitted_thinking_keeps_legacy_high(provider):
-    """``anthropic`` (Messages thinking-budget mapping) and ``claude-code``
-    (``--effort`` mapping) keep the legacy ``"high"`` main-session default."""
-    manifest = _init_data({"llm": {"provider": provider, "model": "m"}})["manifest"]
+def test_build_agent_config_anthropic_omitted_thinking_keeps_legacy_high():
+    """``anthropic`` (Messages thinking-budget mapping) keeps the legacy
+    ``"high"`` main-session default."""
+    manifest = _init_data({"llm": {"provider": "anthropic", "model": "m"}})["manifest"]
     cfg = build_agent_config(manifest, max_rpm=0)
     assert cfg.thinking == "high"
+
+
+@pytest.mark.parametrize("llm_extra", [{"model": "opus"}, {}], ids=["model", "no-model"])
+def test_build_agent_config_claude_code_omitted_thinking_uses_cli_default(llm_extra):
+    """``claude-code`` omitted thinking keeps the ``"default"`` sentinel, so no
+    ``--effort`` flag is sent and Claude Code's own default effort applies."""
+    manifest = _init_data(
+        {"llm": {"provider": "claude-code", **llm_extra}}
+    )["manifest"]
+    cfg = build_agent_config(manifest, max_rpm=0)
+    assert cfg.thinking == "default"
+
+
+def test_build_agent_config_claude_code_explicit_thinking_preserved():
+    manifest = _init_data(
+        {"llm": {"provider": "claude-code", "thinking": "xhigh"}}
+    )["manifest"]
+    assert build_agent_config(manifest, max_rpm=0).thinking == "xhigh"
 
 
 def test_cache_miss_budget_is_not_an_agent_config_or_manifest_hydration_field():

@@ -23,6 +23,7 @@ from lingtai.kernel.config_resolve import (
     resolve_env_checked,
 )
 from lingtai.init_reader import InitReadStatus, read_init, reader_callbacks
+from lingtai.init_schema import llm_credential_required
 from lingtai.llm.service import (
     CONSERVATIVE_CONTEXT_WINDOW,
     LLMService,
@@ -102,11 +103,19 @@ def build_llm_service(
     if runtime_policy is None:
         runtime_policy = resolve_runtime_policy(working_dir)
 
+    # An unresolved api_key_env is fatal only when the provider cannot work
+    # without it. ``claude-code``'s setup-token is optional: an unset variable
+    # falls through to the process env ``CLAUDE_CODE_OAUTH_TOKEN`` and then to
+    # the local ``claude`` login, decided per request by the adapter.
     api_key = resolve_env_checked(
         llm.get("api_key"),
         llm.get("api_key_env"),
         context="manifest.llm.api_key_env",
-        warn=lambda msg: _raise_env_miss(msg, env_file),
+        warn=(
+            (lambda msg: _raise_env_miss(msg, env_file))
+            if llm_credential_required(llm.get("provider"))
+            else (lambda _msg: None)
+        ),
     )
 
     # Default 60 matches AgentConfig.max_rpm — agents whose init.json
@@ -127,7 +136,8 @@ def build_llm_service(
         context_window = CONSERVATIVE_CONTEXT_WINDOW
     return LLMService(
         provider=llm["provider"],
-        model=llm["model"],
+        # ``model`` may be omitted for ``claude-code`` (the CLI's own default).
+        model=llm.get("model") or "",
         api_key=api_key,
         base_url=llm.get("base_url"),
         context_window=context_window,

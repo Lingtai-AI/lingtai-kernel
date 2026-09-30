@@ -1026,7 +1026,7 @@ def test_system_settings_removed_provider_fails_complete_inventory(
         ("codex", "default"),
         ("openai", "default"),
         ("anthropic", "high"),
-        ("claude-code", "high"),
+        ("claude-code", "default"),
     ),
 )
 def test_system_settings_thinking_default_uses_selected_route_hydration(

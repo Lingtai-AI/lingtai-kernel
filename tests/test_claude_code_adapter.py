@@ -5,11 +5,17 @@ A live end-to-end check against the real CLI lives in
 ``tests/integration_test_claude_code.py``.
 """
 
+import gc
 import json
+import os
+import stat
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from lingtai.kernel import preset_connectivity
 from lingtai.llm.claude_code.adapter import (
     ClaudeCodeAdapter,
     ClaudeCodeAuthError,
@@ -17,7 +23,11 @@ from lingtai.llm.claude_code.adapter import (
     ClaudeCodeError,
     _extract_json_object,
 )
-from lingtai.kernel.llm.base import FunctionSchema
+from lingtai.kernel.llm.base import (
+    FunctionSchema,
+    LLMReplayTerminalError,
+    llm_replay_terminal_flags,
+)
 from lingtai.kernel.llm.interface import TextBlock, ToolCallBlock, ToolResultBlock
 from lingtai.tools.context import _rebuild_action, _summarize_action
 from lingtai.tools.system.summarize import SUMMARY_STATUS_DONE, SUMMARY_STATUS_PENDING
@@ -26,6 +36,48 @@ from lingtai.tools.system.summarize import SUMMARY_STATUS_DONE, SUMMARY_STATUS_P
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_claude_auth(monkeypatch, tmp_path):
+    """Tests choose the auth mode explicitly; nothing leaks in from the shell.
+
+    With no token, the adapter is in local-login mode; the suite-wide guard in
+    ``tests/conftest.py`` answers the ``claude auth status`` probe with
+    "unknown" (proceed) so the real CLI is never consulted. The adapter's temp
+    artifacts (neutral cwd, system-prompt file, private config dirs) land in
+    this test's ``tmp_path``.
+    """
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    for name in (
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CONFIG_DIR",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _login_probe(monkeypatch, verdict):
+    """Pin the local-login probe verdict; returns the list of probe calls."""
+    calls = []
+
+    def fake_status(cli_path="claude", **kwargs):
+        calls.append({"cli_path": cli_path, **kwargs})
+        return verdict
+
+    monkeypatch.setattr(preset_connectivity, "claude_cli_login_status", fake_status)
+    return calls
+
+
+def _capture_run(captured, stdout=None):
+    def fake_run(cmd, **kw):
+        captured.append((list(cmd), kw))
+        return _FakeProc(
+            stdout=stdout or _envelope('{"action":"final","text":"ok"}')
+        )
+
+    return fake_run
 
 
 class _FakeProc:
@@ -643,24 +695,287 @@ def test_update_system_prompt_rewrites_system_file():
         assert "sys-v2" in f.read()
 
 
-def test_env_strips_api_keys_but_keeps_oauth_token(monkeypatch):
+# ---------------------------------------------------------------------------
+# Auth order: setup-token (private config dir) > local login > clear error
+# ---------------------------------------------------------------------------
+
+
+def _send_once(ad, monkeypatch=None):
+    captured = []
+    sess = ad.create_chat(ad._model or "", "sys", None)
+    with patch(
+        "lingtai.llm.claude_code.adapter.subprocess.run",
+        side_effect=_capture_run(captured),
+    ):
+        sess.send("hi")
+    assert len(captured) == 1
+    return captured[0]
+
+
+def _assert_private_config_dir(path_str):
+    path = Path(path_str)
+    assert path.is_dir()
+    assert stat.S_IMODE(os.lstat(path).st_mode) == 0o700
+    assert Path(tempfile.gettempdir()).resolve() in path.resolve().parents
+    home_claude = Path.home() / ".claude"
+    assert path.resolve() != home_claude.resolve()
+    assert home_claude.resolve() not in path.resolve().parents
+
+
+def test_setup_token_from_api_key_is_the_only_credential(monkeypatch, tmp_path):
+    """The factory's resolved ``api_key`` (manifest ``api_key_env``) becomes the
+    child's only credential, in a private config dir; nothing ambient leaks."""
+    from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
+
+    probe = _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_LOGGED_IN)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "tok-secret")
-    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-keep")
-    ad = ClaudeCodeAdapter(model="sonnet")
-    sess = ad.create_chat("sonnet", "sys", None)
-    captured = {}
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "stale-inherited-token")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
+    defaults = build_provider_defaults_from_manifest_llm(
+        {"provider": "claude-code"}, max_rpm=0, working_dir=tmp_path
+    )
+    svc = LLMService(
+        provider="claude-code",
+        model="",
+        api_key="sk-ant-oat01-from-api-key-env",
+        provider_defaults=defaults,
+    )
+    ad = svc.get_adapter("claude-code")
 
-    def fake_run(cmd, **kw):
-        captured["env"] = kw["env"]
-        return _FakeProc(stdout=_envelope('{"action":"final","text":"ok"}'))
-
-    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
-        sess.send("hi")
-    env = captured["env"]
+    cmd, kw = _send_once(ad)
+    env = kw["env"]
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-from-api-key-env"
     assert "ANTHROPIC_API_KEY" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
-    assert env.get("CLAUDE_CODE_OAUTH_TOKEN") == "oauth-keep"
+    _assert_private_config_dir(env["CLAUDE_CONFIG_DIR"])
+    assert cmd[cmd.index("--setting-sources") + 1] == "user"
+    # Token mode never consults (or depends on) the machine's local login.
+    assert probe == []
+
+
+def test_setup_token_falls_back_to_process_env(monkeypatch):
+    probe = _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_LOGGED_IN)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "  sk-ant-oat01-from-env  ")
+    ad = ClaudeCodeAdapter(model="sonnet")
+
+    cmd, kw = _send_once(ad)
+    assert kw["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-from-env"
+    _assert_private_config_dir(kw["env"]["CLAUDE_CONFIG_DIR"])
+    assert cmd[cmd.index("--setting-sources") + 1] == "user"
+    assert probe == []
+
+
+def test_explicit_token_wins_over_process_env(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-env")
+    ad = ClaudeCodeAdapter(oauth_token="sk-ant-oat01-explicit")
+    _cmd, kw = _send_once(ad)
+    assert kw["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-explicit"
+
+
+def test_private_config_dir_is_stable_per_agent_anchor(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-x")
+    anchor_a = str(tmp_path / "a" / "init.json")
+    anchor_b = str(tmp_path / "b" / "init.json")
+    dirs = []
+    for anchor in (anchor_a, anchor_a, anchor_b):
+        _cmd, kw = _send_once(ClaudeCodeAdapter(config_anchor=anchor))
+        dirs.append(kw["env"]["CLAUDE_CONFIG_DIR"])
+    assert dirs[0] == dirs[1]  # same agent -> same dir across adapter rebuilds
+    assert dirs[0] != dirs[2]  # different agents never share one
+    root = Path(tempfile.gettempdir()) / "lingtai-claude-code"
+    assert all(Path(d).parent == root for d in dirs)
+    for d in dirs:
+        _assert_private_config_dir(d)
+
+
+def test_anchorless_private_config_dir_is_per_adapter_and_removed(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-x")
+    ad = ClaudeCodeAdapter()
+    sess = ad.create_chat("", "sys", None)
+    captured = []
+    with patch(
+        "lingtai.llm.claude_code.adapter.subprocess.run",
+        side_effect=_capture_run(captured),
+    ):
+        sess.send("one")
+        sess.send("two")
+    dirs = {kw["env"]["CLAUDE_CONFIG_DIR"] for _cmd, kw in captured}
+    assert len(dirs) == 1  # stable for the adapter's life (so --resume works)
+    config_dir = Path(dirs.pop())
+    _assert_private_config_dir(str(config_dir))
+    other = ClaudeCodeAdapter()
+    _cmd, kw = _send_once(other)
+    assert kw["env"]["CLAUDE_CONFIG_DIR"] != str(config_dir)
+
+    del sess, ad
+    gc.collect()
+    assert not config_dir.exists()
+
+
+def test_private_config_dir_is_recreated_after_temp_cleanup(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-x")
+    ad = ClaudeCodeAdapter(config_anchor=str(tmp_path / "init.json"))
+    _cmd, kw = _send_once(ad)
+    config_dir = Path(kw["env"]["CLAUDE_CONFIG_DIR"])
+    config_dir.rmdir()
+    _cmd, kw = _send_once(ad)
+    assert kw["env"]["CLAUDE_CONFIG_DIR"] == str(config_dir)
+    _assert_private_config_dir(str(config_dir))
+
+
+def test_local_login_mode_keeps_cli_config_and_skips_settings_files(monkeypatch):
+    """No token + a logged-in CLI: run as-is (its own config dir holds the
+    login) but load no user/project/local settings files."""
+    probe = _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_LOGGED_IN)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "   ")  # blank = no token
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/profiles/work")
+    ad = ClaudeCodeAdapter(model="sonnet")
+    sess = ad.create_chat("sonnet", "sys", None)
+    captured = []
+    with patch(
+        "lingtai.llm.claude_code.adapter.subprocess.run",
+        side_effect=_capture_run(captured),
+    ):
+        sess.send("one")
+        sess.send("two")
+
+    for cmd, kw in captured:
+        env = kw["env"]
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+        assert "ANTHROPIC_API_KEY" not in env
+        assert env["CLAUDE_CONFIG_DIR"] == "/profiles/work"  # untouched
+        assert cmd[cmd.index("--setting-sources") + 1] == ""
+    # One probe per adapter: the logged-in verdict is cached.
+    assert len(probe) == 1
+    assert probe[0]["cli_path"] == "claude"
+    assert "ANTHROPIC_API_KEY" not in probe[0]["env"]
+    assert probe[0]["cwd"] == str(ad._cwd)
+
+
+def test_no_token_and_no_login_fails_clearly_without_aed_or_cli(monkeypatch):
+    probe = _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_NOT_LOGGED_IN)
+    ad = ClaudeCodeAdapter(model="sonnet")
+    sess = ad.create_chat("sonnet", "sys", None)
+    before = len(sess.interface._entries)
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run") as run:
+        with pytest.raises(LLMReplayTerminalError) as excinfo:
+            sess.send("hi")
+        with pytest.raises(LLMReplayTerminalError):
+            sess.send("hi again")
+    run.assert_not_called()  # never falls through to the CLI's own login
+    exc = excinfo.value
+    assert llm_replay_terminal_flags(exc) == (False, True)  # no AED retries
+    assert isinstance(exc.original, ClaudeCodeAuthError)
+    message = str(exc)
+    assert "claude setup-token" in message
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in message
+    assert "api_key_env" in message
+    assert "claude auth login" in message
+    assert len(sess.interface._entries) == before  # turn rolled back
+    # "not logged in" is never cached: a later `claude auth login` is seen.
+    assert len(probe) == 2
+
+
+def test_missing_cli_during_login_probe_is_terminal(monkeypatch):
+    _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_CLI_MISSING)
+    sess = ClaudeCodeAdapter().create_chat("", "sys", None)
+    with pytest.raises(LLMReplayTerminalError) as excinfo:
+        sess.send("hi")
+    assert llm_replay_terminal_flags(excinfo.value) == (False, True)
+    assert "not found on PATH" in str(excinfo.value)
+
+
+def test_inconclusive_login_probe_lets_the_cli_decide(monkeypatch):
+    """A CLI too old for ``auth status`` must not block a working login."""
+    probe = _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_UNKNOWN)
+    ad = ClaudeCodeAdapter()
+    cmd, kw = _send_once(ad)
+    assert cmd[cmd.index("--setting-sources") + 1] == ""
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in kw["env"]
+    assert len(probe) == 1
+
+
+@pytest.mark.parametrize(
+    "token, result, status, expect",
+    [
+        (None, "Not logged in · Please run /login", None, "local `claude` CLI login"),
+        (
+            "sk-ant-oat01-bad",
+            "Failed to authenticate. API Error: 401 invalid bearer",
+            401,
+            "setup-token was rejected",
+        ),
+    ],
+    ids=["local-login", "setup-token"],
+)
+def test_cli_reported_auth_failure_is_terminal(monkeypatch, token, result, status, expect):
+    """The CLI reports auth failures inside an ``is_error`` envelope (exit 1)."""
+    probe = _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_LOGGED_IN)
+    envelope = json.loads(_envelope(result, is_error=True))
+    envelope["api_error_status"] = status
+    proc = _FakeProc(stdout=json.dumps(envelope), returncode=1)
+    ad = ClaudeCodeAdapter(oauth_token=token)
+    sess = ad.create_chat("", "sys", None)
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", return_value=proc):
+        with pytest.raises(LLMReplayTerminalError) as excinfo:
+            sess.send("hi")
+        if token is None:
+            # A rejected local login drops the cached verdict -> re-probe.
+            with pytest.raises(LLMReplayTerminalError):
+                sess.send("hi")
+            assert len(probe) == 2
+    assert llm_replay_terminal_flags(excinfo.value) == (False, True)
+    assert isinstance(excinfo.value.original, ClaudeCodeAuthError)
+    assert expect in str(excinfo.value)
+
+
+def test_replace_mode_and_isolation_flags_hold_in_both_auth_modes(monkeypatch):
+    _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_LOGGED_IN)
+    for token in (None, "sk-ant-oat01-x"):
+        cmd, _kw = _send_once(ClaudeCodeAdapter(oauth_token=token))
+        assert "--system-prompt-file" in cmd
+        assert "--append-system-prompt-file" not in cmd
+        assert cmd[cmd.index("--tools") + 1] == ""
+        assert "--strict-mcp-config" in cmd
+        assert cmd[cmd.index("--mcp-config") + 1] == '{"mcpServers":{}}'
+        assert cmd.count("--setting-sources") == 1
+
+
+def test_omitted_model_uses_cli_default():
+    """No configured model: no ``--model`` flag, Claude Code's default applies."""
+    ad = ClaudeCodeAdapter()
+    assert ad._model is None
+    cmd, _kw = _send_once(ad)
+    assert "--model" not in cmd
+    captured = []
+    with patch(
+        "lingtai.llm.claude_code.adapter.subprocess.run",
+        side_effect=_capture_run(captured, stdout=_envelope("plain")),
+    ):
+        ad.generate("", "hello")
+    assert "--model" not in captured[0][0]
+    explicit, _kw = _send_once(ClaudeCodeAdapter(model="opus"))
+    assert explicit[explicit.index("--model") + 1] == "opus"
+
+
+def test_provider_defaults_inject_a_runtime_only_config_anchor(tmp_path):
+    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
+
+    defaults = build_provider_defaults_from_manifest_llm(
+        {"provider": "claude-code", "claude_code_config_anchor": "/elsewhere"},
+        max_rpm=0,
+        working_dir=tmp_path,
+    )
+    assert defaults == {
+        "claude-code": {
+            "claude_code_config_anchor": str((tmp_path / "init.json").resolve())
+        }
+    }
+    assert build_provider_defaults_from_manifest_llm(
+        {"provider": "claude-code"}, max_rpm=0
+    ) is None
 
 
 # ---------------------------------------------------------------------------
@@ -668,21 +983,38 @@ def test_env_strips_api_keys_but_keeps_oauth_token(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_missing_cli_raises_auth_error():
+def test_missing_cli_raises_terminal_auth_error():
     ad = ClaudeCodeAdapter(model="sonnet")
     sess = ad.create_chat("sonnet", "sys", None)
     with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=FileNotFoundError()):
-        with pytest.raises(ClaudeCodeAuthError):
+        with pytest.raises(LLMReplayTerminalError) as excinfo:
             sess.send("hi")
+    assert isinstance(excinfo.value.original, ClaudeCodeAuthError)
+    assert llm_replay_terminal_flags(excinfo.value) == (False, True)
 
 
-def test_not_logged_in_raises_auth_error():
+def test_not_logged_in_stderr_raises_terminal_auth_error():
     ad = ClaudeCodeAdapter(model="sonnet")
     sess = ad.create_chat("sonnet", "sys", None)
     proc = _FakeProc(stdout="", stderr="Please run /login to authenticate", returncode=1)
     with patch("lingtai.llm.claude_code.adapter.subprocess.run", return_value=proc):
-        with pytest.raises(ClaudeCodeAuthError):
+        with pytest.raises(LLMReplayTerminalError) as excinfo:
             sess.send("hi")
+    assert isinstance(excinfo.value.original, ClaudeCodeAuthError)
+    assert llm_replay_terminal_flags(excinfo.value) == (False, True)
+    assert "claude setup-token" in str(excinfo.value)
+
+
+def test_non_auth_envelope_error_stays_retryable():
+    ad = ClaudeCodeAdapter(model="sonnet")
+    sess = ad.create_chat("sonnet", "sys", None)
+    proc = _FakeProc(
+        stdout=_envelope("API Error: 500 overloaded", is_error=True), returncode=1
+    )
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", return_value=proc):
+        with pytest.raises(ClaudeCodeError) as excinfo:
+            sess.send("hi")
+    assert llm_replay_terminal_flags(excinfo.value) == (False, False)
 
 
 def test_context_overflow_detected_from_stderr():
@@ -875,3 +1207,164 @@ def test_no_overflow_means_no_notice():
         if isinstance(b, TextBlock)
     ]
     assert not any(t.startswith("[kernel] Context exceeded") for t in texts)
+
+
+# ---------------------------------------------------------------------------
+# Boot/load: the TUI Claude template declares api_key_env even for local-login
+# users (no token stored) and omits model. That must boot, and fall through.
+# ---------------------------------------------------------------------------
+
+
+def _claude_init(tmp_path, llm_extra, *, env_lines=None):
+    from tests.test_deep_refresh import _make_init
+
+    init = _make_init()
+    init["manifest"]["llm"] = {"provider": "claude-code", **llm_extra}
+    if env_lines is not None:
+        env_file = tmp_path / ".env"
+        env_file.write_text("".join(f"{line}\n" for line in env_lines))
+        init["env_file"] = str(env_file)
+    (tmp_path / "init.json").write_text(json.dumps(init))
+
+
+def _forget_env_after_test(monkeypatch, name):
+    """Record *name* so a value loaded later from an env_file is undone."""
+    monkeypatch.setenv(name, "placeholder")
+    monkeypatch.delenv(name)
+
+
+def _dispatch_once(adapter):
+    captured = []
+    chat = adapter.create_chat("", "sys", None)
+    with patch(
+        "lingtai.llm.claude_code.adapter.subprocess.run",
+        side_effect=_capture_run(captured),
+    ):
+        chat.send("hi")
+    return captured[0]
+
+
+@pytest.mark.parametrize("with_env_file", [True, False], ids=["env-file", "no-env-file"])
+def test_boot_with_declared_but_unset_api_key_env_uses_local_login(
+    monkeypatch, tmp_path, with_env_file
+):
+    """``api_key_env: CLAUDE_CODE_OAUTH_TOKEN`` with no stored token and no
+    model: validation and boot succeed (no hard fail), the CLI runs on its
+    local login with no ``--model``/``--effort``, and no token is invented."""
+    from lingtai.cli import build_agent, load_init
+
+    _forget_env_after_test(monkeypatch, "CLAUDE_CODE_OAUTH_TOKEN")
+    _forget_env_after_test(monkeypatch, "UNRELATED")
+    probe = _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_LOGGED_IN)
+    _claude_init(
+        tmp_path,
+        {"api_key": None, "api_key_env": "CLAUDE_CODE_OAUTH_TOKEN"},
+        env_lines=["UNRELATED=1"] if with_env_file else None,
+    )
+
+    agent = build_agent(load_init(tmp_path), tmp_path)
+    try:
+        assert agent.service.model == ""
+        assert agent.service.api_key is None
+        assert agent._config.thinking == "default"
+        adapter = agent.service.get_adapter("claude-code")
+        assert adapter._model is None and adapter._oauth_token is None
+        cmd, kw = _dispatch_once(adapter)
+    finally:
+        agent._workdir_lease.release()
+    assert "--model" not in cmd
+    assert "--effort" not in cmd
+    assert cmd[cmd.index("--setting-sources") + 1] == ""
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in kw["env"]
+    assert len(probe) == 1
+
+
+def test_boot_with_token_in_env_file_uses_isolated_config_dir(monkeypatch, tmp_path):
+    from lingtai.cli import build_agent, load_init
+
+    _forget_env_after_test(monkeypatch, "CLAUDE_CODE_OAUTH_TOKEN")
+    probe = _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_LOGGED_IN)
+    _claude_init(
+        tmp_path,
+        {"api_key": None, "api_key_env": "CLAUDE_CODE_OAUTH_TOKEN", "thinking": "high"},
+        env_lines=["CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-from-dotenv"],
+    )
+
+    agent = build_agent(load_init(tmp_path), tmp_path)
+    try:
+        adapter = agent.service.get_adapter("claude-code")
+        assert adapter._oauth_token == "sk-ant-oat01-from-dotenv"
+        cmd, kw = _dispatch_once(adapter)
+    finally:
+        agent._workdir_lease.release()
+    assert kw["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-from-dotenv"
+    _assert_private_config_dir(kw["env"]["CLAUDE_CONFIG_DIR"])
+    anchor = str((tmp_path / "init.json").resolve())
+    assert adapter._config_anchor == anchor
+    assert cmd[cmd.index("--setting-sources") + 1] == "user"
+    assert "--model" not in cmd
+    assert probe == []
+
+
+@pytest.mark.parametrize("env_token", [None, "sk-ant-oat01-legacy-slot"], ids=["login", "token"])
+def test_legacy_empty_api_key_env_reads_default_slot_then_login(
+    monkeypatch, tmp_path, env_token
+):
+    """A legacy preset with ``api_key_env: ""`` still honors the
+    ``CLAUDE_CODE_OAUTH_TOKEN`` slot when set, else the local login."""
+    from lingtai.cli import build_llm_service, load_init
+
+    if env_token is None:
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", env_token)
+    probe = _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_LOGGED_IN)
+    _claude_init(tmp_path, {"model": "", "api_key_env": ""})
+
+    service = build_llm_service(load_init(tmp_path), tmp_path)
+    cmd, kw = _dispatch_once(service.get_adapter("claude-code"))
+    if env_token is None:
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in kw["env"]
+        assert cmd[cmd.index("--setting-sources") + 1] == ""
+        assert len(probe) == 1
+    else:
+        assert kw["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == env_token
+        _assert_private_config_dir(kw["env"]["CLAUDE_CONFIG_DIR"])
+        assert probe == []
+
+
+def test_unresolved_api_key_env_still_fails_boot_for_api_families(monkeypatch, tmp_path):
+    from lingtai.cli import build_llm_service, load_init
+    from tests.test_deep_refresh import _make_init
+
+    monkeypatch.delenv("OPENAI_TEST_MISSING_KEY", raising=False)
+    _forget_env_after_test(monkeypatch, "UNRELATED")
+    init = _make_init()
+    init["manifest"]["llm"].update({"api_key": None, "api_key_env": "OPENAI_TEST_MISSING_KEY"})
+    env_file = tmp_path / ".env"
+    env_file.write_text("UNRELATED=1\n")
+    init["env_file"] = str(env_file)
+    (tmp_path / "init.json").write_text(json.dumps(init))
+
+    with pytest.raises(ValueError, match="cannot boot without it"):
+        build_llm_service(load_init(tmp_path), tmp_path)
+
+
+def test_claude_code_preset_without_model_or_token_loads(tmp_path):
+    """The TUI template shape loads through the lingtai-layer preset loader."""
+    from lingtai.agent import load_preset
+
+    path = tmp_path / "claude.json"
+    path.write_text(json.dumps({
+        "name": "claude",
+        "description": {"summary": "Claude subscription"},
+        "manifest": {
+            "llm": {"provider": "claude-code", "api_key_env": "CLAUDE_CODE_OAUTH_TOKEN"},
+            "capabilities": {},
+        },
+    }))
+    loaded = load_preset(str(path), working_dir=tmp_path)
+    assert loaded["manifest"]["llm"] == {
+        "provider": "claude-code",
+        "api_key_env": "CLAUDE_CODE_OAUTH_TOKEN",
+    }

@@ -145,6 +145,32 @@ def test_live_set_clear_changes_next_dispatch_and_preserves_baseline_omission():
     assert manager.last_reasoning_effort_dispatch()["completed"] is True
 
 
+def test_omitted_model_keeps_live_effort_on_the_cli_default_route():
+    """No configured model means Claude Code's default model, not an unknown
+    route: live effort stays available and no ``--model`` flag is sent."""
+    adapter = ClaudeCodeAdapter()
+    chat = adapter.create_chat("", "system")
+    capability = chat.reasoning_effort_capability()
+    assert capability.available is True
+    assert capability.route == "claude-code:cli-default"
+    assert capability.fingerprint != (
+        ClaudeCodeAdapter(model="opus")
+        .create_chat("opus", "system")
+        .reasoning_effort_capability()
+        .fingerprint
+    )
+    captured: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append(list(cmd))
+        return _FakeProc(_envelope('{"action":"final","text":"ok"}'))
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+        chat.send("first")
+    assert "--model" not in captured[0]
+    assert "--effort" not in captured[0]
+
+
 def test_dispatch_uses_one_snapshot_when_set_changes_during_subprocess():
     manager, chat = _make_bound_session(thinking="default")
     captured: list[list[str]] = []

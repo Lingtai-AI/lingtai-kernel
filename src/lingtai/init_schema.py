@@ -143,6 +143,33 @@ LLM_REQUIRED: dict[str, type | tuple[type, ...]] = {
     "provider": str,
     "model": str,
 }
+# Providers whose ``manifest.llm.model`` may be omitted, null, or empty: the
+# CLI-backed ``claude-code`` then omits ``--model`` so Claude Code's own
+# default model applies. Every other provider still requires a string model.
+MODEL_OPTIONAL_LLM_PROVIDERS = frozenset({"claude-code"})
+
+# Providers whose ``manifest.llm.api_key_env`` names an OPTIONAL credential: a
+# declared-but-unset (or empty-named) variable is not a misconfiguration.
+# ``claude-code`` then falls back to the process env ``CLAUDE_CODE_OAUTH_TOKEN``
+# and, failing that, the local ``claude`` CLI login — so boot neither requires
+# an ``env_file`` for it nor hard-fails when it resolves empty.
+OPTIONAL_CREDENTIAL_LLM_PROVIDERS = frozenset({"claude-code"})
+
+
+def _normalized_provider(provider: object) -> str:
+    return provider.strip().lower() if isinstance(provider, str) else ""
+
+
+def llm_model_required(provider: object) -> bool:
+    """Return whether ``manifest.llm.model`` is required for *provider*."""
+    return _normalized_provider(provider) not in MODEL_OPTIONAL_LLM_PROVIDERS
+
+
+def llm_credential_required(provider: object) -> bool:
+    """Return whether an unresolved ``manifest.llm.api_key_env`` is fatal."""
+    return _normalized_provider(provider) not in OPTIONAL_CREDENTIAL_LLM_PROVIDERS
+
+
 LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "api_key": (str, NoneType),
     "api_key_env": str,
@@ -433,7 +460,13 @@ def validate_init(data: dict) -> list[str]:
             )
 
     llm = manifest["llm"]
-    _require_keys(llm, LLM_REQUIRED, prefix="manifest.llm")
+    _require_keys(
+        llm, {"provider": LLM_REQUIRED["provider"]}, prefix="manifest.llm"
+    )
+    if llm_model_required(llm["provider"]):
+        _require_keys(llm, {"model": LLM_REQUIRED["model"]}, prefix="manifest.llm")
+    elif "model" in llm:
+        _check_type(llm["model"], (str, NoneType), "manifest.llm.model")
     if is_removed_llm_provider(llm["provider"]):
         raise ValueError(
             removed_provider_message("manifest.llm.provider", llm["provider"])
@@ -444,8 +477,14 @@ def validate_init(data: dict) -> list[str]:
         if key not in LLM_KNOWN:
             warnings.append(f"unknown field in manifest.llm: {key}")
 
-    # If api_key_env is set without api_key, env_file must be provided
-    if llm.get("api_key_env") and not llm.get("api_key"):
+    # If api_key_env is set without api_key, env_file must be provided —
+    # except for an optional credential (claude-code), which may come from the
+    # process env or be absent entirely (local ``claude`` login).
+    if (
+        llm.get("api_key_env")
+        and not llm.get("api_key")
+        and llm_credential_required(llm.get("provider"))
+    ):
         if not data.get("env_file"):
             raise ValueError(
                 "manifest.llm.api_key_env is set but no env_file provided "

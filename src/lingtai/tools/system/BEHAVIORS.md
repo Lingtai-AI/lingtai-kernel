@@ -282,7 +282,7 @@ Pass only when mounted and direct routes agree on refusal, force escape, receipt
       either axis (`anthropic`, `claude-code`) report null rather than fake
       values.
 - [ ] Omitted thinking uses the selected route's canonical hydrated default
-      (`default` for `openai`/`codex`, `high` for `anthropic`/`claude-code`),
+      (`default` for `openai`/`codex`/`claude-code`, `high` for `anthropic`),
       and selected-provider credentials reflect only authored key/alias sources.
 - [ ] `runtime.tool_batch_memory_relief` matches the canonical live resolver for
       the global post-`ToolExecutor`-batch hook, including ordinary main-agent

@@ -3450,7 +3450,7 @@ class DaemonManager:
             context_window = effective_llm.get("context_window")
         return {
             "provider": effective_llm["provider"],
-            "model": effective_llm["model"],
+            "model": effective_llm.get("model") or "",
             "api_key_env": api_key_env,
             "base_url": effective_llm.get("base_url"),
             "context_window": context_window,
@@ -3721,7 +3721,8 @@ class DaemonManager:
         from lingtai.kernel.config_resolve import resolve_env
 
         provider = effective_preset_llm["provider"]
-        effective_model = effective_preset_llm["model"]
+        # ``model`` may be omitted for ``claude-code`` (the CLI's own default).
+        effective_model = effective_preset_llm.get("model") or ""
         # Primary key: the preset's direct api_key (resolved from its api_key_env
         # only, never a guessed provider-name slot). For the implicit preset this
         # is the parent's already-resolved effective key. Never logged/persisted.
@@ -5489,7 +5490,7 @@ class DaemonManager:
             effective_llm = (
                 resolved["llm"] if resolved else self._implicit_parent_preset_llm()
             )
-            effective_model = effective_llm["model"]
+            effective_model = effective_llm.get("model") or ""
 
             # Build tool surface and system prompt up front so the run_dir
             # records the prompt verbatim before any LLM call. Validation

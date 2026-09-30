@@ -31,6 +31,27 @@ def _isolate_llm_adapter_registry():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_claude_cli_auth_probe(monkeypatch):
+    """Never ask this machine's real ``claude`` CLI for its login state.
+
+    ``claude auth status`` reads (and may touch) the developer's real Claude
+    config. The claude-code adapter and the preset connectivity check both
+    reach it only through ``preset_connectivity.claude_cli_login_status``, so
+    this guard answers "unknown" (proceed) there; a test that needs a verdict
+    patches the same seam, and the implementation's own tests import the real
+    function at module import time and point it at a stub CLI.
+    """
+
+    from lingtai.kernel import preset_connectivity
+
+    monkeypatch.setattr(
+        preset_connectivity,
+        "claude_cli_login_status",
+        lambda *args, **kwargs: preset_connectivity.CLAUDE_LOGIN_UNKNOWN,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolate_runtime_identity_cache():
     """Keep process-cached runtime identity local to each test."""
 

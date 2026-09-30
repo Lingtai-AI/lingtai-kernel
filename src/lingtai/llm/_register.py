@@ -7,7 +7,7 @@ LingTai ships exactly four LLM provider families:
                     ``responses`` (always stateless full-history replay).
 * ``anthropic``   — any Anthropic-compatible (Messages API) endpoint.
 * ``codex``       — Codex / ChatGPT OAuth (one account; pooling is external).
-* ``claude-code`` — the local Claude Code CLI login.
+* ``claude-code`` — the local Claude Code CLI (setup-token, else its login).
 
 Other vendors and subscriptions are reached by pointing ``openai`` or
 ``anthropic`` at that vendor's compatible endpoint, or at an external pool
@@ -163,11 +163,25 @@ def register_all_adapters() -> None:
     # -- claude-code ----------------------------------------------------------
 
     def _claude_code(*, model=None, defaults=None, **kw):
+        """Build the CLI-backed Claude Code adapter.
+
+        ``api_key`` is the manifest ``api_key``/``api_key_env`` resolution
+        (default env ``CLAUDE_CODE_OAUTH_TOKEN``): a ``claude setup-token``
+        OAuth token, handed to the CLI as its only credential. The HTTP-only
+        knobs (``base_url``, ``default_headers``) are dropped — the CLI owns
+        its transport. An empty ``model`` means the CLI's own default.
+        """
         from .claude_code.adapter import ClaudeCodeAdapter
         kw.pop("model", None)
-        kw.pop("api_key", None)
+        oauth_token = kw.pop("api_key", None)
         kw.pop("base_url", None)
         kw.pop("default_headers", None)
-        return ClaudeCodeAdapter(model=model, **{k: v for k, v in kw.items() if v is not None})
+        d = defaults or {}
+        return ClaudeCodeAdapter(
+            model=model or None,
+            oauth_token=oauth_token,
+            config_anchor=d.get("claude_code_config_anchor"),
+            **{k: v for k, v in kw.items() if v is not None},
+        )
 
     LLMService.register_adapter("claude-code", _claude_code)
