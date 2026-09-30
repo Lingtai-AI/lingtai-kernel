@@ -1705,6 +1705,11 @@ def test_empty_llm_response_error_carries_provider_diagnostics():
     raw = SimpleNamespace(
         id="resp_123",
         model="gpt-test",
+        status="completed",
+        output=[
+            SimpleNamespace(type="message", content="PRIVATE_TEXT"),
+            SimpleNamespace(type="PRIVATE_TEXT"),
+        ],
         choices=[SimpleNamespace(finish_reason="stop")],
     )
     response = LLMResponse(
@@ -1737,9 +1742,13 @@ def test_empty_llm_response_error_carries_provider_diagnostics():
     assert any(
         event == "empty_llm_response"
         and fields["response_id"] == "resp_123"
+        and fields["response_status"] == "completed"
+        and fields["response_output_types"] == ["message", "other"]
+        and fields["response_output_count"] == 2
         and fields["api_call_id"] == "api_123"
         for event, fields in logs
     )
+    assert "PRIVATE_TEXT" not in str(logs)
 
 
 

@@ -805,6 +805,66 @@ class RealisticRestClient:
         self.responses = RealisticRestResponses(**kw)
 
 
+def test_rest_recovers_complete_message_without_text_delta():
+    """A completed output item is usable even if Codex omits text deltas."""
+
+    class DoneOnlyResponses:
+        def create(self, **kwargs):
+            yield Event(
+                "response.output_item.done",
+                item=SimpleNamespace(
+                    type="message",
+                    id="msg_done_only",
+                    role="assistant",
+                    status="completed",
+                    content=[SimpleNamespace(type="output_text", text="recovered")],
+                ),
+            )
+            yield _completed("resp_done_only")
+
+    session = _make_rest_session(SimpleNamespace(responses=DoneOnlyResponses()))
+    chunks: list[str] = []
+    result = session.send_stream("hello", on_chunk=chunks.append)
+
+    assert result.text == "recovered"
+    assert chunks == ["recovered"]
+    assert result.raw.id == "resp_done_only"
+
+
+def test_rest_complete_empty_output_stays_empty():
+    """A genuinely empty completed response still reaches kernel recovery."""
+
+    class EmptyResponses:
+        def create(self, **kwargs):
+            yield _completed("resp_empty")
+
+    session = _make_rest_session(SimpleNamespace(responses=EmptyResponses()))
+    result = session.send("hello")
+
+    assert result.text == ""
+    assert result.tool_calls == []
+    assert result.raw.id == "resp_empty"
+
+
+def test_rest_partial_message_does_not_claim_recovery():
+    """An added item without a completed item cannot bypass AED."""
+
+    class PartialResponses:
+        def create(self, **kwargs):
+            yield Event(
+                "response.output_item.added",
+                item=SimpleNamespace(type="message", id="msg_partial"),
+            )
+            yield _completed("resp_partial")
+
+    session = _make_rest_session(SimpleNamespace(responses=PartialResponses()))
+    result = session.send("hello")
+
+    assert result.text == ""
+    assert result.tool_calls == []
+    assert result.raw.id == "resp_partial"
+
+
 def _make_rest_session(client, **kwargs):
     """A Codex session pinned to the REST transport with the given fake client."""
     kwargs.setdefault("transport", "rest")

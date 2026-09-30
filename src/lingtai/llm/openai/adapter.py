@@ -5982,7 +5982,9 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                 extra_body["client_metadata"] = {**existing_client_metadata, **client_metadata}
                 kwargs["extra_body"] = extra_body
             acc = StreamingAccumulator()
+            output_recorder = _ResponsesStreamOutputRecorder()
             response_id = None
+            raw_response = None
             usage = UsageMetadata()
             seen_reasoning_summary_items: set[str] = set()
             # Raw reasoning item dicts for replay, in provider output order.
@@ -6181,6 +6183,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                             fallback_kwargs
                         )
             for event in stream:
+                output_recorder.observe(event)
                 thoughts_before = acc.thoughts
                 pending_thought_chars_before = len("".join(acc._thought_parts))
                 accepted_reasoning = _handle_responses_reasoning_event(
@@ -6260,6 +6263,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                         )
                         acc.finish_tool()
                 elif event.type == "response.completed":
+                    raw_response = event.response
                     response_id = event.response.id
                     # REST continuation: record the completed response so the NEXT
                     # turn can delta off it (the WebSocket path does the equivalent
@@ -6345,6 +6349,24 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
 
         try:
             result = acc.finalize(usage=usage)
+            # Codex normally streams text deltas, but a complete Responses
+            # output item can arrive without them. The generic Responses path
+            # already normalizes that case. Recover only when the accumulator
+            # has no projection and the recorder can prove the final output is
+            # complete; an unsupported or partial trailer remains empty so the
+            # kernel's bounded empty-response recovery still applies.
+            if not result.text and not result.thoughts and not result.tool_calls:
+                output_items = output_recorder.finalized_items()
+                if output_items is not None:
+                    normalized = _responses_normalized_response(output_items, usage)
+                    if normalized is not None and (
+                        normalized.text or normalized.thoughts or normalized.tool_calls
+                    ):
+                        result = normalized
+                        self._codex_partial_output = True
+                        if on_chunk and result.text:
+                            on_chunk(result.text)
+            result.raw = raw_response
             # The provider dispatch actually completed. A rejected attempt
             # deliberately does NOT reach here, so its dispatch-start evidence
             # stays on record with ``completed`` false rather than vanishing

@@ -2776,6 +2776,19 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             if raw is not None:
                 _diag["response_id"] = getattr(raw, "id", None)
                 _diag["response_model"] = getattr(raw, "model", None)
+                status = getattr(raw, "status", None)
+                if isinstance(status, str):
+                    _diag["response_status"] = status
+                output = getattr(raw, "output", None)
+                if isinstance(output, (list, tuple)):
+                    # Shape only: no provider output text or arguments in logs.
+                    _diag["response_output_count"] = len(output)
+                    _diag["response_output_types"] = [
+                        item_type if (item_type := getattr(item, "type", None))
+                        in {"message", "reasoning", "function_call"}
+                        else "other"
+                        for item in output[:16]
+                    ]
                 choices = getattr(raw, "choices", None)
                 if choices:
                     _diag["finish_reason"] = getattr(
