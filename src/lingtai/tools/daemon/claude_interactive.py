@@ -79,6 +79,128 @@ _TRUST_PROMPTS = (
     "project you created",
 )
 
+# Workspace-trust dialog parsing. Claude Code 2.1.285 renders the options as
+# un-numbered lines with a ``❯`` cursor on the highlighted one and lists
+# "No, exit" FIRST; older builds listed a numbered "1. Yes, ..." first. The
+# bridge therefore selects the affirmative option by its label, never by a
+# hardcoded key, and presses nothing when it cannot find it.
+# Ink positions words with column moves and repaints single lines with
+# vertical moves / carriage returns, so: string controls (APC/OSC/DCS) are
+# dropped, vertical moves and CR become line breaks, horizontal moves become
+# spaces, and every other control sequence is dropped.
+_ANSI_STRING = re.compile(r"\x1b[_\]P^X].*?(?:\x07|\x1b\\)", re.DOTALL)
+_ANSI_VERTICAL_MOVE = re.compile(r"\x1b\[[0-9;]*[ABEFHf]|\r")
+_ANSI_COLUMN_MOVE = re.compile(r"\x1b\[\d*[CDG]")
+_ANSI_OTHER = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[()][0-9A-Za-z]|[=>78])")
+_TRUST_OPTION_LINE = re.compile(
+    r"^\s*(?P<cursor>[\u276f\u203a]\s*)?(?:(?P<number>\d+)[.)]\s*)?"
+    r"(?P<label>(?:yes|no)\b.*?)\s*$",
+    re.IGNORECASE,
+)
+_TRUST_DIALOG_FOOTER = "enter to confirm"
+# A repaint re-renders the whole dialog; only the last render is current.
+_TRUST_DIALOG_STARTS = ("quick safety check", "do you trust")
+_KEY_DOWN = b"\x1b[B"
+_KEY_UP = b"\x1b[A"
+# The dialog must be quiet this long before the bridge presses anything, and
+# a cursor that keeps bouncing back is given up on after this many moves.
+_TRUST_SETTLE_S = 0.4
+_TRUST_MAX_MOVES = 5
+
+
+@dataclass(frozen=True, slots=True)
+class TrustDialogOption:
+    """One rendered option of Claude Code's workspace-trust dialog."""
+
+    position: int
+    number: int | None
+    label: str
+    highlighted: bool
+
+
+def _trust_dialog_lines(frame: str) -> list[str]:
+    """Plain lines of the LAST rendered trust dialog in *frame*."""
+    text = _ANSI_STRING.sub("", frame)
+    text = _ANSI_VERTICAL_MOVE.sub("\n", text)
+    text = _ANSI_COLUMN_MOVE.sub(" ", text)
+    text = _ANSI_OTHER.sub("", text)
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.split("\n")]
+    starts = [
+        index for index, line in enumerate(lines)
+        if any(marker in line.lower() for marker in _TRUST_DIALOG_STARTS)
+    ]
+    return lines[starts[-1]:] if starts else lines
+
+
+def parse_trust_dialog_options(frame: str) -> list[TrustDialogOption]:
+    """The Yes/No option lines of the latest render, in display order.
+
+    Ink re-renders changed option lines without the question (for example a
+    cursor move), so a label that repeats starts a newer render; only the
+    last one is current.
+    """
+    groups: list[list[tuple[str, str | None, bool]]] = [[]]
+    for line in _trust_dialog_lines(frame):
+        match = _TRUST_OPTION_LINE.match(line)
+        if not match:
+            continue
+        label = match.group("label")
+        if any(seen.lower() == label.lower() for seen, _, _ in groups[-1]):
+            groups.append([])
+        groups[-1].append((label, match.group("number"), bool(match.group("cursor"))))
+    options: list[TrustDialogOption] = []
+    for label, number, highlighted in groups[-1]:
+        options.append(TrustDialogOption(
+            position=len(options),
+            number=int(number) if number else None,
+            label=label,
+            highlighted=highlighted,
+        ))
+    return options
+
+
+def trust_dialog_answer(frame: str) -> bytes | None:
+    """The next keystrokes toward "Yes … trust" for the dialog as last rendered.
+
+    With a rendered cursor: Enter only when the cursor is ON the affirmative
+    option, otherwise just the arrow moves toward it (the bridge confirms on a
+    later, settled render — Claude Code 2.1.285 resets the selection while it
+    finishes starting, so move+Enter in one burst can land on "No, exit").
+    Without a cursor: that option's own number plus Enter. ``None`` (press
+    nothing) when no "Yes … trust" option is visible or it cannot be reached
+    unambiguously, so the bridge can never pick "No, exit".
+    """
+    options = parse_trust_dialog_options(frame)
+    target = next(
+        (
+            option for option in options
+            if option.label.lower().startswith("yes")
+            and "trust" in option.label.lower()
+        ),
+        None,
+    )
+    if target is None:
+        return None
+    highlighted = [option for option in options if option.highlighted]
+    if len(highlighted) == 1:
+        delta = target.position - highlighted[0].position
+        if delta == 0:
+            return b"\r"
+        return _KEY_DOWN * delta if delta > 0 else _KEY_UP * -delta
+    if not highlighted and target.number is not None:
+        return str(target.number).encode("ascii") + b"\r"
+    return None
+
+
+def trust_dialog_is_complete(frame: str) -> bool:
+    """Whether enough of the dialog is rendered to decide (footer or 2+ options)."""
+    lines = _trust_dialog_lines(frame)
+    return (
+        any(_TRUST_DIALOG_FOOTER in line.lower() for line in lines)
+        or len(parse_trust_dialog_options(frame)) >= 2
+    )
+
+
 _MANAGED_SYSTEM_PROMPT = """
 You are Claude Code running as a LingTai daemon backend inside a
 LingTai-managed ephemeral workspace.  Operational boundaries:
@@ -169,6 +291,12 @@ class ClaudeInteractiveBridge:
         self.claude_cwd = self.managed_worktree_path
         self._auto_trust_workspace = False
         self._trust_prompt_answered = False
+        # Accumulated managed-workspace trust dialog frames (the options can
+        # arrive in a later PTY chunk than the question), when output last
+        # arrived, and how many cursor moves were sent.
+        self._trust_frame: str | None = None
+        self._trust_output_at = 0.0
+        self._trust_moves = 0
 
         self._hook_events: queue.Queue[_HookEvent] = queue.Queue()
         self._hook_done = threading.Event()
@@ -549,7 +677,14 @@ class ClaudeInteractiveBridge:
             return
         text, normalized = self._normalized_prompt_text(data)
 
-        if self._contains_marker(text, normalized, _TRUST_PROMPTS):
+        managed_trust_in_progress = (
+            self._auto_trust_workspace
+            and self._trust_frame is not None
+            and not self._trust_prompt_answered
+        )
+        if managed_trust_in_progress or self._contains_marker(
+            text, normalized, _TRUST_PROMPTS
+        ):
             if self._auto_trust_workspace:
                 if self._trust_prompt_answered:
                     # The TUI can repaint the same prompt before consuming our
@@ -557,17 +692,16 @@ class ClaudeInteractiveBridge:
                     # workspace trust request; let the process advance or time
                     # out normally.
                     return
-                try:
-                    self.terminal_port.write(terminal_handle, b"1\r")
-                except OSError:
-                    return
-                self._trust_prompt_answered = True
-                msg = (
-                    "Claude interactive backend auto-selected workspace trust "
-                    "inside a LingTai-managed Claude worktree."
-                )
-                self.run_dir.record_cli_output(msg, stream="stderr")
-                self._write_state(claude_interactive_managed_trust_answered=True)
+                frame = (self._trust_frame or "") + data.decode("utf-8", errors="ignore")
+                self._trust_frame = frame[-16384:]
+                self._trust_output_at = time.monotonic()
+                if (
+                    trust_dialog_answer(self._trust_frame) is None
+                    and trust_dialog_is_complete(self._trust_frame)
+                ):
+                    self._fail_managed_trust()
+                # Keys are sent from ``_advance_managed_trust`` once the dialog
+                # has been quiet for ``_TRUST_SETTLE_S``.
                 return
             self._prompt_warning = (
                 "Claude interactive backend appears to be waiting for a workspace "
@@ -585,6 +719,59 @@ class ClaudeInteractiveBridge:
                 "credentials."
             )
             self.run_dir.record_cli_output(self._prompt_warning, stream="stderr")
+
+    def _fail_managed_trust(self) -> None:
+        self._prompt_warning = (
+            "Claude interactive backend found a workspace trust prompt in its "
+            "LingTai-managed worktree but no 'Yes, I trust this folder' option "
+            "it can select; LingTai will not press anything that could choose "
+            "'No, exit'."
+        )
+        self.run_dir.record_cli_output(self._prompt_warning, stream="stderr")
+
+    def _advance_managed_trust(self, terminal_handle) -> None:
+        """Step the managed-workspace trust dialog toward "Yes … trust".
+
+        Runs every loop tick. Acts only on a settled render (no output for
+        ``_TRUST_SETTLE_S``): moves the cursor toward the affirmative option,
+        then — on a later settled render that shows the cursor on it —
+        confirms. Never presses anything when that option is missing.
+        """
+        if (
+            not self._auto_trust_workspace
+            or self._trust_prompt_answered
+            or self._trust_frame is None
+            or self._prompt_warning
+            or time.monotonic() - self._trust_output_at < _TRUST_SETTLE_S
+        ):
+            return
+        if not trust_dialog_is_complete(self._trust_frame):
+            return
+        answer = trust_dialog_answer(self._trust_frame)
+        if answer is None:
+            self._fail_managed_trust()
+            return
+        confirms = answer.endswith(b"\r")
+        if not confirms:
+            if self._trust_moves >= _TRUST_MAX_MOVES:
+                self._fail_managed_trust()
+                return
+            self._trust_moves += 1
+        try:
+            self.terminal_port.write(terminal_handle, answer)
+        except OSError:
+            return
+        # Wait for the re-render produced by these keys before acting again.
+        self._trust_output_at = time.monotonic()
+        if not confirms:
+            return
+        self._trust_prompt_answered = True
+        msg = (
+            "Claude interactive backend auto-selected workspace trust "
+            "inside a LingTai-managed Claude worktree."
+        )
+        self.run_dir.record_cli_output(msg, stream="stderr")
+        self._write_state(claude_interactive_managed_trust_answered=True)
 
     def _send_prompt(self, terminal_handle) -> None:
         payload = self.task.encode("utf-8")
@@ -703,7 +890,12 @@ class ClaudeInteractiveBridge:
                                 ),
                             )
                             break
+                    if not self._prompt_warning:
+                        self._advance_managed_trust(terminal_handle)
                     if self._prompt_warning:
+                        exit_receipt = exit_receipt or terminal_port.terminate(
+                            terminal_handle, reason="prompt",
+                        )
                         break
 
                     self._handle_hook_events(terminal_handle)
