@@ -8,6 +8,7 @@ A live end-to-end check against the real CLI lives in
 import gc
 import json
 import os
+import shutil
 import stat
 import tempfile
 from pathlib import Path
@@ -817,10 +818,89 @@ def test_private_config_dir_is_recreated_after_temp_cleanup(monkeypatch, tmp_pat
     ad = ClaudeCodeAdapter(config_anchor=str(tmp_path / "init.json"))
     _cmd, kw = _send_once(ad)
     config_dir = Path(kw["env"]["CLAUDE_CONFIG_DIR"])
-    config_dir.rmdir()
+    shutil.rmtree(config_dir)  # an OS temp cleaner removed the whole dir
     _cmd, kw = _send_once(ad)
     assert kw["env"]["CLAUDE_CONFIG_DIR"] == str(config_dir)
     _assert_private_config_dir(str(config_dir))
+    assert json.loads((config_dir / ".claude.json").read_text())["hasCompletedOnboarding"] is True
+
+
+def _mode(path):
+    return stat.S_IMODE(os.stat(path).st_mode)
+
+
+def test_setup_token_seeds_first_run_state_only_in_the_private_dir(monkeypatch, tmp_path):
+    """Token mode pre-seeds ``hasCompletedOnboarding`` (the interactive CLI's
+    first-run theme gate) into the private dir's ``.claude.json``, 0600, and
+    nowhere else — never the user's home config."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-x")
+    _cmd, kw = _send_once(ClaudeCodeAdapter(config_anchor=str(tmp_path / "init.json")))
+
+    config_dir = Path(kw["env"]["CLAUDE_CONFIG_DIR"])
+    seeded = config_dir / ".claude.json"
+    assert json.loads(seeded.read_text()) == {"hasCompletedOnboarding": True}
+    assert _mode(seeded) == 0o600
+    assert not (home / ".claude.json").exists()
+    assert not (home / ".claude").exists()
+    assert not any(p.name.endswith(".tmp") for p in config_dir.iterdir())
+
+
+def test_seed_private_config_is_idempotent_and_preserves_existing_keys(tmp_path):
+    from lingtai.llm.claude_code.auth import seed_private_config
+
+    config_dir = tmp_path / "private"
+    config_dir.mkdir(mode=0o700)
+    existing = {
+        "machineID": "cli-owned",
+        "numStartups": 3,
+        "projects": {"/work/a": {"allowedTools": ["Read"]}},
+    }
+    path = config_dir / ".claude.json"
+    path.write_text(json.dumps(existing))
+    os.chmod(path, 0o644)
+    workspace = tmp_path / "managed" / "worktree"
+
+    seed_private_config(config_dir, trusted_workspaces=[workspace])
+    first = json.loads(path.read_text())
+    assert first["machineID"] == "cli-owned" and first["numStartups"] == 3
+    assert first["projects"]["/work/a"] == {"allowedTools": ["Read"]}
+    assert first["hasCompletedOnboarding"] is True
+    assert first["projects"][os.path.realpath(workspace)] == {"hasTrustDialogAccepted": True}
+    assert _mode(path) == 0o600
+
+    # Steady state: nothing missing -> no rewrite at all (never races the CLI).
+    before = (path.stat().st_ino, path.stat().st_mtime_ns, path.read_bytes())
+    seed_private_config(config_dir, trusted_workspaces=[workspace])
+    assert (path.stat().st_ino, path.stat().st_mtime_ns, path.read_bytes()) == before
+
+    # A key the CLI later adds survives a later seed that has work to do.
+    first["theme"] = "dark"
+    path.write_text(json.dumps(first))
+    seed_private_config(config_dir, trusted_workspaces=[tmp_path / "other"])
+    merged = json.loads(path.read_text())
+    assert merged["theme"] == "dark" and merged["machineID"] == "cli-owned"
+    assert merged["projects"][os.path.realpath(tmp_path / "other")] == {
+        "hasTrustDialogAccepted": True
+    }
+
+
+def test_local_login_mode_writes_no_claude_config(monkeypatch, tmp_path):
+    profile = tmp_path / "user-profile"
+    profile.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+    _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_LOGGED_IN)
+
+    _cmd, kw = _send_once(ClaudeCodeAdapter())
+    assert kw["env"]["CLAUDE_CONFIG_DIR"] == str(profile)
+    assert list(profile.iterdir()) == []
+    assert list(home.iterdir()) == []
+    assert not (Path(tempfile.gettempdir()) / "lingtai-claude-code").exists()
 
 
 def test_local_login_mode_keeps_cli_config_and_skips_settings_files(monkeypatch):

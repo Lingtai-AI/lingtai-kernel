@@ -98,6 +98,20 @@ LingTai-managed ephemeral workspace.  Operational boundaries:
 """.strip()
 
 
+def managed_worktree_path(run_id: str, env: dict[str, str] | None = None) -> Path:
+    """The LingTai-managed workspace a run's interactive ``claude`` uses as cwd.
+
+    ``~/.lingtai-claude/runs/<run_id>/worktree`` (or under the
+    ``LINGTAI_CLAUDE_MANAGED_ROOT`` test override). The daemon records trust
+    for exactly this path in its private setup-token config dir.
+    """
+    source = os.environ if env is None else env
+    managed_root = Path(
+        source.get("LINGTAI_CLAUDE_MANAGED_ROOT") or Path.home() / ".lingtai-claude"
+    ).expanduser()
+    return managed_root / "runs" / run_id / "worktree"
+
+
 class ClaudeInteractiveError(RuntimeError):
     """Raised when the interactive Claude bridge cannot finish a turn."""
 
@@ -141,13 +155,9 @@ class ClaudeInteractiveBridge:
         self.log_callback = log_callback or (lambda *args, **kwargs: None)
         self.terminal_port = terminal_port
 
-        managed_root = Path(
-            self.env.get("LINGTAI_CLAUDE_MANAGED_ROOT")
-            or Path.home() / ".lingtai-claude"
-        ).expanduser()
-        self.managed_runs_root = managed_root / "runs"
-        self.managed_run_root = self.managed_runs_root / run_dir.run_id
-        self.managed_worktree_path = self.managed_run_root / "worktree"
+        self.managed_worktree_path = managed_worktree_path(run_dir.run_id, self.env)
+        self.managed_run_root = self.managed_worktree_path.parent
+        self.managed_runs_root = self.managed_run_root.parent
         self.prompt_dir = self.managed_run_root / "prompt"
         self.system_prompt_path = self.prompt_dir / "lingtai-system-prompt.md"
 

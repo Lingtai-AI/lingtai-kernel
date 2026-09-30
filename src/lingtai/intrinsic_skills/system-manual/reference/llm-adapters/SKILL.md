@@ -212,7 +212,9 @@ replaced by LingTai's (`--system-prompt-file`), all built-in tools off
    used, else step 2 — boot never fails on it. The CLI then runs with exactly that
    token and a private, LingTai-owned `CLAUDE_CONFIG_DIR` (per agent, under
    the system temp dir), so this machine's `~/.claude` settings, CLAUDE.md,
-   hooks, plugins, credentials, and history are never loaded.
+   hooks, plugins, credentials, and history are never loaded. That dir's
+   `.claude.json` is pre-seeded so an interactive CLI (the daemon `claude`
+   backend) skips its first-run screens.
 2. **Local login.** With no token, the installed CLI's own login is used when
    `claude auth status` reports one (e.g. after `claude auth login`). The CLI
    keeps its normal config dir — that is where the login lives — but runs

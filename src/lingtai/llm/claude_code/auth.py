@@ -10,7 +10,9 @@ Claude CLI backends (``claude`` / ``claude-p`` / ``claude-code`` in
    token plus a private, LingTai-owned ``CLAUDE_CONFIG_DIR`` and
    ``--setting-sources user`` (only that empty private dir's settings), so the
    machine's ``~/.claude`` settings, CLAUDE.md, hooks, plugins, credentials,
-   and history are never loaded.
+   and history are never loaded. The private dir's ``.claude.json`` is
+   pre-seeded (``seed_private_config``) so an interactive CLI skips its
+   first-run theme picker and trusts only LingTai-managed workspaces.
 2. **Local login** — no token, and ``claude auth status --json`` reports the
    installed CLI logged in: the inherited config dir is kept (on macOS the
    login lives in the Keychain entry tied to it) and ``--setting-sources ""``
@@ -27,6 +29,7 @@ never logged.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -34,7 +37,7 @@ import tempfile
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Iterable, Mapping
 
 from lingtai.kernel import preset_connectivity as _connectivity
 from lingtai.kernel.logging import get_logger
@@ -66,6 +69,11 @@ SETTING_SOURCES = {
     AUTH_MODE_SETUP_TOKEN: "user",
     AUTH_MODE_LOCAL_LOGIN: "",
 }
+
+#: The global-state file Claude Code reads inside ``CLAUDE_CONFIG_DIR`` (it
+#: lives at ``~/.claude.json`` only when the variable is unset). Verified on
+#: Claude Code 2.1.285: ``auth status`` / ``-p`` create it inside the dir.
+CLAUDE_GLOBAL_CONFIG_FILENAME = ".claude.json"
 
 # Per-agent private config dirs live under ``<tempdir>/lingtai-claude-code/``,
 # keyed by a hash of the agent anchor (never inside the agent's git-snapshotted
@@ -137,6 +145,69 @@ def choose_private_config_dir(anchor: str | None, *, owner: object) -> Path:
             )
     path = Path(tempfile.mkdtemp(prefix=f"{PRIVATE_CONFIG_ROOT}-"))
     weakref.finalize(owner, shutil.rmtree, str(path), ignore_errors=True)
+    return path
+
+
+def seed_private_config(
+    config_dir: Path, *, trusted_workspaces: Iterable[str | os.PathLike] = (),
+) -> Path:
+    """Merge LingTai's first-run state into a PRIVATE config dir's ``.claude.json``.
+
+    Only ever called on the LingTai-owned setup-token dir, never ``~/.claude``
+    and never in local-login mode. A fresh ``CLAUDE_CONFIG_DIR`` makes the
+    interactive CLI open its first-run theme picker, gated by
+    ``hasCompletedOnboarding`` (Claude Code 2.1.285); each workspace LingTai
+    itself manages and trusts is recorded as
+    ``projects[<realpath>].hasTrustDialogAccepted`` so its trust dialog does
+    not block either. Print mode (``-p``) shows neither screen and is
+    unaffected. Existing keys (the CLI's own state) are kept; the file is
+    rewritten only when a key is missing, atomically and 0600, so steady-state
+    calls are no-ops that never race the CLI's own writes.
+    """
+    path = config_dir / CLAUDE_GLOBAL_CONFIG_FILENAME
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        loaded = {}
+    except (OSError, ValueError):
+        logger.warning("[claude-code] private %s unreadable; reseeding it", path.name)
+        loaded = {}
+    data = dict(loaded) if isinstance(loaded, dict) else {}
+    changed = not path.exists() or data != loaded
+    if data.get("hasCompletedOnboarding") is not True:
+        data["hasCompletedOnboarding"] = True
+        changed = True
+    for workspace in trusted_workspaces:
+        key = os.path.realpath(os.fspath(workspace))
+        projects = data.get("projects")
+        if not isinstance(projects, dict):
+            projects = {}
+        entry = projects.get(key)
+        entry = dict(entry) if isinstance(entry, dict) else {}
+        if entry.get("hasTrustDialogAccepted") is not True:
+            entry["hasTrustDialogAccepted"] = True
+            projects = {**projects, key: entry}
+            data["projects"] = projects
+            changed = True
+    if not changed:
+        return path
+    fd, tmp_name = tempfile.mkstemp(
+        dir=config_dir, prefix=f"{CLAUDE_GLOBAL_CONFIG_FILENAME}.", suffix=".tmp"
+    )
+    try:
+        # mkstemp creates the file 0600 in the private dir; os.replace keeps it.
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    os.chmod(path, 0o600)
     return path
 
 
@@ -244,10 +315,13 @@ def prepare_claude_child(
     overlay: Mapping[str, str] | None = None,
     login_cache: LocalLoginCache | None = None,
     label: str = "claude-code",
+    trusted_workspaces: Iterable[str | os.PathLike] = (),
 ) -> ClaudeChildAuth:
     """Resolve the auth mode and child env for one ``claude`` invocation.
 
-    *private_config_dir* is called only in setup-token mode. *overlay* is an
+    *private_config_dir* is called only in setup-token mode, where the dir is
+    also seeded with first-run state (``seed_private_config``) including trust
+    for *trusted_workspaces* (LingTai-managed workspaces only). *overlay* is an
     explicit operator ``backend_options.env`` map (daemon backends): it may
     carry the token, is visible to the login probe, and is applied last so a
     deliberate choice (for example a ``CLAUDE_CONFIG_DIR`` profile) wins.
@@ -261,8 +335,15 @@ def prepare_claude_child(
     env.pop(CLAUDE_CODE_OAUTH_TOKEN_ENV, None)
     token = resolve_setup_token(explicit_token, overlay=overlay)
     if token:
+        config_dir = private_config_dir()
+        try:
+            seed_private_config(config_dir, trusted_workspaces=trusted_workspaces)
+        except OSError as exc:
+            raise ClaudeCodeError(
+                f"{label} could not seed its private Claude config: {exc}"
+            ) from exc
         env[CLAUDE_CODE_OAUTH_TOKEN_ENV] = token
-        env[CLAUDE_CONFIG_DIR_ENV] = str(private_config_dir())
+        env[CLAUDE_CONFIG_DIR_ENV] = str(config_dir)
         mode = AUTH_MODE_SETUP_TOKEN
     else:
         require_local_login(

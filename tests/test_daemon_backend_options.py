@@ -1980,6 +1980,7 @@ def test_daemon_interactive_claude_shares_the_policy(
 ):
     if token:
         monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", token)
+    monkeypatch.setenv("LINGTAI_CLAUDE_MANAGED_ROOT", str(tmp_path / "managed-claude"))
     agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     run_dir = make_daemon_run_dir(agent, handle="em-interactive", backend="claude")
@@ -1999,14 +2000,33 @@ def test_daemon_interactive_claude_shares_the_policy(
     )
     env, argv = seen[0]["env"], seen[0]["backend_argv"]
     _assert_isolated_env(env)
+    workspace = os.path.realpath(
+        tmp_path / "managed-claude" / "runs" / run_dir.run_id / "worktree"
+    )
     if token:
         assert env["CLAUDE_CODE_OAUTH_TOKEN"] == token
         assert env["CLAUDE_CONFIG_DIR"] == _private_dir_for(agent)
         assert argv[:2] == ["--setting-sources", "user"]
+        # The fresh private config is pre-seeded so the interactive CLI skips
+        # its first-run theme picker, and trusts only the bridge's own
+        # LingTai-managed worktree (0600, private dir only).
+        seeded_path = Path(_private_dir_for(agent)) / ".claude.json"
+        seeded = json.loads(seeded_path.read_text())
+        assert seeded["hasCompletedOnboarding"] is True
+        assert seeded["projects"] == {workspace: {"hasTrustDialogAccepted": True}}
+        assert os.stat(seeded_path).st_mode & 0o777 == 0o600
     else:
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
         assert argv[:2] == ["--setting-sources", ""]
+        import tempfile
+        assert not (Path(tempfile.gettempdir()) / "lingtai-claude-code").exists()
     assert argv[2:] == ["--model", "opus"]
+    from lingtai.tools.daemon.claude_interactive import ClaudeInteractiveBridge
+    bridge = ClaudeInteractiveBridge(
+        em_id="em-interactive", run_dir=run_dir, working_dir=agent._working_dir,
+        task="t", cancel_event=threading.Event(), env=env,
+    )
+    assert os.path.realpath(bridge.managed_worktree_path) == workspace
 
 
 def test_emanate_claude_hands_the_setup_token_to_the_credential_capsule(

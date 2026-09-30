@@ -4433,7 +4433,12 @@ class DaemonManager:
         finally:
             self._close_task_mcp_clients(mcp_clients)
 
-    def _claude_cli_child(self, backend_env: dict[str, str] | None = None):
+    def _claude_cli_child(
+        self,
+        backend_env: dict[str, str] | None = None,
+        *,
+        trusted_workspaces: tuple[Path, ...] = (),
+    ):
         """Resolve one daemon Claude CLI child's auth via the shared policy.
 
         Runs where the ``claude`` process is spawned (the detached execution or
@@ -4441,8 +4446,10 @@ class DaemonManager:
         capsule's ``credential_env`` (see ``_claude_cli_credential_env``) and is
         read from the environment; the private config dir is keyed on the
         parent agent's anchor, so the agent's claude-code brain and its Claude
-        daemons share one LingTai-owned dir. Raises ``ClaudeCodeError`` /
-        ``ClaudeCodeAuthError`` with the shared guidance.
+        daemons share one LingTai-owned dir. *trusted_workspaces* (the
+        interactive bridge's own managed worktree only) are recorded as trusted
+        in that private dir. Raises ``ClaudeCodeError`` / ``ClaudeCodeAuthError``
+        with the shared guidance.
         """
         from lingtai.llm.claude_code.auth import (
             ClaudeCodeError,
@@ -4474,6 +4481,24 @@ class DaemonManager:
             overlay=backend_env,
             login_cache=None,
             label=_CLAUDE_CLI_AUTH_LABEL,
+            trusted_workspaces=trusted_workspaces,
+        )
+
+    def _claude_interactive_child(self, run_dir, backend_env=None):
+        """Shared auth for the interactive bridge, trusting only its workspace.
+
+        In setup-token mode the fresh private config would otherwise open the
+        first-run theme picker and the workspace trust dialog; the bridge's
+        own LingTai-managed worktree (the one path it already auto-trusts) is
+        recorded as trusted there. Local-login mode writes nothing.
+        """
+        from .claude_interactive import managed_worktree_path
+
+        workspace = managed_worktree_path(
+            run_dir.run_id, {**os.environ, **(backend_env or {})}
+        )
+        return self._claude_cli_child(
+            backend_env, trusted_workspaces=(workspace,),
         )
 
     def _claude_cli_credential_env(self, backend: str) -> dict[str, str]:
@@ -4876,7 +4901,7 @@ class DaemonManager:
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         try:
-            claude_child = self._claude_cli_child(backend_env)
+            claude_child = self._claude_interactive_child(run_dir, backend_env)
         except Exception as e:
             run_dir.mark_failed(e)
             raise
@@ -6644,7 +6669,7 @@ class DaemonManager:
         monitor.start()
         try:
             try:
-                claude_child = self._claude_cli_child()
+                claude_child = self._claude_interactive_child(run_dir)
                 result = run_claude_interactive(
                     em_id=em_id,
                     run_dir=run_dir,
