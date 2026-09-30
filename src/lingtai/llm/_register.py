@@ -14,7 +14,7 @@ CODEX_OFFICIAL_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
 
 # ---------------------------------------------------------------------------
-# service_tier normalization — Codex common boundary
+# service_tier normalization — Codex and OpenAI-compatible boundary
 # ---------------------------------------------------------------------------
 
 # Valid user-facing values and their wire (OpenAI/Codex) equivalents.
@@ -48,6 +48,19 @@ def _normalize_service_tier(raw: object) -> str | None:
     )
 
 
+def _openai_compatible_service_tier(raw: object) -> str | None:
+    """Wire ``service_tier`` for the OpenAI-compatible factories.
+
+    Recognized values (``fast``) normalize exactly as on Codex. These routes
+    historically ignored the axis entirely, so an unrecognized value stays
+    ignored rather than failing adapter construction for existing configs.
+    """
+    try:
+        return _normalize_service_tier(raw)
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -79,6 +92,9 @@ def register_all_adapters() -> None:
         kw.pop("model", None)
         adapter_kw = {k: v for k, v in kw.items() if v is not None}
         d = defaults or {}
+        service_tier = _openai_compatible_service_tier(d.get("service_tier"))
+        if service_tier is not None:
+            adapter_kw["service_tier"] = service_tier
         # Canonical ``wire_api`` and the legacy ``use_responses_api`` preference
         # are independent and both may be present (as in the openai DEFAULTS).
         # Pass each when present — do NOT ``elif`` them — so ``auto`` can delegate
@@ -127,6 +143,9 @@ def register_all_adapters() -> None:
             for _k in ("inject_reasoning_fallback", "reasoning_effort_vocab", "prompt_cache_namespace"):
                 if _k in d:
                     adapter_kw[_k] = d[_k]
+            service_tier = _openai_compatible_service_tier(d.get("service_tier"))
+            if service_tier is not None:
+                adapter_kw["service_tier"] = service_tier
         return create_custom_adapter(api_compat=compat, **adapter_kw)
 
     LLMService.register_adapter("gemini", _gemini)

@@ -1058,19 +1058,25 @@ def _effective_service_tier_values(
     llm: Mapping[str, Any],
     normalized: Mapping[str, Any],
 ) -> tuple[Any, Any]:
-    """Return the Codex-only public tier after its canonical validation."""
+    """Return the public tier the selected factory actually forwards."""
     route = _selected_llm_route(llm, normalized)
-    if route.factory != "codex":
-        return None, None
-
     raw = normalized.get("service_tier")
-    from lingtai.llm._register import _normalize_service_tier
+    from lingtai.llm._register import (
+        _normalize_service_tier,
+        _openai_compatible_service_tier,
+    )
 
-    wire_value = _normalize_service_tier(raw)
+    if route.factory == "codex":
+        wire_value = _normalize_service_tier(raw)
+    elif route.factory in {"openai", "custom_openai"}:
+        # Recognized values forward; unrecognized ones stay ignored.
+        wire_value = _openai_compatible_service_tier(raw)
+    else:
+        return None, None
     if wire_value is None:
         return None, None
     # The public setting is the authored vocabulary (``fast``); ``priority``
-    # is the private wire normalization owned by the Codex factory.
+    # is the private wire normalization owned by the factory.
     return str(raw).strip(), None
 
 

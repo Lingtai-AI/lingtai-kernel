@@ -3263,6 +3263,7 @@ class OpenAIAdapter(LLMAdapter):
         max_rpm: int = 0,
         default_headers: dict | None = None,
         prompt_cache_key: str | bool | None = None,
+        service_tier: str | None = None,
         responses_stateless_replay: bool = False,
         inject_reasoning_fallback: bool | None = None,
         reasoning_effort_vocab: str = "openai",
@@ -3296,6 +3297,9 @@ class OpenAIAdapter(LLMAdapter):
         else:
             self._prompt_cache_key_policy = prompt_cache_key
         self._responses_stateless_replay = bool(responses_stateless_replay)
+        # Wire ``service_tier`` (already normalized by the factory, e.g. user
+        # ``fast`` -> ``priority``). ``None`` omits the field.
+        self._service_tier: str | None = service_tier or None
         # Generic ``reasoning_content`` round-trip fallback (the former
         # DeepSeek-specific behavior, now available to any OpenAI-compatible
         # provider). On by default: real thinking is already passed back via
@@ -3473,6 +3477,8 @@ class OpenAIAdapter(LLMAdapter):
         )
         if applied is None:
             extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        if self._service_tier is not None:
+            extra_kwargs["service_tier"] = self._service_tier
 
         session = OpenAIResponsesSession(
             client=self._client,
@@ -3576,6 +3582,8 @@ class OpenAIAdapter(LLMAdapter):
             effort = self._chat_reasoning_effort(thinking)
             if effort is not None:
                 extra_kwargs["reasoning_effort"] = effort
+        if self._service_tier is not None:
+            extra_kwargs["service_tier"] = self._service_tier
 
         # Subclass-provided extra_body (e.g. OpenRouter's reasoning include).
         # Merge rather than overwrite so callers adding their own extra_body
