@@ -193,7 +193,7 @@ def test_line_never_leaks_inf_or_nan_and_total_overflow_is_unknown():
     bill = {"model": "big", "input": 1, "cached": 1, "cache_write_tokens": 0, "billable_output_tokens": 1}
     line = api_cost.usage_line(1.0, {"output": 1, "bill": bill}, catalog)
     assert "inf" not in line.lower() and "nan" not in line.lower()
-    assert "cost ?" in line and "≈" not in line  # finite parts sum to inf: unknown
+    assert line.startswith("cost ?")  # finite parts sum to inf: unknown
 
 
 # ---------------------------------------------------------------- catalog
@@ -217,17 +217,17 @@ def test_line_complete_partial_and_unknown():
     full = {"output": 50, "bill": {"model": "sol", "input": 1000, "cached": 400,
                                     "cache_write_tokens": 120, "billable_output_tokens": 50}}
     line = api_cost.usage_line(2.0, full, catalog)
-    assert line == "≈$0.0018 · ↓$0.0005 ↑$0.0013 | <$0.0001"
+    assert line == "$0.0018 · ↓$0.0005 ↑$0.0013 | <$0.0001"
     assert "?" not in line and "+" not in line
     partial = {"output": 50, "bill": {"model": "sol", "input": 1000, "cached": 400, "billable_output_tokens": 50}}
     text = api_cost.usage_line(2.0, partial, catalog)
     assert "↑?" in text  # writes priced but not reported: cache-miss cost unknown
     # Partial: the known subtotal with a trailing "+" (unknown parts are
     # non-negative, so it is a lower bound).
-    assert "≈$0.0005+ · ↓$0.0005 ↑? | <$0.0001" in text
+    assert text == "$0.0005+ · ↓$0.0005 ↑? | <$0.0001"
     nothing = {"output": 5, "bill": {"model": "sol", "input": 100, "cached": 0}}
     # Only a real known-zero read bucket: total stays unknown, subtotal is $0.
-    assert "≈$0+ · ↓? ↑? | $0" in api_cost.usage_line(1.0, nothing, catalog)
+    assert api_cost.usage_line(1.0, nothing, catalog) == "$0+ · ↓? ↑? | $0"
     unpriced = {"output": 5, "bill": {"model": "sol", "input": 100, "cached": 10}}
     assert "↑?" in api_cost.usage_line(1.0, unpriced, catalog)
     assert api_cost.usage_line(None, {"output": 5}, catalog) == "cost n/a (model unknown)"
@@ -244,7 +244,7 @@ def test_line_marks_estimate_and_never_invoice_or_routing_claims():
                                       "cache_write_tokens": 120, "billable_output_tokens": 50}}
     for line in (api_cost.usage_line(1.0, priced, catalog),
                  api_cost.usage_line(1.0, {"output": 5}, api_cost.PriceCatalog(lambda *a: b""))):
-        assert "≈" in line or "cost " in line  # always marked as an estimate / cost note
+        assert line.startswith(("$", "<$", "cost "))  # a price or an explicit cost note
         for forbidden in ("bill", "invoice", "charged", "discount", "priority", "batch"):
             assert forbidden not in line.lower()
 
@@ -502,7 +502,7 @@ def test_render_pure_text_group_with_bill_gets_line():
     text = TaskCardEventProjection.render_event_groups(
         [{"events": [{"kind": "text", "text": "hello", "_ts": 1.0, "api_delay_s": 2.0, "_usage": usage}]}],
         normal_rows=3, usage_line=lambda d, u: api_cost.usage_line(d, u, catalog))
-    assert "≈$" in text and " · ↓$" in text and " ↑" in text and " | " in text
+    assert "\n$0." in text and " · ↓$" in text and " ↑" in text and " | " in text
 
 
 # ---------------------------------------------------------------- providers

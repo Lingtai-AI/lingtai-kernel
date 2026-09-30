@@ -1932,7 +1932,7 @@ def test_fingerprint_ignores_only_wall_clock_ticks(tmp_path):
 # Real TelegramManager, FakeAccount transport, tiny in-memory price catalog
 # installed as ``api_cost.CATALOG``: no provider, Telegram or catalog network.
 
-_PRICE_LINE_RE = re.compile(r"^\s*(?:≈\$|cost (?:n/a|\?|loading))")
+_PRICE_LINE_RE = re.compile(r"^\s*(?:<?\$[\d.,]+\+? · ↓|cost (?:n/a|\?|loading))")
 
 
 def _is_price_line(line: str) -> bool:
@@ -1954,8 +1954,8 @@ _TINY = {
 _TINY2 = {name: rate * 2 for name, rate in _TINY.items()}
 _BILL = {"model": "tiny", "cache_write_tokens": 1000, "billable_output_tokens": 500}
 # total 10k input / 4k read / 1k write / 500 output over a 2.0 s API delay.
-_TINY_LINE = "≈$0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004"
-_TINY2_LINE = "≈$0.0168 · ↓$0.0020 ↑$0.0140 | $0.0008"
+_TINY_LINE = "$0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004"
+_TINY2_LINE = "$0.0168 · ↓$0.0020 ↑$0.0140 | $0.0008"
 
 
 def _static_catalog(monkeypatch, models):
@@ -2180,7 +2180,7 @@ def test_legacy_event_without_billing_facts_shows_unknown_never_a_price(tmp_path
     text = _last_edit(acct)
     assert "cost n/a (model unknown)" in text
     assert "↓500" in text  # the old metrics row is still rendered
-    assert "≈$" not in text  # no price without billing facts
+    assert not any(line.lstrip().startswith("$") for line in text.splitlines())  # no price without billing facts
 
 
 def test_price_line_is_html_escaped_in_telegram_delivery(tmp_path, monkeypatch):

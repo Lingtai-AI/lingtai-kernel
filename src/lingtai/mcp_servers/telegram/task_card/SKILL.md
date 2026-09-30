@@ -53,12 +53,12 @@ Under each API-call metrics row (`↻ <delay> ↓out ↑miss ◌ ctx | cache%`) 
 automatic Telegram card adds one plain line, for example:
 
 ```text
-≈$0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004
+$0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004
 ```
 
 Reading it:
 
-- **What it is.** `≈$` marks a STANDARD public per-token list-price ESTIMATE in
+- **What it is.** The line is a STANDARD public per-token list-price ESTIMATE in
   USD (LiteLLM prices), not a bill or invoice. It is not the actual subscription/Codex-pool bill, and it
   does not claim the routed tier, batch/priority pricing or discounts. Search,
   grounding and image fixed fees are not included in `total`.
@@ -81,7 +81,7 @@ Reading it:
   lacks that rate, or when the counts are incoherent (for example a 1-hour
   cache-write part larger than the whole write). If any part is unknown the
   total is NOT a full sum: the headline is the known subtotal with a trailing
-  `+` (`≈$0.0249+`, a lower bound), or `cost ?` when nothing is known.
+  `+` (`$0.0249+`, a lower bound), or `cost ?` when nothing is known.
 - **No speed figure.** The line shows no tokens/second: the displayed API
   gap includes waiting, prefill, streaming and orchestration, so dividing by it
   would not be a real generation speed.

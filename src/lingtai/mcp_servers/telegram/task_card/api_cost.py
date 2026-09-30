@@ -316,9 +316,9 @@ def usage_line(
 ) -> str:
     """One compact list-price estimate line, or ``""``.
 
-    ``≈$0.0310 · ↓$0.0006 ↑$0.0070 | $0.0234`` mirrors the metrics
-    row (``↓`` output, ``↑`` cache-miss input, ``|`` cache hits). ``≈`` marks a
-    STANDARD list-price estimate; a trailing ``+`` means some parts are
+    ``$0.0310 · ↓$0.0006 ↑$0.0070 | $0.0234`` mirrors the metrics
+    row (``↓`` output, ``↑`` cache-miss input, ``|`` cache hits). The total is
+    a STANDARD list-price estimate; a trailing ``+`` means some parts are
     unknown, so the figure is the known subtotal (every part is non-negative,
     so it is a lower bound).
     """
@@ -349,9 +349,9 @@ def usage_line(
             if subtotal is None:
                 head = "cost ?"
             elif len(known) == len(costs):
-                head = f"≈{_money(subtotal)}"
+                head = _money(subtotal)
             else:
-                head = f"≈{_money(subtotal)}+"
+                head = f"{_money(subtotal)}+"
 
             def cell(name: str) -> str:
                 return _money(costs[name]) if costs[name] is not None else "?"

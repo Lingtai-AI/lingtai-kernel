@@ -102,13 +102,13 @@ semantics live here. The public producer contract lives in
    preserving old-event rendering and never exposing reasoning text.
     Telegram alone also opts into one extra plain line immediately after that
     metrics row per API call, compact on one line and mirroring that row's
-    symbols: `≈$<total>[+] · ↓<$> ↑<$> | <$>[ stale prices]` (no tokens/second figure) where
+    symbols: `$<total>[+] · ↓<$> ↑<$> | <$>[ stale prices]` (no tokens/second figure) where
     `↓` prices the billable output, `↑` the cache-miss input (uncached input
     plus any cache writes: at the catalog's cache-write rate when it prices
     writes separately and the wire reports the write count, else — when the
     catalog has no cache-write price — at the input rate), and `|` the
     cache-hit (cache-read) input (or `cost n/a (<reason>)` / `cost loading` /
-    `cost ?`). `≈` marks a STANDARD public per-token list-price (LiteLLM)
+    `cost ?`). The line is a STANDARD public per-token list-price (LiteLLM)
     estimate. It is a STANDARD public per-token list-price
     estimate as of the catalog fetch — not an invoice, not the actual
     subscription/Codex-pool bill, no routed-tier/discount claim, and `total`
