@@ -65,7 +65,8 @@
       // or omitted falls back to the process env CLAUDE_CODE_OAUTH_TOKEN, else
       // the local `claude` CLI login (`claude auth login`), else a clear
       // request-time error — boot never fails on it and no env_file is
-      // required. ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN never reach the CLI.
+      // required. ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL and
+      // the CLAUDE_CODE_USE_* cloud-provider switches never reach the CLI.
       "api_key_env": "OPENAI_API_KEY",
 
       // Base URL for the provider's API. Set to null (or omit) to use the

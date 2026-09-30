@@ -52,8 +52,7 @@ def _no_ambient_claude_auth(monkeypatch, tmp_path):
     for name in (
         "CLAUDE_CODE_OAUTH_TOKEN",
         "CLAUDE_CONFIG_DIR",
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
+        *preset_connectivity.CLAUDE_CODE_STRIPPED_ENV,
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -929,6 +928,40 @@ def test_cli_reported_auth_failure_is_terminal(monkeypatch, token, result, statu
     assert llm_replay_terminal_flags(excinfo.value) == (False, True)
     assert isinstance(excinfo.value.original, ClaudeCodeAuthError)
     assert expect in str(excinfo.value)
+
+
+_REDIRECT_AND_BILLING_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_GATEWAY",
+)
+
+
+@pytest.mark.parametrize("token", [None, "sk-ant-oat01-x"], ids=["local-login", "setup-token"])
+def test_redirect_and_cloud_billing_env_never_reach_the_child(monkeypatch, token):
+    """The token only ever reaches Anthropic and nothing bills a cloud account:
+    API-key, base-URL, and provider-switch vars are stripped in both modes,
+    while proxy settings pass through."""
+    _login_probe(monkeypatch, preset_connectivity.CLAUDE_LOGIN_LOGGED_IN)
+    for name in _REDIRECT_AND_BILLING_ENV:
+        monkeypatch.setenv(name, "1" if name.startswith("CLAUDE_CODE_USE_") else "leak")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+    assert set(_REDIRECT_AND_BILLING_ENV) == set(preset_connectivity.CLAUDE_CODE_STRIPPED_ENV)
+
+    _cmd, kw = _send_once(ClaudeCodeAdapter(oauth_token=token))
+    env = kw["env"]
+    for name in _REDIRECT_AND_BILLING_ENV:
+        assert name not in env, name
+    assert env["HTTPS_PROXY"] == "http://proxy.invalid:3128"
+    assert env["HTTP_PROXY"] == "http://proxy.invalid:3128"
 
 
 def test_replace_mode_and_isolation_flags_hold_in_both_auth_modes(monkeypatch):

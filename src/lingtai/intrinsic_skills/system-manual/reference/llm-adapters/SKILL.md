@@ -16,6 +16,7 @@ related_files:
 - src/lingtai/llm/openai/codex_ws.py
 - src/lingtai/llm/anthropic/adapter.py
 - src/lingtai/llm/claude_code/adapter.py
+- src/lingtai/llm/claude_code/auth.py
 - src/lingtai/kernel/preset_connectivity.py
 - src/lingtai/init_schema.py
 - src/lingtai/intrinsic_skills/system-manual/reference/subs-pool/SKILL.md
@@ -223,8 +224,15 @@ replaced by LingTai's (`--system-prompt-file`), all built-in tools off
    goes to sleep instead of spending AED retries. A rejected token or login
    reported by the CLI takes the same path.
 
-`ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are always stripped from the CLI
-child, so it never bills an API key. `model` and `thinking` are optional: when
+Every mode strips `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (API-key
+billing), `ANTHROPIC_BASE_URL` (would send the token to another host), and the
+cloud-provider switches `CLAUDE_CODE_USE_BEDROCK` / `_VERTEX` / `_FOUNDRY` /
+`_ANTHROPIC_AWS` / `_ANTHROPIC_GOOGLE_CLOUD` / `_MANTLE` / `_GATEWAY`, so the
+token only reaches Anthropic and nothing bills a cloud account; proxy variables
+(`HTTPS_PROXY` etc.) pass through. The same policy (one module,
+`claude_code/auth.py`) drives the daemon `claude` / `claude-p` / `claude-code`
+CLI backends, which share the agent's private config dir and receive the token
+through the detached run's credential capsule. `model` and `thinking` are optional: when
 omitted, no `--model` / `--effort` flag is sent and Claude Code's own defaults
 apply. The `system(action='presets')` connectivity check follows the same
 order (token present, else `claude auth status`) without a network probe.

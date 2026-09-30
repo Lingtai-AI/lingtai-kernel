@@ -68,6 +68,9 @@ _AUTH_OR_ONBOARDING_PROMPTS = (
     "not logged in",
     "please log in",
     "press enter to continue",
+    # First-run theme picker of a fresh CLAUDE_CONFIG_DIR — e.g. the private
+    # per-agent dir used with a setup-token (Claude Code 2.1.285).
+    "choose the text style",
 )
 
 _TRUST_PROMPTS = (

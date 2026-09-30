@@ -45,9 +45,27 @@ _CLI_BACKED_PROVIDERS = {
 #: ``claude-code`` preset and the process-env fallback when a preset names none.
 CLAUDE_CODE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
 
-#: Env vars never passed to a ``claude`` CLI child: they would switch the CLI
-#: to API-key billing instead of the subscription OAuth path.
-CLAUDE_CODE_API_KEY_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+#: Env vars never passed to a LingTai-launched ``claude`` CLI child (the
+#: claude-code LLM adapter, the daemon Claude backends, and the login probe).
+#: Each one moves the CLI off the Claude subscription: the API-key pair
+#: switches to API-key billing, ``ANTHROPIC_BASE_URL`` would send the OAuth
+#: token to another host, and the ``CLAUDE_CODE_USE_*`` switches route the CLI
+#: to a cloud provider account (Claude Code 2.1.285 selects Bedrock, Foundry,
+#: Claude Platform on AWS / Google Cloud, Bedrock Mantle, or Vertex from them,
+#: and a gateway from ``CLAUDE_CODE_USE_GATEWAY``). Proxy variables
+#: (``HTTPS_PROXY`` etc.) are deliberately kept.
+CLAUDE_CODE_STRIPPED_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_GATEWAY",
+)
 
 #: ``claude_cli_login_status`` outcomes.
 CLAUDE_LOGIN_LOGGED_IN = "logged_in"
@@ -224,11 +242,11 @@ def _check_claude_code(
     if claude_code_token_from_env(api_key_env):
         return _result("ok", None)
     # 2. Otherwise the local CLI login, checked the same way the adapter
-    #    checks it: API-key env stripped, local status read only.
+    #    checks it: redirect/billing env stripped, local status read only.
     env = {
         k: v
         for k, v in os.environ.items()
-        if k not in CLAUDE_CODE_API_KEY_ENV and k != CLAUDE_CODE_OAUTH_TOKEN_ENV
+        if k not in CLAUDE_CODE_STRIPPED_ENV and k != CLAUDE_CODE_OAUTH_TOKEN_ENV
     }
     # A neutral cwd, like the adapter's: no project settings from wherever
     # the agent process happens to run.

@@ -558,3 +558,18 @@ subprocess.run(
     )
     events = run_dir.events_path.read_text(encoding="utf-8")
     assert "auto-selected workspace trust" in events
+
+
+def test_first_run_theme_picker_counts_as_an_onboarding_prompt():
+    """A fresh private CLAUDE_CONFIG_DIR (setup-token mode) opens Claude Code's
+    first-run theme picker; the bridge reports it rather than waiting silently."""
+    from lingtai.tools.daemon import claude_interactive as bridge
+
+    frame = (
+        b"Welcome to Claude Code\x1b[2CLet's get started.\x1b[1B"
+        b"Choose\x1b[1Cthe\x1b[1Ctext\x1b[1Cstyle that looks best with your terminal"
+    )
+    text, normalized = bridge.ClaudeInteractiveBridge._normalized_prompt_text(None, frame)
+    assert bridge.ClaudeInteractiveBridge._contains_marker(
+        text, normalized, bridge._AUTH_OR_ONBOARDING_PROMPTS
+    )

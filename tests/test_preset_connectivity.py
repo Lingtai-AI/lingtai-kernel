@@ -243,7 +243,8 @@ def test_claude_code_without_token_follows_local_login(
 ):
     from lingtai.kernel import preset_connectivity
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK"):
+        monkeypatch.setenv(name, "leak")
     probe_calls = _pin_login(monkeypatch, verdict)
     with patch.object(preset_connectivity, "_probe_host") as probe:
         result = preset_connectivity.check_connectivity(
@@ -252,7 +253,8 @@ def test_claude_code_without_token_follows_local_login(
     assert result["status"] == status
     probe.assert_not_called()  # never a TCP probe, never a model request
     assert len(probe_calls) == 1
-    assert "ANTHROPIC_API_KEY" not in probe_calls[0]["env"]
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK"):
+        assert name not in probe_calls[0]["env"]
     if status == "no_credentials":
         error = result["error"]
         assert "claude setup-token" in error

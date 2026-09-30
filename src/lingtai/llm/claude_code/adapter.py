@@ -4,7 +4,8 @@ See ``__init__.py`` for the high-level design. This module implements the
 ``LLMAdapter`` / ``ChatSession`` contract by spawning ``claude -p --output-format
 json`` once per turn and parsing a single JSON *action* out of the result.
 
-Auth order, resolved per invocation (``ClaudeCodeAdapter._prepare_child``):
+Auth order, resolved per invocation (``ClaudeCodeAdapter._prepare_child``) by
+the shared policy in ``auth.py`` (also used by the daemon Claude backends):
 
 1. **Setup-token** — the preset's ``api_key`` (resolved from ``api_key_env``,
    default ``CLAUDE_CODE_OAUTH_TOKEN``) or, absent that, the process env var
@@ -27,12 +28,9 @@ import hashlib
 import json
 import os
 import re
-import shutil
-import stat
 import subprocess
 import tempfile
 import uuid
-import weakref
 from pathlib import Path
 from typing import Any
 
@@ -45,13 +43,10 @@ from lingtai.kernel.llm.base import (
     checked_count,
     mark_llm_replay_terminal,
 )
-from lingtai.kernel import preset_connectivity as _connectivity
 from lingtai.kernel.preset_connectivity import (
-    CLAUDE_CODE_API_KEY_ENV,
     CLAUDE_CODE_AUTH_GUIDANCE,
     CLAUDE_CODE_OAUTH_TOKEN_ENV,
-    CLAUDE_LOGIN_CLI_MISSING,
-    CLAUDE_LOGIN_NOT_LOGGED_IN,
+    CLAUDE_CODE_STRIPPED_ENV,
 )
 from lingtai.kernel.llm.reasoning_effort import (
     ReasoningEffortCapability,
@@ -68,6 +63,19 @@ from lingtai.kernel.llm.interface import (
 from lingtai.kernel.logging import get_logger
 
 from lingtai.llm.base import LLMAdapter
+
+from .auth import (
+    AUTH_MODE_LOCAL_LOGIN,
+    AUTH_MODE_SETUP_TOKEN,
+    CLAUDE_CONFIG_DIR_ENV,
+    SETTING_SOURCES,
+    ClaudeCodeAuthError,
+    ClaudeCodeError,
+    LocalLoginCache,
+    choose_private_config_dir,
+    ensure_private_dir,
+    prepare_claude_child,
+)
 from lingtai.llm.interface_converters import _project_tool_result
 
 logger = get_logger()
@@ -96,34 +104,11 @@ DEFAULT_DISALLOWED_TOOLS = (
     "TodoWrite",
 )
 
-# Stripped from the child env in every auth mode so the subprocess can never
-# bill an API key — forcing the subscription / OAuth path. An inherited
-# ``CLAUDE_CODE_OAUTH_TOKEN`` is always removed too and replaced by the token
-# this adapter resolved (setup-token mode only); see ``_prepare_child``.
-DEFAULT_STRIP_ENV = CLAUDE_CODE_API_KEY_ENV
-
-#: Claude Code's config-root env var. Setup-token mode points it at a private,
-#: LingTai-owned directory; local-login mode leaves the inherited value alone.
-CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
-
-AUTH_MODE_SETUP_TOKEN = "setup_token"
-AUTH_MODE_LOCAL_LOGIN = "local_login"
-
-# ``--setting-sources`` per auth mode. ``user`` in setup-token mode loads only
-# the (empty) private config dir's settings — keeping Claude Code's default
-# transcript retention cleanup — while dropping project/local settings and
-# CLAUDE.md from the cwd's ancestors. ``""`` in local-login mode drops every
-# settings file source, so the machine's ~/.claude settings, hooks, and
-# CLAUDE.md memory are not loaded (managed policy settings always apply).
-_SETTING_SOURCES = {
-    AUTH_MODE_SETUP_TOKEN: "user",
-    AUTH_MODE_LOCAL_LOGIN: "",
-}
-
-# Per-agent private config dirs live under ``<tempdir>/lingtai-claude-code/``,
-# keyed by a hash of the agent anchor (never inside the agent's git-snapshotted
-# working dir, and never shared with ``~/.claude``).
-_PRIVATE_CONFIG_ROOT = "lingtai-claude-code"
+# Stripped from the child env in every auth mode (see ``auth.py``): API-key
+# billing, a redirected ``ANTHROPIC_BASE_URL``, and the cloud-provider
+# ``CLAUDE_CODE_USE_*`` switches. An inherited ``CLAUDE_CODE_OAUTH_TOKEN`` is
+# always removed too and replaced by the resolved token (setup-token mode only).
+DEFAULT_STRIP_ENV = CLAUDE_CODE_STRIPPED_ENV
 
 # Route label for the live-effort descriptor when no model is configured and
 # the CLI's own default model applies (``--model`` is omitted).
@@ -200,15 +185,6 @@ def _claude_effort_argv(thinking: str | None) -> list[str]:
     return ["--effort", thinking]
 
 
-class ClaudeCodeError(RuntimeError):
-    """A ``claude`` CLI invocation failed (non-zero exit, no output, etc.)."""
-
-
-class ClaudeCodeAuthError(ClaudeCodeError):
-    """No usable Claude Code credential (missing/rejected token, no local login,
-    or no ``claude`` CLI). Raised wrapped by ``_terminal_auth_error``."""
-
-
 def _terminal_auth_error(message: str) -> Exception:
     """Return a ``ClaudeCodeAuthError`` that fail-closes AED recovery.
 
@@ -220,27 +196,6 @@ def _terminal_auth_error(message: str) -> Exception:
     return mark_llm_replay_terminal(
         ClaudeCodeAuthError(message), no_aed_retry=True, message=message
     )
-
-
-def _ensure_private_dir(path: Path) -> None:
-    """Create *path* as a user-private (0700) directory, refusing a hijacked one.
-
-    Re-run before every setup-token invocation so an OS temp cleaner that
-    removed the directory is healed. A symlink, a non-directory, or a
-    directory owned by another user raises ``OSError``.
-    """
-    try:
-        path.mkdir(mode=0o700)
-    except FileExistsError:
-        pass
-    info = os.lstat(path)
-    if not stat.S_ISDIR(info.st_mode):
-        raise OSError(f"not a private directory: {path}")
-    getuid = getattr(os, "getuid", None)
-    if getuid is not None and info.st_uid != getuid():
-        raise OSError(f"directory owned by another user: {path}")
-    if stat.S_IMODE(info.st_mode) & 0o077:
-        os.chmod(path, 0o700)
 
 
 class ClaudeCodeContextOverflow(ClaudeCodeError):
@@ -802,11 +757,9 @@ class ClaudeCodeAdapter(LLMAdapter):
             else None
         )
         self._private_config_dir: Path | None = None
-        # Cached ``claude auth status`` verdict for local-login mode. Only a
-        # logged-in (or inconclusive) verdict is cached: after "not logged in"
-        # the next request re-checks, so a later ``claude auth login`` works
-        # without a refresh.
-        self._local_login_state: str | None = None
+        # Cached ``claude auth status`` verdict for local-login mode (see
+        # ``auth.LocalLoginCache``: "not logged in" is never cached).
+        self._login_cache = LocalLoginCache()
         # Default (disallowed_tools=None) disables EVERY Claude Code built-in
         # tool via ``--tools ""`` — the CLI becomes a pure reasoning core and
         # the remaining built-in tool schemas (Workflow/PowerShell/DesignSync/
@@ -817,7 +770,9 @@ class ClaudeCodeAdapter(LLMAdapter):
             list(disallowed_tools) if disallowed_tools is not None else []
         )
         self._timeout_s = timeout_s
-        self._strip_env = tuple(strip_env) if strip_env is not None else DEFAULT_STRIP_ENV
+        # ``DEFAULT_STRIP_ENV`` is always stripped (``auth.py``); ``strip_env``
+        # only adds names on top of that mandatory policy.
+        self._strip_env = tuple(strip_env) if strip_env is not None else ()
         self._extra_argv = list(extra_argv or [])
         self._context_window = context_window
         self._setup_gate(max_rpm)
@@ -990,101 +945,47 @@ class ClaudeCodeAdapter(LLMAdapter):
 
     # -- CLI plumbing ---------------------------------------------------------
 
-    def _resolve_oauth_token(self) -> str | None:
-        """The setup-token for this invocation: explicit, else process env."""
-        if self._oauth_token:
-            return self._oauth_token
-        value = os.environ.get(CLAUDE_CODE_OAUTH_TOKEN_ENV)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        return None
-
-    def _pick_private_config_dir(self) -> Path:
-        """Choose the private CLAUDE_CONFIG_DIR for setup-token mode.
-
-        Per agent (stable across restarts, so the CLI's cached state and
-        ``--resume`` transcripts persist) when an anchor is known; otherwise a
-        fresh per-adapter directory that is removed when the adapter is
-        collected. Either way it is LingTai-created, user-private, and never
-        ``~/.claude``.
-        """
-        if self._config_anchor:
-            digest = hashlib.sha256(self._config_anchor.encode("utf-8")).hexdigest()[:16]
-            root = Path(tempfile.gettempdir()) / _PRIVATE_CONFIG_ROOT
-            candidate = root / digest
-            try:
-                _ensure_private_dir(root)
-                _ensure_private_dir(candidate)
-                return candidate
-            except OSError as exc:
-                logger.warning(
-                    "[claude-code] per-agent config dir unusable (%s); "
-                    "using a per-adapter private dir",
-                    type(exc).__name__,
-                )
-        path = Path(tempfile.mkdtemp(prefix=f"{_PRIVATE_CONFIG_ROOT}-"))
-        weakref.finalize(self, shutil.rmtree, str(path), ignore_errors=True)
-        return path
-
     def _config_dir_for_token_mode(self) -> Path:
-        path = self._private_config_dir
-        if path is None:
-            path = self._pick_private_config_dir()
-            self._private_config_dir = path
-        _ensure_private_dir(path)
-        return path
+        """This adapter's private ``CLAUDE_CONFIG_DIR`` (created on first use).
 
-    def _require_local_login(self, env: dict[str, str]) -> None:
-        """Fail closed unless the installed CLI reports a local login."""
-        if self._local_login_state is not None:
-            return
-        # Looked up on the module at call time: the one probe seam shared with
-        # the connectivity check (and patched by the test suite's guard).
-        state = _connectivity.claude_cli_login_status(
-            self._cli_path, env=env, cwd=str(self._cwd)
-        )
-        if state == CLAUDE_LOGIN_CLI_MISSING:
-            raise _terminal_auth_error(
-                f"claude-code: `{self._cli_path}` not found on PATH; install "
-                f"Claude Code. {CLAUDE_CODE_AUTH_GUIDANCE}."
-            )
-        if state == CLAUDE_LOGIN_NOT_LOGGED_IN:
-            raise _terminal_auth_error(
-                "claude-code has no Claude credential: no "
-                f"{CLAUDE_CODE_OAUTH_TOKEN_ENV} setup-token is configured and "
-                f"the local `claude` CLI is not logged in. "
-                f"{CLAUDE_CODE_AUTH_GUIDANCE}."
-            )
-        # logged_in, or unknown (e.g. a CLI without ``auth status``): proceed
-        # and let the CLI report its own auth error if there is one.
-        self._local_login_state = state
+        Per agent when the provider defaults supplied an anchor, else a
+        per-adapter directory removed when the adapter is collected; re-created
+        if an OS temp cleaner removed it (``auth.choose_private_config_dir``).
+        """
+        try:
+            path = self._private_config_dir
+            if path is None:
+                path = choose_private_config_dir(self._config_anchor, owner=self)
+                self._private_config_dir = path
+            ensure_private_dir(path)
+        except OSError as exc:
+            raise ClaudeCodeError(
+                f"claude-code could not create its private config dir: {exc}"
+            ) from exc
+        return path
 
     def _prepare_child(self) -> tuple[dict[str, str], str]:
         """Resolve the auth mode for one invocation: ``(child env, mode)``.
 
-        Every mode strips the API-key env vars and any inherited
-        ``CLAUDE_CODE_OAUTH_TOKEN``. Setup-token mode then sets exactly the
-        resolved token plus a private ``CLAUDE_CONFIG_DIR`` (replacing any
-        inherited one); local-login mode keeps the inherited config dir, where
-        the login lives, and requires ``claude auth status`` to report it.
+        Delegates to the shared ``auth.prepare_claude_child`` policy (also used
+        by the daemon Claude backends): setup-token in a private config dir,
+        else the local login, else a terminal no-AED ``ClaudeCodeAuthError``.
         """
-        env = os.environ.copy()
+        try:
+            child = prepare_claude_child(
+                explicit_token=self._oauth_token,
+                private_config_dir=self._config_dir_for_token_mode,
+                cli_path=self._cli_path,
+                probe_cwd=str(self._cwd),
+                login_cache=self._login_cache,
+                label="claude-code",
+            )
+        except ClaudeCodeAuthError as exc:
+            raise _terminal_auth_error(str(exc)) from exc
+        env = child.env
         for key in self._strip_env:
             env.pop(key, None)
-        env.pop(CLAUDE_CODE_OAUTH_TOKEN_ENV, None)
-        token = self._resolve_oauth_token()
-        if token:
-            try:
-                config_dir = self._config_dir_for_token_mode()
-            except OSError as exc:
-                raise ClaudeCodeError(
-                    f"claude-code could not create its private config dir: {exc}"
-                ) from exc
-            env[CLAUDE_CODE_OAUTH_TOKEN_ENV] = token
-            env[CLAUDE_CONFIG_DIR_ENV] = str(config_dir)
-            return env, AUTH_MODE_SETUP_TOKEN
-        self._require_local_login(env)
-        return env, AUTH_MODE_LOCAL_LOGIN
+        return env, child.mode
 
     def _build_env(self) -> dict[str, str]:
         """The child env for the current auth mode (see ``_prepare_child``)."""
@@ -1100,7 +1001,7 @@ class ClaudeCodeAdapter(LLMAdapter):
                 f"{CLAUDE_CODE_OAUTH_TOKEN_ENV})."
             )
         # The login may have been revoked since the cached status check.
-        self._local_login_state = None
+        self._login_cache.forget()
         return _terminal_auth_error(
             f"claude-code: the local `claude` CLI login was rejected ({detail}). "
             f"{CLAUDE_CODE_AUTH_GUIDANCE}."
@@ -1159,10 +1060,10 @@ class ClaudeCodeAdapter(LLMAdapter):
         # is expected to fail loud rather than silently re-leak; older versions
         # are not verified.
         cmd += ["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
-        # Settings-file isolation per auth mode (see ``_SETTING_SOURCES``).
+        # Settings-file isolation per auth mode (``auth.SETTING_SOURCES``).
         # Verified on Claude Code 2.1.285: ``""`` skips the user CLAUDE.md and
         # user-settings hooks that load without it.
-        cmd += ["--setting-sources", _SETTING_SOURCES[auth_mode]]
+        cmd += ["--setting-sources", SETTING_SOURCES[auth_mode]]
         if system_prompt_file is _UNSET:
             system_prompt_file = self._system_prompt_file
         if system_prompt_file:

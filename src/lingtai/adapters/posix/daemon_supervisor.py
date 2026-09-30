@@ -41,10 +41,11 @@ _SECRET_ENV_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Claude-family runners are deliberately absent: their product contract strips
-# ANTHROPIC_* and CLAUDE_CODE_OAUTH_TOKEN so the CLI uses its first-party stored
-# subscription/OAuth state.  Detachment must not turn restored parent env into an
-# override of that established runner policy.
+# Claude-family runners are deliberately absent: an inherited Claude credential
+# must never be restored into their child.  Their only credential is the
+# setup-token the daemon resolves under the shared claude-code auth policy
+# (``DaemonManager._claude_cli_credential_env`` / ``lingtai.llm.claude_code.auth``),
+# added to the capsule's ``credential_env`` explicitly.
 _CLI_CREDENTIAL_ENV_NAMES = {
     "codex": {"OPENAI_API_KEY", "CODEX_API_KEY"},
     "opencode": {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENCODE_API_KEY"},

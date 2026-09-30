@@ -26,8 +26,11 @@ Auth, in order (see ``adapter.py``):
    (``--setting-sources ""``).
 3. Otherwise a request-time auth error with guidance (no AED retries).
 
-``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN`` are always stripped from the
-child env so the subprocess can never fall back to API-key billing. With no
+``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN`` / ``ANTHROPIC_BASE_URL`` and the
+``CLAUDE_CODE_USE_*`` cloud-provider switches are always stripped from the child
+env, so the token only reaches Anthropic and nothing bills an API key or a cloud
+account. The policy lives in ``auth.py`` and is shared with the daemon
+``claude`` / ``claude-p`` / ``claude-code`` CLI backends. With no
 configured ``model`` / ``thinking`` the CLI's own defaults apply (no
 ``--model`` / ``--effort`` flag).
 
