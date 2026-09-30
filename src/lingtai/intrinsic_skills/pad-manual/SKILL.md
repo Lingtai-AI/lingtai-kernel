@@ -3,8 +3,8 @@ name: pad-manual
 description: |
   Read before editing the living Pad, pinning references, or preparing Pad state
   for rebuild/molt.
-version: 2.0.0
-last_changed_at: 2026-09-09T00:00:00Z
+version: 2.1.0
+last_changed_at: 2026-09-29T00:00:00Z
 related_files:
 - src/lingtai/tools/pad/__init__.py
 - src/lingtai/tools/pad/_pad.py
@@ -38,9 +38,11 @@ Durable Pad changes go through `shell`, anchored in the authorized working
 directory: rewrite `system/pad.md` in full, or make a bounded exact change after
 verifying the old text exists exactly once, then verify the written file and
 keep output bounded. Platform recipes live in `shell-manual`. No shell write
-hot-loads the prompt. Apply one
-`context(action="rebuild", input={}, reasoning="apply Pad change")` when immediate
-activation is needed.
+hot-loads the prompt; the edit persists and takes effect at the next natural molt
+or reload, so do not rebuild after each edit. Manual rebuild is strongly
+discouraged (full replay is costly and can disturb prompt-prefix cache reuse); only
+when the change must be active in this conversation and a molt is unsuitable, make
+one targeted `context(action="rebuild", input={}, reasoning="apply Pad change")`.
 
 Keep Pad to current goal, state, next action, blockers, collaborators, and useful
 pointers; archive completed narrative in knowledge.
@@ -59,6 +61,6 @@ refresh, or molt. A missing path is reported as `append_not_found` at compose ti
 not rejected at write time; pinned text also consumes context budget, so keep the
 list short and text-only.
 
-Before molt, make durable Pad state accurate, rebuild only if needed in the
-current context, then follow `context-manual` for journal/summary/molt procedure.
+Before molt, make durable Pad state accurate (no rebuild is needed first), then
+follow `context-manual` for journal/summary/molt procedure.
 Leave root `summarize` false for exact guidance.

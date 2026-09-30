@@ -19,7 +19,7 @@ Use this reference after you have inspected a bulky tool result and know what a 
 ## Choose the operation
 
 - `context(action="summarize")` is **record-only**. It replaces selected prior tool-result blocks in runtime history with your agent-authored summaries, marks them pending, and preserves the raw event for recovery. The active provider continuation may still carry the raw block.
-- `context(action="rebuild")` is the one active application path. It first re-reads and recomposes **all** canonical prompt sources, then records/applies supplied and pending summaries, then requests provider replay with the new prompt and history. Bare `input={}` is valid, including with no pending summaries.
+- `context(action="rebuild")` is the one active application path, but a rare exception rather than routine compaction: full replay is costly, can disturb prompt-prefix cache reuse, and retains bulky history. It first re-reads and recomposes **all** canonical prompt sources, then records/applies supplied and pending summaries, then requests provider replay with the new prompt and history. Bare `input={}` is valid, including with no pending summaries.
 - `context(action="molt")` is the whole-session boundary. Choose it when pressure, an explicit human reset request, or conversation confusion makes a fresh briefing worthwhile; do not use it as task-completion housekeeping.
 
 The root `summarize` boolean is a separate generic result-presentation control. It is not the `context` action, is not an item-list input, and does not apply a recorded summary to provider context. The action/schema descriptions are authoritative for fields and requiredness.
@@ -48,7 +48,7 @@ Recording is not durable-store authoring and does not rebuild. Do not summarize 
 
 ## Apply and recover
 
-Call one `context(action="rebuild", input={})` when making recorded summaries or a durable prompt-source edit active is worth a provider replay. Reconstruction is deliberately delayed for cache efficiency; do not loop summarize/rebuild calls. If composition fails, the Context contract leaves summaries unapplied and reports the reconstruction error.
+Prefer molt when history is substantial or noisy. Call one `context(action="rebuild", input={})` only when recorded summaries or new canonical prompt sources must apply in this conversation and a molt is unsuitable; routine durable edits can wait for the next natural molt or reload. Reconstruction is deliberately delayed for cache efficiency; do not loop summarize/rebuild calls. If composition fails, the Context contract leaves summaries unapplied and reports the reconstruction error.
 
 The rebuild receipt reports the provider round that requested the rebuild; post-rebuild context usage does not exist yet in that receipt. Observe it on the next provider round.
 
@@ -60,4 +60,4 @@ rg 'call_abc123' <workdir>/logs/events.jsonl
 
 For a spilled result, preserve and reopen its `tmp/tool-results/` path. Use `system(action="manual", input={}, reasoning="load System routes")` for settings, cache-miss budget ownership, and current automatic threshold details; this reference does not duplicate System-owned numbers or configuration procedures.
 
-When the current pressure reminder is active, follow the resident cadence: make at most one useful summarize/rebuild pass, then stop repeating it and molt deliberately if the context remains too high. The pressure reminder is a decision aid, not an automatic molt order. A deliberate molt still requires the Context manual's journal gate and concise successor handoff.
+When the current pressure reminder is active, follow the resident cadence: prefer preparing a deliberate molt; at most one summarize pass (and a rebuild only under the rare exception above) may precede it, and never repeat either while context remains too high. The pressure reminder is a decision aid, not an automatic molt order. A deliberate molt still requires the Context manual's journal gate and concise successor handoff.

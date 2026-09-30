@@ -4,8 +4,8 @@ description: >
   Read before authoring, installing, or sharing a skill in
   `.library/custom/<name>/`, adding configured skill roots, or diagnosing a
   catalog entry; this teaches the Skills system, not bundled skill procedures.
-version: 1.2.0
-last_changed_at: "2026-09-09T00:00:00Z"
+version: 1.3.0
+last_changed_at: "2026-09-29T00:00:00Z"
 related_files:
 - src/lingtai/tools/skills/manual/reference/cleanup-footprint-contract.md
 - src/lingtai/tools/skills/manual/assets/skill-template.md
@@ -66,8 +66,11 @@ use its `location` with a bounded `shell` read:
 shell(action="run", input={"command": "sed -n '1,120p' -- \"<location>\"", "timeout": null, "working_dir": null, "async": null, "reminder": null}, reasoning="read cataloged skill, bounded")
 ```
 
-`context(action="rebuild", input={}, reasoning="rescan skills catalog")` rescans
-`.library/` and configured roots and recomposes the Skills section. A degraded
+A rebuild rescans `.library/` and configured roots and recomposes the Skills
+section, but a manual rebuild is strongly discouraged as routine (costly full
+replay): prefer the next natural refresh/molt, and make one targeted
+`context(action="rebuild", input={}, reasoning="rescan skills catalog")` only when
+the catalog must change in this conversation and a molt is unsuitable. A degraded
 manual result usually means the intrinsic manual was not installed correctly.
 
 ## Nested reference pattern
@@ -102,10 +105,11 @@ workflows should remain top-level skills, not hidden children.
 A shared URL or temporary clone is not installed: the skill is
    only a file on disk until a reviewed copy reaches a scanned root. Copy/clone
 into `<agent>/.library/custom/<skill-name>/`, retain useful upstream metadata, and
-inspect `SKILL.md` plus referenced scripts/assets/references. For each install, run the bundled validator, rebuild, and read the cataloged location. Each receiving agent clones/copies it into its own `.library/custom/<name>`. Do not assume `.library_shared` is loaded by default. If a shared root is explicitly chosen, add `../.library_shared` to each participating agent's configured paths:
+inspect `SKILL.md` plus referenced scripts/assets/references. For each install, run the bundled validator, then read the cataloged location after the next natural refresh/molt (a manual rebuild is a rare, discouraged exception when the skill must be cataloged in this conversation). Each receiving agent clones/copies it into its own `.library/custom/<name>`. Do not assume `.library_shared` is loaded by default. If a shared root is explicitly chosen, add `../.library_shared` to each participating agent's configured paths:
 
 ```text
 python3 .library/intrinsic/capabilities/skills/scripts/validate.py .library/custom/<skill-name>/
+# Only for the rare immediate-activation exception above, not every install:
 context(action="rebuild", input={}, reasoning="rescan skills catalog")
 ```
 
@@ -118,7 +122,7 @@ before relying on it. To check for a name collision first, use the complete shel
 call `shell(action="run", input={"command": "grep -rh '^name:' .library/", "timeout": null, "working_dir": null, "async": null, "reminder": null}, reasoning="check for skill-name collision")`. Check already configured extra roots too;
 rename or reuse an existing skill on a collision. The example only scans `.library/`.
 Installation never authorizes side effects described by the skill. For sharing, send the source URL or artifact path and this local-install /
-validate / rebuild recipe; each receiver owns its copy and rollback.
+validate / next-natural-reload recipe; each receiver owns its copy and rollback.
 
 To author a skill, write it with `shell` from your working directory
 (`mkdir -p .library/custom/<skill-name>`, then a quoted heredoc into
@@ -164,7 +168,8 @@ stale signatures and fictional references that structural validation cannot.
 The catalog contains each entry's `name`, `description`, and `location`; read its
 body only on demand. There is no Skills-owned settings file and no
 `settings/psyche.skills.json`; Psyche's owner document does not configure Skills.
-Pin a relevant body in Pad only through the Pad manual and rebuild afterward.
+Pin a relevant body in Pad only through the Pad manual; let the next natural
+reload activate it unless the rare immediate-activation exception applies.
 
 ## Cleanup / Footprint
 
@@ -175,5 +180,6 @@ and select `.library/intrinsic/`, `.library/custom/`, and explicitly configured
 roots; inspection writes nothing. Cleanup means reviewed validation, renaming,
 consolidation, archive, or a PR—not ad-hoc removal. First show a dry-run, explain
 what changes, obtain explicit user consent, and record approved work in
-`logs/cleanup.jsonl`; then rebuild the catalog. The recipe's audit append is a
+`logs/cleanup.jsonl`; let the next natural reload update the catalog, or use
+the rare immediate-activation exception above. The recipe's audit append is a
 separate explicit write.

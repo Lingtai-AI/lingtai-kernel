@@ -403,7 +403,11 @@ def test_summarize_only_pending_positive_offers_forced_boundary_and_proactive():
     assert "context(action='rebuild', input={}, reasoning='...')" in recon
     assert "no new items" in recon
     assert "system(action='summarize'" not in recon
-    assert "Proactive is better" in recon
+    # Molt is preferred; the manual rebuild is a rare, discouraged exception.
+    assert "Proactive is better" not in recon
+    assert "rare exception" in recon
+    assert "strongly discouraged as routine compaction" in recon
+    assert "prefer a deliberate molt" in recon
 
 
 def test_summarize_only_wording_conditional_pending_zero():
