@@ -29,6 +29,7 @@ from lingtai.kernel.llm.base import (
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    checked_count,
 )
 from lingtai.kernel.llm.interface import (
     ChatInterface,
@@ -138,6 +139,13 @@ def _map_usage(usage: dict | None = None) -> UsageMetadata:
         output_tokens=output,
         thinking_tokens=0,
         cached_tokens=cache_read,
+        # Only counts Kimi's wire record actually carries; absent stays unknown.
+        cache_write_tokens=checked_count(
+            usage.get("inputCacheCreation", usage.get("cache_creation_input_tokens"))
+        ),
+        billable_output_tokens=checked_count(
+            usage.get("output", usage.get("output_tokens"))
+        ),
     )
 
 

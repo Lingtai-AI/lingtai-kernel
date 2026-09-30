@@ -5,6 +5,7 @@ All agent code should depend on these types, never on provider-specific SDKs.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -143,6 +144,40 @@ class UsageMetadata:
     # Optional safe, provider-specific metadata to merge into token_ledger.jsonl.
     # Do not place request bodies, API keys, or other secrets here.
     extra: dict[str, Any] = field(default_factory=dict)
+    # Optional billing evidence an adapter positively established from its wire
+    # contract. ``None`` means unknown (never zero). ``cache_write_tokens`` is
+    # the part of ``input_tokens`` written to the prompt cache (its 1h-TTL part
+    # in ``cache_write_1h_tokens``); ``billable_output_tokens`` is the output
+    # count providers charge, thinking included exactly once.
+    cache_write_tokens: int | None = None
+    cache_write_1h_tokens: int | None = None
+    billable_output_tokens: int | None = None
+
+
+def checked_count(value: object) -> int | None:
+    """A wire token count only if it is a real non-negative int (else unknown).
+
+    Absent, ``None``, negative, float and ``bool`` values are all unknown, never
+    zero; adapters use this for the optional billing fields on ``UsageMetadata``.
+    """
+    return value if type(value) is int and value >= 0 else None
+
+
+_SAFE_BILLING_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}")
+
+
+def safe_billing_model(value: object) -> str | None:
+    """A plain model name (<=128, optionally ``provider/model``) or ``None``.
+
+    No URL, auth, whitespace/newline, query or config text is accepted, so the
+    string is safe to persist in an event and to look up by exact catalog key.
+    """
+    if not isinstance(value, str):
+        return None
+    name = value.strip()
+    if not _SAFE_BILLING_MODEL_RE.fullmatch(name) or "//" in name or ".." in name:
+        return None
+    return name
 
 
 @dataclass

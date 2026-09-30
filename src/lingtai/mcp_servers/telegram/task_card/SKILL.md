@@ -4,13 +4,18 @@ description: |
   Shipped retained-legacy/projection notice for Telegram Task Card files. The
   public `task_card` tool is intrinsic and documented at
   src/lingtai/tools/task_card/manual/SKILL.md; Telegram only projects the
-  intrinsic taskcard/status + taskcard/taskcard.md artifact read-only.
-last_changed_at: 2026-09-15T00:00:00Z
+  intrinsic taskcard/status + taskcard/taskcard.md artifact read-only. It also
+  explains the Telegram-only per-call API token list-price estimate line.
+last_changed_at: 2026-09-29T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/telegram/SKILL.md
 - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
+- src/lingtai/mcp_servers/telegram/task_card/api_cost.py
+- src/lingtai/mcp_servers/task_card/event_projection.py
 - src/lingtai/tools/task_card/manual/SKILL.md
+- tests/test_telegram_task_card_api_cost.py
+- tests/test_telegram_task_card_event_tail.py
 maintenance: |
   Keep this shipped subpackage manual aligned with the intrinsic Task Card
   owner. Do not reintroduce the retired Telegram controller schema, endpoint,
@@ -41,3 +46,51 @@ are not deleted or rewritten.
 
 Do not use this retained package as the old Telegram-owned schema, endpoint,
 JSON-card renderer, reverse-MCP route, or refresh-ceiling source.
+
+## API token list-price line (Telegram only)
+
+Under each API-call metrics row (`↻ <delay> ↓out ↑miss ◌ ctx | cache%`) the
+automatic Telegram card adds one plain line, for example:
+
+```text
+avg out 250.0 tok/s · STANDARD API TOKEN list-price ESTIMATE USD (LiteLLM): input $0.0050 | write $0.0020 | read $0.0004 | output $0.0010 | total $0.0084 (catalog 2026-09-29)
+```
+
+Reading it:
+
+- **What it is.** A STANDARD public per-token list-price ESTIMATE in USD, not a
+  bill or invoice. It is not the actual subscription/Codex-pool bill, and it
+  does not claim the routed tier, batch/priority pricing or discounts. Search,
+  grounding and image fixed fees are not included in `total`.
+- **Source and basis.** Prices come from LiteLLM's public
+  `model_prices_and_context_window.json`, looked up by the EXACT model that
+  made that round (no alias or fuzzy match). `(catalog YYYY-MM-DD)` is the day
+  this process fetched the prices; `, stale` is added once the snapshot is older
+  than six hours and a refresh has not landed. Above 200k/272k total input the
+  catalog's above-threshold rates are used when the model lists them.
+- **Four buckets.** `input` is uncached input (total input minus cache read
+  minus cache write); `write` is the cache-write count; `read` is the cache-read
+  count; `output` is the provider-billable output (thinking included exactly
+  once). `<$0.0001` is a nonzero amount that rounds below the display precision.
+- **Unknowns are never zero.** A bucket shows `?` when the provider wire did not
+  state its count (for example OpenAI/Gemini/Codex do not report cache-write
+  tokens, so `write` and the uncached `input` stay `?`), when the catalog lacks
+  that rate, or when the counts are incoherent (for example a 1-hour cache-write
+  part larger than the whole write). If any bucket is unknown the total is NOT
+  a sum: it reads `total ? (known $x)` (the known subtotal only) or `total ?`.
+  Other notes: `n/a (model unknown)` (old history, no round facts),
+  `n/a (model not listed)`, `n/a (catalog unavailable)`, `loading`,
+  `n/a (estimated tokens)`.
+- **`avg out` vs decode speed.** `avg out <n> tok/s` is billable output tokens
+  divided by the existing displayed API gap. That gap may include waiting,
+  prefill, streaming and orchestration; it is not an independently measured
+  decode interval, and no universal speed comparison is claimed. It is omitted
+  when the delay or token count is unknown.
+- **Async cache, offline, old history.** The card never waits for the network:
+  the first render may show `loading`, one bounded background refresh (fixed
+  URL, 8 MiB cap, per-read timeout plus a total deadline, no credentials)
+  fills a process-local snapshot, and a failed fetch is retried no faster than
+  every five minutes. Offline, prices stay `n/a (catalog unavailable)` (or the
+  last snapshot marked stale). Old events written before this feature carry no
+  round facts and show `n/a (model unknown)`; no price is invented for them.
+  Feishu and other channels render exactly as before.

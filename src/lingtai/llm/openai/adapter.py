@@ -41,6 +41,7 @@ from lingtai.kernel.llm.base import (
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    checked_count,
     mark_llm_replay_terminal,
     safe_exception_description,
     wire_tool_description,
@@ -1436,6 +1437,10 @@ def _parse_response(raw) -> LLMResponse:
         usage = UsageMetadata(
             input_tokens=raw.usage.prompt_tokens or 0,
             output_tokens=raw.usage.completion_tokens or 0,
+            # completion_tokens already includes reasoning tokens.
+            billable_output_tokens=checked_count(
+                getattr(raw.usage, "completion_tokens", None)
+            ),
             thinking_tokens=getattr(raw.usage, "completion_tokens_details", None)
             and getattr(raw.usage.completion_tokens_details, "reasoning_tokens", 0)
             or 0,
@@ -2032,6 +2037,10 @@ def _parse_responses_api_response(raw) -> LLMResponse:
         usage = UsageMetadata(
             input_tokens=getattr(raw.usage, "input_tokens", 0) or 0,
             output_tokens=getattr(raw.usage, "output_tokens", 0) or 0,
+            # output_tokens already includes reasoning tokens.
+            billable_output_tokens=checked_count(
+                getattr(raw.usage, "output_tokens", None)
+            ),
             thinking_tokens=getattr(raw.usage, "output_tokens_details", None)
             and getattr(raw.usage.output_tokens_details, "reasoning_tokens", 0)
             or 0,
@@ -2177,6 +2186,9 @@ def _consume_responses_stream(
                 usage = UsageMetadata(
                     input_tokens=getattr(raw_usage, "input_tokens", 0) or 0,
                     output_tokens=getattr(raw_usage, "output_tokens", 0) or 0,
+                    billable_output_tokens=checked_count(
+                        getattr(raw_usage, "output_tokens", None)
+                    ),
                     thinking_tokens=(
                         getattr(details, "reasoning_tokens", 0) or 0 if details else 0
                     ),
@@ -2775,6 +2787,9 @@ class OpenAIChatSession(ChatSession):
                         usage = UsageMetadata(
                             input_tokens=chunk.usage.prompt_tokens or 0,
                             output_tokens=chunk.usage.completion_tokens or 0,
+                            billable_output_tokens=checked_count(
+                                getattr(chunk.usage, "completion_tokens", None)
+                            ),
                             thinking_tokens=(
                                 getattr(
                                     getattr(chunk.usage, "completion_tokens_details", None),
@@ -6371,6 +6386,12 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                         usage = UsageMetadata(
                             input_tokens=input_tokens,
                             output_tokens=getattr(event.response.usage, "output_tokens", 0) or 0,
+                            # Responses wire output_tokens already includes
+                            # reasoning; absent stays unknown. Cache-write is not
+                            # a Responses wire field, so it stays unknown too.
+                            billable_output_tokens=checked_count(
+                                getattr(event.response.usage, "output_tokens", None)
+                            ),
                             thinking_tokens=getattr(
                                 event.response.usage, "output_tokens_details", None
                             )

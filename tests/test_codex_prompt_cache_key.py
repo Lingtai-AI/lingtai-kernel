@@ -147,6 +147,45 @@ def test_codex_request_includes_default_prompt_cache_key():
     assert sent["prompt_cache_key"] == "lingtai-codex:gpt-5.5:v1"
 
 
+def _completed_with(usage: SimpleNamespace) -> Event:
+    return Event("response.completed", response=SimpleNamespace(id="resp_fake", usage=usage))
+
+
+def test_codex_pool_usage_carries_known_billable_output_from_responses_wire():
+    """Native Codex/pool rounds get the Responses ``output_tokens`` (reasoning
+    already included) as billable output for the Telegram list-price line; no
+    cache-write wire field exists there, so it stays unknown, never 0."""
+    usage = SimpleNamespace(
+        input_tokens=100,
+        output_tokens=20,
+        input_tokens_details=SimpleNamespace(cached_tokens=40),
+        output_tokens_details=SimpleNamespace(reasoning_tokens=8),
+    )
+    result = _create_codex_session([_completed_with(usage)]).send("x")
+
+    assert (result.usage.input_tokens, result.usage.output_tokens) == (100, 20)
+    assert (result.usage.thinking_tokens, result.usage.cached_tokens) == (8, 40)
+    assert result.usage.billable_output_tokens == 20
+    assert result.usage.cache_write_tokens is None
+    assert result.usage.cache_write_1h_tokens is None
+
+
+@pytest.mark.parametrize("bad", [None, -1, True])
+def test_codex_usage_absent_or_invalid_output_is_unknown_not_zero(bad):
+    usage = SimpleNamespace(
+        input_tokens=100,
+        output_tokens=bad,
+        input_tokens_details=SimpleNamespace(cached_tokens=0),
+        output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+    )
+    result = _create_codex_session([_completed_with(usage)]).send("x")
+
+    assert result.usage.billable_output_tokens is None
+    missing = SimpleNamespace(input_tokens=100)
+    result = _create_codex_session([_completed_with(missing)]).send("x")
+    assert result.usage.billable_output_tokens is None
+
+
 def test_codex_request_sends_lingtai_identity_headers():
     """Every Codex request carries honest LingTai app-name identity.
 

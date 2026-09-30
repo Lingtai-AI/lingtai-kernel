@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 11
+contract_version: 12
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -21,6 +21,8 @@ related_files:
   - tests/test_task_card_event_projection_shared.py
   - tests/test_telegram_task_card_rows.py
   - tests/test_telegram_task_card_display_expression.py
+  - src/lingtai/mcp_servers/telegram/task_card/api_cost.py
+  - tests/test_telegram_task_card_api_cost.py
   - tests/test_mcp_skill_manuals.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md. Keep related
@@ -98,6 +100,28 @@ semantics live here. The public producer contract lives in
    `thinking_tokens` fallback produce the same representation. A missing,
    malformed, or output-less count is omitted without a dangling parenthesis,
    preserving old-event rendering and never exposing reasoning text.
+    Telegram alone also opts into one extra plain line immediately after that
+    metrics row per API call: `avg out <n> tok/s · STANDARD API TOKEN
+    list-price ESTIMATE USD (LiteLLM): input | write | read | output | total
+    (catalog <date>[, stale])`. It is a STANDARD public per-token list-price
+    estimate as of the catalog fetch — not an invoice, not the actual
+    subscription/Codex-pool bill, no routed-tier/discount claim, and `total`
+    excludes search/grounding/image fixed fees — from that exact round's own
+    model (a plain name, exact catalog key, no fuzzy alias) and
+    adapter-established counts (`llm_response.usage_billing`; a wire field the
+    provider did not state stays unknown, never `0`). Unknown counts, rates,
+    incoherent splits (1h cache-write larger than total write, malformed TTL
+    count), invalid above-threshold tier rates (never a silent fallback to the
+    base rate) and non-finite/overflowing products are `?`; `n/a` notes cover
+    model-unknown/unlisted/catalog-unavailable/estimated rounds. When any
+    bucket is unknown the total is unknown and the line shows
+    `total ? (known $x)` (never a `≥` bound). Prices come from a process-local
+    background-refreshed LiteLLM snapshot fetched from one fixed URL with an
+    8 MiB cap, chunked reads and a monotonic total deadline (each blocking read
+    bounded by the socket timeout); a failed fetch or failed thread start
+    releases the single in-flight slot and retries no faster than the pacing
+    interval. Rendering never waits on the network, and other channels' frames
+    are byte-identical.
 10. When an existing `apriori_summary_generated` event, its preceding successful
     `tool_result`, and the already-recorded `source=summarize_apriori` main-ledger
     row correlate by `tool_call_id`, the automatic card appends

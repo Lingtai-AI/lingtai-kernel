@@ -29,6 +29,7 @@ from .llm import (
     LLMResponse,
     LLMService,
 )
+from .llm.base import checked_count, safe_billing_model
 from .llm_utils import (
     send_with_timeout,
     send_with_timeout_stream,
@@ -146,6 +147,23 @@ def _safe_usage_extra_for_event(extra: object) -> dict[str, str] | None:
             continue
         safe[key] = str(value)[:512]
     return safe or None
+
+
+def _usage_billing_for_event(usage: object, model: object) -> dict[str, object] | None:
+    """Bounded neutral pricing evidence for one ``llm_response`` round.
+
+    Carries only the model that made this exact call and the adapter's
+    explicitly established non-negative integer counts; unknown stays absent.
+    """
+    billing: dict[str, object] = {}
+    safe_model = safe_billing_model(model)
+    if safe_model is not None:
+        billing["model"] = safe_model
+    for key in ("cache_write_tokens", "cache_write_1h_tokens", "billable_output_tokens"):
+        value = checked_count(getattr(usage, key, None))
+        if value is not None:
+            billing[key] = value
+    return billing or None
 
 
 def _ensure_spill_manifest_fields(messages: list) -> None:
@@ -834,6 +852,11 @@ class SessionManager:
             usage_extra_for_event = _safe_usage_extra_for_event(usage_extra)
             if usage_extra_for_event:
                 telemetry_fields["usage_extra"] = usage_extra_for_event
+            usage_billing = _usage_billing_for_event(
+                response.usage, self._config.model or self._llm_service.model,
+            )
+            if usage_billing:
+                telemetry_fields["usage_billing"] = usage_billing
             self._log(
                 "llm_response",
                 input_tokens=response.usage.input_tokens,

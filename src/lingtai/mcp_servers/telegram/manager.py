@@ -49,6 +49,7 @@ from .._outbound_files import OutboundFileError, resolve_outbound_file
 from . import _family
 from . import updates as tg_updates
 from .plugin import TELEGRAM_PLUGIN
+from .task_card import api_cost as _api_cost
 from .account import TelegramRateLimitError
 from .service import _TASKCARD_DEFAULT_NORMAL_ROWS
 
@@ -3726,6 +3727,7 @@ class TelegramManager:
             normal_rows=normal_rows,
             locale=self._taskcard_locale(),
             display_expression=self._taskcard_display_expression(),
+            usage_line=_api_cost.usage_line,
         ))
         fingerprint = self._task_card_automatic_fingerprint(automatic)
         for account, chat_id in self._resident_task_card_targets():
@@ -3905,6 +3907,7 @@ class TelegramManager:
             normal_rows=self._taskcard_normal_rows(),
             locale=self._taskcard_locale(),
             display_expression=self._taskcard_display_expression(),
+            usage_line=_api_cost.usage_line,
         ))
         return self._deliver_channel_frame(
             account,
