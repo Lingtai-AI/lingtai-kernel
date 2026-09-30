@@ -16,7 +16,7 @@ must not be acted on, and the producer channel (e.g. ``telegram.read``,
 ``email.read``) remains the source of truth for actionable channel content.
 
 This is SHARED semantics, not a Codex special case: the converters
-(``to_anthropic`` / ``to_openai`` / ``to_responses_input`` / ``to_gemini``)
+(``to_anthropic`` / ``to_openai`` / ``to_responses_input``)
 and the claude_code full-history render all serialize ``ToolResultBlock``
 content directly, with no timely-transient filtering step. On the Codex WS
 path the per-``call_id`` freeze keeps already-sent outputs byte-stable within
@@ -53,7 +53,6 @@ from lingtai.kernel.llm.interface import (
 
 from lingtai.llm.interface_converters import (
     to_anthropic,
-    to_gemini,
     to_openai,
     to_responses_input,
 )
@@ -114,20 +113,10 @@ def _responses_outputs(iface: ChatInterface) -> dict[str, str]:
     }
 
 
-def _gemini_outputs(iface: ChatInterface) -> dict[str, str]:
-    return {
-        b["call_id"]: b["result"]
-        for t in to_gemini(iface)
-        for b in t["content"]
-        if isinstance(b, dict) and b.get("type") == "function_result"
-    }
-
-
 _CONVERTER_OUTPUTS = [
     pytest.param(_anthropic_outputs, id="to_anthropic"),
     pytest.param(_openai_outputs, id="to_openai"),
     pytest.param(_responses_outputs, id="to_responses_input"),
-    pytest.param(_gemini_outputs, id="to_gemini"),
 ]
 
 

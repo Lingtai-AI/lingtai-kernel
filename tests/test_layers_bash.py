@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from unittest.mock import MagicMock
 
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 
 from lingtai.tools.bash import (
     BashManager,
@@ -419,7 +419,7 @@ def strict_setup_agent(tmp_path):
     from lingtai.agent import Agent
 
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="strict-shell-setup",
         working_dir=tmp_path / "agent",
         capabilities={},
@@ -468,8 +468,8 @@ class TestAddCapability:
         from lingtai.agent import Agent
         svc = MagicMock()
         svc.get_adapter.return_value = MagicMock()
-        svc.provider = "gemini"
-        svc.model = "gemini-test"
+        svc.provider = "anthropic"
+        svc.model = "claude-test"
         agent = Agent(service=svc, agent_name="test", working_dir=tmp_path / "test",
                            capabilities={"bash": {"yolo": True}})
         mgr = agent.get_capability("bash")
@@ -483,8 +483,8 @@ class TestAddCapability:
         policy_file.write_text(json.dumps({"allow": ["echo"]}))
         svc = MagicMock()
         svc.get_adapter.return_value = MagicMock()
-        svc.provider = "gemini"
-        svc.model = "gemini-test"
+        svc.provider = "anthropic"
+        svc.model = "claude-test"
         agent = Agent(service=svc, agent_name="test", working_dir=tmp_path / "test",
                            capabilities={"bash": {"policy_file": str(policy_file)}})
         mgr = agent.get_capability("bash")

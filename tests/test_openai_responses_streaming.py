@@ -275,8 +275,7 @@ def _create_codex_session(events: list[Event], *, thinking: str = "high"):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
     )
     adapter._client = FakeClient(events)
     return adapter.create_chat(
@@ -290,7 +289,7 @@ def _create_codex_session(events: list[Event], *, thinking: str = "high"):
 
 @pytest.mark.parametrize("thinking", ["none", "minimal", "low", "medium", "high", "xhigh"])
 def test_openai_responses_sends_exact_reasoning_effort(thinking):
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+    adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     adapter._client = FakeClient([_completed()])
     session = adapter.create_chat("gpt-5.5", "system prompt", thinking=thinking)
 
@@ -318,42 +317,6 @@ def test_codex_responses_default_thinking_sends_xhigh(thinking_kwargs):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
-    )
-    adapter._client = FakeClient([_completed()])
-    session = adapter.create_chat("gpt-5.5", "system prompt", **thinking_kwargs)
-
-    session.send_stream("hello")
-
-    sent = adapter._client.responses.kwargs[-1]
-    assert sent["reasoning"] == {"effort": "xhigh"}
-    assert "reasoning_effort" not in sent
-
-
-@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}, {"thinking": None}])
-def test_openai_responses_default_thinking_sends_xhigh(thinking_kwargs):
-    """Generic OpenAI Responses maps an omitted/``default`` thinking level to
-    explicit ``reasoning.effort = "xhigh"`` on the wire (the Responses
-    semantics: the user did not specify an effort, so xhigh is sent)."""
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
-    adapter._client = FakeClient([_completed()])
-    session = adapter.create_chat("gpt-5.5", "system prompt", **thinking_kwargs)
-
-    session.send_stream("hello")
-
-    sent = adapter._client.responses.kwargs[-1]
-    assert sent["reasoning"] == {"effort": "xhigh"}
-    assert "reasoning_effort" not in sent
-
-
-@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}])
-def test_custom_openai_responses_default_thinking_sends_xhigh(thinking_kwargs):
-    """Custom/OpenAI-compatible Responses (base_url + ``wire_api="responses"``)
-    shares the same explicit ``xhigh`` default as generic OpenAI."""
-    adapter = OpenAIAdapter(
-        api_key="fake",
-        base_url="https://custom.example/v1",
         wire_api="responses",
     )
     adapter._client = FakeClient([_completed()])
@@ -366,15 +329,33 @@ def test_custom_openai_responses_default_thinking_sends_xhigh(thinking_kwargs):
     assert "reasoning_effort" not in sent
 
 
+@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}, {"thinking": None}])
+@pytest.mark.parametrize("base_url", [None, "https://custom.example/v1"])
+def test_openai_responses_default_thinking_omits_reasoning(thinking_kwargs, base_url):
+    """``openai`` Responses sends ``thinking`` verbatim as the standard
+    ``reasoning.effort`` field and omits it for an omitted/``default`` level
+    (the endpoint's own default applies) — on the official endpoint and a
+    compatible ``base_url`` alike. Only Codex substitutes an explicit ``xhigh``."""
+    adapter = OpenAIAdapter(api_key="fake", base_url=base_url, wire_api="responses")
+    adapter._client = FakeClient([_completed()])
+    session = adapter.create_chat("gpt-5.5", "system prompt", **thinking_kwargs)
+
+    session.send_stream("hello")
+
+    sent = adapter._client.responses.kwargs[-1]
+    assert "reasoning" not in sent
+    assert "reasoning_effort" not in sent
+
+
 @pytest.mark.parametrize("adapter_cls", [OpenAIAdapter, CodexOpenAIAdapter])
 def test_responses_rejects_unsupported_thinking(adapter_cls):
-    kwargs = {"api_key": "fake", "use_responses": True}
+    kwargs = {"api_key": "fake", "wire_api": "responses"}
     if adapter_cls is CodexOpenAIAdapter:
-        kwargs.update({"base_url": "http://fake", "force_responses": True})
+        kwargs["base_url"] = "http://fake"
     adapter = adapter_cls(**kwargs)
     adapter._client = FakeClient([_completed()])
 
-    with pytest.raises(ValueError, match="OpenAI Responses thinking"):
+    with pytest.raises(ValueError, match="thinking must be one of"):
         adapter.create_chat("gpt-5.5", "system prompt", thinking="ultra")
 
 

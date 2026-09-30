@@ -30,7 +30,7 @@ from lingtai.mcp_servers.feishu.service import FeishuService
 from lingtai.mcp_servers.telegram.service import TelegramService
 from lingtai.mcp_servers.wechat.manager import WechatManager
 from lingtai.mcp_servers.whatsapp.manager import WhatsAppManager
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 # ---------------------------------------------------------------------------

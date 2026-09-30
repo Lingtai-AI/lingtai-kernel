@@ -39,13 +39,7 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from .config import (
-    THINKING_LEVELS,
-    THINKING_NATIVE_PROVIDERS,
-    THINKING_OWNED_PROVIDERS,
-    THINKING_PROVIDERS,
-    llm_supports_thinking,
-)
+from .config import THINKING_LEVELS
 
 log = logging.getLogger(__name__)
 
@@ -364,22 +358,12 @@ def load_preset(
             f"preset {name!r} ({p}): context_limit must be an integer (got {type(ctx_limit).__name__})"
         )
     if "thinking" in llm:
-        if not llm_supports_thinking(llm):
-            raise ValueError(
-                f"preset {name!r} ({p}): manifest.llm.thinking is supported "
-                "only for thinking-capable providers — the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)}), "
-                f"{', '.join(THINKING_NATIVE_PROVIDERS)}, or any "
-                "OpenAI-compatible block (api_compat=openai)"
-            )
+        # Every provider accepts the standard level vocabulary; the
+        # provider-specific checks (removed provider names, wire/tier values)
+        # are applied by the lingtai-layer preset loader
+        # (``lingtai.agent.load_preset``), which the kernel must not import.
         thinking = llm["thinking"]
-        # A provider that owns its own effort contract is validated against the
-        # exact selected model and wire by the lingtai-layer preset loader
-        # (``lingtai.agent.load_preset``); the kernel must not second-guess it
-        # with a cross-provider level tuple it does not own.
-        if str(llm.get("provider") or "").lower() not in THINKING_OWNED_PROVIDERS and (
-            not isinstance(thinking, str) or thinking not in THINKING_LEVELS
-        ):
+        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
             raise ValueError(
                 f"preset {name!r} ({p}): manifest.llm.thinking must be one of "
                 f"{', '.join(THINKING_LEVELS)}"
@@ -638,17 +622,12 @@ def expand_inherit(capabilities: dict, main_llm: dict) -> dict:
 
     For each capability whose kwargs has `provider == "inherit"`, replace it
     with the main LLM's provider plus its credentials (api_key, api_key_env,
-    base_url) and wire-protocol flag (api_compat, wire_api). The `model` field is NOT
+    base_url) and wire selector (wire_api). The `model` field is NOT
     inherited — capabilities pick their own model independently.
 
-    api_compat must inherit too: capability fallbacks (e.g. vision) dispatch
-    between OpenAI / Anthropic / Gemini adapters based on it, and an inheriting
-    capability that drops api_compat silently routes through the wrong adapter.
-
-    wire_api must inherit alongside api_compat for the same reason: an
-    OpenAI-compatible capability that explicitly selects the Responses or Chat
-    Completions wire must keep that selection on the fallback, or a custom
-    base URL silently drops back to Chat Completions.
+    wire_api must inherit: an OpenAI-compatible capability that explicitly
+    selects the Responses or Chat Completions wire must keep that selection,
+    or it silently drops back to Chat Completions.
 
     Mutates `capabilities` in place. Returns the same dict for convenience.
     """
@@ -661,7 +640,6 @@ def expand_inherit(capabilities: dict, main_llm: dict) -> dict:
         kwargs["api_key"]     = main_llm.get("api_key")
         kwargs["api_key_env"] = main_llm.get("api_key_env")
         kwargs["base_url"]    = main_llm.get("base_url")
-        kwargs["api_compat"]  = main_llm.get("api_compat")
         if "wire_api" in main_llm:
             kwargs["wire_api"] = main_llm["wire_api"]
     return capabilities

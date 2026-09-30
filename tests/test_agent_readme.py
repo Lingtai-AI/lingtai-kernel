@@ -9,7 +9,7 @@ import pytest
 from lingtai.agent import Agent
 from lingtai.kernel.agent_readme import ensure_agent_readme, render_readme, template_version
 from lingtai.kernel.workdir import WorkdirLayout, workdir_layout
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 @pytest.fixture()

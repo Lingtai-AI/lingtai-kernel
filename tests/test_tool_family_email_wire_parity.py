@@ -29,7 +29,7 @@ _PUBLIC_ACTIONS = [
 def _email_schema(tmp_path):
     """Build a real Agent and return its registered ``email`` FunctionSchema."""
     from lingtai.agent import Agent
-    from tests._service_helpers import make_gemini_mock_service as make_mock_service
+    from tests._service_helpers import make_mock_llm_service as make_mock_service
 
     agent = Agent(
         service=make_mock_service(),
@@ -46,7 +46,7 @@ def _email_schema(tmp_path):
 def test_email_is_exactly_one_model_facing_tool(tmp_path):
     """Children consume no model tool slots: 15 actions, one advertised tool."""
     from lingtai.agent import Agent
-    from tests._service_helpers import make_gemini_mock_service as make_mock_service
+    from tests._service_helpers import make_mock_llm_service as make_mock_service
 
     agent = Agent(
         service=make_mock_service(),
@@ -125,7 +125,7 @@ def test_every_action_branch_is_disclosed_on_both_wires(tmp_path):
 def test_handler_parity_dispatches_through_the_registered_intrinsic(tmp_path):
     """The registered handler and the module entry point are the same boundary."""
     from lingtai.agent import Agent
-    from tests._service_helpers import make_gemini_mock_service as make_mock_service
+    from tests._service_helpers import make_mock_llm_service as make_mock_service
 
     agent = Agent(
         service=make_mock_service(),

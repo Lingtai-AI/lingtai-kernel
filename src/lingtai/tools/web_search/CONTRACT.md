@@ -1,6 +1,6 @@
 ---
 name: web
-contract_version: 7
+contract_version: 8
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/web_search/ANATOMY.md
@@ -22,7 +22,7 @@ related_files:
   - src/lingtai/services/websearch/__init__.py
   - src/lingtai/services/websearch/openai.py
   - src/lingtai/services/websearch/anthropic.py
-  - src/lingtai/services/websearch/gemini.py
+  - tests/test_web_canonical_provider_routing.py
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/kernel/tool_result_artifacts.py
   - src/lingtai/kernel/workdir.py
@@ -105,8 +105,8 @@ The declaration sets only this family's boolean settings opt-in, so the generic
 child appears immediately before `manual`. Normal success has no top-level
 `status` and every row contains exactly `key`, `current`, `default`,
 `configurable`, and `comment`. The exact ordered keys are `provider`, `model`,
-`api_key`, `engines`, `search.engine`, `output.max_chars`, and the three
-`credentials.{openai,anthropic,gemini}_api_key` rows. Every `comment` points to
+`api_key`, `engines`, `search.engine`, `output.max_chars`, and the two
+`credentials.{openai,anthropic}_api_key` rows. Every `comment` points to
 the exact `web-manual` section that owns meaning, accepted values, source and
 precedence, address, apply timing, authorization/sensitivity notes, and the real
 external change procedure.
@@ -115,8 +115,9 @@ Provider, model, API-key composition, and admitted engines are applied
 startup/launcher snapshots. The singular flat provider defaults to
 `"automatic"`; its model defaults to `"provider-default"`; multi-engine or
 injected composition reports JSON `null` for singular provider/model facts; and
-the admitted-engine default is the sorted canonical four-engine list. The four
-credential-bearing rows use private `SettingRow(..., _sensitive=True)` facts,
+the admitted-engine default is the sorted three-engine list (`anthropic`,
+`duckduckgo`, `openai`). The three credential-bearing rows use private
+`SettingRow(..., _sensitive=True)` facts,
 so both public values render as `<redacted>` and no secret, env indirection, or
 private flag is projected. Credential-route truth comes from the manager: the
 declared route before lazy construction and the cached service afterward.
@@ -140,7 +141,7 @@ browser transport from search. The declared host plugin additionally receives
 only `WorkdirPort` (settings, artifacts, and installed manual), the typed
 `WebCompositionPort` (browser transport, immutable engine specs, default
 provenance, and one manager-publication operation), and `ProviderIdentityPort`
-(the one canonical label needed for Anthropic/Gemini eligibility); it never
+(the one provider label needed for OpenAI/Anthropic backend eligibility); it never
 receives the Agent or its LLM service/credentials. `WebCompositionPort` is the
 Protocol behind the kernel grant name `web_runtime` (family-owned, like Email's
 `email_runtime`): `setup()` composes one `WebComposition` and grants it to the
@@ -159,17 +160,22 @@ is read-only and read through on every access; it exposes only a string label
 
 Guarded by: [W001](BEHAVIORS.md#behavior-w001), [W002](BEHAVIORS.md#behavior-w002)
 
-Built-in Search admits exactly four engines: canonical first-party OpenAI
-Responses Web Search, canonical first-party Anthropic server-side Web Search,
-canonical first-party Gemini Google Search grounding, and DuckDuckGo. MiniMax
+Built-in Search admits exactly three engines: DuckDuckGo (the default; no
+credential), first-party OpenAI Responses Web Search (`openai`), and
+first-party Anthropic server-side Web Search (`anthropic`). The former Gemini
+Google Search grounding engine was removed together with the Gemini LLM
+provider (LingTai keeps exactly four LLM provider families: `openai`,
+`anthropic`, `codex`, `claude-code`); its `SearchService`, factory branch,
+`GEMINI_API_KEY` credential route, and `credentials.gemini_api_key` settings
+row no longer exist. MiniMax
 and Zhipu are retired from built-in admission entirely (`_RETIRED_PROVIDERS`
 in `web_search/__init__.py`). Their `SearchService` implementations were
 deleted 2026-07-28 (Jason authorized the exact two-path deletion, issue
 11114) — `src/lingtai/services/websearch/minimax.py` and `.../zhipu.py` no
 longer exist, and `create_search_service()`'s factory branches for both were
-removed with them, so an unrecognized `"minimax"`/`"zhipu"` name now raises
-the factory's own documented `ValueError` like any other unknown provider,
-never an uncaught `ModuleNotFoundError`. Wire either provider through a
+removed with them, so an unrecognized `"minimax"`/`"zhipu"`/`"gemini"` name now
+raises the factory's own documented `ValueError` like any other unknown
+provider, never an uncaught `ModuleNotFoundError`. Wire MiniMax/Zhipu through a
 third-party MCP server instead — see
 `src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md`, the
 skill-owned procedure route. Naming either via `provider=`, `default_engine=`,
@@ -177,57 +183,69 @@ or `engines={}` at `web` composition time raises `RetiredProviderError` — a
 composition-time, actionable failure, never a silent DuckDuckGo substitution
 and never reaching the factory at all. This is distinct from the pre-existing
 `legacy_fallback_from`-tagged DuckDuckGo behavior, which remains in force
-only for a genuinely unrecognized/inherited legacy provider name that was
-never a deliberately-retired built-in.
+for every other unrecognized/inherited legacy provider name — including the
+removed `gemini` engine — named through `provider=` or `engines={}`: such a
+composition never raises and searches DuckDuckGo with
+`current_setting.legacy_fallback_from` naming the original provider.
 
-`RetiredProviderError` is reserved exactly for MiniMax/Zhipu. Anthropic and
-Gemini are fully active, currently-admitted canonical providers — never
-described as "retired" anywhere in code, docs, or error text — restricted only
-to a settings-only selection route; naming either through a forbidden
-composition route raises the distinct `SettingsOnlyProviderError` (see below).
+`RetiredProviderError` is reserved exactly for MiniMax/Zhipu. Anthropic is a
+fully active, currently-admitted engine — never described as "retired"
+anywhere in code, docs, or error text — restricted only to a settings-only
+selection route; naming it through a forbidden composition route raises the
+distinct `SettingsOnlyProviderError` (see below).
+
+**Backend gating.** `openai` and `anthropic` are backend-gated
+(`_BACKEND_GATED_ENGINES`): each runs only when the current Agent's own LLM
+provider label is that same family, per the module-private
+`_same_provider_identity()` predicate in `web_search/__init__.py` (exact match
+against the declared `ProviderIdentityPort.provider`: the `openai` engine
+requires provider `openai`, the `anthropic` engine requires provider
+`anthropic`; `codex`, `claude-code`, and any other label are never eligible,
+regardless of wire compatibility). The gate applies however the engine was
+selected — composition default, built-in default, `LINGTAI_WEB_ENGINE`, or
+`settings/web.search.json` — and an ineligible selection fails loudly with
+`PROVIDER_BACKEND_INELIGIBLE`: no provider construction, no search call, and
+no silent substitution (the OpenAI→DuckDuckGo runtime fallback below never
+covers it). This predicate is private to `web` — no cross-tool identity API
+was created for one policy.
 
 The real no-config `setup(agent)` path (no `engines=`, `provider=`,
 `default_engine=`, or `search_service=`) composes the true built-in spec set:
-all four canonical providers, with `openai`/`anthropic`/`gemini` each reading
-only their own standard, publicly-documented API-key environment variable
-(`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/`GEMINI_API_KEY` — as declared by
+all three engines, with `openai`/`anthropic` each reading only their own
+standard, publicly-documented API-key environment variable
+(`OPENAI_API_KEY`/`ANTHROPIC_API_KEY` — as declared by
 `src/lingtai/tools/web_search/__init__.py:_CANONICAL_API_KEY_ENV`) — never the
 current Agent's own live `agent.service` credentials or any private LLM-adapter
-attribute. The built-in default engine is resolved live, per call: canonical
-OpenAI when its standard credential is genuinely present, else DuckDuckGo.
-Anthropic and Gemini are present in this spec set (so their status is
-honestly reported in `current_setting`) but are never the *selected* default;
-only a valid explicit `LINGTAI_WEB_ENGINE` or `settings/web.search.json`
-selection can select them.
+attribute. The built-in default engine is resolved live, per call: OpenAI when
+its standard credential is genuinely present **and** the Agent's own LLM
+provider is `openai`, else DuckDuckGo. Anthropic is present in this spec set
+(so its status is honestly reported in `current_setting`) but is never the
+*selected* default; only a valid explicit `LINGTAI_WEB_ENGINE` or
+`settings/web.search.json` selection can select it.
 
-Anthropic and Gemini are explicit opt-in **only** through the hot-read
-`search.engine` setting: a valid `LINGTAI_WEB_ENGINE` or
+**Composition route.** The two gated engines differ only in how they may be
+*selected*. `openai` stays composable: `provider="openai"`,
+`default_engine="openai"`, and an `engines={"openai": ...}` map are accepted at
+`setup()` time (existing `capabilities.web.provider = "openai"` configs keep
+loading), and the backend gate then decides each search. `anthropic` is
+settings-only (`_SETTINGS_ONLY_ENGINES`): explicit opt-in **only** through the
+hot-read `search.engine` setting — a valid `LINGTAI_WEB_ENGINE` or
 `settings/web.search.json` selection. A composition-time `default_engine=`/
-`provider=` naming either one is rejected outright with
-`SettingsOnlyProviderError` at `setup()` time (an `engines={}` mapping may
-still declare a bounded spec for one of them — credential/service injection
-for tests/integration — without that composition selecting it as the
-default). Once selected through either setting source, the call fails loudly with
-`PROVIDER_BACKEND_INELIGIBLE` — no provider construction, no search call —
-unless the current Agent's live LLM backend truthfully IS that same canonical
-provider, per the module-private `_same_provider_identity()` predicate in
-`web_search/__init__.py` (exact match against the declared
-`ProviderIdentityPort.provider`; Claude Code, `custom`, `openrouter`, and every
-other aliased/wire-compatible provider name are never treated as canonical
-Anthropic/Gemini identity, regardless of API compatibility). This predicate
-is private to `web` — no cross-tool identity API was created for one policy.
-A runtime failure of an explicitly selected Anthropic/Gemini engine reports
-`SEARCH_FAILED`; it is never silently substituted with DuckDuckGo or any
-other engine — see the error hierarchy below for exactly how each provider's
-own adapter reports that failure.
+`provider=` naming it is rejected outright with `SettingsOnlyProviderError` at
+`setup()` time (an `engines={}` mapping may still declare a bounded spec for it
+— credential/service injection for tests/integration — without that
+composition selecting it as the default). A runtime failure of a selected,
+eligible Anthropic engine reports `SEARCH_FAILED`; it is never silently
+substituted with DuckDuckGo or any other engine — see the error hierarchy
+below for exactly how each provider's own adapter reports that failure.
 
 **Provider error hierarchy.** `src/lingtai/services/websearch/__init__.py`
 defines `SearchProviderError(provider, failure_class)`, a shared, narrow base
-raised by all three canonical adapters on a runtime failure — bounded to a
+raised by both canonical adapters on a runtime failure — bounded to a
 provider name and a failure class, never raw SDK exception text, request
 bodies, or credentials in the message, logs, or any returned structure. Each
 adapter's own subclass carries the same shape: `OpenAISearchError`,
-`AnthropicSearchError`, `GeminiSearchError`. None of the three ever swallows
+`AnthropicSearchError`. Neither ever swallows
 a genuine SDK/HTTP failure to `[]` — `[]` is reserved for a genuine
 successful provider response with no content/result. `AnthropicSearchService`
 additionally detects Anthropic's official in-body HTTP-200
@@ -246,7 +264,7 @@ line stating that OpenAI failed and DuckDuckGo was used, and bounded,
 secret-free `openai_failure_class`/`duckduckgo_failure_class` provenance. If
 the DuckDuckGo fallback also fails, the call fails with `SEARCH_FAILED` and
 both bounded failure classes; there is no second retry and no recursive
-fallback. A typed `AnthropicSearchError`/`GeminiSearchError` (or any other
+fallback. A typed `AnthropicSearchError` (or any other
 `SearchProviderError` on a non-OpenAI engine) fails with `SEARCH_FAILED` and
 a bounded `provider_failure_class`, never touching DuckDuckGo. Any non-typed
 exception (a manager/programming defect — a `TypeError` or `AttributeError`
@@ -256,13 +274,11 @@ DuckDuckGo. No engine other than OpenAI has an automatic fallback.
 
 Each canonical provider's `SearchService` extracts real, official per-source
 citation URLs from its own provider response — OpenAI's Responses `output[]`
-message `annotations[].url_citation`, Anthropic's `web_search_result_location`
-text citations (falling back to raw `web_search_tool_result` items), and
-Gemini's `grounding_metadata.grounding_chunks[].web` (field names verified
-2026-07-28 read-only against the installed `google-genai` 2.10.0 package
-source, `google/genai/types.py`) — never an invented URL. When a provider
+message `annotations[].url_citation` and Anthropic's `web_search_result_location`
+text citations (falling back to raw `web_search_tool_result` items) — never an
+invented URL. When a provider
 genuinely returns a nonempty search-grounded narrative with no citation (a
-legally valid response shape for all three official APIs), exactly
+legally valid response shape for both official APIs), exactly
 one bounded narrative `SearchResult` with `url=""` is preserved rather than
 silently discarded; `WebManager` never fabricates a `link_ref` for it
 (`link_ref: null` in that one case only — every other result with a real URL
@@ -324,8 +340,10 @@ Guarded by: [W002](BEHAVIORS.md#behavior-w002)
   credential-missing selections fail search without substitution. Invalid
   settings use error code `WEB_SETTINGS_INVALID`; a selected or
   initialization-unavailable engine uses `SEARCH_ENGINE_UNAVAILABLE`; a
-  selected Anthropic/Gemini engine on a non-canonical backend uses
-  `PROVIDER_BACKEND_INELIGIBLE`. Browse and manual remain fully usable —
+  selected OpenAI/Anthropic engine on a backend whose own LLM provider is not
+  that family uses `PROVIDER_BACKEND_INELIGIBLE`. A selector naming a removed
+  engine such as `gemini` is simply not operator-admitted and fails
+  `WEB_SETTINGS_INVALID` like any other non-admitted name. Browse and manual remain fully usable —
   including when `settings/web.search.json` is invalid — and never construct
   a search provider.
 - `settings/web.json` is a separate, family-owned strict schema
@@ -376,14 +394,17 @@ Guarded by: [W002](BEHAVIORS.md#behavior-w002)
   exactly as the provider boundary already requires.
 - Composing `web` with a retired provider (`minimax`, `zhipu`) via
   `provider=`, `default_engine=`, or `engines={}` raises
-  `RetiredProviderError` at `setup()` time. Composing with a settings-only
-  provider (`anthropic`, `gemini`) via `provider=` or `default_engine=`
-  raises the distinct `SettingsOnlyProviderError` instead — both are
-  composition-time, actionable Python exceptions, not a runtime search
-  result; the two classes are never conflated, since Anthropic/Gemini are
-  active canonical providers and MiniMax/Zhipu are not. `engines={}` may
-  still declare a bounded spec for `anthropic`/`gemini` (credential/service
-  injection) without that composition selecting either as the default.
+  `RetiredProviderError` at `setup()` time. Composing with the settings-only
+  engine (`anthropic`) via `provider=` or `default_engine=` raises the
+  distinct `SettingsOnlyProviderError` instead — both are composition-time,
+  actionable Python exceptions, not a runtime search result; the two classes
+  are never conflated, since Anthropic is an active engine and MiniMax/Zhipu
+  are not. `engines={}` may still declare a bounded spec for `anthropic`
+  (credential/service injection) without that composition selecting it as the
+  default. Composing `openai` through any route is accepted; its backend gate
+  applies at search time. Composing any other unrecognized name (including the
+  removed `gemini`) via `provider=` or `engines={}` never raises and takes the
+  `legacy_fallback_from` DuckDuckGo route.
 - Browse remains static public HTTP(S) only with its existing SSRF/DNS,
   extraction, provenance, cursor, snapshot, deadline, and typed-failure rules,
   and stays provider/network independent of the search settings file (though
@@ -477,26 +498,30 @@ proves declaration/action order, exact row-key and five-field equality,
 current/default/configurable values, exact manual targets, full private
 credential redaction, one fixed no-row failure when current truth is
 unavailable, no mutation input, and unchanged ordinary search behavior.
-Provider ownership/routing checks cover: the real
-no-config `setup(agent)` path composes all four canonical specs and
-genuinely selects OpenAI via its standard `OPENAI_API_KEY` env var when set
-(proved with real environment isolation, not a test-only injected `engines=`
-set standing in for the default), else DuckDuckGo, without overriding an
-explicit operator default; MiniMax/Zhipu are absent from `PROVIDERS` and
+Provider ownership/routing checks
+(`tests/test_web_canonical_provider_routing.py`) cover: `PROVIDERS` admits
+exactly `duckduckgo`/`anthropic`/`openai` and the factory rejects `gemini`;
+the real no-config `setup(agent)` path composes all three specs and genuinely
+selects OpenAI via its standard `OPENAI_API_KEY` env var when set on an
+`openai` backend (proved with real environment isolation, not a test-only
+injected `engines=` set standing in for the default), else DuckDuckGo —
+including with the key set on every non-`openai` backend — without overriding
+an explicit operator default; MiniMax/Zhipu are absent from `PROVIDERS` and
 raise `RetiredProviderError` from the flat-`provider=`, `default_engine=`,
 and map-shaped `engines={}` composition paths alike — never a DuckDuckGo
-substitution — while a genuinely unrecognized/inherited legacy provider name
-keeps the pre-existing `legacy_fallback_from` DuckDuckGo behavior; a
-composition-time `default_engine=`/`provider=` naming `anthropic`/`gemini`
-raises the distinct `SettingsOnlyProviderError` (never `RetiredProviderError`
-— both are still active canonical providers), and only a valid hot-read
-`search.engine` env/document selection (live-changed, no refresh required) can
-select either, subject to canonical-backend eligibility that succeeds for a
-truthfully-canonical backend and fails `PROVIDER_BACKEND_INELIGIBLE` (no
-provider construction, no search call) on every non-canonical backend
-including Claude Code and `custom`/aliased providers; a settings-selected
-Anthropic/Gemini runtime failure raises the adapter's own typed
-`AnthropicSearchError`/`GeminiSearchError` (including Anthropic's official
+substitution — while a genuinely unrecognized/inherited legacy provider name,
+including the removed `gemini`, keeps the pre-existing `legacy_fallback_from`
+DuckDuckGo behavior without raising; a composition-time
+`default_engine=`/`provider=` naming `anthropic` raises the distinct
+`SettingsOnlyProviderError` (never `RetiredProviderError`), and only a valid
+hot-read `search.engine` env/document selection (live-changed, no refresh
+required) can select it; a composed `openai` searches on an `openai` backend
+and fails `PROVIDER_BACKEND_INELIGIBLE` elsewhere; either gated engine
+selected through settings succeeds on its own family's backend and fails
+`PROVIDER_BACKEND_INELIGIBLE` (no provider construction, no search call) on
+every other backend including Claude Code and Codex; a settings-selected
+Anthropic runtime failure raises the adapter's own typed
+`AnthropicSearchError` (including Anthropic's official
 in-body `web_search_tool_result_error`) and reports `SEARCH_FAILED` with a
 bounded `provider_failure_class`, proved end-to-end through the real adapter
 class plus `WebManager`, never invoking DuckDuckGo; an OpenAI runtime
@@ -504,11 +529,11 @@ failure raising the typed `OpenAISearchError` falls back to exactly one
 DuckDuckGo search with a comment line and bounded dual failure-class
 provenance, a non-`OpenAISearchError` exception (a programming defect) fails
 normally without touching DuckDuckGo, and a non-OpenAI engine's runtime
-failure never triggers that fallback; all three canonical providers'
+failure never triggers that fallback; both canonical providers'
 `SearchService.search()` are proved, using provider-shaped fake Responses/
-Anthropic/Gemini objects passed through the real extraction code, to return
-nonempty results with real link refs when official citations/grounding
-chunks/result blocks are present, and exactly one bounded narrative
+Anthropic objects passed through the real extraction code, to return
+nonempty results with real link refs when official citations/result blocks
+are present, and exactly one bounded narrative
 result with `link_ref: null` (never a fabricated one) when the official API
 legally returns a citation-free grounded narrative. A real
 fresh Agent startup must prove exactly

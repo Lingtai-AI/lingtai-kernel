@@ -13,7 +13,7 @@ from lingtai.tools.system.summarize import (
     SUMMARY_STATUS_DONE,
     SUMMARY_STATUS_PENDING,
 )
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 def _agent(tmp_path, **kwargs):

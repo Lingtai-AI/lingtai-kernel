@@ -30,8 +30,8 @@ def _service_mock():
     """Return a minimal service stub that lets ``Agent`` construct in tests."""
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     return svc
 
 

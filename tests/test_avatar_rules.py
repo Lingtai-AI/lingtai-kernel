@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from lingtai.tools.avatar import AvatarManager
 
 import pytest
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 def _fake_launch_return(pid: int = 12345):
@@ -38,8 +38,8 @@ class TestRulesHeartbeatWatch:
 
         svc = MagicMock()
         svc.get_adapter.return_value = MagicMock()
-        svc.provider = "gemini"
-        svc.model = "gemini-test"
+        svc.provider = "anthropic"
+        svc.model = "claude-test"
         wd = tmp_path / "agent"
         agent = Agent(service=svc, agent_name="test", working_dir=wd)
         return agent
@@ -118,8 +118,8 @@ class TestRulesHeartbeatWatch:
         from lingtai.agent import Agent
         svc = MagicMock()
         svc.get_adapter.return_value = MagicMock()
-        svc.provider = "gemini"
-        svc.model = "gemini-test"
+        svc.provider = "anthropic"
+        svc.model = "claude-test"
         agent = Agent(service=svc, agent_name="test", working_dir=wd)
 
         # Rules should be loaded from system/rules.md during init

@@ -74,7 +74,6 @@ _LLM_PUBLIC_KEYS = (
     "provider",
     "model",
     "base_url",
-    "api_compat",
     "context_limit",
     "service_tier",
 )
@@ -118,7 +117,7 @@ def _safe_llm_from_service(agent) -> dict:
     """Extract a sanitized ``llm`` block from the live LLMService.
 
     Returns a safelisted public block (provider/model/base_url plus optional
-    api_compat/context_limit) with only string/int values. Empty values, None,
+    context_limit/service_tier) with only string/int values. Empty values, None,
     and non-scalars are dropped. Returns ``{}`` on any unexpected service shape
     (mocks in tests, future adapter rewrites). Never raises.
     """
@@ -147,24 +146,19 @@ def _safe_llm_from_service(agent) -> dict:
     if context_limit is not None:
         llm["context_limit"] = context_limit
 
-    api_compat = _provider_default_from_service(service, "api_compat")
-    if isinstance(api_compat, str) and api_compat:
-        llm["api_compat"] = api_compat
-
     # The configured service tier is safe runtime identity metadata, reported
-    # only for routes whose factory actually forwards it (Codex, official
-    # OpenAI, custom api_compat=openai); other adapters must not claim one.
+    # only for routes whose factory actually forwards it (``openai`` and
+    # ``codex``); ``anthropic``/``claude-code`` never claim one.
     route = _service_tier_route(service, llm.get("provider"))
     if route is not None:
         service_tier = _provider_default_from_service(service, "service_tier")
         authored = service_tier.strip() if isinstance(service_tier, str) else ""
-        if route == "openai":
-            # OpenAI-compatible factories forward only recognized tiers and
-            # ignore the rest, so report what is actually sent.
-            from lingtai.llm._register import _openai_compatible_service_tier
+        try:
+            from lingtai.llm._register import _normalize_service_tier
 
-            if _openai_compatible_service_tier(authored) is None:
-                authored = ""
+            _normalize_service_tier(authored)
+        except Exception:
+            authored = ""
         # An omitted tier labels the known request-side default rather than
         # inventing a provider-returned tier.
         llm["service_tier"] = authored or "default"
@@ -191,10 +185,6 @@ def _service_tier_route(service, provider) -> str | None:
         return "codex"
     if selected is factories.get("openai"):
         return "openai"
-    if selected is factories.get("custom"):
-        api_compat = _provider_default_from_service(service, "api_compat")
-        if (api_compat if api_compat is not None else "openai") == "openai":
-            return "openai"
     return None
 
 

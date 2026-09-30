@@ -626,7 +626,7 @@ def test_concurrent_writers_different_payloads_never_lose(tmp_path):
 def test_non_ascii_attention_measured_with_provider_escaping(tmp_path, monkeypatch):
     """P1-1: multilingual attention is measured like the provider serializes it.
 
-    Anthropic/OpenAI Chat/OpenAI Responses/Gemini canonical converters
+    Anthropic/OpenAI Chat/OpenAI Responses canonical converters
     re-serialize projected ToolResultBlock dictionaries with default ASCII
     escaping (``json.dumps(..., default=str)``), so a CJK body that is small
     under ``ensure_ascii=False`` is far larger on the wire.  The cap ruler must

@@ -153,8 +153,7 @@ def _adapter(source, managers, responses, **kwargs):
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=manager_factory,
         **kwargs,
@@ -211,8 +210,7 @@ def test_native_codex_without_source_or_factory_uses_constructor_identity():
     adapter = CodexOpenAIAdapter(
         api_key="static-key",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_id="acct-static",
         codex_auth_path_sha8="0123abcd",
         codex_auth_path_source="configured",

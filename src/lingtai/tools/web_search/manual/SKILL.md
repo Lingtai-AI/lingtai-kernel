@@ -61,15 +61,17 @@ under `tmp/tool-results/`; read the returned file with `shell` (for example
 
 Only typed OpenAI search failure gets one automatic DuckDuckGo attempt, with
 selected/actual provenance. Browse never silently searches or runs an extraction
-chain. Anthropic/Gemini need explicit hot selection and matching canonical
-backend identity; compatible aliases do not qualify.
+chain. The engines are `duckduckgo` (default), `openai`, and `anthropic`;
+`openai`/`anthropic` run only when this agent's own LLM provider is that same
+family (other providers, including `codex`/`claude-code`, do not qualify), and
+Anthropic additionally needs explicit hot selection.
 [Provider policy](reference/operation-contract.md#provider-routing-and-explicit-fallback).
 
 ## Read-only settings
 
 `web(action="settings", input={}, reasoning="inspect applied settings")` is
 SHOW only; `configurable:true` does not grant permission to change configuration.
-Nine five-field rows (`key`, `current`, `default`, `configurable`, `comment`)
+Eight five-field rows (`key`, `current`, `default`, `configurable`, `comment`)
 include redacted credentials. Use the owning route below for source, default,
 timing and authorized changes; then SHOW again. No set/reset action exists.
 
@@ -89,8 +91,6 @@ timing and authorized changes; then SHOW again. No set/reset action exists.
 [OpenAI credential lifetime](reference/operation-contract.md#openai-api-key).
 #### anthropic-api-key
 [Anthropic credential lifetime](reference/operation-contract.md#anthropic-api-key).
-#### gemini-api-key
-[Gemini credential lifetime](reference/operation-contract.md#gemini-api-key).
 
 `web(action="manual", input={}, reasoning="load web guidance")` reads the
 installed bundle without provider construction, network or settings I/O, even

@@ -159,11 +159,12 @@ def test_service_builds_keyless():
     assert isinstance(svc.get_adapter("claude-code"), ClaudeCodeAdapter)
 
 
-def test_service_builds_keyless_underscore_alias():
+def test_underscore_alias_is_no_longer_registered():
+    """``claude_code`` was removed; only ``claude-code`` is registered."""
     from lingtai.llm.service import LLMService
 
-    svc = LLMService(provider="claude_code", model="sonnet", api_key=None)
-    assert isinstance(svc.get_adapter("claude_code"), ClaudeCodeAdapter)
+    with pytest.raises(RuntimeError, match="No adapter registered"):
+        LLMService(provider="claude_code", model="sonnet", api_key=None)
 
 
 # ---------------------------------------------------------------------------

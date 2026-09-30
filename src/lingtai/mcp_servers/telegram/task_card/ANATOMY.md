@@ -128,9 +128,9 @@ onto its one tracked resident Task Card target per account+chat.
   Catalog entries keep a present-but-invalid tier rate as `None` so a bad tier
   price cannot fall back to the cheaper base rate; every charge/average is
   finite-checked and unknown on overflow. Providers that state the counts on
-  their wire: Anthropic (write, 1h TTL, output), Claude Code and Kimi (write,
-  output), OpenAI chat/Responses and native Codex/pool (output only), Gemini
-  generateContent (candidates + thoughts); Gemini Interactions stays unknown.
+  their wire: Anthropic (write, 1h TTL, output), Claude Code (write, output),
+  and OpenAI chat/Responses and native Codex (output only) — the four LLM
+  provider families.
 - `SKILL.md` — packaged Telegram-facing manual/procedure material for this
   component.
 - Retained legacy files in this package (`controller.py`, `_family.py`,

@@ -9,9 +9,9 @@ branch and was forwarded to ``responses.create(input=[...])`` *unconverted*
 ``OpenAIResponsesSession._convert_input`` — at ``openai/adapter.py:1800-1801``
 in the fresh-main base ``57c0611a``; the staged fix inserts the
 ``ToolResultBlock`` branch just above it). This is a live defect for a
-non-Codex ``openai`` provider on the Responses wire (``wire_api=responses`` /
-no base_url + ``use_responses`` / ``force_responses``), because that session
-commits nothing to the canonical interface, so no replay path rescues it.
+non-Codex Responses session in its non-replay mode (``stateless_replay=False``),
+because that mode commits nothing to the canonical interface, so no replay path
+rescues it. (``OpenAIAdapter`` now always builds the stateless replay mode.)
 
 Fix: ``_convert_input`` now converts a ``ToolResultBlock`` to the
 ``function_call_output`` wire item using the same mapping as

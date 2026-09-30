@@ -3050,14 +3050,10 @@ class DaemonManager:
         traffic collide in one REST cache slot.
 
         context_token_limit: the task's optional ``context_token_limit``.
-        Meaningful for a Codex-family provider, where it becomes
+        Meaningful only for the ``codex`` provider, where it becomes
         ``codex_compact_token_limit`` — the standalone-compaction threshold
-        consulted by ``CodexOpenAIAdapter``/``CodexResponsesSession`` — and
-        for the native ``mimo`` provider, where it becomes
-        ``mimo_compact_token_limit`` — the same standalone-compaction axis
-        consulted by ``MimoAdapter``/``MimoResponsesSession`` (see
-        ``src/lingtai/llm/mimo/ANATOMY.md``). Omitted for every other
-        provider so their adapter construction is unaffected.
+        consulted by ``CodexOpenAIAdapter``/``CodexResponsesSession``. Omitted
+        for every other provider so their adapter construction is unaffected.
         """
         provider_key = str(provider).lower()
         bucket = dict(base_defaults or {})
@@ -3067,26 +3063,41 @@ class DaemonManager:
             bucket["codex_session_anchor"] = self._daemon_codex_session_anchor(run_dir)
             if context_token_limit is not None:
                 bucket["codex_compact_token_limit"] = context_token_limit
-        elif provider_key == "mimo" and context_token_limit is not None:
-            bucket["mimo_compact_token_limit"] = context_token_limit
         if not bucket:
             return None
         return {provider_key: bucket}
 
     @staticmethod
     def _llm_defaults_from_manifest(llm: dict) -> dict:
-        """Extract adapter-consulted defaults from a preset ``manifest.llm``."""
-        keys = (
-            "api_compat",
-            "base_url",
-            "codex_auth_path",
-            "codex_session_anchor",
-            "codex_thread_salt",
-            "default_headers",
-            "max_rpm",
-            "wire_api",
+        """Extract adapter-consulted defaults from a preset ``manifest.llm``.
+
+        Uses the SAME safelist the main agent boot uses
+        (``lingtai.llm.service.build_provider_defaults_from_manifest_llm``), so
+        a daemon run from a preset forwards every generic knob the adapter
+        factories consult — ``service_tier``, ``wire_api``,
+        ``inject_reasoning_fallback``, ``prompt_cache_namespace``,
+        ``default_headers``, the ``codex_*`` identity/endpoint keys — plus the
+        preset's ``base_url`` and ``max_rpm``. A second hand-maintained key
+        list here previously dropped several of them.
+        """
+        from lingtai.llm.service import build_provider_defaults_from_manifest_llm
+
+        provider = llm.get("provider")
+        if not isinstance(provider, str) or not provider.strip():
+            provider = "_"
+        max_rpm = llm.get("max_rpm")
+        rpm = (
+            max_rpm
+            if isinstance(max_rpm, int) and not isinstance(max_rpm, bool) and max_rpm > 0
+            else 0
         )
-        return {key: llm[key] for key in keys if key in llm}
+        built = build_provider_defaults_from_manifest_llm(
+            {**llm, "provider": provider}, max_rpm=rpm
+        )
+        bucket: dict = dict(next(iter(built.values()))) if built else {}
+        if llm.get("base_url") is not None:
+            bucket["base_url"] = llm["base_url"]
+        return bucket
 
     def _implicit_parent_preset_llm(self) -> dict:
         """Materialize the parent service into an implicit/effective preset.
@@ -3693,10 +3704,9 @@ class DaemonManager:
 
         context_token_limit: the task's optional ``context_token_limit``
         (already validated as a positive int by ``_handle_emanate``'s
-        pre-flight gate). Consulted for a Codex-family provider or the native
-        ``mimo`` provider — see ``_daemon_provider_defaults``; every other
-        provider ignores it, and every external CLI backend never reaches
-        this method at all.
+        pre-flight gate). Consulted only for the ``codex`` provider — see
+        ``_daemon_provider_defaults``; every other provider ignores it, and
+        every external CLI backend never reaches this method at all.
         """
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
@@ -3730,9 +3740,9 @@ class DaemonManager:
             # A detached child receives the provider bucket under the public
             # ``provider_defaults`` key (the private ``_provider_defaults`` alias
             # never crosses the process boundary). Merge the nested bucket so
-            # provider-specific fields such as ``wire_api`` / ``api_compat`` /
+            # provider-specific fields such as ``wire_api`` / ``service_tier`` /
             # ``max_rpm`` survive the reconstruction; without this a Responses
-            # provider degrades to ``auto`` and is misrouted to Chat Completions.
+            # provider degrades to the default Chat Completions wire.
             public_defaults = effective_preset_llm.get("provider_defaults")
             if isinstance(public_defaults, dict):
                 nested = public_defaults.get(provider)
@@ -5331,8 +5341,7 @@ class DaemonManager:
         # ``backend_spec.is_cli`` return above). A single bad value refuses the
         # whole batch, consistent with the other pre-flight gates below. Bound
         # to a provider-specific standalone-compaction feature at construction
-        # time (Codex's ``codex_compact_token_limit`` or the native ``mimo``
-        # provider's ``mimo_compact_token_limit`` — see
+        # time (Codex's ``codex_compact_token_limit`` — see
         # ``_daemon_provider_defaults``), but validated generically here so the
         # schema/error shape does not leak provider identity into the daemon
         # tool surface.

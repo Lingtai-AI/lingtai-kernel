@@ -36,8 +36,8 @@ def _make_agent_with_context(tmp_path):
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     return Agent(
         service=svc, agent_name="test", working_dir=tmp_path / "test",
         capabilities=["context"],

@@ -60,13 +60,17 @@ def _consent_guidance() -> str:
 
 _CODEX_FAMILY = {"codex"}
 
-# Claude Code CLI vision: all three spellings identify the claude backend
-# whose vision route is the operator-installed Claude Code CLI (``claude -p``).
+# Claude Code CLI vision: both spellings identify the claude backend whose
+# vision route is the operator-installed Claude Code CLI (``claude -p``).
 # LingTai does not proxy the CLI's auth, so these providers return explicit
 # guidance instead of constructing a service. ``claude-p`` is the explicit
-# vision-route alias alongside the LLM registry's two canonical adapter
-# spellings (``claude-code``/``claude_code``).
-_CLAUDE_CLI_FAMILY = {"claude-p", "claude-code", "claude_code"}
+# vision-route alias beside the LLM registry's ``claude-code`` provider.
+_CLAUDE_CLI_FAMILY = {"claude-p", "claude-code"}
+
+# The two API provider families with a direct Vision service. Each accepts any
+# compatible endpoint through ``base_url``; the default route inherits the
+# active provider's effective endpoint, model, and credential.
+_API_FAMILIES = {"openai", "anthropic"}
 
 _VISION_SETTING_KEYS = (
     "provider",
@@ -75,7 +79,6 @@ _VISION_SETTING_KEYS = (
     "api_key",
     "api_key_env",
     "max_tokens",
-    "api_compat",
     "wire_api",
     "default_headers",
     "token_path",
@@ -96,23 +99,12 @@ _MODEL_DEFAULTS = {
 }
 _BASE_URL_DEFAULTS = {
     "local": DEFAULT_LOCAL_BASE_URL,
-    "mimo": "https://api.xiaomimimo.com/v1",
     "codex": "https://chatgpt.com/backend-api/codex",
 }
 _MAX_TOKENS_DEFAULTS = {
     "local": 1024,
     "openai": 1024,
-    "openrouter": 1024,
-    "custom": 1024,
-    "deepseek": 1024,
-    "zhipu": 1024,
-    "glm": 1024,
-    "grok": 1024,
-    "qwen": 1024,
-    "kimi": 1024,
     "anthropic": 1024,
-    "minimax": 1024,
-    "mimo": 1024,
     "mlx": 512,
 }
 
@@ -124,13 +116,6 @@ class _VisionSettingsSnapshot:
     current: tuple[Any, ...]
     default: tuple[Any, ...]
     sensitive: tuple[bool, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class _VisionRouteProvenance:
-    """Resolver-produced protocol provenance for the successfully bound route."""
-
-    api_compat: str | None = None
 
 
 def _same_codex_family(requested: str, active: str) -> bool:
@@ -153,7 +138,7 @@ def _vision_endpoint(provider: str | None) -> str:
         return "openai-compatible-local"
     if key == "mlx":
         return "mlx-on-device"
-    if key in PROVIDERS.get("providers", ()):
+    if key in _API_FAMILIES:
         return "provider-service"
     return "unknown"
 
@@ -200,28 +185,24 @@ def _same_provider_identity(requested: str, active: str) -> bool:
     """Return whether two provider names identify the same current route."""
     if requested == active:
         return True
-    if {requested, active} <= {"glm", "zhipu"}:
-        return True
     if {requested, active} <= _CLAUDE_CLI_FAMILY:
         return True
     return _same_codex_family(requested, active)
 
 
-def _effective_openai_wire(
-    wire_api: str | None,
-    *,
-    use_responses_api: bool,
-    base_url: str | None,
-) -> str | None:
-    """Resolve a supported canonical wire; reject unknown protocols."""
+def _effective_openai_wire(wire_api: object) -> str | None:
+    """Resolve the ``openai`` wire selector; reject unknown protocols.
+
+    ``responses`` selects the Responses API; ``chat_completions``, the legacy
+    ``auto``, blank, and omission all select Chat Completions (the ``openai``
+    provider's own default). Any other value returns ``None`` so the route
+    stays manual-only.
+    """
     normalized = wire_api.strip().lower() if isinstance(wire_api, str) else wire_api
-    if isinstance(normalized, str):
-        if normalized in {"chat_completions", "responses"}:
-            return normalized
-        if normalized in {"", "auto"}:
-            return "responses" if use_responses_api and not base_url else "chat_completions"
-    elif normalized is None:
-        return "responses" if use_responses_api and not base_url else "chat_completions"
+    if normalized is None or normalized in {"", "auto", "chat_completions"}:
+        return "chat_completions"
+    if normalized == "responses":
+        return "responses"
     return None
 
 
@@ -237,6 +218,32 @@ def _plain_service_value(service: Any, *names: str) -> Any:
     return None
 
 
+def _active_effective_base_url(service: Any) -> str | None:
+    """Return the endpoint the active provider service actually talks to.
+
+    ``LLMService.effective_base_url`` resolves the adapter's own default when
+    the manifest omitted ``base_url`` (the official OpenAI/Anthropic endpoint
+    or an SDK-level override), so a credential inherited from the active
+    service is only ever sent to that same endpoint. Falls back to the raw
+    configured ``_base_url`` for services that expose no effective endpoint.
+    """
+    for name in ("effective_base_url", "_base_url"):
+        try:
+            value = getattr(service, name)
+        except Exception:
+            continue
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _endpoint_key(url: object) -> str | None:
+    """Normalize an endpoint for same-endpoint comparison only."""
+    if not isinstance(url, str) or not url.strip():
+        return None
+    return url.strip().rstrip("/").lower()
+
+
 def _model_is_path_like(value: str) -> bool:
     """Return whether a model value has an explicit filesystem-path shape."""
     candidate = value.strip()
@@ -247,15 +254,13 @@ def _model_is_path_like(value: str) -> bool:
     )
 
 
-def _vision_service_kind(provider: str, api_compat: str | None) -> str:
+def _vision_service_kind(provider: str) -> str | None:
     """Name the concrete Vision service boundary selected by the resolver."""
     if provider in _CODEX_FAMILY:
         return "codex"
-    if provider in {"mlx", "local", "anthropic", "gemini", "mimo", "openai"}:
+    if provider in {"mlx", "local"} or provider in _API_FAMILIES:
         return provider
-    if provider == "minimax" or api_compat == "anthropic":
-        return "anthropic"
-    return "openai"
+    return None
 
 
 def _vision_settings_snapshot(
@@ -264,7 +269,6 @@ def _vision_settings_snapshot(
     active_service: Any,
     vision_service: Any,
     local_settings: LocalVisionSettings | None,
-    route_provenance: _VisionRouteProvenance,
 ) -> _VisionSettingsSnapshot:
     """Project the exact successful bind inputs without retaining secrets."""
     if vision_service is None or not isinstance(provider, str) or not provider.strip():
@@ -272,6 +276,9 @@ def _vision_settings_snapshot(
 
     provider = provider.strip()
     provider_key = provider.lower()
+    service_kind = _vision_service_kind(provider_key)
+    if service_kind is None:
+        raise SettingsError("vision route is unavailable")
     kwargs = dict(configuration.kwargs)
     active_name = getattr(active_service, "provider", "")
     active_key = active_name.lower() if isinstance(active_name, str) else ""
@@ -280,11 +287,9 @@ def _vision_settings_snapshot(
     bucket = defaults.get(active_key) if isinstance(defaults, dict) else None
     bucket = bucket if isinstance(bucket, dict) else {}
 
-    api_compat = route_provenance.api_compat
-    service_kind = _vision_service_kind(provider_key, api_compat)
     active_model = _plain_service_value(active_service, "_model") if same_provider else None
     active_base_url = (
-        _plain_service_value(active_service, "_base_url") if same_provider else None
+        _active_effective_base_url(active_service) if same_provider else None
     )
 
     if provider_key == "local":
@@ -338,13 +343,9 @@ def _vision_settings_snapshot(
         wire_api = applied_wire
     elif service_kind == "codex":
         wire_api = "responses"
-    elif service_kind == "mimo":
-        wire_api = "chat_completions"
-    elif service_kind == "openai" or provider_key == "local":
+    elif service_kind in {"openai", "local"}:
         wire_api = _effective_openai_wire(
             kwargs.get("wire_api") or bucket.get("wire_api"),
-            use_responses_api=bucket.get("use_responses_api") is True,
-            base_url=base_url,
         )
     else:
         wire_api = None
@@ -368,18 +369,15 @@ def _vision_settings_snapshot(
     if timeout is None:
         timeout = kwargs.get("timeout")
 
-    uses_api_key = service_kind in {"openai", "anthropic", "gemini", "mimo"}
-    if provider_key == "local":
-        uses_api_key = True
-    uses_headers = service_kind in {"openai", "anthropic"}
+    uses_api_key = service_kind in {"openai", "anthropic", "local"}
+    uses_headers = service_kind in _API_FAMILIES
     current = {
         "provider": provider,
-        "base_url": bool(base_url) if service_kind not in {"gemini", "mlx"} else None,
+        "base_url": bool(base_url) if service_kind != "mlx" else None,
         "model": model,
         "api_key": True if uses_api_key else None,
         "api_key_env": True if uses_api_key and configuration.api_key_env else None,
         "max_tokens": max_tokens if service_kind != "codex" else None,
-        "api_compat": api_compat,
         "wire_api": wire_api,
         "default_headers": (
             True
@@ -395,7 +393,7 @@ def _vision_settings_snapshot(
     default_wire = None
     if service_kind == "codex":
         default_wire = "responses"
-    elif service_kind in {"openai", "mimo"} or provider_key == "local":
+    elif service_kind in {"openai", "local"}:
         default_wire = "chat_completions"
     default = {
         "provider": None,
@@ -410,7 +408,6 @@ def _vision_settings_snapshot(
                 provider_key, _MAX_TOKENS_DEFAULTS.get(service_kind)
             )
         ),
-        "api_compat": None,
         "wire_api": default_wire,
         "default_headers": None,
         "token_path": None,
@@ -435,7 +432,6 @@ def _vision_settings_provider(
     active_service: Any,
     vision_service: Any,
     local_settings: LocalVisionSettings | None,
-    route_provenance: _VisionRouteProvenance,
     failure: Exception | None,
 ) -> SettingsProvider:
     """Bind one SHOW-only provider to the already-applied Vision route."""
@@ -448,7 +444,6 @@ def _vision_settings_provider(
             active_service,
             vision_service,
             local_settings,
-            route_provenance,
         )
     except Exception:
         return _unavailable_vision_settings
@@ -481,10 +476,7 @@ def _unavailable_vision_settings() -> tuple[SettingRow, ...]:
 
 PROVIDERS = {
     "providers": [
-        "gemini", "anthropic", "openai", "openrouter", "custom", "deepseek",
-        "minimax", "mimo", "glm", "zhipu", "grok", "qwen", "kimi",
-        "codex", "claude-p", "claude-code", "claude_code",
-        "local",
+        "openai", "anthropic", "codex", "claude-p", "claude-code", "local",
     ],
     "default": None,
     "fallback_on_inherit": None,  # no agnostic fallback for vision
@@ -746,11 +738,14 @@ class VisionManager:
             provider = preset_provider
             _model = llm.get("model")
             _base_url = llm.get("base_url")
+            # A preset that omits ``base_url`` uses its provider's default
+            # endpoint; the vision service then applies the same SDK default.
+            effective_base_url = llm.get("base_url")
             api_key = None
             _provider_defaults: dict = preset_defaults
 
         kwargs = dict(vision_cap)
-        for key in ("model", "base_url", "api_key_env", "api_compat", "wire_api"):
+        for key in ("model", "base_url", "api_key_env", "wire_api"):
             if key in llm and key not in kwargs:
                 kwargs[key] = llm[key]
         api_key = kwargs.pop("api_key", None)
@@ -758,7 +753,7 @@ class VisionManager:
         # ``provider`` is passed positionally below; drop the capability copy so
         # ``_resolve_direct_service`` never receives it twice (TypeError).
         kwargs.pop("provider", None)
-        service, service_reason, _route_provenance = _resolve_direct_service(
+        service, service_reason = _resolve_direct_service(
             self._workdir,
             self._active_provider,
             provider,
@@ -840,8 +835,8 @@ class VisionManager:
             else:
                 route = "default vision route"
                 hint = (
-                    "The default route is the current provider's "
-                    "Responses-API vision, which may not support images."
+                    "The default route is the current provider's own "
+                    "endpoint and model, which may not support images."
                 )
             return {
                 "status": "error",
@@ -866,8 +861,9 @@ class VisionManager:
         load, provider identity) and reports the resolved provider/model; the
         service is constructed but no image request is made, so it never costs
         a provider call. Without ``preset``, it reports whether the default
-        route (configured service or the active LLM's own Responses API) is
-        available. A failure returns a sanitized error pointing at the manual.
+        route (configured service or the active LLM provider's own endpoint)
+        is available. A failure returns a sanitized error pointing at the
+        manual.
         """
         preset_ref = action_input.get("preset") if isinstance(action_input, Mapping) else None
         if preset_ref:
@@ -1038,7 +1034,6 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
     settings_failure: Exception | None = None
     resolved_api_key = configuration.api_key
     resolved_route = vision_service is None
-    route_provenance = _VisionRouteProvenance()
     if resolved_route and configuration.api_key_env:
         from lingtai.kernel.config_resolve import resolve_env
 
@@ -1053,7 +1048,7 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
         except SettingsError as exc:
             settings_failure = exc
     if vision_service is None and provider is not None:
-        vision_service, manual_reason, route_provenance = _resolve_direct_service(
+        vision_service, manual_reason = _resolve_direct_service(
             host.workdir,
             host.active_provider,
             provider,
@@ -1081,7 +1076,6 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
             active_service,
             vision_service,
             local_settings,
-            route_provenance,
             settings_failure,
         ),
     )
@@ -1132,29 +1126,40 @@ def _resolve_direct_service(
     local_settings: LocalVisionSettings | None = None,
     local_settings_error: SettingsError | None = None,
     **kwargs: Any,
-) -> tuple["VisionService | None", str, _VisionRouteProvenance]:
+) -> tuple["VisionService | None", str]:
     """Resolve a direct VisionService from provider + kwargs.
 
+    Supported routes are exactly the four LLM families plus the explicit local
+    pseudo-providers: ``openai`` / ``anthropic`` (any compatible endpoint),
+    ``codex`` (one OAuth identity), ``claude-code`` / ``claude-p`` (manual
+    ``claude -p`` guidance), ``local`` (a local OpenAI-compatible server), and
+    ``mlx`` (on-device). Every other provider name is manual-only; there is no
+    fallback provider.
+
     ``identity_service`` overrides the active-provider port's service used for
-    provider identity, model/base_url inheritance, and the Codex provider-default
-    bucket. Preset borrowing passes a lightweight identity shim built from the
-    borrowed preset's ``manifest.llm`` so the borrowed provider (e.g. ``codex``)
-    resolves its own route and credentials instead of the active provider's.
+    provider identity, model/endpoint/credential inheritance, and the
+    provider-default bucket. Preset borrowing passes a lightweight identity
+    shim built from the borrowed preset's ``manifest.llm`` so the borrowed
+    provider resolves its own route and credentials instead of the active
+    provider's.
     """
     vision_service: "VisionService | None" = None
     manual_reason = ""
-    applied_api_compat: str | None = None
+    # ``api_compat`` belonged to the retired ``custom`` provider; a legacy
+    # capability/preset value is accepted and ignored.
+    kwargs.pop("api_compat", None)
     if api_key_env:
         from lingtai.kernel.config_resolve import resolve_env
         api_key = resolve_env(api_key, api_key_env)
-    provider_key = provider.lower()
+    provider_key = provider.strip().lower()
     active_service = identity_service if identity_service is not None else active_provider.service
-    active_provider = getattr(active_service, "provider", "")
-    active_provider_key = active_provider.lower() if isinstance(active_provider, str) else ""
+    active_provider_name = getattr(active_service, "provider", "")
+    active_provider_key = (
+        active_provider_name.lower() if isinstance(active_provider_name, str) else ""
+    )
     same_provider = _same_provider_identity(provider_key, active_provider_key)
     active_model = getattr(active_service, "_model", None) if same_provider else None
     active_base_url = getattr(active_service, "_base_url", None) if same_provider else None
-    active_api_key = getattr(active_service, "api_key", None) if same_provider else None
     if provider_key == "mlx":
         # Native Apple-MLX on-device vision is an explicit pseudo-provider:
         # keep it out of PROVIDERS/check-caps, but preserve the documented
@@ -1214,17 +1219,13 @@ def _resolve_direct_service(
                 )
             else:
                 local_key = api_key or local_settings.api_key or "local"
-                local_wire = _effective_openai_wire(
-                    kwargs.get("wire_api"),
-                    use_responses_api=False,
-                    base_url=local_base_url,
-                )
+                local_wire = _effective_openai_wire(kwargs.get("wire_api"))
                 svc_kwargs: dict = {
                     "api_key": local_key,
                     "model": local_model,
                     "base_url": local_base_url,
                 }
-                if local_wire and local_wire != "auto":
+                if local_wire:
                     svc_kwargs["wire_api"] = local_wire
                 cap_max_tokens = kwargs.get("max_tokens")
                 if cap_max_tokens is None:
@@ -1235,234 +1236,176 @@ def _resolve_direct_service(
                     vision_service = OpenAIVisionService(**svc_kwargs)
                 except Exception as exc:
                     manual_reason = _setup_failure(provider, exc)
-    elif provider_key not in PROVIDERS["providers"]:
-        # No dedicated VisionService for this provider (custom relay,
-        # OpenRouter, an anthropic-compat local proxy, ...). Route vision
-        # through the OpenAI- or Anthropic-compatible service, picking the
-        # wire protocol and endpoint from, in order:
-        #   1. capability kwargs — explicit init.json override. This lets a
-        #      user point vision at a *different*, vision-capable model
-        #      (e.g. Kimi-K2.6 on a multi-model proxy) while the main LLM
-        #      stays on a text-only model (e.g. GLM-5.1).
-        #   2. the main LLM: api_compat from service._provider_defaults
-        #      (shaped {provider_name: defaults_dict}), base_url/model from
-        #      service._base_url / service._model.
-        # If the relay or model can't actually do vision, the call fails at
-        # runtime — capability registration never pre-checks.
-        bucket = {}
-        api_compat = (kwargs.get("api_compat") or "").lower()
-        if not api_compat:
-            defaults = getattr(active_service, "_provider_defaults", None) if same_provider else None
-            if isinstance(defaults, dict):
-                # _provider_defaults is dict[provider_name, defaults_dict];
-                # read only the active provider's bucket, never another
-                # provider's credential/transport configuration.
-                bucket = defaults.get(active_provider_key)
-                if isinstance(bucket, dict):
-                    api_compat = (bucket.get("api_compat") or "").lower()
-
-        cap_model = kwargs.get("model")
-        cap_base_url = kwargs.get("base_url")
-        cap_max_tokens = kwargs.get("max_tokens")
-        bucket = bucket if isinstance(bucket, dict) else {}
-        llm_base_url = cap_base_url or active_base_url or bucket.get("base_url")
-        llm_model = cap_model or active_model or bucket.get("model")
-        api_key = api_key or active_api_key
-        headers = kwargs.get("default_headers") or bucket.get("default_headers")
-        wire_api = _effective_openai_wire(
-            kwargs.get("wire_api") or bucket.get("wire_api"),
-            use_responses_api=bucket.get("use_responses_api") is True,
-            base_url=llm_base_url,
+    elif provider_key in _CLAUDE_CLI_FAMILY:
+        # The claude backend uses the Claude Code CLI for vision. LingTai
+        # does not proxy the CLI's own authentication (claude.ai
+        # subscription, API key, configured provider), so there is no
+        # direct service to construct: the agent is told to run
+        # ``claude -p`` and read the vision manual for the exact steps.
+        manual_reason = (
+            "You are using claude as backend, therefore to use vision run "
+            "`claude -p`; see the vision manual for more details: "
+            "vision(action='manual', input={}, reasoning='claude vision "
+            "details')."
         )
-
-        if api_compat == "openai":
-            applied_api_compat = "openai"
-            from lingtai.services.vision.openai import OpenAIVisionService
-            svc_kwargs: dict = {
-                "api_key": api_key,
-                "model": llm_model,
-                "base_url": llm_base_url,
-            }
-            if headers:
-                svc_kwargs["default_headers"] = headers
-            if wire_api and wire_api != "auto":
-                svc_kwargs["wire_api"] = wire_api
-            if cap_max_tokens is not None:
-                svc_kwargs["max_tokens"] = cap_max_tokens
-            if wire_api is None:
-                manual_reason = "The active OpenAI-compatible wire is not implemented by the direct vision service; use vision(action='manual', input={}, reasoning='the active OpenAI-compatible wire has no direct vision route')."
-            elif not llm_model:
-                manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current model for direct vision')."
-            elif not api_key:
-                manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current credential for direct vision')."
-            else:
-                try:
-                    vision_service = OpenAIVisionService(**svc_kwargs)
-                except Exception as exc:
-                    manual_reason = _setup_failure(provider, exc)
-        elif api_compat == "anthropic":
-            applied_api_compat = "anthropic"
-            from lingtai.services.vision.anthropic import AnthropicVisionService
-            svc_kwargs = {
-                "api_key": api_key,
-                "model": llm_model,
-                "base_url": llm_base_url,
-            }
-            if headers:
-                svc_kwargs["default_headers"] = headers
-            if cap_max_tokens is not None:
-                svc_kwargs["max_tokens"] = cap_max_tokens
-            if not llm_model:
-                manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current model for direct vision')."
-            elif not api_key:
-                manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current credential for direct vision')."
-            else:
-                try:
-                    vision_service = AnthropicVisionService(**svc_kwargs)
-                except Exception as exc:
-                    manual_reason = _setup_failure(provider, exc)
-        else:
-            manual_reason = f"No direct vision route is supported for provider {provider!r}; use vision(action='manual', input={{}}, reasoning='this provider has no supported direct vision route')."
-    else:
-        if provider_key in _CLAUDE_CLI_FAMILY:
-            # The claude backend uses the Claude Code CLI for vision. LingTai
-            # does not proxy the CLI's own authentication (claude.ai
-            # subscription, API key, configured provider), so there is no
-            # direct service to construct: the agent is told to run
-            # ``claude -p`` and read the vision manual for the exact steps.
-            manual_reason = (
-                "You are using claude as backend, therefore to use vision run "
-                "`claude -p`; see the vision manual for more details: "
-                "vision(action='manual', input={}, reasoning='claude vision "
-                "details')."
-            )
-        elif provider_key in _CODEX_FAMILY:
-            # Codex vision is a standalone Responses request. It may share
-            # the active Codex provider's model and endpoint, but never
-            # inherits those from an unrelated main provider. The OAuth
-            # identity mirrors the canonical Codex factory: an explicit
-            # ``token_path``, else the active bucket's ``codex_auth_path``,
-            # else (active Codex service only) the default token file.
-            if same_provider:
-                if active_model:
-                    kwargs.setdefault("model", active_model)
-                if active_base_url:
-                    kwargs.setdefault("base_url", active_base_url)
-            codex_base_url = kwargs.get("base_url")
-
-            defaults = getattr(active_service, "_provider_defaults", None) if same_provider else None
-            bucket = defaults.get(active_provider_key) if isinstance(defaults, dict) else None
-            if not isinstance(bucket, dict):
-                bucket = {}
-            # Normalize an explicit capability identity. This preserves a valid
-            # independent token path while ensuring a whitespace-only value
-            # cannot bypass the fail-closed branch.
-            explicit_token_path = _normalize_codex_auth_path(kwargs.pop("token_path", None))
-            token_path = explicit_token_path or _normalize_codex_auth_path(
-                bucket.get("codex_auth_path")
-            )
-            if not token_path and same_provider:
-                from lingtai.auth.codex import default_codex_token_path
-
-                token_path = str(default_codex_token_path())
-            if not kwargs.get("model"):
-                manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current model for direct vision')."
-            elif token_path:
-                kwargs["token_path"] = token_path
-            else:
-                # An unrelated active provider never supplies a Codex identity.
-                manual_reason = "Codex vision has no explicit current OAuth identity; use vision(action='manual', input={}, reasoning='Codex vision has no explicit current OAuth identity')."
-            kwargs.pop("api_compat", None)
-            kwargs.pop("base_url", None)
-            if codex_base_url:
-                kwargs["base_url"] = codex_base_url
-            if not manual_reason:
-                from lingtai.services.vision import create_vision_service
-                try:
-                    vision_service = create_vision_service("codex", api_key=None, **kwargs)
-                except Exception as exc:
-                    manual_reason = _setup_failure(provider, exc)
-        else:
-            service_provider = provider_key
-            defaults = getattr(active_service, "_provider_defaults", {}) if same_provider else {}
-            bucket = defaults.get(active_provider_key, {}) if isinstance(defaults, dict) else {}
-            active_base_url = active_base_url or (bucket.get("base_url") if isinstance(bucket, dict) else None)
-            active_headers = bucket.get("default_headers") if isinstance(bucket, dict) else None
-            active_compat = kwargs.get("api_compat") or (bucket.get("api_compat") if isinstance(bucket, dict) else "") or ""
-            wire_api = _effective_openai_wire(
-                kwargs.get("wire_api") or (bucket.get("wire_api") if isinstance(bucket, dict) else None),
-                use_responses_api=isinstance(bucket, dict) and bucket.get("use_responses_api") is True,
-                base_url=kwargs.get("base_url") or active_base_url,
-            )
-            if service_provider in {
-                "openrouter", "custom", "deepseek", "zhipu", "glm", "grok",
-                "qwen", "kimi",
-            }:
-                service_provider = "anthropic" if active_compat.lower() == "anthropic" else "openai"
-                if active_compat.lower() in {"openai", "anthropic"}:
-                    applied_api_compat = active_compat.lower()
-
-            # Provider-specific kwarg injection. Each branch is opt-in because
-            # vision services have heterogeneous constructor signatures.
-            if service_provider == "minimax":
-                service_provider = "anthropic"
-            if service_provider in {"openai", "anthropic", "gemini", "mimo"}:
-                if same_provider and active_model:
-                    kwargs.setdefault("model", active_model)
-                if (
-                    service_provider in {"openai", "anthropic"}
-                    and same_provider
-                    and active_base_url
-                ):
-                    kwargs.setdefault("base_url", active_base_url)
-            if service_provider == "mimo" and same_provider and active_base_url:
+    elif provider_key in _CODEX_FAMILY:
+        # Codex vision is a standalone Responses request. It may share
+        # the active Codex provider's model and endpoint, but never
+        # inherits those from an unrelated main provider. The OAuth
+        # identity mirrors the canonical Codex factory: an explicit
+        # ``token_path``, else the active bucket's ``codex_auth_path``,
+        # else (active Codex service only) the default token file.
+        if same_provider:
+            if active_model:
+                kwargs.setdefault("model", active_model)
+            if active_base_url:
                 kwargs.setdefault("base_url", active_base_url)
-            if service_provider in {"openai", "mimo"} and wire_api is None:
-                manual_reason = "The active OpenAI-compatible wire is not implemented by the direct vision service; use vision(action='manual', input={}, reasoning='the active OpenAI-compatible wire has no direct vision route')."
-            elif service_provider == "mimo" and wire_api != "chat_completions":
-                manual_reason = "The active MiMo wire is not implemented by the direct vision service; use vision(action='manual', input={}, reasoning='the active MiMo wire has no direct vision route')."
-            if service_provider in {"openai", "mimo"} and active_compat == "anthropic":
-                manual_reason = "The active preset uses an Anthropic wire that this vision route cannot safely adapt; use vision(action='manual', input={}, reasoning='the active Anthropic wire cannot be safely adapted for direct vision')."
-                vision_service = None
-            if service_provider == "anthropic" and active_headers:
-                kwargs.setdefault("default_headers", active_headers)
-            elif service_provider == "openai":
-                if active_headers:
-                    kwargs.setdefault("default_headers", active_headers)
-                if wire_api not in (None, "auto"):
-                    kwargs.setdefault("wire_api", wire_api)
-            elif service_provider == "mimo":
-                # MiMo's standalone constructor intentionally accepts only
-                # api_key/model/base_url/max_tokens. Its current direct
-                # route is Chat Completions; other wires stay manual-only.
-                kwargs.pop("default_headers", None)
-                kwargs.pop("wire_api", None)
-            resolved_api_key = api_key or active_api_key
-            if service_provider not in {"codex", "local"} and not kwargs.get("model"):
-                manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current model for direct vision')."
-            elif service_provider not in {"codex", "local"} and not resolved_api_key:
-                manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current credential for direct vision')."
-            # Dedicated vision services do not consume the LLM adapter's
-            # transport selector.
-            kwargs.pop("api_compat", None)
-            if service_provider not in {"openai", "anthropic", "mimo"}:
-                kwargs.pop("base_url", None)
-            # Lazy import: the provider service lives in ``lingtai.services``.
+        codex_base_url = kwargs.get("base_url")
+
+        defaults = getattr(active_service, "_provider_defaults", None) if same_provider else None
+        bucket = defaults.get(active_provider_key) if isinstance(defaults, dict) else None
+        if not isinstance(bucket, dict):
+            bucket = {}
+        # Normalize an explicit capability identity. This preserves a valid
+        # independent token path while ensuring a whitespace-only value
+        # cannot bypass the fail-closed branch.
+        explicit_token_path = _normalize_codex_auth_path(kwargs.pop("token_path", None))
+        token_path = explicit_token_path or _normalize_codex_auth_path(
+            bucket.get("codex_auth_path")
+        )
+        if not token_path and same_provider:
+            from lingtai.auth.codex import default_codex_token_path
+
+            token_path = str(default_codex_token_path())
+        if not kwargs.get("model"):
+            manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current model for direct vision')."
+        elif token_path:
+            kwargs["token_path"] = token_path
+        else:
+            # An unrelated active provider never supplies a Codex identity.
+            manual_reason = "Codex vision has no explicit current OAuth identity; use vision(action='manual', input={}, reasoning='Codex vision has no explicit current OAuth identity')."
+        kwargs.pop("base_url", None)
+        if codex_base_url:
+            kwargs["base_url"] = codex_base_url
+        if not manual_reason:
             from lingtai.services.vision import create_vision_service
-            if vision_service is None and not manual_reason:
-                try:
-                    vision_service = create_vision_service(
-                        service_provider,
-                        api_key=resolved_api_key,
-                        **kwargs,
-                    )
-                except Exception as exc:
-                    manual_reason = _setup_failure(provider, exc)
-    return (
-        vision_service,
-        manual_reason,
-        _VisionRouteProvenance(api_compat=applied_api_compat),
+            try:
+                vision_service = create_vision_service("codex", api_key=None, **kwargs)
+            except Exception as exc:
+                manual_reason = _setup_failure(provider, exc)
+    elif provider_key in _API_FAMILIES:
+        vision_service, manual_reason = _resolve_api_family_service(
+            provider,
+            provider_key,
+            api_key=api_key,
+            active_service=active_service,
+            active_provider_key=active_provider_key,
+            same_provider=same_provider,
+            kwargs=kwargs,
+        )
+    else:
+        manual_reason = f"No direct vision route is supported for provider {provider!r}; use vision(action='manual', input={{}}, reasoning='this provider has no supported direct vision route')."
+    return vision_service, manual_reason
+
+
+def _resolve_api_family_service(
+    provider: str,
+    provider_key: str,
+    *,
+    api_key: str | None,
+    active_service: Any,
+    active_provider_key: str,
+    same_provider: bool,
+    kwargs: Mapping[str, Any],
+) -> tuple["VisionService | None", str]:
+    """Build the ``openai``/``anthropic`` Vision service for one route.
+
+    On the active provider's own family the route inherits that service's
+    effective endpoint (``effective_base_url`` — the adapter's own default when
+    the manifest omitted ``base_url``), model, credential, provider-default
+    headers, and (``openai``) wire. Explicit capability values win. The active
+    credential is sent ONLY to the active effective endpoint: a capability that
+    names a different ``base_url`` must supply its own ``api_key``/
+    ``api_key_env``. A different active family lends nothing.
+    """
+    bucket: Mapping[str, Any] = {}
+    if same_provider:
+        defaults = getattr(active_service, "_provider_defaults", None)
+        if isinstance(defaults, dict):
+            candidate = defaults.get(active_provider_key)
+            if isinstance(candidate, dict):
+                bucket = candidate
+    active_model = getattr(active_service, "_model", None) if same_provider else None
+    active_endpoint = (
+        _active_effective_base_url(active_service) or bucket.get("base_url")
+        if same_provider
+        else None
     )
+    active_api_key = getattr(active_service, "api_key", None) if same_provider else None
+
+    cap_base_url = kwargs.get("base_url")
+    base_url = cap_base_url or active_endpoint
+    model = kwargs.get("model") or active_model or bucket.get("model")
+    own_key = api_key if isinstance(api_key, str) and api_key.strip() else None
+    resolved_key = own_key
+    leak_blocked = False
+    if resolved_key is None and isinstance(active_api_key, str) and active_api_key:
+        if cap_base_url and _endpoint_key(cap_base_url) != _endpoint_key(active_endpoint):
+            leak_blocked = True
+        else:
+            resolved_key = active_api_key
+    headers = kwargs.get("default_headers") or bucket.get("default_headers")
+    max_tokens = kwargs.get("max_tokens")
+
+    wire_api: str | None = None
+    if provider_key == "openai":
+        wire_selector = kwargs.get("wire_api")
+        if wire_selector is None:
+            wire_selector = bucket.get("wire_api")
+        wire_api = _effective_openai_wire(wire_selector)
+        if wire_api is None:
+            return None, (
+                "The active OpenAI-compatible wire is not implemented by the "
+                "direct vision service; use vision(action='manual', input={}, "
+                "reasoning='the active OpenAI-compatible wire has no direct "
+                "vision route')."
+            )
+    if not isinstance(model, str) or not model.strip():
+        return None, (
+            f"Provider {provider!r} has no resolved current model for direct "
+            "vision; use vision(action='manual', input={}, reasoning='no "
+            "resolved current model for direct vision')."
+        )
+    if resolved_key is None:
+        detail = (
+            " (the active credential is only sent to the active endpoint; "
+            "give this vision endpoint its own api_key/api_key_env)"
+            if leak_blocked
+            else ""
+        )
+        return None, (
+            f"Provider {provider!r} has no resolved current credential for "
+            f"direct vision{detail}; use vision(action='manual', input={{}}, "
+            "reasoning='no resolved current credential for direct vision')."
+        )
+    svc_kwargs: dict[str, Any] = {"model": model}
+    if base_url:
+        svc_kwargs["base_url"] = base_url
+    if headers:
+        svc_kwargs["default_headers"] = headers
+    if wire_api is not None:
+        svc_kwargs["wire_api"] = wire_api
+    if max_tokens is not None:
+        svc_kwargs["max_tokens"] = max_tokens
+    # Lazy import: the provider service lives in ``lingtai.services``.
+    from lingtai.services.vision import create_vision_service
+    try:
+        return (
+            create_vision_service(provider_key, api_key=resolved_key, **svc_kwargs),
+            "",
+        )
+    except Exception as exc:
+        return None, _setup_failure(provider, exc)
 
 
 def setup(

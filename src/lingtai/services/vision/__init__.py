@@ -1,7 +1,9 @@
 """VisionService — abstract image understanding backing the vision capability.
 
-Provides standalone vision implementations for supported direct providers.
-The local implementation is an explicit pseudo-provider and needs no API key.
+Provides standalone vision implementations for the direct providers: the
+``openai`` and ``anthropic`` families (any compatible endpoint through
+``base_url``), ``codex`` (ChatGPT OAuth), and the explicit on-device ``mlx``
+pseudo-provider, which needs no API key.
 
 Usage:
     from lingtai.services.vision import VisionService, create_vision_service
@@ -94,8 +96,8 @@ def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs
     """Factory — create a VisionService for the given provider.
 
     Args:
-        provider: Provider name ("anthropic", "openai", "gemini", "mimo", "codex", "mlx").
-        api_key: API key for the provider (not required for "codex" or "local").
+        provider: Provider name ("openai", "anthropic", "codex", "mlx").
+        api_key: API key for the provider (not required for "codex" or "mlx").
         **kwargs: Additional provider-specific kwargs (e.g., model, base_url).
 
     Returns:
@@ -122,14 +124,8 @@ def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs
     elif provider == "openai":
         from .openai import OpenAIVisionService
         return OpenAIVisionService(api_key=api_key, **kwargs)
-    elif provider == "gemini":
-        from .gemini import GeminiVisionService
-        return GeminiVisionService(api_key=api_key, **kwargs)
-    elif provider == "mimo":
-        from .mimo import MiMoVisionService
-        return MiMoVisionService(api_key=api_key, **kwargs)
     else:
         raise ValueError(
             f"Unsupported vision provider: {provider!r}. "
-            f"Supported: anthropic, openai, gemini, mimo, codex, mlx."
+            f"Supported: openai, anthropic, codex, mlx."
         )

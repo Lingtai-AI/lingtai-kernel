@@ -1565,7 +1565,7 @@ def test_codex_adapter_create_chat_carries_context_window_to_responses_session()
     OpenAIAdapter.create_chat dropped context_window before `_create_responses_session`,
     leaving CodexResponsesSession.context_window() at ChatSession's 0 default.
     """
-    adapter = CodexOpenAIAdapter(api_key="test", use_responses=True, force_responses=True)
+    adapter = CodexOpenAIAdapter(api_key="test", wire_api="responses")
 
     session = adapter.create_chat(
         "gpt-5.5",
@@ -1579,7 +1579,7 @@ def test_codex_adapter_create_chat_carries_context_window_to_responses_session()
 
 
 def test_codex_adapter_static_comment_disabled_before_chat_creation():
-    adapter = CodexOpenAIAdapter(api_key="test", use_responses=True, force_responses=True)
+    adapter = CodexOpenAIAdapter(api_key="test", wire_api="responses")
 
     assert adapter.static_adapter_comment() is None
 

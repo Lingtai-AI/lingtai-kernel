@@ -3,7 +3,7 @@ name: vision-manual
 description: >
   Use the Vision schema directly for ordinary image analysis; route setup,
   borrowing, settings, and recovery to focused references.
-last_changed_at: 2026-09-09T00:00:00Z
+last_changed_at: 2026-09-29T00:00:00Z
 related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/ANATOMY.md
@@ -48,8 +48,9 @@ structured errors. The schema owns all five actions and strict input fields.
 
 ## Route and authority boundary
 
-Without `preset`, use the configured service or active provider's own compatible
-identity. A non-null `preset` must be in `manifest.preset.allowed`; it borrows the
+Without `preset`, use the configured service or the active provider's own family
+(`openai`, `anthropic`, `codex`, or `claude-code`) with its effective endpoint,
+model, and credential. A non-null `preset` must be in `manifest.preset.allowed`; it borrows the
 allowed preset's own provider/model/endpoint/wire/credential for one call, without
 switching the active preset. Missing or unsupported routes fail closed.
 
@@ -85,9 +86,6 @@ See [api-key-env](reference/settings.md#setting-api-key-env).
 
 ## Setting: max-tokens
 See [max-tokens](reference/settings.md#setting-max-tokens).
-
-## Setting: api-compat
-See [api-compat](reference/settings.md#setting-api-compat).
 
 ## Setting: wire-api
 See [wire-api](reference/settings.md#setting-wire-api).

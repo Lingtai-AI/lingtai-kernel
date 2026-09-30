@@ -37,7 +37,6 @@ related_files:
   - tests/contracts/llm_conversation_input/test_send_str.py
   - tests/contracts/llm_conversation_input/test_send_tool_results.py
   - tests/integration_test_claude_code.py
-  - tests/integration_test_kimi_code.py
   - tests/opencode
   - tests/test_activate_preset.py
   - tests/test_acp_stdio.py
@@ -111,8 +110,8 @@ related_files:
   - tests/test_context_ownership_redesign.py
   - tests/test_context_pressure_reminder.py
   - tests/test_context_pressure_streak.py
-  - tests/test_custom_responses_stateless.py
   - tests/test_daemon.py
+  - tests/test_daemon_llm_defaults_forwarding.py
   - tests/test_daemon_attention_delay.py
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_check.py
@@ -152,8 +151,6 @@ related_files:
   - tests/test_daemon_windows_process_port.py
   - tests/test_daemon_windows_supervisor.py
   - tests/test_deep_refresh.py
-  - tests/test_deepseek_adapter.py
-  - tests/test_deepseek_reasoning_effort.py
   - tests/test_docs_governance.py
   - tests/test_eigen.py
   - tests/test_email_abs_reply_route.py
@@ -211,7 +208,6 @@ related_files:
   - tests/test_kernel_migrate.py
   - tests/test_kernel_update_contract.py
   - tests/test_kernel_version_nudge.py
-  - tests/test_kimi_code_adapter.py
   - tests/test_knowledge.py
   - tests/test_labt_validation.py
   - tests/test_large_result_no_notification.py
@@ -253,8 +249,6 @@ related_files:
   - tests/test_mcp_v2_adapter_metadata.py
   - tests/test_messaging_notification_format.py
   - tests/test_meta_block.py
-  - tests/test_mimo_adapter.py
-  - tests/test_mimo_responses_compaction.py
   - tests/test_molt_notification_persistence.py
   - tests/test_molt_task_persistence.py
   - tests/test_network.py
@@ -273,6 +267,8 @@ related_files:
   - tests/test_responses_no_context_management.py
   - tests/test_openai_overflow_recovery.py
   - tests/test_openai_compatible_service_tier.py
+  - tests/test_openai_reasoning_fallback.py
+  - tests/test_openai_responses_stateless.py
   - tests/test_openai_prompt_cache_key.py
   - tests/test_openai_responses_streaming.py
   - tests/test_outbound_file_containment.py
@@ -459,7 +455,6 @@ related_files:
   - tests/test_workdir.py
   - tests/test_workdir_lease.py
   - tests/test_workdir_lease_posix_only.py
-  - tests/test_zhipu_merge_consecutive.py
   - tests/unit/__init__.py
   - tests/unit/auth/__init__.py
   - tests/unit/auth/test_codex_auth.py
@@ -524,15 +519,17 @@ complete, not to pair with a governed contract.
   exports `FAKE_DAEMON_CLI=opencode` so one fake CLI serves both daemon
   backends. They are tracked, mode-`+x`, extension-less files — not scripts to
   run by hand.
-- `integration_test_*.py` — `integration_test_claude_code.py` and
-  `integration_test_kimi_code.py`, named off the `test_*` collection pattern so
-  the default run does not drive a real local CLI.
+- `integration_test_*.py` — `integration_test_claude_code.py`, named off the
+  `test_*` collection pattern so the default run does not drive a real local
+  CLI.
 - `contracts/llm_conversation_input/` — the contract-conformance sub-package for
   provider conversation input. `tests/contracts/llm_conversation_input/regimes.py` holds the executable
   session-return matrix (`REGISTRY_EDGES`) that builds every registered
-  provider through the real `LLMService`, and `tests/contracts/llm_conversation_input/test_regime_inventory.py` asserts
-  that matrix equals the live registry key set, so adding a provider or
-  rebinding a factory fails here rather than silently.
+  provider (exactly the four families `openai`, `anthropic`, `codex`,
+  `claude-code`) through the real `LLMService`, and `tests/contracts/llm_conversation_input/test_regime_inventory.py` asserts
+  that matrix equals the live registry key set and that every removed provider
+  name fails `validate_init`, so adding a provider or rebinding a factory fails
+  here rather than silently.
 - `unit/` and `unit/auth/` — the one explicitly-layered unit sub-package,
   currently holding `tests/unit/auth/test_codex_auth.py`.
 - `test_*.py` (~380 modules at the top level) — the bulk of the suite, named
@@ -588,4 +585,4 @@ autouse fixtures rather than by per-test cleanup.
   repository. A tooling change that filters files by suffix will silently drop
   them.
 - `integration_test_*.py` files are invisible to a default `pytest` run by
-  design; they require a real `claude` or `kimi` CLI and are invoked explicitly.
+  design; they require a real `claude` CLI and are invoked explicitly.

@@ -27,8 +27,8 @@ from tests._agent_presence_helpers import make_test_presence_store
 
 
 def _mock_service(
-    provider: str = "gemini",
-    model: str = "gemini-test",
+    provider: str = "anthropic",
+    model: str = "claude-test",
     base_url: str | None = None,
 ):
     """Build a mock LLMService with the live attributes the manifest reads."""
@@ -51,7 +51,7 @@ def _write_init(
     """Write a minimal init.json that exercises the preset/llm surface."""
     workdir.mkdir(parents=True, exist_ok=True)
     llm: dict = {
-        "provider": "deepseek",
+        "provider": "openai",
         "model": "deepseek-v4-pro",
         "base_url": "https://api.deepseek.com",
     }
@@ -150,9 +150,9 @@ def test_sanitize_endpoint_rejects_non_url_secret_like_input():
 
 def test_safe_llm_from_service_uses_provider_default_base_url():
     agent = MagicMock()
-    svc = _mock_service("custom", "model-x", None)
+    svc = _mock_service("openai", "model-x", None)
     svc._provider_defaults = {
-        "custom": {
+        "openai": {
             "base_url": "https://relay.example.test/v1",
             "api_compat": "openai",
         }
@@ -162,7 +162,8 @@ def test_safe_llm_from_service_uses_provider_default_base_url():
 
     out = _safe_llm_from_service(agent)
     assert out["base_url"] == "https://relay.example.test/v1"
-    assert out["api_compat"] == "openai"
+    # The retired ``api_compat`` key is never surfaced as identity.
+    assert "api_compat" not in out
     assert out["context_limit"] == 123456
 
 
@@ -187,14 +188,14 @@ def test_safe_llm_from_service_labels_omitted_codex_service_tier_default():
 @pytest.mark.parametrize(
     "provider,defaults,expected",
     [
-        ("custom", {"api_compat": "openai", "service_tier": " fast "}, "fast"),
-        ("custom", {"api_compat": "openai"}, "default"),
-        ("custom", {}, "default"),
-        ("custom", {"api_compat": "openai", "service_tier": "unsupported"}, "default"),
-        ("openai", {"service_tier": "fast"}, "fast"),
+        ("openai", {"service_tier": " fast "}, "fast"),
+        ("openai", {"service_tier": "flex"}, "flex"),
+        ("openai", {"service_tier": "priority"}, "priority"),
+        ("openai", {"service_tier": "unsupported"}, "default"),
         ("openai", {}, "default"),
+        ("codex", {"service_tier": "auto"}, "auto"),
     ],
-    ids=["custom-fast", "custom-omitted", "custom-compat-default", "custom-unrecognized-ignored", "openai-fast", "openai-omitted"],
+    ids=["openai-fast", "openai-flex", "openai-priority", "openai-invalid-not-claimed", "openai-omitted", "codex-auto"],
 )
 def test_safe_llm_from_service_reports_tier_on_openai_compatible_routes(provider, defaults, expected):
     from lingtai.llm._register import register_all_adapters
@@ -211,13 +212,14 @@ def test_safe_llm_from_service_reports_tier_on_openai_compatible_routes(provider
 @pytest.mark.parametrize(
     "provider,defaults",
     [
-        ("custom", {"api_compat": "anthropic", "service_tier": "fast"}),
+        ("anthropic", {"service_tier": "fast"}),
+        ("claude-code", {"service_tier": "fast"}),
         ("gemini", {"service_tier": "fast"}),
-        ("mimo", {"service_tier": "fast"}),
+        ("custom", {"service_tier": "fast"}),
         ("codex-pool", {"service_tier": "fast"}),
         ("codex_pool", {"service_tier": "fast"}),
     ],
-    ids=["custom-anthropic", "gemini", "mimo", "removed-codex-pool", "removed-codex_pool"],
+    ids=["anthropic", "claude-code", "removed-gemini", "removed-custom", "removed-codex-pool", "removed-codex_pool"],
 )
 def test_safe_llm_from_service_omits_tier_where_not_forwarded(provider, defaults):
     from lingtai.llm._register import register_all_adapters
@@ -241,13 +243,13 @@ def test_identity_section_renders_llm_line():
     text = _build_identity_section({
         "agent_name": "alice",
         "llm": {
-            "provider": "deepseek",
+            "provider": "openai",
             "model": "deepseek-v4-pro",
             "base_url": "https://api.deepseek.com",
         },
     })
     assert "deepseek-v4-pro" in text
-    assert "deepseek" in text
+    assert "openai" in text
     assert "https://api.deepseek.com" in text
 
 

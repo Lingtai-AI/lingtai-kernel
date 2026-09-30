@@ -124,8 +124,8 @@ class ToolCall:
         name: Tool/function name.
         args: Parsed arguments dict.
         id: Provider-assigned call ID (e.g. ``call_xxxxx`` for OpenAI,
-            ``toolu_xxxxx`` for Anthropic).  None for Gemini which doesn't
-            use explicit tool-call IDs.
+            ``toolu_xxxxx`` for Anthropic).  None when a provider issues no
+            explicit tool-call ID.
     """
 
     name: str
@@ -190,7 +190,7 @@ class LLMResponse:
         usage: Token usage for this call.
         thoughts: List of thinking/reasoning text blocks (for verbose logging).
         raw: The original provider-specific response object. Use for escape
-            hatches (e.g. Gemini grounding metadata, multimodal parts).
+            hatches (e.g. provider-specific metadata, multimodal parts).
     """
 
     text: str = ""
@@ -322,13 +322,12 @@ class ChatSession(ABC):
     # provider's strict pair-validation invariant.
     #
     # Sessions that don't use the canonical ChatInterface for wire
-    # serialization (OpenAIResponsesSession, GeminiChatSession via
-    # genai SDK) still call the hook for the agent-side drain, but the
-    # spliced pair is only visible to the LLM on the *next* turn (when
-    # the agent re-syncs from interface). For canonical-interface
-    # adapters (anthropic, openai-CC, codex-Responses, deepseek), the
-    # spliced pair is visible in the same API call as the triggering
-    # tool_results.
+    # serialization (a non-replay ``OpenAIResponsesSession``) still call the
+    # hook for the agent-side drain, but the spliced pair is only visible to
+    # the LLM on the *next* turn (when the agent re-syncs from interface).
+    # For canonical-interface sessions (anthropic, openai Chat Completions
+    # and stateless Responses replay, codex-Responses), the spliced pair is
+    # visible in the same API call as the triggering tool_results.
     #
     # Default ``None`` — adapters that don't install a hook treat the
     # call as a no-op, preserving the legacy zero-hook behavior.
@@ -559,16 +558,16 @@ class ChatSession(ABC):
         only the underlying HTTP client is recreated.
 
         Default: no-op.  Override in session types backed by a persistent
-        HTTP client (Anthropic, OpenAI).  Gemini sessions with server-side
-        state (Interactions API) cannot be meaningfully reset this way.
+        HTTP client (Anthropic, OpenAI).
         """
 
     @property
     def interaction_id(self) -> str | None:
-        """Return the current Interactions API interaction ID, or None.
+        """Return a provider-side interaction ID, or None.
 
-        Only meaningful for Gemini ``InteractionsChatSession`` which chains
-        calls via ``previous_interaction_id``.  Other session types return None.
+        Only meaningful for a session that chains calls through server-side
+        interaction state. No current adapter does (every wire replays the
+        canonical interface), so the default returns None.
         """
         return None
 

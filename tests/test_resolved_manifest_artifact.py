@@ -19,7 +19,8 @@ def _make_workdir(tmp_path: Path, active_preset: str | None = None,
     manifest = {
         "agent_name": "alice",
         "language": "en",
-        "llm": llm or {"provider": "deepseek", "model": "deepseek-v4-flash",
+        "llm": llm or {"provider": "openai", "model": "deepseek-v4-flash",
+                       "base_url": "https://api.deepseek.com",
                        "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
         "capabilities": {"shell": {}},
         "soul": {"delay": 120},
@@ -91,7 +92,7 @@ def test_redact_secrets_drops_secret_keys_keeps_public():
             "api_key": "sk-live-SECRET", "api_key_env": "DEEPSEEK_API_KEY",
         },
         "capabilities": {
-            "web_search": {"provider": "gemini", "api_key": "sk-2"},
+            "web_search": {"provider": "anthropic", "api_key": "sk-2"},
             "telegram": {"botToken": "bot-secret", "chat_id": 123},
             "feishu": {"appSecret": "app-secret", "app_id": "cli_x"},
             "imap": {"accounts": [{"host": "h", "password": "hunter2",
@@ -136,14 +137,14 @@ def test_artifact_publishes_materialized_skills_paths(tmp_path, monkeypatch):
             "name": "smart",
             "description": {"summary": "smart preset with skills"},
             "manifest": {
-                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
-                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+                "llm": {"provider": "anthropic", "model": "claude-sonnet-4-5",
+                        "api_key": None, "api_key_env": "ANTHROPIC_API_KEY"},
                 "capabilities": {"shell": {},
                                  "skills": {"paths": ["~/skills/curated"]}},
             },
         },
     })
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     wd = _make_workdir(tmp_path, active_preset=str(plib / "smart.json"))
     raw_before = json.loads((wd / "init.json").read_text())
     assert "skills" not in raw_before["manifest"]["capabilities"]
@@ -160,13 +161,13 @@ def test_artifact_publishes_materialized_skills_paths(tmp_path, monkeypatch):
     assert artifact["preset"]["active"] == str(plib / "smart.json")
     caps = artifact["manifest"]["capabilities"]
     assert caps["skills"]["paths"] == ["~/skills/curated"]
-    assert artifact["manifest"]["llm"]["provider"] == "gemini"
+    assert artifact["manifest"]["llm"]["provider"] == "anthropic"
 
     # init.json stays user-owned input — the resolved manifest is NOT
     # written back (skills still absent in the raw file).
     raw_after = json.loads((wd / "init.json").read_text())
     assert "skills" not in raw_after["manifest"]["capabilities"]
-    assert raw_after["manifest"]["llm"]["provider"] == "deepseek"
+    assert raw_after["manifest"]["llm"]["provider"] == "openai"
 
 
 def test_artifact_merges_init_extras_per_materialize_semantics(tmp_path, monkeypatch):
@@ -178,14 +179,14 @@ def test_artifact_merges_init_extras_per_materialize_semantics(tmp_path, monkeyp
             "name": "smart",
             "description": {"summary": "smart preset"},
             "manifest": {
-                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
-                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+                "llm": {"provider": "anthropic", "model": "claude-sonnet-4-5",
+                        "api_key": None, "api_key_env": "ANTHROPIC_API_KEY"},
                 "capabilities": {"skills": {"paths": ["~/skills/curated"]},
                                  "daemon": {"manager_pool_size": 10}},
             },
         },
     })
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     wd = _make_workdir(
         tmp_path, active_preset=str(plib / "smart.json"),
         manifest_extra={"capabilities": {
@@ -209,7 +210,7 @@ def test_artifact_redacts_api_key_like_secrets(tmp_path, monkeypatch):
     secret = "sk-live-SUPERSECRET-123"
     wd = _make_workdir(
         tmp_path,
-        llm={"provider": "deepseek", "model": "deepseek-v4-flash",
+        llm={"provider": "openai", "base_url": "https://api.deepseek.com", "model": "deepseek-v4-flash",
              "api_key": secret},
         manifest_extra={"capabilities": {
             "shell": {},
@@ -227,7 +228,7 @@ def test_artifact_redacts_api_key_like_secrets(tmp_path, monkeypatch):
     artifact = _read_artifact(wd)
     llm = artifact["manifest"]["llm"]
     assert "api_key" not in llm
-    assert llm["provider"] == "deepseek"
+    assert llm["provider"] == "openai"
     assert llm["model"] == "deepseek-v4-flash"
     assert "api_key" not in artifact["manifest"]["capabilities"]["web"]
     # no half-written temp file left behind by the atomic write
@@ -246,7 +247,7 @@ def test_refresh_rewrites_artifact_after_preset_change(tmp_path, monkeypatch):
             "name": "fast",
             "description": {"summary": "fast preset"},
             "manifest": {
-                "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
+                "llm": {"provider": "openai", "base_url": "https://api.deepseek.com", "model": "deepseek-v4-flash",
                         "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
                 "capabilities": {"shell": {}},
             },
@@ -255,14 +256,14 @@ def test_refresh_rewrites_artifact_after_preset_change(tmp_path, monkeypatch):
             "name": "smart",
             "description": {"summary": "smart preset"},
             "manifest": {
-                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
-                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+                "llm": {"provider": "anthropic", "model": "claude-sonnet-4-5",
+                        "api_key": None, "api_key_env": "ANTHROPIC_API_KEY"},
                 "capabilities": {"shell": {}, "skills": {"paths": ["~/s"]}},
             },
         },
     })
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     fast, smart = str(plib / "fast.json"), str(plib / "smart.json")
 
     wd = _make_workdir(tmp_path, active_preset=fast)
@@ -279,7 +280,7 @@ def test_refresh_rewrites_artifact_after_preset_change(tmp_path, monkeypatch):
     agent._setup_from_init()
 
     artifact = _read_artifact(wd)
-    assert artifact["manifest"]["llm"]["provider"] == "deepseek"
+    assert artifact["manifest"]["llm"]["provider"] == "openai"
     assert artifact["preset"]["active"] == fast
 
     # Swap the active preset (what system(refresh) does before re-setup).
@@ -287,8 +288,8 @@ def test_refresh_rewrites_artifact_after_preset_change(tmp_path, monkeypatch):
     agent._setup_from_init()
 
     artifact = _read_artifact(wd)
-    assert artifact["manifest"]["llm"]["provider"] == "gemini"
-    assert artifact["manifest"]["llm"]["model"] == "gemini-2.5-pro"
+    assert artifact["manifest"]["llm"]["provider"] == "anthropic"
+    assert artifact["manifest"]["llm"]["model"] == "claude-sonnet-4-5"
     assert artifact["preset"]["active"] == smart
     assert artifact["manifest"]["capabilities"]["skills"]["paths"] == ["~/s"]
 
@@ -316,7 +317,7 @@ def test_write_resolved_manifest_byte_identical_to_legacy_format(tmp_path, monke
     data = {
         "manifest": {
             "agent_name": "内省",
-            "llm": {"provider": "deepseek", "model": "deepseek-v4-flash"},
+            "llm": {"provider": "openai", "base_url": "https://api.deepseek.com", "model": "deepseek-v4-flash"},
             "soul": {"voice": "inner", "delay": 120},
         },
         "principle": "p",

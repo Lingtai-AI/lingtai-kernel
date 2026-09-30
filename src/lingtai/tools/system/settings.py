@@ -135,12 +135,6 @@ SYSTEM_INIT_SETTING_SPECS: tuple[_InitSettingSpec, ...] = (
         comment=_LLM_COMMENT,
     ),
     _init(
-        "llm.reasoning_effort_vocab",
-        "/manifest/llm/reasoning_effort_vocab",
-        None,
-        comment=_LLM_COMMENT,
-    ),
-    _init(
         "llm.prompt_cache_namespace",
         "/manifest/llm/prompt_cache_namespace",
         None,
@@ -153,7 +147,6 @@ SYSTEM_INIT_SETTING_SPECS: tuple[_InitSettingSpec, ...] = (
         comment=_LLM_COMMENT,
     ),
     _init("llm.thinking", "/manifest/llm/thinking", None, comment=_LLM_COMMENT),
-    _init("llm.api_compat", "/manifest/llm/api_compat", None, comment=_LLM_COMMENT),
     _init(
         "llm.codex_session_anchor",
         "/manifest/llm/codex_session_anchor",
@@ -250,6 +243,11 @@ SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
         "/manifest/llm/compact_threshold",
         # Retired in-kernel Codex account pool; pooling is external (subs-pool).
         "/manifest/llm/codex_auth_pool_path",
+        # Retired per-vendor wire routing (four-family collapse); recognized-
+        # and-ignored legacy keys, never System rows.
+        "/manifest/llm/api_compat",
+        "/manifest/llm/reasoning_effort_vocab",
+        "/manifest/llm/use_responses_api",
     }
 )
 
@@ -462,7 +460,6 @@ SYSTEM_ENVIRONMENT_CLASSIFICATION: dict[str, frozenset[str]] = {
             "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SLEEP",
             "LINGTAI_FAKE_APP_SERVER_MODE",
             "LINGTAI_FAKE_CLI_REPORT",
-            "LINGTAI_RUN_LIVE_KIMI_CODE",
             "LINGTAI_TEST_CONFIG",
             "LINGTAI_TEST_FAKE_CLAUDE_SIGNAL_RECORD",
         }
@@ -863,36 +860,21 @@ def _openai_adapter_default(parameter: str) -> Any:
     return default
 
 
-def _custom_adapter_default(parameter: str) -> Any:
-    """Read an effective constructor default from the canonical custom adapter."""
-    from inspect import Parameter, signature
-
-    from lingtai.llm.custom.adapter import create_custom_adapter
-
-    default = signature(create_custom_adapter).parameters[parameter].default
-    if default is Parameter.empty:
-        raise RuntimeError("custom adapter setting has no constructor default")
-    return default
-
-
 @dataclass(frozen=True, slots=True)
 class _SelectedLLMRoute:
     factory: str
-    api_compat: Any = None
 
 
 # This narrow classifier covers only selected-factory LLM axes; it reads the
 # actual registered factory identities and never constructs an adapter or
-# reads credentials. That naturally keeps every alias bound to _custom/_codex
-# on the same route without maintaining a second alias registry here.
+# reads credentials. The four registered families are ``openai``,
+# ``anthropic``, ``codex``, and ``claude-code``.
 _SELECTED_FACTORY_LLM_SETTING_KEYS = frozenset(
     {
         "llm.wire_api",
         "llm.inject_reasoning_fallback",
-        "llm.reasoning_effort_vocab",
         "llm.prompt_cache_namespace",
         "llm.service_tier",
-        "llm.api_compat",
     }
 )
 
@@ -930,30 +912,9 @@ def _selected_llm_route(
     selected = factories.get(provider)
     if selected is None:
         raise RuntimeError("selected LLM provider has no registered factory")
-    if selected is factories.get("openai"):
-        return _SelectedLLMRoute("openai")
-    if selected is factories.get("custom"):
-        # Runtime drops authored api_compat=null before _custom. Omitted/null
-        # therefore both take its OpenAI default and forward any authored
-        # non-null reasoning vocabulary.
-        effective_compat = normalized.get(
-            "api_compat", _custom_adapter_default("api_compat")
-        )
-        if effective_compat == "openai":
-            return _SelectedLLMRoute("custom_openai", effective_compat)
-        if effective_compat == "anthropic" or effective_compat == "gemini":
-            return _SelectedLLMRoute("custom_other", effective_compat)
-        # create_custom_adapter sends every other admitted value (including
-        # non-lowercase/structured values) to OpenAIAdapter, but _register's
-        # _custom does not forward reasoning axes unless compat is the
-        # exact lowercase string "openai".
-        return _SelectedLLMRoute("custom_openai_fallback", "openai")
-    if selected is factories.get("deepseek"):
-        return _SelectedLLMRoute("deepseek")
-    if selected is factories.get("codex"):
-        return _SelectedLLMRoute("codex")
-    if selected is factories.get("mimo"):
-        return _SelectedLLMRoute("mimo")
+    for family in ("openai", "anthropic", "codex", "claude-code"):
+        if selected is factories.get(family):
+            return _SelectedLLMRoute(family)
     return _SelectedLLMRoute("ignored")
 
 
@@ -965,55 +926,24 @@ def _effective_nullable_llm_values(
     """Return selected-route ``(current, default)`` without constructing clients."""
     route = _selected_llm_route(llm, normalized)
 
-    if key == "llm.reasoning_effort_vocab":
-        if route.factory in {"openai", "custom_openai"}:
-            default = _openai_adapter_default("reasoning_effort_vocab")
-            return normalized.get("reasoning_effort_vocab", default), default
-        if route.factory == "custom_openai_fallback":
-            default = _openai_adapter_default("reasoning_effort_vocab")
-            return default, default
-        # DeepSeek installs a provider-owned reasoning policy; every other
-        # non-OpenAI factory ignores this generic vocabulary setting.
-        return None, None
-
     if key == "llm.inject_reasoning_fallback":
         default = True
-        if route.factory in {
-            "openai",
-            "custom_openai",
-            "custom_openai_fallback",
-        }:
-            if route.factory != "custom_openai_fallback":
-                authored = normalized.get("inject_reasoning_fallback", _MISSING)
-                if authored is not _MISSING:
-                    return authored, default
+        if route.factory == "openai":
+            authored = normalized.get("inject_reasoning_fallback", _MISSING)
+            if authored is not _MISSING:
+                return authored, default
             from lingtai.llm.openai.adapter import _env_bool
 
             return (
                 _env_bool("LINGTAI_INJECT_REASONING_FALLBACK", default=default),
                 default,
             )
-        if route.factory == "deepseek":
-            return normalized.get("inject_reasoning_fallback", default), default
         return None, None
 
     if key == "llm.prompt_cache_namespace":
-        if route.factory in {"openai", "custom_openai"}:
+        if route.factory == "openai":
             default = _openai_adapter_default("prompt_cache_namespace")
             return normalized.get("prompt_cache_namespace", default), default
-        if route.factory == "deepseek":
-            return normalized.get("prompt_cache_namespace", "deepseek"), "deepseek"
-        return None, None
-
-    if key == "llm.api_compat":
-        # _register._custom is the only factory that consumes api_compat. Its
-        # default remains OpenAI even while an authored non-OpenAI route is live.
-        if route.factory in {
-            "custom_openai",
-            "custom_openai_fallback",
-            "custom_other",
-        }:
-            return route.api_compat, _custom_adapter_default("api_compat")
         return None, None
 
     raise RuntimeError("unknown nullable LLM setting")
@@ -1030,22 +960,12 @@ def _effective_wire_api_values(
     # The Codex factory ignores the generic selector and forces Responses.
     if route.factory == "codex":
         return "responses", "responses"
-    # MiMo changes OpenAIAdapter's omitted selector to Responses but forwards
-    # an explicit value, including ``auto``, unchanged.
-    if route.factory == "mimo":
-        default = "responses"
-        return (default if authored is _MISSING else authored), default
-    # These factories forward an explicit selector. With omission, their real
-    # runtime construction has no legacy Responses preference and therefore
-    # selects Chat Completions.
-    if route.factory in {
-        "openai",
-        "custom_openai",
-        "custom_openai_fallback",
-        "deepseek",
-    }:
+    # ``openai`` selects Responses only when explicitly asked; omission and the
+    # legacy ``auto`` both select Chat Completions.
+    if route.factory == "openai":
         default = "chat_completions"
-        return (default if authored is _MISSING else authored), default
+        current = "responses" if authored == "responses" else default
+        return current, default
     return None, None
 
 
@@ -1053,21 +973,19 @@ def _effective_service_tier_values(
     llm: Mapping[str, Any],
     normalized: Mapping[str, Any],
 ) -> tuple[Any, Any]:
-    """Return the public tier the selected factory actually forwards."""
+    """Return the public tier the selected factory actually forwards.
+
+    Only ``openai`` and ``codex`` forward ``service_tier`` (one normalizer:
+    ``fast`` -> wire ``priority``; standard values verbatim). ``anthropic`` and
+    ``claude-code`` report none.
+    """
     route = _selected_llm_route(llm, normalized)
     raw = normalized.get("service_tier")
-    from lingtai.llm._register import (
-        _normalize_service_tier,
-        _openai_compatible_service_tier,
-    )
+    from lingtai.llm._register import _normalize_service_tier
 
-    if route.factory == "codex":
-        wire_value = _normalize_service_tier(raw)
-    elif route.factory in {"openai", "custom_openai"}:
-        # Recognized values forward; unrecognized ones stay ignored.
-        wire_value = _openai_compatible_service_tier(raw)
-    else:
+    if route.factory not in {"openai", "codex"}:
         return None, None
+    wire_value = _normalize_service_tier(raw)
     if wire_value is None:
         return None, None
     # The public setting is the authored vocabulary (``fast``); ``priority``

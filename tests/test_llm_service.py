@@ -63,35 +63,60 @@ def test_no_get_context_limit():
 # build_provider_defaults_from_manifest_llm
 #
 # Regression: Lingtai-AI/lingtai#112 Bug A — cli.py and agent.py constructed
-# `per_provider` inline and silently dropped `api_compat`, causing custom
-# anthropic-compat proxies to be routed through OpenAIAdapter and crash on
-# raw.choices access. The helper exists so the two call sites stay in sync.
+# `per_provider` inline and silently dropped adapter-consulted keys. The helper
+# exists so the call sites (boot, refresh, daemon presets, settings) stay in
+# sync. The retired ``api_compat`` key is recognized-and-ignored and is never
+# forwarded.
 # ---------------------------------------------------------------------------
 
 from lingtai.llm.service import build_provider_defaults_from_manifest_llm
 
 
-def test_build_provider_defaults_propagates_api_compat():
-    """The whole point: api_compat from manifest.llm reaches the bucket."""
+def test_build_provider_defaults_drops_retired_api_compat():
+    """``api_compat`` is a retired legacy key: it never reaches the bucket."""
     out = build_provider_defaults_from_manifest_llm(
-        {"provider": "custom", "api_compat": "anthropic", "model": "GLM-5.1"},
+        {"provider": "anthropic", "api_compat": "anthropic", "model": "GLM-5.1"},
         max_rpm=60,
     )
-    assert out == {"custom": {"max_rpm": 60, "api_compat": "anthropic"}}
+    assert out == {"anthropic": {"max_rpm": 60}}
+
+
+def test_build_provider_defaults_propagates_generic_openai_knobs():
+    out = build_provider_defaults_from_manifest_llm(
+        {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "wire_api": "responses",
+            "service_tier": "flex",
+            "inject_reasoning_fallback": False,
+            "prompt_cache_namespace": "acme",
+            "reasoning_effort_vocab": "seven_tier",
+            "use_responses_api": True,
+        },
+        max_rpm=0,
+    )
+    assert out == {
+        "openai": {
+            "wire_api": "responses",
+            "service_tier": "flex",
+            "inject_reasoning_fallback": False,
+            "prompt_cache_namespace": "acme",
+        }
+    }
 
 
 def test_build_provider_defaults_propagates_service_tier():
     """The real manifest path must not silently drop Codex fast mode."""
     out = build_provider_defaults_from_manifest_llm(
         {
-            "provider": "codex-pool",
+            "provider": "codex",
             "model": "gpt-5.6-sol",
             "service_tier": "fast",
         },
         max_rpm=60,
     )
     assert out == {
-        "codex-pool": {"max_rpm": 60, "service_tier": "fast"},
+        "codex": {"max_rpm": 60, "service_tier": "fast"},
     }
 
 
@@ -121,10 +146,10 @@ def test_build_provider_defaults_includes_default_headers():
 def test_build_provider_defaults_lowercases_provider_key():
     """Bucket key must match the lowercased lookup used by the adapter factory."""
     out = build_provider_defaults_from_manifest_llm(
-        {"provider": "Custom", "api_compat": "anthropic", "model": "GLM-5.1"},
+        {"provider": "OpenAI", "wire_api": "responses", "model": "GLM-5.1"},
         max_rpm=0,
     )
-    assert out == {"custom": {"api_compat": "anthropic"}}
+    assert out == {"openai": {"wire_api": "responses"}}
 
 
 def test_build_provider_defaults_skips_none_api_compat():
@@ -139,10 +164,10 @@ def test_build_provider_defaults_skips_none_api_compat():
 # ---------------------------------------------------------------------------
 # Effective api_key memory (daemon credential inheritance, Lingtai-AI/lingtai)
 #
-# A parent agent on a preset/custom endpoint resolves its api_key from a
-# *noncanonical* env slot (e.g. provider=custom with api_key_env=LLM_API_KEY)
+# A parent agent on a compatible endpoint resolves its api_key from a
+# *noncanonical* env slot (e.g. api_key_env=LLM_API_KEY)
 # and passes it directly to LLMService(api_key=...). The default key_resolver
-# only ever reads the canonical {PROVIDER}_API_KEY (CUSTOM_API_KEY), so an
+# only ever reads the canonical {PROVIDER}_API_KEY (PROXY_API_KEY), so an
 # inheriting caller (the no-preset daemon path) that re-derives the key via
 # parent_service._key_resolver(provider) loses it. LLMService must therefore
 # remember the direct key handed to its boot adapter.
@@ -169,15 +194,15 @@ def _register_recording_adapter(provider: str):
 def test_direct_api_key_remembered_as_effective_key(monkeypatch):
     """A directly-supplied api_key is remembered, even from a noncanonical env.
 
-    Mirrors a parent on provider=custom whose key came from LLM_API_KEY: the
-    canonical CUSTOM_API_KEY is absent, the resolver would return None, but the
+    Mirrors a parent on a proxy provider whose key came from LLM_API_KEY: the
+    canonical PROXY_API_KEY is absent, the resolver would return None, but the
     service was handed a real key and must expose it for daemon inheritance.
     """
-    monkeypatch.delenv("CUSTOM_API_KEY", raising=False)
-    _register_recording_adapter("custom")
+    monkeypatch.delenv("PROXY_API_KEY", raising=False)
+    _register_recording_adapter("proxy")
 
     svc = LLMService(
-        provider="custom",
+        provider="proxy",
         model="glm-5.1",
         api_key="sk-from-noncanonical-LLM_API_KEY",
         base_url="https://proxy.example/v1",
@@ -186,7 +211,7 @@ def test_direct_api_key_remembered_as_effective_key(monkeypatch):
 
     assert svc.api_key == "sk-from-noncanonical-LLM_API_KEY"
     # base_url/provider/model unchanged by this fix.
-    assert svc.provider == "custom"
+    assert svc.provider == "proxy"
     assert svc.model == "glm-5.1"
     assert svc._base_url == "https://proxy.example/v1"
 
@@ -194,7 +219,7 @@ def test_direct_api_key_remembered_as_effective_key(monkeypatch):
 def test_api_key_property_does_not_call_resolver_when_no_direct_key(monkeypatch):
     """The api_key property is direct-only; daemon falls back to resolver itself."""
 
-    _register_recording_adapter("custom")
+    _register_recording_adapter("proxy")
     calls: list[str] = []
 
     def resolver(provider: str) -> str:
@@ -202,7 +227,7 @@ def test_api_key_property_does_not_call_resolver_when_no_direct_key(monkeypatch)
         return "sk-canonical"
 
     svc = LLMService(
-        provider="custom",
+        provider="proxy",
         model="glm-5.1",
         key_resolver=resolver,
     )
@@ -213,11 +238,11 @@ def test_api_key_property_does_not_call_resolver_when_no_direct_key(monkeypatch)
 
 def test_direct_api_key_reaches_boot_adapter_unchanged(monkeypatch):
     """Adapter-creation semantics intact: the boot adapter still gets the key."""
-    monkeypatch.delenv("CUSTOM_API_KEY", raising=False)
-    calls = _register_recording_adapter("custom")
+    monkeypatch.delenv("PROXY_API_KEY", raising=False)
+    calls = _register_recording_adapter("proxy")
 
     LLMService(
-        provider="custom",
+        provider="proxy",
         model="glm-5.1",
         api_key="sk-direct",
         base_url="https://proxy.example/v1",

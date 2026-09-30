@@ -273,7 +273,7 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    Web's focused suites prove its exact three-port grant, the
    `search | browse | settings | manual` surface, the fail-closed typed `web_runtime`
    bind, the standard-table `provider_identity` label, exact-match canonical
-   provider gating for the explicit Anthropic/Gemini opt-in, and — through the
+   provider gating for the backend-gated OpenAI/Anthropic engines, and — through the
    same strict controlled official host in
    `tests/test_intrinsic_manual_actions.py` — that its `manual` returns the
    installed `capabilities/web/SKILL.md` body and path after a real registrar

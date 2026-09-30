@@ -1179,7 +1179,7 @@ def test_avatar_spawned_directory_stays_restricted_without_launch_env(
     )
     from lingtai.tools.avatar import AvatarManager
     from lingtai.tools.avatar._launcher import AvatarLaunchReceipt, derived_avatar_state_path
-    from tests._service_helpers import make_gemini_mock_service
+    from tests._service_helpers import make_mock_llm_service
 
     class _GrantingPort:
         def authorize_derived_launch(self, _parent, _capability):
@@ -1196,7 +1196,7 @@ def test_avatar_spawned_directory_stays_restricted_without_launch_env(
         {"manifest": {"capabilities": {"avatar": {}}}},
     )
     parent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="parent",
         working_dir=parent_dir,
         capabilities=["avatar"],

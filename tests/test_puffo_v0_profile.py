@@ -34,7 +34,7 @@ from lingtai.kernel.execution_workspace import ExecutionWorkspace
 from lingtai.kernel.config import AgentConfig
 from lingtai.kernel.provider_admission import ProviderAdmittedLLMService
 from lingtai.kernel.turns import TurnAdmissionError, TurnOrigin, submit_turn
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 from tests.test_deep_refresh import _make_init
 
 

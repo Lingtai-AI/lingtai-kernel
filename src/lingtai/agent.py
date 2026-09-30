@@ -20,8 +20,6 @@ from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel.config import (
     AgentConfig,
     HEARTBEAT_LIVENESS_SECONDS,
-    THINKING_OWNED_PROVIDERS,
-    THINKING_PROVIDERS,
 )
 from lingtai.kernel.llm.base import ToolCall
 from lingtai.llm.service import (
@@ -86,30 +84,53 @@ def load_preset(name: str, working_dir: "Path | None" = None) -> dict:
     preset = _core_load_preset(
         name, working_dir=working_dir, run_migrations=_run_preset_library_migrations
     )
-    _validate_provider_owned_thinking(preset, name)
+    _validate_preset_llm_routes(preset, name)
     return preset
 
 
-def _validate_provider_owned_thinking(preset: dict, name: str) -> None:
-    """Apply a provider-owned effort contract to a loaded preset.
+def _validate_preset_llm_routes(preset: dict, name: str) -> None:
+    """Apply the lingtai-layer LLM route rules to a loaded preset.
 
-    The kernel validator only decides whether ``manifest.llm.thinking`` is in
-    scope; it must not import provider modules (the DAG is
-    lingtai -> tools -> lingtai.kernel, enforced by
-    tests/test_kernel_isolation.py). The exact per-model/per-wire accepted set
-    is owned by the provider and applied here, on the shared preset-loading
-    path the CLI, each ``Agent``'s ``_preset_loader`` hook, and ``Agent``'s own
-    preset paths all use.
+    The kernel preset validator stays provider-agnostic; it must not import
+    ``lingtai`` modules (the DAG is lingtai -> tools -> lingtai.kernel,
+    enforced by tests/test_kernel_isolation.py). The provider-specific rules —
+    a removed LLM provider name on ``manifest.llm.provider`` or on a
+    capability, and the standard ``wire_api``/``service_tier`` values — are
+    the same ``lingtai.init_schema`` rules ``init.json`` obeys, applied here on
+    the shared preset-loading path the CLI, each ``Agent``'s
+    ``_preset_loader`` hook, and ``Agent``'s own preset paths all use.
     """
-    from lingtai.llm.deepseek.policy import owns_provider, validate_llm_block
+    from lingtai.init_schema import (
+        is_removed_llm_provider,
+        removed_provider_message,
+        validate_capability_providers,
+        validate_llm_standard_parameters,
+    )
 
-    llm = (preset or {}).get("manifest", {}).get("llm")
-    if not isinstance(llm, dict) or not owns_provider(llm.get("provider")):
+    manifest = (preset or {}).get("manifest")
+    if not isinstance(manifest, dict):
         return
     try:
-        validate_llm_block(llm)
+        llm = manifest.get("llm")
+        if isinstance(llm, dict):
+            if is_removed_llm_provider(llm.get("provider")):
+                raise ValueError(
+                    removed_provider_message("manifest.llm.provider", llm["provider"])
+                )
+            validate_llm_standard_parameters(llm, prefix="manifest.llm")
+        caps = manifest.get("capabilities")
+        if isinstance(caps, dict):
+            validate_capability_providers(caps, prefix="manifest.capabilities")
     except ValueError as exc:
         raise ValueError(f"preset {name!r}: {exc}") from exc
+
+
+#: Providers whose OMITTED ``manifest.llm.thinking`` keeps the ``"default"``
+#: sentinel so the adapter applies its own omitted default: ``codex`` sends an
+#: explicit ``reasoning.effort = "xhigh"``, and ``openai`` sends no reasoning
+#: field at all (the endpoint's own default). ``anthropic`` and ``claude-code``
+#: keep the historical cross-provider ``"high"`` main-session default.
+_OMITTED_THINKING_DEFAULT_SENTINEL_PROVIDERS = ("codex", "openai")
 
 
 def build_agent_config(
@@ -141,15 +162,15 @@ def build_agent_config(
         context_limit=policy.get("context_limit", defaults.context_limit),
         # Providers that own their omitted-thinking default keep the "default"
         # sentinel instead of being promoted to the legacy cross-provider
-        # "high" main-session default: the Codex family (omitted ->
-        # reasoning.effort "xhigh") and the provider-owned routes such as
-        # DeepSeek (omitted -> no reasoning field at all, so the provider's own
-        # default applies). Every other provider hydrates exactly as before.
+        # "high" main-session default: ``codex`` (omitted -> reasoning.effort
+        # "xhigh") and ``openai`` (omitted -> no reasoning field at all, so the
+        # endpoint's own default applies). ``anthropic``/``claude-code``
+        # hydrate exactly as before.
         thinking=llm.get(
             "thinking",
             "default"
             if str(llm.get("provider") or "").lower()
-            in THINKING_PROVIDERS + THINKING_OWNED_PROVIDERS
+            in _OMITTED_THINKING_DEFAULT_SENTINEL_PROVIDERS
             else defaults.thinking,
         ),
         # Molt thresholds and the context.molt message are kernel-fixed runtime
@@ -194,7 +215,8 @@ class Agent(BaseAgent):
         capabilities: Capability names to enable. Either a list of strings
             (no kwargs) or a dict mapping names to kwargs dicts.
             Each capability dict may include ``"provider"`` to route that
-            capability to a specific LLM provider (e.g. ``"gemini"``, ``"minimax"``).
+            capability to a specific provider (e.g. vision ``"anthropic"`` or
+            ``"local"``, web ``"duckduckgo"``).
         plugins: Agent Plugin package directories to register, the constructor
             form of ``init.json`` ``manifest.plugins``. Each declared plugin's
             ``skills/`` joins the skills catalog and its ``mcp.json`` servers
@@ -795,7 +817,6 @@ class Agent(BaseAgent):
         "provider",
         "model",
         "base_url",
-        "api_compat",
         "context_limit",
         "service_tier",
     )
@@ -2257,7 +2278,7 @@ class Agent(BaseAgent):
         )
         # Compare the resolved provider-defaults bucket as a whole so explicit
         # init.json changes (codex_session_anchor, default_headers,
-        # max_rpm, api_compat, etc.) rebuild coherently.
+        # max_rpm, wire_api, etc.) rebuild coherently.
         if (
             codex_force_rebuild
             or new_provider != self.service.provider

@@ -19,11 +19,6 @@ from lingtai.kernel.llm.base import UsageMetadata, checked_count, safe_billing_m
 from lingtai.kernel.session import _usage_billing_for_event
 from lingtai.llm.anthropic.adapter import _anthropic_billing_fields, _parse_response
 from lingtai.llm.claude_code.adapter import _map_usage as claude_code_map_usage
-from lingtai.llm.gemini.adapter import (
-    _parse_interaction_response,
-    _parse_response as gemini_parse_response,
-)
-from lingtai.llm.kimi_code.adapter import _map_usage as kimi_map_usage
 from lingtai.llm.openai.adapter import (
     _parse_response as openai_chat_parse,
     _parse_responses_api_response,
@@ -590,30 +585,6 @@ def test_openai_responses_wire_billable_output_includes_reasoning_once():
     assert missing.billable_output_tokens is None
 
 
-def test_gemini_generate_content_billable_output_is_candidates_plus_thoughts():
-    def raw(meta):
-        return SimpleNamespace(candidates=[], usage_metadata=meta)
-
-    usage = gemini_parse_response(raw(SimpleNamespace(
-        prompt_token_count=100, candidates_token_count=30, thoughts_token_count=12,
-        cached_content_token_count=0))).usage
-    assert (usage.output_tokens, usage.thinking_tokens, usage.billable_output_tokens) == (30, 12, 42)
-    assert usage.cache_write_tokens is None
-    # Absent thoughts cannot be told from zero on the wire: unknown, not 30.
-    no_thoughts = gemini_parse_response(raw(SimpleNamespace(prompt_token_count=1, candidates_token_count=30))).usage
-    assert no_thoughts.billable_output_tokens is None
-    no_candidates = gemini_parse_response(raw(SimpleNamespace(prompt_token_count=1, thoughts_token_count=4))).usage
-    assert no_candidates.billable_output_tokens is None
-
-
-def test_gemini_interactions_output_semantics_unproven_stays_unknown():
-    interaction = SimpleNamespace(steps=[], usage=SimpleNamespace(
-        total_input_tokens=100, total_output_tokens=30, total_thought_tokens=12, total_cached_tokens=0))
-    usage = _parse_interaction_response(interaction).usage
-    assert (usage.output_tokens, usage.thinking_tokens) == (30, 12)  # old fields unchanged
-    assert usage.billable_output_tokens is None  # whether total_output includes thoughts is unproven
-
-
 def test_claude_code_usage_preserves_explicit_write_and_output_else_unknown():
     usage = claude_code_map_usage({
         "input_tokens": 10, "output_tokens": 5,
@@ -623,15 +594,6 @@ def test_claude_code_usage_preserves_explicit_write_and_output_else_unknown():
     bare = claude_code_map_usage({"input_tokens": 10})
     assert bare.cache_write_tokens is None and bare.billable_output_tokens is None
     assert claude_code_map_usage(None).cache_write_tokens is None
-
-
-def test_kimi_usage_preserves_explicit_write_and_output_else_unknown():
-    usage = kimi_map_usage({"inputCacheRead": 1, "inputCacheCreation": 2, "inputOther": 3, "output": 4})
-    assert (usage.input_tokens, usage.cached_tokens, usage.output_tokens) == (6, 1, 4)
-    assert (usage.cache_write_tokens, usage.billable_output_tokens) == (2, 4)
-    bare = kimi_map_usage({"inputOther": 3})
-    assert bare.cache_write_tokens is None and bare.billable_output_tokens is None
-    assert kimi_map_usage(None).cache_write_tokens is None
 
 
 @pytest.mark.parametrize("null_rate", [None, "junk", -1])

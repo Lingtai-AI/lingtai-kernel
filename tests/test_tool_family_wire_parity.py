@@ -89,7 +89,7 @@ def test_real_agent_startup_builds_web_family_schema_on_both_wires(tmp_path):
     from lingtai.agent import Agent
     from lingtai.kernel.base_agent.tools import _build_tool_schemas
     from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
-    from tests._service_helpers import make_gemini_mock_service as make_mock_service
+    from tests._service_helpers import make_mock_llm_service as make_mock_service
 
     agent = Agent(
         service=make_mock_service(),
@@ -184,7 +184,7 @@ def test_context_molt_diagnostic_descriptor_never_reaches_either_provider_wire(t
     schema — the sidecar is dispatch-time-only and never schema-composed."""
     from lingtai.agent import Agent
     from lingtai.kernel.base_agent.tools import _build_tool_schemas
-    from tests._service_helpers import make_gemini_mock_service as make_mock_service
+    from tests._service_helpers import make_mock_llm_service as make_mock_service
 
     agent = Agent(
         service=make_mock_service(), agent_name="wire-blindness-test",

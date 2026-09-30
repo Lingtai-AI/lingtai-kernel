@@ -437,10 +437,10 @@ def test_avatar_manual_states_the_real_spawn_comment_prompt_position() -> None:
 
 def test_agent_mounts_avatar_only_through_the_official_registrar(tmp_path):
     from lingtai.agent import Agent
-    from tests._service_helpers import make_gemini_mock_service
+    from tests._service_helpers import make_mock_llm_service
 
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="avatar-plugin",
         working_dir=tmp_path / "agent",
         capabilities={"avatar": {}},

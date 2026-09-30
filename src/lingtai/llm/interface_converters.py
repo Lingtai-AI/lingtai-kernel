@@ -554,9 +554,9 @@ def to_responses_input(
     deep-copies and emits those raw output items in their original order.
     Changed, redacted, old, and manually-created entries use the projections
     below instead. Raw output replay is opt-in at this converter seam via
-    ``replay_raw_output_items=True``; generic stateless Responses sessions and
-    MiMo/DeepSeek opt in, while native Codex deliberately keeps its existing
-    canonical projection.
+    ``replay_raw_output_items=True``; generic stateless Responses sessions opt
+    in, while native Codex deliberately keeps its existing canonical
+    projection.
 
     Before returning, the wire-layer guard
     :func:`_pair_responses_orphan_function_calls` synthesizes a
@@ -671,88 +671,3 @@ def to_responses_input(
                     items.append({"role": "assistant", "content": joined})
             items.extend(tool_calls)
     return _pair_responses_orphan_function_calls(items)
-
-
-# ---------------------------------------------------------------------------
-# Gemini (Interactions API TurnParam format)
-# ---------------------------------------------------------------------------
-
-
-def to_gemini(iface: ChatInterface) -> list[dict]:
-    """Convert canonical interface to Gemini Interactions TurnParam list.
-    System entries excluded (Gemini uses system_instruction parameter).
-    Every historical tool result's content is serialized as-is, including any
-    ``_meta.agent_meta`` / ``guidance`` / ``notifications`` /
-    ``notification_guidance`` it carries — full-history conversion does not
-    strip these keys from any holder. String content passes through
-    unchanged; dict content is re-serialized to JSON (equal, not
-    byte-identical). A ``summarize``-replaced body is the only historical
-    tool-result body a rebuild replaces.
-    """
-    turns: list[dict] = []
-    for entry in iface.entries:
-        if entry.role == "system":
-            continue
-        role = "model" if entry.role == "assistant" else "user"
-        turns.append({"role": role, "content": [_to_gemini_block(b) for b in entry.content]})
-    return turns
-
-
-def _to_gemini_block(block: ContentBlock) -> dict:
-    if isinstance(block, TextBlock):
-        return {"type": "text", "text": block.text}
-    elif isinstance(block, ToolCallBlock):
-        return {"type": "function_call", "id": block.id, "name": block.name, "arguments": block.args}
-    elif isinstance(block, ToolResultBlock):
-        content = _project_tool_result(block)
-        return {
-            "type": "function_result",
-            "call_id": block.id,
-            "result": content if isinstance(content, str) else json.dumps(content, default=str),
-            "name": block.name,
-        }
-    elif isinstance(block, ThinkingBlock):
-        d: dict = {"type": "thought"}
-        if block.text:
-            d["summary"] = [{"type": "text", "text": block.text}]
-        return d
-    return {"type": "text", "text": str(block)}
-
-
-def from_gemini(turns: list[dict], system_prompt: str | None = None) -> ChatInterface:
-    """Convert Gemini TurnParam list to canonical interface."""
-    iface = ChatInterface()
-    if system_prompt:
-        iface.add_system(system_prompt)
-    for turn in turns:
-        role = turn.get("role", "user")
-        blocks = [_from_gemini_block(c) for c in turn.get("content", [])]
-        if role == "model":
-            iface.add_assistant_message(blocks)
-        else:
-            if blocks and isinstance(blocks[0], ToolResultBlock):
-                iface.add_tool_results([b for b in blocks if isinstance(b, ToolResultBlock)])
-            elif len(blocks) == 1 and isinstance(blocks[0], TextBlock):
-                iface.add_user_message(blocks[0].text)
-            else:
-                iface.add_user_blocks(blocks)
-    return iface
-
-
-def _from_gemini_block(b: dict) -> ContentBlock:
-    btype = b.get("type", "")
-    if btype == "text":
-        return TextBlock(text=b["text"])
-    elif btype == "function_call":
-        return ToolCallBlock(id=b.get("id", ""), name=b["name"], args=b.get("arguments", {}))
-    elif btype == "function_result":
-        content, metadata = _restore_projected_result(b.get("result", ""))
-        return ToolResultBlock(id=b.get("call_id", ""), name=b.get("name", ""), content=content, metadata=metadata)
-    elif btype == "thought":
-        text = ""
-        for s in b.get("summary", []):
-            if s.get("type") == "text":
-                text = s.get("text", "")
-                break
-        return ThinkingBlock(text=text)
-    return TextBlock(text=str(b))

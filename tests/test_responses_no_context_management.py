@@ -3,9 +3,9 @@
 The generic OpenAI Responses auto-compaction axis (``compact_threshold`` →
 ``context_management: [{"type": "compaction", ...}]``) was removed. Its old
 100k default fired server-side compaction on every turn of any agent whose
-context exceeded the threshold (e.g. a ``custom`` provider pointed at a
-Codex-compatible proxy), rewriting the context prefix each turn and driving
-prompt-cache hits to zero. Codex and MiMo keep their separate standalone
+context exceeded the threshold (e.g. an OpenAI-compatible provider pointed at
+a Codex-compatible proxy), rewriting the context prefix each turn and driving
+prompt-cache hits to zero. Codex keeps its separate standalone
 ``/responses/compact`` path; nothing sends ``context_management``.
 
 Existing configs that still carry ``manifest.llm.compact_threshold`` must keep
@@ -74,7 +74,7 @@ class _FakeClient:
 def test_openai_adapter_has_no_compact_threshold_parameter():
     assert "compact_threshold" not in inspect.signature(OpenAIAdapter).parameters
     with pytest.raises(TypeError):
-        OpenAIAdapter(api_key="fake", use_responses=True, compact_threshold=100_000)
+        OpenAIAdapter(api_key="fake", wire_api="responses", compact_threshold=100_000)
 
 
 def test_responses_session_has_no_compact_threshold_parameter():
@@ -88,7 +88,7 @@ def test_responses_session_has_no_compact_threshold_parameter():
 
 
 def test_streaming_responses_request_has_no_context_management():
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+    adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     adapter._client = _FakeClient()
     session = adapter._create_responses_session("gpt-5.5", "sys")
 
@@ -98,7 +98,7 @@ def test_streaming_responses_request_has_no_context_management():
 
 
 def test_non_streaming_responses_request_has_no_context_management():
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+    adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     adapter._client = _FakeClient()
     session = adapter._create_responses_session("gpt-5.5", "sys")
 
@@ -123,43 +123,12 @@ def test_openai_factory_ignores_legacy_compact_threshold(value):
     assert not hasattr(adapter, "_compact_threshold")
 
 
-@pytest.mark.parametrize("api_compat", ["openai", "anthropic", "gemini"])
-def test_custom_factory_does_not_forward_legacy_compact_threshold(
-    monkeypatch, api_compat
-):
-    import lingtai.llm.custom.adapter as custom_adapter_module
-
-    captured = {}
-
-    def fake_create_custom_adapter(**kwargs):
-        captured.update(kwargs)
-        return object()
-
-    monkeypatch.setattr(
-        custom_adapter_module,
-        "create_custom_adapter",
-        fake_create_custom_adapter,
-    )
+def test_compatible_openai_responses_session_sends_no_context_management():
     register_all_adapters()
-    factory = LLMService._adapter_registry["custom"]
-    factory(
-        model="provider-model",
-        defaults={"api_compat": api_compat, "compact_threshold": 250},
-        api_key="fake",
-        base_url="https://provider.example/v1",
-    )
-
-    assert captured["api_compat"] == api_compat
-    assert "compact_threshold" not in captured
-
-
-def test_custom_openai_responses_session_sends_no_context_management():
-    register_all_adapters()
-    factory = LLMService._adapter_registry["custom"]
+    factory = LLMService._adapter_registry["openai"]
     adapter = factory(
         model="gpt-6.1-sol",
         defaults={
-            "api_compat": "openai",
             "wire_api": "responses",
             "compact_threshold": 250,
         },

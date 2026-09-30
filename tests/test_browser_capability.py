@@ -8,7 +8,7 @@ from lingtai.kernel.config import TOOL_PROSE_SECTION_ENABLED_ENV
 from lingtai.tools.browser.core import BrowserEngine
 from lingtai.tools.browser.port import ResolvedTarget, TransportResponse
 from lingtai.tools.web_search import get_schema
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 
 
 @dataclass
@@ -61,7 +61,7 @@ def test_web_browse_vertical_slice(tmp_path):
         }
     )
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="web-browse-vertical-slice",
         working_dir=tmp_path,
         capabilities={"web": {"browser_port": port}},
@@ -164,7 +164,7 @@ def test_web_action_input_search_to_link_ref_browse(tmp_path):
         "https://public.example/page": b"<html><body><p>Provider-shaped page</p></body></html>",
     })
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="web-action-input",
         working_dir=tmp_path,
         capabilities={
@@ -222,7 +222,7 @@ def test_web_action_input_search_to_link_ref_browse(tmp_path):
 
 def _web_startup_agent(tmp_path, name):
     return Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name=name,
         working_dir=tmp_path,
         capabilities={"web": {}},

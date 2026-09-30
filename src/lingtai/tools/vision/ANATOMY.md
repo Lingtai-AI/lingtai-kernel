@@ -39,49 +39,74 @@ Vision result shape.
 
 ## Components
 
-- `__init__.py:197-212` — `_canonical_preset_path` resolves one allowed preset
-  reference (`~`, absolute, or workdir-relative spelling) to its canonical
-  physical path; `list` keys its rows on it so one file appears once.
-- `__init__.py:540-584` — strict declaration-owned input schemas: `analyze`
+- `__init__.py:61-104` — route vocabulary: the Codex family, the Claude CLI
+  family (`claude-code` plus the vision-only `claude-p` alias), the two API
+  families `openai`/`anthropic`, the twelve settings keys, and route-owned
+  model/endpoint/token defaults.
+- `__init__.py:121-264` — pure route helpers: `_vision_endpoint`/
+  `_responses_vision` classify a provider string for `list`;
+  `_canonical_preset_path` resolves one allowed preset reference (`~`,
+  absolute, or workdir-relative spelling) to its canonical physical path so
+  `list` shows one file once; `_same_provider_identity` decides inheritance;
+  `_effective_openai_wire` maps `responses` vs `chat_completions` (legacy
+  `auto`/omitted = Chat Completions); `_active_effective_base_url` reads the
+  active service's effective endpoint (`LLMService.effective_base_url`, falling
+  back to `_base_url`) and `_endpoint_key` compares endpoints for the
+  credential-leak guard.
+- `__init__.py:266-474` — owner-local settings snapshot/projection turns the
+  successfully bound route into 12 exact `SettingRow` values. Sensitive inputs,
+  including path-like models, become presence markers before the generic
+  redaction boundary; an unavailable route raises into the generic
+  all-or-nothing failure.
+- `__init__.py:477-482` — `PROVIDERS`: the advertised routes (`openai`,
+  `anthropic`, `codex`, `claude-p`, `claude-code`, `local`); `mlx` stays an
+  explicit, unadvertised opt-in and there is no `fallback_on_inherit`.
+- `__init__.py:485-530` — strict declaration-owned input schemas: `analyze`
   requires `image_path` and nullable `question` and accepts nullable `preset`,
   `check` requires nullable `preset`, and `list` is strict empty input.
-- `__init__.py:588-685` — immutable `VisionConfiguration` (with
+- `__init__.py:533-630` — immutable `VisionConfiguration` (with
   `port_values`/`from_port_values`, the only translation to and from the kernel
   `ConfigurationPort` mapping), static description, and declaration-derived
   `_build_family`; import-time and host-bound families therefore expose the
   same three operational children plus generic `settings` and `manual`.
-- `__init__.py:698-721` — `VisionManager` retains only the granted workdir and
+- `__init__.py:643-666` — `VisionManager` retains only the granted workdir and
   live active-provider ports, the resolved service/reason, and the installed
   manual child; it does not retain an Agent.
-- `__init__.py:727-808` — `_build_service_from_preset` checks
+- `__init__.py:672-765` — `_build_service_from_preset` checks
   `manifest.preset.allowed`, loads the authorized preset read-only, and passes
-  that preset's provider/model/credential identity to the direct resolver.
-- `__init__.py:810-897` — `_dispatch_analyze` resolves relative image paths,
+  that preset's provider/model/endpoint/credential identity (an identity shim
+  whose `effective_base_url` is the preset's own `base_url`) to the resolver.
+- `__init__.py:767-854` — `_dispatch_analyze` resolves relative image paths,
   performs one request on either the default or explicitly borrowed service, and
   returns the exact success/error shapes.
-- `__init__.py:899-946` — `_dispatch_check` constructs/resolves the selected route
+- `__init__.py:856-904` — `_dispatch_check` constructs/resolves the selected route
   and reports provider/model without sending an image request.
-- `__init__.py:948-1001` — `_dispatch_list` mechanically classifies the active route
+- `__init__.py:906-959` — `_dispatch_list` mechanically classifies the active route
   and only the authorized preset definitions, one row per physical preset in its
   declared spelling; it constructs no provider service.
-- `__init__.py:1017-1024` — `manual` reads the installed package manual through the
+- `__init__.py:961-1011` — `manual` reads the installed package manual through the
   reserved child, then the host flattens its canonical body/path result once.
   `manual/SKILL.md` is the short operational router; its `reference/actions.md`,
   `routing.md`, `settings.md`, and `backends.md` children own the progressively
   disclosed action, route, setting, and backend depth.
-- `__init__.py:144-526` and `1162-1543` — owner-local settings
-  snapshot/projection turns the successfully bound route and resolver-produced
-  protocol provenance into 13 exact `SettingRow` values. Sensitive inputs,
-  including path-like models, become presence markers before the generic
-  redaction boundary; an unavailable route raises into the generic
-  all-or-nothing failure.
-- `__init__.py:1056-1153` and `1546-1588` — `_bind`, `DECLARATION`, and `setup`
+- `__init__.py:1014-1115` and `1411-1453` — `_bind`, `DECLARATION`, and `setup`
   compose Vision through the official registrar with `workdir`,
   `active_provider`, and opaque `configuration` ports: `setup` hands the
   registrar `StaticConfigurationAdapter(VisionConfiguration(...).port_values())`
   through `extra_ports_for` for the `vision` declaration alone, and `_bind`
   rebuilds the snapshot with `VisionConfiguration.from_port_values`, resolves the
   service once, and binds one read-only settings provider.
+- `__init__.py:1118-1308` — `_resolve_direct_service`: the one route resolver.
+  `mlx` and `local` (settings-file backed) are explicit local routes;
+  `claude-code`/`claude-p` return manual `claude -p` guidance; `codex` binds one
+  OAuth identity; `openai`/`anthropic` delegate to `_resolve_api_family_service`;
+  every other provider name is manual-only. A legacy `api_compat` kwarg is
+  ignored.
+- `__init__.py:1311-1408` — `_resolve_api_family_service` builds the
+  `openai`/`anthropic` service: on the active family it inherits the effective
+  endpoint, model, credential, provider-default headers, and (`openai`) wire;
+  explicit capability values win; the active credential is sent only to the
+  active effective endpoint.
 - `settings.py:1-188` — bounded, stable, duplicate/unknown-field-rejecting
   `settings/vision.json` reader retained for the local route; it has no writer.
 
@@ -91,8 +116,11 @@ Vision result shape.
   loading descend through [`src/lingtai/tools/tool_family/ANATOMY.md`](../tool_family/ANATOMY.md).
 - `_bind` receives the host's live active-provider read-through and one immutable
   `VisionConfiguration` snapshot; it never reaches through to an Agent.
-- Direct routes call the service implementations under `lingtai.services.vision`.
-  Provider aliases and Codex route selection stay inside this family boundary.
+- Direct routes call the service implementations under `lingtai.services.vision`
+  ([`src/lingtai/services/vision/ANATOMY.md`](../../services/vision/ANATOMY.md)).
+  The default route reads the active `LLMService.effective_base_url`, `api_key`,
+  `_model`, and provider-default bucket; Codex route selection stays inside
+  this family boundary.
 - Generic settings input enforcement, exact five-field projection, redaction,
   failure, and response bounding stay in `tool_family`; Vision supplies only
   the applied bind snapshot and stable owner-manual pointers.

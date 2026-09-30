@@ -197,8 +197,7 @@ def test_codex_conversion_keeps_generic_raw_sidecar_opt_in_only():
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
     )
     codex = adapter.create_chat("gpt-5.5", "system", interface=iface)
 

@@ -212,41 +212,44 @@ def test_build_agent_config_codex_explicit_thinking_preserved(value):
     assert cfg.thinking == value
 
 
+@pytest.mark.parametrize("wire_api", [None, "chat_completions", "responses"])
 @pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh"])
-def test_build_agent_config_custom_responses_explicit_thinking_preserved(value):
-    manifest = _init_data({
-        "llm": {
-            "provider": "custom",
-            "model": "custom-model",
-            "api_compat": "openai",
-            "wire_api": "responses",
-            "thinking": value,
-        },
-    })["manifest"]
+def test_build_agent_config_openai_explicit_thinking_preserved(value, wire_api):
+    llm = {
+        "provider": "openai",
+        "model": "compat-model",
+        "base_url": "https://compat.example/v1",
+        "thinking": value,
+    }
+    if wire_api is not None:
+        llm["wire_api"] = wire_api
+    manifest = _init_data({"llm": llm})["manifest"]
 
     cfg = build_agent_config(manifest, max_rpm=0)
 
     assert cfg.thinking == value
 
 
-def test_build_agent_config_custom_responses_omitted_thinking_keeps_high():
-    manifest = _init_data({
-        "llm": {
-            "provider": "custom",
-            "model": "custom-model",
-            "api_compat": "openai",
-            "wire_api": "responses",
-        },
-    })["manifest"]
+@pytest.mark.parametrize("wire_api", [None, "chat_completions", "responses"])
+def test_build_agent_config_openai_omitted_thinking_stays_default_sentinel(wire_api):
+    """``openai`` sends ``thinking`` verbatim as the standard field and omits it
+    when unset, so an omitted manifest level hydrates to the ``"default"``
+    sentinel (never promoted to the legacy cross-provider ``"high"``)."""
+    llm = {"provider": "openai", "model": "gpt-5.5"}
+    if wire_api is not None:
+        llm["wire_api"] = wire_api
+    manifest = _init_data({"llm": llm})["manifest"]
 
     cfg = build_agent_config(manifest, max_rpm=0)
 
-    assert cfg.thinking == "high"
+    assert cfg.thinking == "default"
 
 
-def test_build_agent_config_non_codex_omitted_thinking_keeps_legacy_high():
-    """Non-Codex providers keep the legacy "high" main-session default."""
-    manifest = _init_data()["manifest"]  # provider "openai", no thinking
+@pytest.mark.parametrize("provider", ["anthropic", "claude-code"])
+def test_build_agent_config_anthropic_family_omitted_thinking_keeps_legacy_high(provider):
+    """``anthropic`` (Messages thinking-budget mapping) and ``claude-code``
+    (``--effort`` mapping) keep the legacy ``"high"`` main-session default."""
+    manifest = _init_data({"llm": {"provider": provider, "model": "m"}})["manifest"]
     cfg = build_agent_config(manifest, max_rpm=0)
     assert cfg.thinking == "high"
 

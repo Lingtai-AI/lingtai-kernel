@@ -16,9 +16,28 @@ maintenance: |
 ## Default route
 
 With no `preset`, Vision uses the configured Vision service or the active
-provider's own compatible model, endpoint, wire, and credential. An unsupported
-or incomplete identity fails closed with sanitized guidance. There is no hidden
-model, legacy credential, provider switch, or automatic MCP/provider fallback.
+provider's own family:
+
+- `openai` — OpenAI-compatible vision on the active service's *effective*
+  endpoint (the configured `base_url`, else the official
+  `https://api.openai.com/v1`), with the same key, model, headers, and wire
+  (`wire_api: responses` selects Responses; otherwise Chat Completions).
+- `anthropic` — Anthropic Messages vision on the effective endpoint with the
+  same key, model, and headers.
+- `codex` — Codex Responses vision with the active OAuth account (below).
+- `claude-code` — manual-only `claude -p` guidance (below).
+
+An explicit `capabilities.vision` may instead select `openai` or `anthropic`
+(with `base_url`, `api_key`/`api_key_env`, `model`, and for `openai`
+`wire_api`), `codex` (with `model`, `token_path`), or the local `local`/`mlx`
+routes. The active credential is only ever sent to the active effective
+endpoint: a vision `base_url` that differs from it needs its own
+`api_key`/`api_key_env`. Any other provider name — for example a vendor that is
+now reached through `openai`/`anthropic` with a `base_url` — is manual-only.
+If the endpoint or model cannot do vision, the request simply fails. An
+unsupported or incomplete identity fails closed with sanitized guidance. There
+is no hidden model, legacy credential, provider switch, or automatic
+MCP/provider fallback.
 
 The Codex provider (`codex`) uses one OAuth identity: an explicit `token_path`,
 else the active `codex_auth_path`, else (active Codex service only) the default
@@ -47,8 +66,8 @@ fails closed. Ask the human before changing authorization or configuration.
 
 ## Claude route
 
-Claude-family providers (`claude-code`, `claude_code`, `claude-p`) are manual-only
-for Vision. Run the operator's explicit CLI action, for example:
+Claude-family providers (`claude-code` and the vision-only `claude-p` alias) are
+manual-only for Vision. Run the operator's explicit CLI action, for example:
 
 ```text
 claude -p "Analyze this image: /path/to/image.png"

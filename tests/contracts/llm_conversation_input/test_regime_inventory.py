@@ -12,16 +12,17 @@ Layers (see ``regimes.py``):
 * **Registry matrix** — every registered provider name built through the real
   ``LLMService`` (``test_registry_matrix_*``). The union of built provider names
   equals the registry key set.
-* **Custom-family schema cross-product** — schema selectability
-  (``validate_init``) checked *separately* from the concrete factory result
-  (``test_custom_schema_*``).
+* **Wire-selector schema cross-product** — schema selectability
+  (``validate_init``) for every family x ``wire_api`` and every removed provider
+  name, checked *separately* from the concrete factory result
+  (``test_wire_schema_*``).
 * **Mutation/counterexample proofs** — rebinding registry providers to the wrong
   factory fails the real matrix (``test_rebinding_*``).
-* Gemini Chat factory-reachability, the canonical-fixture factory-shape anchor,
-  and the one non-conforming regime flag.
+* The canonical-fixture factory-shape anchor and the all-regimes-conform flag.
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -44,8 +45,7 @@ from tests.contracts.llm_conversation_input import regimes
 def test_registry_matrix_builds_expected_classes(edge: regimes.RegistryEdge) -> None:
     """Each registered provider built via the real ``LLMService`` resolves to the
     exact adapter + session class the matrix declares, wrapped in
-    ``_GatedSession`` iff a gate applies (MiniMax default 120 rpm; normal
-    ``max_rpm``). The build is the exact production route, so a rebind or a
+    ``_GatedSession`` iff a gate applies (a normal ``max_rpm``). The build is the exact production route, so a rebind or a
     factory class change fails here."""
     adapter, session = regimes.build_registry_edge(edge)
     with regimes.shutdown_gate(adapter):
@@ -70,11 +70,10 @@ def test_registry_matrix_builds_expected_classes(edge: regimes.RegistryEdge) -> 
                 f"{edge.id()}: expected {edge.session_class}, "
                 f"got {type(session).__name__}"
             )
-        # #861 Responses mode bit: for a row that pins it, assert the concrete
-        # stateful/stateless mode on the built session (unwrapping a gate if any).
-        # This is what a class-only row cannot do — official/stateful and
-        # custom/stateless share the OpenAIResponsesSession class, so only the
-        # _stateless_replay bit distinguishes the two production regimes.
+        # Responses mode bit: for a row that pins it, assert the concrete
+        # stateless mode on the built session (unwrapping a gate if any). A
+        # class-only row would stay green if a factory ever built the
+        # non-replay mode of the same OpenAIResponsesSession class.
         if edge.expected_stateless_replay is not None:
             target = session._inner if isinstance(session, _GatedSession) else session
             assert getattr(target, "_stateless_replay") is edge.expected_stateless_replay, (
@@ -115,95 +114,67 @@ def test_registry_matrix_covers_exactly_the_registered_providers() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Layer 2 — Custom-family schema cross-product (selectability vs factory)
+# Layer 2 — Wire-selector schema cross-product (selectability vs factory)
 # ---------------------------------------------------------------------------
 
 
-# The (provider, edge) cross-product: every custom-family name x every generated
-# schema edge. Selectability is per-provider, so this is the unit under test.
-_SCHEMA_ROWS = [
-    (provider, edge)
-    for edge in regimes.CUSTOM_SCHEMA_EDGES
-    for provider in regimes.CUSTOM_FAMILY
-]
+@pytest.mark.parametrize("row", regimes.WIRE_SCHEMA_ROWS, ids=lambda r: r.label())
+def test_wire_schema_selectability_matches_validate_init(row) -> None:
+    """``validate_init`` accepts/rejects each ``(provider, wire_api)`` manifest
+    exactly as ``schema_accepts`` declares: non-``auto`` ``wire_api`` only for
+    ``openai``, and every removed provider name rejected with a pointer to the
+    ``openai``/``anthropic`` replacements."""
+    from lingtai.init_schema import REMOVED_LLM_PROVIDERS
 
-
-def _schema_row_id(row) -> str:
-    provider, edge = row
-    return f"{provider}:{edge.label()}"
-
-
-@pytest.mark.parametrize("row", _SCHEMA_ROWS, ids=_schema_row_id)
-def test_custom_schema_selectability_matches_validate_init(row) -> None:
-    """``validate_init`` accepts/rejects each ``(provider, config)`` manifest exactly
-    as the ``schema_accepts`` predicate declares. This is the *selectability*
-    boundary — checked independently of the factory result — and it is per-provider:
-    a non-``auto`` openai row is selectable for ``custom`` but rejected for the
-    aliases ``grok``/``qwen``/``kimi``."""
-    provider, edge = row
-    data = regimes.custom_manifest(provider, edge)
-    accepts = regimes.schema_accepts(provider, edge.api_compat, edge.wire_api)
-    if accepts:
+    data = regimes.schema_manifest(row)
+    if regimes.schema_accepts(row.provider, row.wire_api):
         validate_init(data)  # must not raise
+    elif row.provider in REMOVED_LLM_PROVIDERS:
+        with pytest.raises(ValueError, match="was removed from LingTai"):
+            validate_init(data)
     else:
-        with pytest.raises(ValueError, match="OpenAI-compatible"):
+        with pytest.raises(ValueError, match="only for provider openai"):
             validate_init(data)
 
 
 @pytest.mark.parametrize(
     "row",
-    [r for r in _SCHEMA_ROWS if not r[1].factory_raises
-     and regimes.schema_accepts(r[0], r[1].api_compat, r[1].wire_api)],
-    ids=_schema_row_id,
+    [r for r in regimes.WIRE_SCHEMA_ROWS
+     if r.adapter_class and regimes.schema_accepts(r.provider, r.wire_api)],
+    ids=lambda r: r.label(),
 )
-def test_custom_schema_accepted_rows_build_expected_classes(row) -> None:
-    """Every schema-accepted ``(provider, config)`` builds the exact adapter +
-    session class through the real ``LLMService`` path. This couples the
-    schema-selectable configuration to the concrete production result, so a wrong
-    row or a route change fails. (grpc is an unknown api_compat that the schema
-    leaves unvalidated; its auto/absent rows build the OpenAI fallback.)"""
-    provider, edge = row
-    adapter, session = regimes.build_custom_schema_edge(provider, edge)
-    assert type(adapter).__name__ == edge.adapter_class, (
-        f"{provider} {edge.label()}: expected adapter {edge.adapter_class}, "
-        f"got {type(adapter).__name__}"
-    )
-    assert type(session).__name__ == edge.session_class, (
-        f"{provider} {edge.label()}: expected session {edge.session_class}, "
-        f"got {type(session).__name__}"
-    )
+def test_wire_schema_accepted_openai_rows_build_expected_classes(row) -> None:
+    """Every schema-accepted ``openai`` wire row builds the exact adapter +
+    session class through the real ``LLMService`` path: ``responses`` builds
+    the (stateless) Responses session; omitted, ``auto``, and
+    ``chat_completions`` build Chat Completions."""
+    adapter, session = regimes.build_schema_row(row)
+    assert type(adapter).__name__ == row.adapter_class
+    assert type(session).__name__ == row.session_class
+    if row.session_class == "OpenAIResponsesSession":
+        assert session._stateless_replay is True
 
 
-@pytest.mark.parametrize(
-    "row",
-    [r for r in _SCHEMA_ROWS if r[1].factory_raises],
-    ids=_schema_row_id,
-)
-def test_custom_schema_factory_error_rows_raise(row) -> None:
-    """A schema-accepted-but-factory-refused configuration (openai/anthropic with
-    no base_url) raises ``ValueError`` from the real factory — proving the schema
-    boundary and the factory boundary are distinct."""
-    provider, edge = row
-    with pytest.raises(ValueError):
-        regimes.build_custom_schema_edge(provider, edge)
+def test_removed_provider_names_are_not_registered() -> None:
+    """A fresh registry holds exactly the four families and no removed name.
 
+    Clear/re-register (snapshot/restore) so another test's hermetic
+    registration cannot leak in, exactly like the registry-matrix check.
+    """
+    from lingtai.init_schema import REMOVED_LLM_PROVIDERS
+    from lingtai.llm._register import LLM_PROVIDERS, register_all_adapters
 
-def test_custom_family_aliases_share_the_same_factory() -> None:
-    """``custom``/``grok``/``qwen``/``kimi`` bind to one ``_custom`` factory, so the
-    schema cross-product applies to all four identically. (The build tests above
-    already exercise all four; this pins the shared-factory invariant directly.)"""
-    registered = regimes.registered_provider_names()
-    for name in regimes.CUSTOM_FAMILY:
-        assert name in registered, f"{name} is not a registered provider"
-    factories = {
-        name: LLMService._adapter_registry[name]  # type: ignore[attr-defined]
-        for name in regimes.CUSTOM_FAMILY
-    }
-    unique = {id(f) for f in factories.values()}
-    assert len(unique) == 1, (
-        f"custom-family names must share one factory; got distinct factories: "
-        f"{ {k: id(v) for k, v in factories.items()} }"
-    )
+    registry = LLMService._adapter_registry  # type: ignore[attr-defined]
+    snapshot = dict(registry)
+    try:
+        registry.clear()
+        register_all_adapters()
+        registered = set(registry)
+    finally:
+        registry.clear()
+        registry.update(snapshot)
+    assert not (registered & set(REMOVED_LLM_PROVIDERS))
+    assert registered == set(regimes.LLM_FAMILIES) == set(LLM_PROVIDERS)
 
 
 # ---------------------------------------------------------------------------
@@ -261,61 +232,28 @@ def _registry_edge(provider: str, **overrides) -> regimes.RegistryEdge:
     )
 
 
-def test_rebinding_custom_family_to_anthropic_fails_the_matrix() -> None:
-    """Rebinding ALL of ``custom``/``grok``/``qwen``/``kimi`` to the Anthropic
-    factory makes their real-build openai edge return an ``AnthropicChatSession``
-    instead of ``OpenAIChatSession`` — so the matrix assertion fails. (Under the
-    old name-set union this rebind stayed green.)"""
-    edge = _registry_edge("custom")
-    # Baseline: the real matrix passes unmutated.
-    test_registry_matrix_builds_expected_classes(edge)
-    with _rebound_registry(regimes.CUSTOM_FAMILY, target_provider="anthropic"):
-        for provider in regimes.CUSTOM_FAMILY:
-            mutated = _registry_edge(provider)
-            with pytest.raises(AssertionError):
-                test_registry_matrix_builds_expected_classes(mutated)
-
-
-def test_rebinding_openrouter_to_anthropic_fails_the_matrix() -> None:
-    """Rebinding ``openrouter`` to the Anthropic factory changes its real-build
-    class from ``OpenRouterAdapter``/``OpenAIChatSession`` to Anthropic — the
-    matrix assertion fails. (The old coverage check stayed green.)"""
-    edge = _registry_edge("openrouter")
+def test_rebinding_openai_to_anthropic_fails_the_matrix() -> None:
+    """Rebinding ``openai`` to the Anthropic factory makes its real-build chat
+    edge return an ``AnthropicAdapter``/``AnthropicChatSession`` — so the matrix
+    assertion fails. (A name-set union would stay green.)"""
+    edge = _registry_edge("openai", label="openai.chat")
     test_registry_matrix_builds_expected_classes(edge)  # baseline passes
-    with _rebound_registry(("openrouter",), target_provider="anthropic"):
+    with _rebound_registry(("openai",), target_provider="anthropic"):
         with pytest.raises(AssertionError):
             test_registry_matrix_builds_expected_classes(edge)
 
 
-def test_rebinding_minimax_to_bare_anthropic_drops_the_gate() -> None:
-    """MiniMax gates by its own default 120 rpm. Rebinding ``minimax`` to the plain
-    ``anthropic`` factory (no default gate) makes the real build return a bare
-    ``AnthropicChatSession`` — so the ``gated=True`` matrix row fails."""
-    edge = _registry_edge("minimax")
-    assert edge.gated, "minimax matrix row must expect a gate"
-    test_registry_matrix_builds_expected_classes(edge)  # baseline: gated, passes
-    with _rebound_registry(("minimax",), target_provider="anthropic"):
+def test_rebinding_anthropic_to_openai_fails_the_matrix() -> None:
+    edge = _registry_edge("anthropic", label="anthropic.bare")
+    test_registry_matrix_builds_expected_classes(edge)  # baseline passes
+    with _rebound_registry(("anthropic",), target_provider="openai"):
         with pytest.raises(AssertionError):
             test_registry_matrix_builds_expected_classes(edge)
 
 
 # ---------------------------------------------------------------------------
-# Gemini Chat reachability + canonical fixture anchoring + non-conforming flag
+# Canonical fixture anchoring + regime flags
 # ---------------------------------------------------------------------------
-
-
-def test_gemini_chat_is_reachable_only_via_json_schema() -> None:
-    """The dormant ``GeminiChatSession`` is factory-reachable through the real
-    ``LLMService`` — but only via ``create_session(json_schema=...)``; without it
-    the Gemini provider returns ``InteractionsChatSession``. This is the executable
-    reachability proof for the non-conforming regime (dormant because no production
-    caller sets json_schema, not because the path is dead)."""
-    interactions = _registry_edge("gemini", label="gemini.interactions")
-    chat = _registry_edge("gemini", label="gemini.chat")
-    _a1, s1 = regimes.build_registry_edge(interactions)
-    _a2, s2 = regimes.build_registry_edge(chat)
-    assert type(s1).__name__ == "InteractionsChatSession"
-    assert type(s2).__name__ == "GeminiChatSession"
 
 
 def test_canonical_fixture_matches_adapter_factory_shape() -> None:
@@ -342,51 +280,27 @@ def test_behavior_regime_names_are_unique() -> None:
 
 
 # ---------------------------------------------------------------------------
-# #861 Responses stateful vs stateless — mode bit AND wire, through LLMService
+# Responses is stateless on every endpoint — mode bit AND wire, via LLMService
 # ---------------------------------------------------------------------------
 
 
-def test_official_and_custom_responses_are_distinct_registry_modes() -> None:
-    """The registry matrix carries BOTH #861 Responses regimes as distinct rows on
-    the same session class: ``openai.responses`` (stateful) and
-    ``custom.responses.stateless`` (stateless). They agree on session class but
-    differ on the pinned ``_stateless_replay`` bit — so the ledger no longer
-    presents one class-only row as complete Responses coverage."""
-    official = _registry_edge("openai", label="openai.responses")
-    custom = _registry_edge("custom", label="custom.responses.stateless")
-    assert official.session_class == custom.session_class == "OpenAIResponsesSession"
-    assert official.expected_stateless_replay is False
-    assert custom.expected_stateless_replay is True
+def test_official_and_compatible_responses_share_the_stateless_mode() -> None:
+    """Both ``openai`` Responses rows — the official endpoint and a compatible
+    ``base_url`` — pin the same stateless mode bit on the same class."""
+    official = _registry_edge("openai", label="openai.official.responses")
+    compat = _registry_edge("openai", label="openai.responses")
+    assert official.session_class == compat.session_class == "OpenAIResponsesSession"
+    assert official.expected_stateless_replay is True
+    assert compat.expected_stateless_replay is True
 
 
-def test_official_stateful_responses_wire_sends_delta_plus_previous_response_id() -> None:
-    """Official OpenAI Responses (``openai`` + ``wire_api=responses``) built through
-    the real ``LLMService`` is server-stateful: turn 2 sends only the new input
-    item and a ``previous_response_id`` pointing at turn 1's response id — NOT a
-    full replay. Proves the mode's wire consequence, not just its class."""
-    edge = _registry_edge("openai", label="openai.responses")
-    session, transport = regimes.build_responses_mode_via_service(edge)
-    assert session._stateless_replay is False
-
-    session.send("first")
-    session.send("second")
-
-    assert transport.kwargs[0]["input"] == [{"role": "user", "content": "first"}]
-    assert "previous_response_id" not in transport.kwargs[0]
-    # Turn 2 is a delta (only the new item), resuming via the prior id.
-    assert transport.kwargs[1]["input"] == [{"role": "user", "content": "second"}]
-    assert transport.kwargs[1]["previous_response_id"] == "resp_char_1"
-    assert session.session_resume_id == "resp_char_2"
-
-
-def test_custom_stateless_responses_wire_replays_full_history_without_resume_id() -> None:
-    """Custom/OpenAI-compatible Responses (``custom`` + ``api_compat=openai`` +
-    ``wire_api=responses``) built through the real ``LLMService`` is internally
-    stateless: the ``_custom`` factory -> ``create_custom_adapter`` sets
-    ``responses_stateless_replay=True``, so turn 2 replays the FULL canonical
-    history (user 1, assistant 1, user 2) and sends NO ``previous_response_id``.
-    This is the #861 regime the class-only row could not distinguish."""
-    edge = _registry_edge("custom", label="custom.responses.stateless")
+@pytest.mark.parametrize("label", ["openai.official.responses", "openai.responses"])
+def test_responses_wire_replays_full_history_without_resume_id(label: str) -> None:
+    """``openai`` Responses built through the real ``LLMService`` is stateless
+    on every endpoint: turn 2 replays the FULL canonical history (user 1,
+    assistant 1, user 2) and sends NO ``previous_response_id``; no server-side
+    resume id is exposed."""
+    edge = _registry_edge("openai", label=label)
     session, transport = regimes.build_responses_mode_via_service(edge)
     assert session._stateless_replay is True
 
@@ -395,21 +309,20 @@ def test_custom_stateless_responses_wire_replays_full_history_without_resume_id(
 
     assert "previous_response_id" not in transport.kwargs[0]
     assert "previous_response_id" not in transport.kwargs[1]
-    # Turn 2 replays the whole conversation, not a delta.
-    assert transport.kwargs[1]["input"] == [
-        {"role": "user", "content": "first"},
-        {"role": "assistant", "content": "ok"},
-        {"role": "user", "content": "second"},
-    ]
-    # Stateless mode exposes no server-side resume id.
+    # Turn 2 replays the whole conversation, not a delta: user 1, the recorded
+    # assistant turn 1 (its exact item shape — projected text or the replayed
+    # raw provider output item — is owned by the converter tests), user 2.
+    replay = transport.kwargs[1]["input"]
+    assert len(replay) == 3
+    assert replay[0] == {"role": "user", "content": "first"}
+    assert replay[2] == {"role": "user", "content": "second"}
+    assert "ok" in json.dumps(replay[1])
     assert session.session_resume_id is None
 
 
-def test_only_gemini_chat_is_non_conforming_and_every_regime_builds() -> None:
-    """The one non-conforming regime (gemini_chat) is flagged and never presented
-    as satisfying the common input surface; every regime has a real builder (no
-    build=None + conforms=True escape)."""
-    non_conforming = [r.name for r in regimes.ALL_REGIMES if not r.conforms]
-    assert non_conforming == ["gemini_chat"], "unexpected non-conforming set"
+def test_every_regime_conforms_and_builds() -> None:
+    """Every behavior regime conforms to the common input surface and has a
+    real builder (no build=None + conforms=True escape)."""
+    assert all(r.conforms for r in regimes.ALL_REGIMES)
     for regime in regimes.ALL_REGIMES:
         assert regime.build is not None, f"{regime.name} has no real builder"

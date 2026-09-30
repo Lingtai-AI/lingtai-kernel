@@ -1,8 +1,19 @@
-"""Register all built-in LLM adapter factories with LLMService.
+"""Register the four built-in LLM adapter factories with LLMService.
 
-Each factory uses lazy imports so provider SDKs are only loaded when first used.
-Each factory receives (model, defaults, **kw) from _create_adapter() and maps
-to the adapter's actual constructor signature.
+LingTai ships exactly four LLM provider families:
+
+* ``openai``      — any OpenAI-compatible endpoint (official OpenAI by default);
+                    ``wire_api`` selects ``chat_completions`` (default) or
+                    ``responses`` (always stateless full-history replay).
+* ``anthropic``   — any Anthropic-compatible (Messages API) endpoint.
+* ``codex``       — Codex / ChatGPT OAuth (one account; pooling is external).
+* ``claude-code`` — the local Claude Code CLI login.
+
+Other vendors and subscriptions are reached by pointing ``openai`` or
+``anthropic`` at that vendor's compatible endpoint, or at an external pool
+(sub2api / subs-pool). Each factory uses lazy imports so provider SDKs are only
+loaded when first used, and receives ``(model, defaults, **kw)`` from
+``LLMService._create_adapter()``.
 """
 from __future__ import annotations
 
@@ -12,22 +23,31 @@ from __future__ import annotations
 # account selection remains inside the one native Codex adapter.
 CODEX_OFFICIAL_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
+#: The registered LLM provider families, in documentation order.
+LLM_PROVIDERS = ("openai", "anthropic", "codex", "claude-code")
+
 
 # ---------------------------------------------------------------------------
-# service_tier normalization — Codex and OpenAI-compatible boundary
+# service_tier normalization — the one boundary for ``openai`` and ``codex``
 # ---------------------------------------------------------------------------
 
-# Valid user-facing values and their wire (OpenAI/Codex) equivalents.
-_SERVICE_TIER_WIRE: dict[str, str | None] = {
-    "fast": "priority",  # the only supported alias in v1
+#: Standard ``service_tier`` values forwarded verbatim on the wire.
+SERVICE_TIER_VALUES = ("auto", "default", "flex", "priority")
+
+#: User-facing aliases and their wire values.
+_SERVICE_TIER_ALIASES: dict[str, str] = {
+    "fast": "priority",
 }
 
 
 def _normalize_service_tier(raw: object) -> str | None:
     """Normalize a user-configured ``service_tier`` to its wire value.
 
-    Returns the wire value, or ``None`` to omit the field.
-    Raises ``ValueError`` for unsupported or invalid values.
+    ``fast`` maps to the wire value ``priority``; the standard values
+    ``auto``/``default``/``flex``/``priority`` pass through verbatim; absent or
+    blank returns ``None`` (the field is omitted). Any other value raises
+    ``ValueError`` — ``init_schema.validate_init`` applies this same function so
+    a bad tier fails at init, never silently at the wire.
     """
     if raw is None:
         return None
@@ -38,27 +58,15 @@ def _normalize_service_tier(raw: object) -> str | None:
     val = raw.strip()
     if not val:
         return None
-    wire = _SERVICE_TIER_WIRE.get(val)
-    if wire is not None:
-        return wire
-    # Unknown value — reject loudly.
+    alias = _SERVICE_TIER_ALIASES.get(val)
+    if alias is not None:
+        return alias
+    if val in SERVICE_TIER_VALUES:
+        return val
     raise ValueError(
-        f"Unsupported service_tier value {val!r}; "
-        f"supported: {sorted(_SERVICE_TIER_WIRE.keys())}"
+        f"Unsupported service_tier value {val!r}; supported: "
+        f"{', '.join(sorted(_SERVICE_TIER_ALIASES) + list(SERVICE_TIER_VALUES))}"
     )
-
-
-def _openai_compatible_service_tier(raw: object) -> str | None:
-    """Wire ``service_tier`` for the OpenAI-compatible factories.
-
-    Recognized values (``fast``) normalize exactly as on Codex. These routes
-    historically ignored the axis entirely, so an unrecognized value stays
-    ignored rather than failing adapter construction for existing configs.
-    """
-    try:
-        return _normalize_service_tier(raw)
-    except ValueError:
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -69,91 +77,37 @@ def _openai_compatible_service_tier(raw: object) -> str | None:
 def register_all_adapters() -> None:
     from lingtai.llm.service import LLMService
 
-    def _gemini(*, model=None, defaults=None, api_key=None, max_rpm=0, **kw):
-        from .gemini.adapter import GeminiAdapter
-        adapter_kw: dict = {}
-        if api_key is not None:
-            adapter_kw["api_key"] = api_key
-        if max_rpm > 0:
-            adapter_kw["max_rpm"] = max_rpm
-        if model:
-            adapter_kw["default_model"] = model
-        if kw.get("default_headers") is not None:
-            adapter_kw["default_headers"] = kw["default_headers"]
-        return GeminiAdapter(**adapter_kw)
-
-    def _anthropic(*, model=None, defaults=None, **kw):
-        from .anthropic.adapter import AnthropicAdapter
-        kw.pop("model", None)
-        return AnthropicAdapter(**{k: v for k, v in kw.items() if v is not None})
-
     def _openai(*, model=None, defaults=None, **kw):
+        """Build the generic OpenAI-compatible adapter.
+
+        ``base_url`` is optional (the official endpoint when omitted);
+        ``wire_api`` selects ``chat_completions`` (default; legacy ``auto`` is
+        treated as omitted) or ``responses`` (stateless full-history replay).
+        """
         from .openai.adapter import OpenAIAdapter
         kw.pop("model", None)
         adapter_kw = {k: v for k, v in kw.items() if v is not None}
         d = defaults or {}
-        service_tier = _openai_compatible_service_tier(d.get("service_tier"))
+        service_tier = _normalize_service_tier(d.get("service_tier"))
         if service_tier is not None:
             adapter_kw["service_tier"] = service_tier
-        # Canonical ``wire_api`` and the legacy ``use_responses_api`` preference
-        # are independent and both may be present (as in the openai DEFAULTS).
-        # Pass each when present — do NOT ``elif`` them — so ``auto`` can delegate
-        # to the legacy flag while an explicit value wins over it inside
-        # ``_should_use_responses()``.
-        if "wire_api" in d:
+        if d.get("wire_api") is not None:
             adapter_kw["wire_api"] = d["wire_api"]
-        if "use_responses_api" in d:
-            adapter_kw["use_responses"] = d["use_responses_api"]
-        # Generic reasoning_content round-trip knobs, lifted from provider
-        # defaults so manifest llm: config is not dead schema (fable F2).
-        for _k in ("inject_reasoning_fallback", "reasoning_effort_vocab", "prompt_cache_namespace"):
+        # Generic, provider-neutral OpenAI-compatible knobs lifted from the
+        # manifest ``llm`` block so they are not dead schema.
+        for _k in ("inject_reasoning_fallback", "prompt_cache_namespace"):
             if _k in d:
                 adapter_kw[_k] = d[_k]
         return OpenAIAdapter(**adapter_kw)
 
-    def _minimax(*, model=None, defaults=None, **kw):
-        from .minimax.adapter import MiniMaxAdapter
+    def _anthropic(*, model=None, defaults=None, **kw):
+        """Build the generic Anthropic-compatible (Messages API) adapter."""
+        from .anthropic.adapter import AnthropicAdapter
         kw.pop("model", None)
-        return MiniMaxAdapter(**{k: v for k, v in kw.items() if v is not None})
+        return AnthropicAdapter(**{k: v for k, v in kw.items() if v is not None})
 
-    def _openrouter(*, model=None, defaults=None, **kw):
-        from .openrouter.adapter import OpenRouterAdapter
-        kw.pop("model", None)
-        return OpenRouterAdapter(**{k: v for k, v in kw.items() if v is not None})
-
-    def _custom(*, model=None, defaults=None, **kw):
-        from .custom.adapter import create_custom_adapter
-        kw.pop("model", None)
-        d = defaults or {}
-        compat = d.get("api_compat", "openai")
-        adapter_kw = {k: v for k, v in kw.items() if v is not None}
-        # Canonical ``wire_api`` and the legacy ``use_responses_api`` preference
-        # are independent and both may be present. Pass each when present — do NOT
-        # ``elif`` them — so ``auto`` can delegate to the legacy flag while an
-        # explicit value wins over it inside ``_should_use_responses()``.
-        if "wire_api" in d:
-            adapter_kw["wire_api"] = d["wire_api"]
-        if "use_responses_api" in d:
-            adapter_kw["use_responses"] = d["use_responses_api"]
-        # Generic reasoning_content round-trip knobs, lifted from provider
-        # defaults so manifest llm: config is not dead schema (fable F2).
-        # Only meaningful for the openai-compat branch; other compat modes
-        # (gemini/anthropic) ignore them inside create_custom_adapter.
-        if compat == "openai":
-            for _k in ("inject_reasoning_fallback", "reasoning_effort_vocab", "prompt_cache_namespace"):
-                if _k in d:
-                    adapter_kw[_k] = d[_k]
-            service_tier = _openai_compatible_service_tier(d.get("service_tier"))
-            if service_tier is not None:
-                adapter_kw["service_tier"] = service_tier
-        return create_custom_adapter(api_compat=compat, **adapter_kw)
-
-    LLMService.register_adapter("gemini", _gemini)
-    LLMService.register_adapter("anthropic", _anthropic)
     LLMService.register_adapter("openai", _openai)
-    LLMService.register_adapter("minimax", _minimax)
-    LLMService.register_adapter("openrouter", _openrouter)
-    LLMService.register_adapter("custom", _custom)
+    LLMService.register_adapter("anthropic", _anthropic)
 
     # -- codex ----------------------------------------------------------------
 
@@ -198,14 +152,15 @@ def register_all_adapters() -> None:
         return CodexOpenAIAdapter(
             api_key="__lingtai_codex_deferred__",
             base_url=codex_base_url,
-            use_responses=True,
-            force_responses=True,
+            wire_api="responses",
             codex_account_source=source,
             codex_token_manager_factory=CodexTokenManager,
             **codex_id_kw,
         )
 
     LLMService.register_adapter("codex", _codex)
+
+    # -- claude-code ----------------------------------------------------------
 
     def _claude_code(*, model=None, defaults=None, **kw):
         from .claude_code.adapter import ClaudeCodeAdapter
@@ -215,86 +170,4 @@ def register_all_adapters() -> None:
         kw.pop("default_headers", None)
         return ClaudeCodeAdapter(model=model, **{k: v for k, v in kw.items() if v is not None})
 
-    for name in ("claude-code", "claude_code"):
-        LLMService.register_adapter(name, _claude_code)
-
-    def _kimi_code(*, model=None, defaults=None, **kw):
-        from .kimi_code.adapter import KimiCodeAdapter
-        kw.pop("model", None)
-        # Kimi Code owns its local CLI auth/config.  An explicitly supplied
-        # api_key is passed only through the child environment by the adapter;
-        # it is never placed in argv, prompts, or logs.
-        return KimiCodeAdapter(model=model, **{k: v for k, v in kw.items() if v is not None})
-
-    for name in ("kimi-code", "kimi_code"):
-        LLMService.register_adapter(name, _kimi_code)
-
-    def _deepseek(*, model=None, defaults=None, **kw):
-        from .openai.adapter import OpenAIAdapter
-        from .deepseek.policy import apply_reasoning
-        kw.pop("model", None)
-        adapter_kw = {k: v for k, v in kw.items() if v is not None}
-        d = defaults or {}
-        # Honor Responses-API wiring from provider defaults, mirroring the
-        # _openai/_custom factories: wire_api selects the wire, and the
-        # legacy use_responses_api preference may coexist with it.
-        if "wire_api" in d:
-            adapter_kw["wire_api"] = d["wire_api"]
-        if "use_responses_api" in d:
-            adapter_kw["use_responses"] = d["use_responses_api"]
-        # Lift the generic reasoning knobs from manifest defaults so DeepSeek
-        # users get the manifest-level off switch too (fable R2 M); the
-        # setdefaults below then only fill gaps for programmatic callers.
-        # ``reasoning_effort_vocab`` is still carried for schema compatibility
-        # but is not consulted on this route — see the reasoning_policy note
-        # below.
-        for _k in ("inject_reasoning_fallback", "reasoning_effort_vocab", "prompt_cache_namespace"):
-            if _k in d:
-                adapter_kw[_k] = d[_k]
-        # DeepSeek defaults collapsed into generic OpenAIAdapter params.
-        # setdefault (not plain =) so an explicit caller override wins,
-        # matching the neighbouring wire_api lines (fable F3).
-        adapter_kw.setdefault("base_url", "https://api.deepseek.com")
-        adapter_kw.setdefault("inject_reasoning_fallback", True)
-        adapter_kw.setdefault("prompt_cache_namespace", "deepseek")
-        # DeepSeek's reasoning-effort surface is genuinely provider-specific
-        # (per-model canonical levels per wire, a ``thinking`` enable/disable
-        # switch, documented compatibility aliases, and an omitted-means-
-        # provider-default rule), so DeepSeek owns it in its own module and
-        # installs it here. The shared transport stays neutral and no adapter
-        # subclass is involved. This supersedes the generic
-        # ``reasoning_effort_vocab`` projection on this route — the former
-        # ``seven_tier`` default was a fabricated cross-provider vocabulary
-        # that DeepSeek never actually served.
-        adapter_kw.setdefault("reasoning_policy", apply_reasoning)
-        # Preserve the old DeepSeekAdapter Responses-wire fidelity: stateless
-        # replay (no server-side response storage). Chat Completions ignores it.
-        adapter_kw.setdefault("responses_stateless_replay", True)
-        return OpenAIAdapter(**adapter_kw)
-
-    LLMService.register_adapter("deepseek", _deepseek)
-
-    def _zhipu(*, model=None, defaults=None, **kw):
-        from .zhipu.adapter import ZhipuAdapter
-        kw.pop("model", None)
-        return ZhipuAdapter(**{k: v for k, v in kw.items() if v is not None})
-
-    for name in ("glm", "zhipu"):
-        LLMService.register_adapter(name, _zhipu)
-
-    def _mimo(*, model=None, defaults=None, **kw):
-        from .mimo.adapter import MimoAdapter
-        kw.pop("model", None)
-        adapter_kw = {k: v for k, v in kw.items() if v is not None}
-        d = defaults or {}
-        if "wire_api" in d:
-            adapter_kw["wire_api"] = d["wire_api"]
-        compact_token_limit = d.get("mimo_compact_token_limit")
-        if compact_token_limit is not None:
-            adapter_kw["compact_token_limit"] = compact_token_limit
-        return MimoAdapter(**adapter_kw)
-
-    LLMService.register_adapter("mimo", _mimo)
-
-    for name in ("grok", "qwen", "kimi"):
-        LLMService.register_adapter(name, _custom)
+    LLMService.register_adapter("claude-code", _claude_code)

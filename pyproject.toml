@@ -22,7 +22,6 @@ dependencies = [
     "httpx>=0.27",
     "openai>=1.0",
     "anthropic>=0.40",
-    "google-genai>=1.0",
     # Official MCP Python SDK v2 (protocol 2026-07-28). The supported range is
     # the SDK's own published compatibility window; the wheel exact-pins
     # `mcp-types`, so never pin that separately here.

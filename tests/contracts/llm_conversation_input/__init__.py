@@ -6,35 +6,33 @@ declares — ``send(str)`` and ``send(list[ToolResultBlock])`` — against every
 
 Three things are made executable (see ``regimes.py``):
 
-* **Registry matrix** — every registered provider name is built through the real
+* **Registry matrix** — every registered provider name (exactly ``openai``,
+  ``anthropic``, ``codex``, ``claude-code``) is built through the real
   ``LLMService`` end to end (``LLMService(provider=<exact name>, ...)`` ->
   registered factory -> ``create_session``), with the SDK client mocked, and the
   returned adapter/session/``_GatedSession`` **class** is asserted. The mapping is
   therefore the data under test; it cannot drift away from what the factories do,
   and rebinding a provider to a different factory fails the matrix. The union of
-  built provider names equals the registry key set. Rows that carry a Responses
-  **mode** also assert the built session's ``_stateless_replay`` bit, so fresh-main
-  #861's official/stateful (``openai.responses``) and custom/OpenAI-compatible
-  stateless (``custom.responses.stateless``) Responses regimes are distinct
-  class-plus-mode rows — and their divergent wires (delta + ``previous_response_id``
-  vs full replay + no resume id) are proven through the same real ``LLMService``
-  route. This is the one class-plus-mode distinction; every other regime is a
-  distinct session class.
+  built provider names equals the registry key set. Every ``openai`` Responses
+  row also asserts the built session's ``_stateless_replay`` bit (always
+  ``True``: stateless full replay on the official endpoint and a compatible
+  ``base_url`` alike), and that wire (full replay, no ``previous_response_id``)
+  is proven through the same real ``LLMService`` route.
 
-* **Custom-family schema cross-product** — for ``custom`` and the aliases
-  ``grok`` / ``qwen`` / ``kimi`` across ``api_compat`` x ``wire_api``, schema
-  *selectability* (``init_schema.validate_init``) is checked *separately* from the
-  concrete adapter/session class the accepted configuration builds through the
-  real ``LLMService`` path (or the exact factory ``ValueError``). Non-``auto``
-  ``wire_api`` is schema-valid only for ``openai`` and ``custom`` +
-  ``api_compat=openai``; the alias non-``auto`` rows are rejected.
+* **Wire-selector schema cross-product** — for every family across
+  ``wire_api`` values, plus every removed provider name, schema *selectability*
+  (``init_schema.validate_init``) is checked *separately* from the concrete
+  adapter/session class the accepted configuration builds through the real
+  ``LLMService`` path. Non-``auto`` ``wire_api`` is schema-valid only for
+  ``openai``; removed provider names are rejected with a pointer to the
+  ``openai``/``anthropic`` replacements.
 
 * **Behavior regimes** — the concrete ``ChatSession`` configurations with
-  distinct common-input wire behavior (including DeepSeek's configured shared
-  ``OpenAIChatSession``, the MiMo / Zhipu subclasses, Codex's own REST machinery, and a
-  ``_GatedSession``-wrapped session) are each driven through both inputs; the
-  tests assert the exact provider wire AND the returned ``LLMResponse`` +
-  concrete ``UsageMetadata``.
+  distinct common-input wire behavior (including the reasoning-fallback-configured
+  ``OpenAIChatSession``, the stateless Responses session, Codex's own REST
+  machinery, and a ``_GatedSession``-wrapped session) are each driven through
+  both inputs; the tests assert the exact provider wire AND the returned
+  ``LLMResponse`` + concrete ``UsageMetadata``.
 
 It is deliberately NOT a governed component: it adds no ``CONTRACT.md``, links
 nothing from the root contract, and claims no Ports & Adapters migration. It is a

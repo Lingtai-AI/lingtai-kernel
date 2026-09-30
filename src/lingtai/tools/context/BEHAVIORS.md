@@ -80,7 +80,7 @@ self-contained and executable verbatim by an agent with the tools listed in its
    {
      "manifest": {
        "agent_name": "integration-test", "language": "en",
-       "llm": {"provider": "gemini", "model": "test-model", "api_key": "fake-key", "base_url": null},
+       "llm": {"provider": "openai", "model": "test-model", "api_key": "fake-key", "base_url": null},
        "capabilities": {}, "stamina": 10,
        "context_limit": null, "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 5,
        "admin": {}, "streaming": false
@@ -465,8 +465,8 @@ required; helper success is not that evidence.
 
    svc = MagicMock()
    svc.get_adapter.return_value = MagicMock()
-   svc.provider = "gemini"
-   svc.model = "gemini-test"
+   svc.provider = "openai"
+   svc.model = "gpt-test"
    workdir = Path(tempfile.mkdtemp()) / "named"
    agent = Agent(service=svc, working_dir=workdir)
    before_dir = agent._working_dir

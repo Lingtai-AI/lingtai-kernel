@@ -39,7 +39,7 @@ def _write_init(root: Path, venv: Path) -> None:
     (root / "init.json").write_text(json.dumps({
         "manifest": {
             "agent_name": "temporary-true-name", "language": "en",
-            "llm": {"provider": "gemini", "model": "test", "api_key": "fake", "base_url": None},
+            "llm": {"provider": "anthropic", "model": "test", "api_key": "fake", "base_url": None},
             "capabilities": {}, "disable": ["mcp"], "soul": {"delay": 60}, "stamina": 10,
             "context_limit": None, "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 5,
             "admin": {}, "streaming": False,

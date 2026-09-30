@@ -534,7 +534,7 @@ def test_every_taught_manual_pointer_round_trips_through_the_dispatcher(tmp_path
     # `manual_reason` literal assigned in setup().
     source = Path("src/lingtai/tools/vision/__init__.py").read_text(encoding="utf-8")
     taught = re.findall(r"vision\(action='manual'([^)]*)\)", source)
-    assert len(taught) >= 18, f"expected every guidance string, found {len(taught)}"
+    assert len(taught) >= 17, f"expected every guidance string, found {len(taught)}"
 
     for suffix in taught:
         assert "input={}" in suffix.replace("{{}}", "{}"), (
@@ -845,7 +845,7 @@ def test_preset_borrow_resolves_the_listed_presets_own_identity(tmp_path):
 
     with patch(
         "lingtai.tools.vision._resolve_direct_service",
-        return_value=(borrowed, "", vision_tool._VisionRouteProvenance()),
+        return_value=(borrowed, ""),
     ) as mock_resolve:
         mgr = _manager(tmp_path, _never_called_service())
         svc, reason, identity = mgr._build_service_from_preset("presets/codex.json")
@@ -876,7 +876,7 @@ def test_analyze_with_preset_option_uses_the_borrowed_service(tmp_path):
 
     with patch(
         "lingtai.tools.vision._resolve_direct_service",
-        return_value=(borrowed, "", vision_tool._VisionRouteProvenance()),
+        return_value=(borrowed, ""),
     ):
         mgr = _manager(tmp_path, _never_called_service())
         result = mgr.handle(
@@ -982,7 +982,7 @@ def test_check_preset_reports_identity_without_image(tmp_path):
 
     with patch(
         "lingtai.tools.vision._resolve_direct_service",
-        return_value=(borrowed, "", vision_tool._VisionRouteProvenance()),
+        return_value=(borrowed, ""),
     ):
         mgr = _manager(tmp_path, _never_called_service())
         result = mgr.handle(
@@ -1132,8 +1132,8 @@ def _write_list_fixture(tmp_path: Path) -> None:
           "description": {"summary": "fixture preset without vision"},
           "manifest": {
             "llm": {
-              "provider": "gemini",
-              "model": "gemini-2.5-pro"
+              "provider": "anthropic",
+              "model": "claude-opus-4.1"
             }
           }
         }
@@ -1256,8 +1256,11 @@ def test_list_action_dedupes_tilde_and_absolute_aliases_of_one_preset(
         ("local", "openai-compatible-local", False),
         ("mlx", "mlx-on-device", False),
         ("openai", "provider-service", False),
-        ("gemini", "provider-service", False),
-        ("GEMINI", "provider-service", False),
+        ("anthropic", "provider-service", False),
+        ("ANTHROPIC", "provider-service", False),
+        # Removed LLM providers have no vision route.
+        ("gemini", "unknown", False),
+        ("claude_code", "unknown", False),
         (None, "unknown", False),
         ("", "unknown", False),
     ],

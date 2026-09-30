@@ -1,14 +1,11 @@
-"""Tests that ``service_tier`` reaches OpenAI-compatible requests.
+"""Tests that the standard ``service_tier`` reaches ``openai`` and ``codex``.
 
-``llm.service_tier: "fast"`` used to be honored only by the Codex factory;
-the ``openai`` and ``custom`` (``api_compat=openai``) factories silently
-dropped it, so an agent pointed at a Codex-compatible proxy through the
-``custom`` provider could never request the priority tier. Both factories now
-normalize it at the same boundary (``fast`` -> wire ``priority``) and
-``OpenAIAdapter`` adds it to Responses and Chat Completions requests.
-
-These routes historically ignored the axis, so an unrecognized value stays
-ignored instead of failing adapter construction.
+One normalizer (``lingtai.llm._register._normalize_service_tier``) owns the
+axis for the two families that forward it: ``fast`` becomes the wire value
+``priority``; the standard values ``auto``/``default``/``flex``/``priority``
+pass through verbatim; anything else is a validation error (the same function
+backs ``init_schema.validate_init``). ``anthropic`` and ``claude-code`` never
+forward a tier.
 
 No network: clients are fakes that record the kwargs they receive.
 """
@@ -21,7 +18,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai.llm._register import register_all_adapters
+from lingtai.llm._register import (
+    SERVICE_TIER_VALUES,
+    _normalize_service_tier,
+    register_all_adapters,
+)
 from lingtai.llm.openai.adapter import OpenAIAdapter
 from lingtai.llm.service import LLMService
 
@@ -79,12 +80,12 @@ def _chat_client():
     return client
 
 
-def _factory_adapter(provider: str, defaults: dict):
+def _factory_adapter(provider: str, defaults: dict, *, base_url: str | None = None):
     register_all_adapters()
     factory = LLMService._adapter_registry[provider]
     kwargs = {"model": "gpt-test", "defaults": defaults, "api_key": "fake"}
-    if provider == "custom":
-        kwargs["base_url"] = "http://127.0.0.1:18766/v1"
+    if base_url is not None:
+        kwargs["base_url"] = base_url
     return factory(**kwargs)
 
 
@@ -102,56 +103,78 @@ def _chat_kwargs(adapter) -> dict:
     return adapter._client.chat.completions.create.call_args.kwargs
 
 
+# The official endpoint (base_url omitted) and a compatible endpoint behave the
+# same: the tier is a standard request field.
 _OPENAI_ROUTES = (
-    ("openai", {"wire_api": "responses"}),
-    ("custom", {"api_compat": "openai", "wire_api": "responses"}),
+    pytest.param(None, id="official"),
+    pytest.param("http://127.0.0.1:18766/v1", id="compatible"),
 )
 
 
-@pytest.mark.parametrize("provider,defaults", _OPENAI_ROUTES)
-def test_fast_reaches_responses_request_as_priority(provider, defaults):
-    adapter = _factory_adapter(provider, {**defaults, "service_tier": " fast "})
+@pytest.mark.parametrize("base_url", _OPENAI_ROUTES)
+def test_fast_reaches_responses_request_as_priority(base_url):
+    adapter = _factory_adapter(
+        "openai", {"wire_api": "responses", "service_tier": " fast "}, base_url=base_url
+    )
     assert _responses_kwargs(adapter)["service_tier"] == "priority"
 
 
-@pytest.mark.parametrize("provider,defaults", _OPENAI_ROUTES)
-def test_fast_reaches_chat_completions_request_as_priority(provider, defaults):
-    adapter = _factory_adapter(provider, {**defaults, "service_tier": "fast"})
+@pytest.mark.parametrize("base_url", _OPENAI_ROUTES)
+def test_fast_reaches_chat_completions_request_as_priority(base_url):
+    adapter = _factory_adapter("openai", {"service_tier": "fast"}, base_url=base_url)
     assert _chat_kwargs(adapter)["service_tier"] == "priority"
 
 
-@pytest.mark.parametrize("provider,defaults", _OPENAI_ROUTES)
-@pytest.mark.parametrize("value", [None, "", "default", "unsupported"])
-def test_absent_or_unrecognized_tier_is_omitted_without_error(
-    provider, defaults, value
-):
-    route_defaults = dict(defaults)
+@pytest.mark.parametrize("value", SERVICE_TIER_VALUES)
+def test_standard_tiers_pass_through_verbatim_on_both_wires(value):
+    responses = _factory_adapter(
+        "openai", {"wire_api": "responses", "service_tier": value}
+    )
+    assert _responses_kwargs(responses)["service_tier"] == value
+    chat = _factory_adapter("openai", {"service_tier": value})
+    assert _chat_kwargs(chat)["service_tier"] == value
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_absent_or_blank_tier_is_omitted(value):
+    defaults: dict = {"wire_api": "responses"}
     if value is not None:
-        route_defaults["service_tier"] = value
-    adapter = _factory_adapter(provider, route_defaults)
+        defaults["service_tier"] = value
+    adapter = _factory_adapter("openai", defaults)
     assert "service_tier" not in _responses_kwargs(adapter)
 
 
-@pytest.mark.parametrize("api_compat", ["anthropic", "gemini"])
-def test_custom_non_openai_compat_does_not_receive_service_tier(
-    monkeypatch, api_compat
-):
-    import lingtai.llm.custom.adapter as custom_adapter_module
+@pytest.mark.parametrize("value", ["unsupported", "turbo", "Fast", 3])
+def test_unrecognized_tier_fails_loudly_at_the_factory(value):
+    with pytest.raises(ValueError):
+        _factory_adapter("openai", {"service_tier": value})
 
-    captured = {}
 
-    def fake_create_custom_adapter(**kwargs):
-        captured.update(kwargs)
-        return object()
+def test_normalizer_contract():
+    assert _normalize_service_tier("fast") == "priority"
+    assert _normalize_service_tier(" priority ") == "priority"
+    for value in ("auto", "default", "flex", "priority"):
+        assert _normalize_service_tier(value) == value
+    assert _normalize_service_tier(None) is None
+    assert _normalize_service_tier("") is None
+    with pytest.raises(ValueError, match="Unsupported service_tier"):
+        _normalize_service_tier("scale")
 
-    monkeypatch.setattr(
-        custom_adapter_module, "create_custom_adapter", fake_create_custom_adapter
-    )
-    _factory_adapter("custom", {"api_compat": api_compat, "service_tier": "fast"})
-    assert captured["api_compat"] == api_compat
+
+def test_anthropic_factory_never_receives_service_tier(monkeypatch):
+    import lingtai.llm.anthropic.adapter as anthropic_module
+
+    captured: dict = {}
+
+    class _FakeAnthropic:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(anthropic_module, "AnthropicAdapter", _FakeAnthropic)
+    _factory_adapter("anthropic", {"service_tier": "fast"})
     assert "service_tier" not in captured
 
 
 def test_direct_adapter_without_tier_sends_no_service_tier():
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+    adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     assert "service_tier" not in _responses_kwargs(adapter)

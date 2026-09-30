@@ -43,9 +43,8 @@ SEARCH_ENGINE_KEY = "search.engine"
 OUTPUT_MAX_CHARS_KEY = "output.max_chars"
 OPENAI_API_KEY = "credentials.openai_api_key"
 ANTHROPIC_API_KEY = "credentials.anthropic_api_key"
-GEMINI_API_KEY = "credentials.gemini_api_key"
 
-DEFAULT_ENGINE_NAMES = ("anthropic", "duckduckgo", "gemini", "openai")
+DEFAULT_ENGINE_NAMES = ("anthropic", "duckduckgo", "openai")
 
 
 def valid_engine_name(value: Any) -> bool:
@@ -439,7 +438,6 @@ def build_settings_provider(
                 for key, provider in (
                     (OPENAI_API_KEY, "openai"),
                     (ANTHROPIC_API_KEY, "anthropic"),
-                    (GEMINI_API_KEY, "gemini"),
                 )
             ),
         )

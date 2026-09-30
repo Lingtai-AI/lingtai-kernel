@@ -9,7 +9,7 @@ import pytest
 from lingtai.agent import Agent
 from lingtai.tools.web_search import WebManager, setup
 from lingtai.services.websearch import SearchResult, SearchService, create_search_service
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 class _WorkdirPort:
@@ -19,6 +19,17 @@ class _WorkdirPort:
 
 class _ProviderIdentityPort:
     provider = None
+
+
+def _openai_service():
+    """Mock LLM service on the ``openai`` provider family.
+
+    The ``openai`` web engine is backend-gated: it searches only for an Agent
+    whose own LLM provider is ``openai``.
+    """
+    service = make_mock_service()
+    service.provider = "openai"
+    return service
 
 
 
@@ -90,6 +101,13 @@ def test_create_search_service_rejects_retired_zhipu():
         create_search_service("zhipu", api_key="key")
 
 
+def test_create_search_service_rejects_removed_gemini():
+    """The Gemini search service was removed with the Gemini LLM provider; the
+    factory raises the documented ValueError like any other unknown name."""
+    with pytest.raises(ValueError, match="Unknown web search provider"):
+        create_search_service("gemini", api_key="key")
+
+
 def test_create_search_service_rejects_unknown_kwargs():
     """The factory API is intentionally narrow; provider kwargs must be explicit."""
     with pytest.raises(TypeError):
@@ -110,7 +128,7 @@ def test_web_with_provider_kwarg(tmp_path):
 def test_web_setup_resolves_api_key_env(tmp_path, monkeypatch):
     """setup() resolves api_key_env before constructing provider services."""
     monkeypatch.setenv("WEB_SEARCH_TEST_API_KEY", "sk-from-env")
-    agent = Agent(service=make_mock_service(), agent_name="web-env", working_dir=tmp_path)
+    agent = Agent(service=_openai_service(), agent_name="web-env", working_dir=tmp_path)
     try:
         with patch("lingtai.services.websearch.create_search_service") as mock_factory:
             mock_factory.return_value = MagicMock(spec=SearchService)
@@ -128,7 +146,7 @@ def test_web_setup_resolves_api_key_env(tmp_path, monkeypatch):
 def test_web_setup_api_key_env_overrides_raw_key(tmp_path, monkeypatch):
     """api_key_env takes precedence over a raw api_key, matching vision."""
     monkeypatch.setenv("WEB_SEARCH_TEST_API_KEY", "sk-from-env")
-    agent = Agent(service=make_mock_service(), agent_name="web-env-priority", working_dir=tmp_path)
+    agent = Agent(service=_openai_service(), agent_name="web-env-priority", working_dir=tmp_path)
     try:
         with patch("lingtai.services.websearch.create_search_service") as mock_factory:
             mock_factory.return_value = MagicMock(spec=SearchService)
@@ -162,7 +180,7 @@ def test_inherited_web_env_key_registers(tmp_path, monkeypatch):
 
     with patch("lingtai.services.websearch.create_search_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=SearchService)
-        service = make_mock_service()
+        service = _openai_service()
         service._base_url = None
         agent = Agent(
             service=service,

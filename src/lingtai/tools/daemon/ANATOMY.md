@@ -139,21 +139,23 @@ mirroring the parent (provider/model/base_url/key_resolver/context_window) and
 preserving the parent's provider defaults, rather than reusing the parent
 service. Codex additionally derives a daemon-scoped cache anchor from each run's
 `daemon.json`, so the child's `session_id`, `thread_id`, and `prompt_cache_key`
-do not collide with the parent agent's cache slot. A preset/manifest `codex_auth_path` (the per-agent Codex
-OAuth token file) is among the preserved provider defaults — and is on the
-`_llm_defaults_from_manifest` preset allowlist — so preset-driven daemon work
-authenticates against the same Codex account as the parent. A per-task
-`context_token_limit` (positive int; validated pre-flight in
-`_handle_emanate`) is threaded through `_run_emanation` into
-`_daemon_provider_defaults` as `codex_compact_token_limit` (Codex) or
-`mimo_compact_token_limit` (the native `mimo` provider) — effective only
-when the task's resolved provider is one of those two; every other provider
-and every external CLI backend ignores it. Omitted, the session falls back
-to its own resolved `context_window()` as the threshold. See
-`src/lingtai/llm/openai/ANATOMY.md` for the shared `_StandaloneCompactionMixin`
-mechanics this threshold drives, and `src/lingtai/llm/mimo/ANATOMY.md` for
-MiMo's hard-failure-on-compact-error divergence from Codex's non-fatal
-policy. Results are persisted in per-run daemon folders; **every** terminal outcome
+do not collide with the parent agent's cache slot. A daemon run from a preset
+builds its provider-defaults bucket through `_llm_defaults_from_manifest`,
+which reuses the main boot path's `lingtai.llm.service.build_provider_defaults_from_manifest_llm`
+safelist (plus the preset's `base_url` and `max_rpm`), so every generic knob
+the adapter factories consult — `service_tier`, `wire_api`,
+`inject_reasoning_fallback`, `prompt_cache_namespace`, `default_headers`, and
+the `codex_*` identity/endpoint keys including `codex_auth_path` (the
+per-agent Codex OAuth token file) — reaches the daemon adapter; preset-driven
+daemon work therefore authenticates against the same Codex account as the
+parent. A per-task `context_token_limit` (positive int; validated pre-flight
+in `_handle_emanate`) is threaded through `_run_emanation` into
+`_daemon_provider_defaults` as `codex_compact_token_limit` — effective only
+when the task's resolved provider is `codex`; every other provider and every
+external CLI backend ignores it. Omitted, the session falls back to its own
+resolved `context_window()` as the threshold. See
+`src/lingtai/llm/openai/ANATOMY.md` for the `_StandaloneCompactionMixin`
+mechanics this threshold drives. Results are persisted in per-run daemon folders; **every** terminal outcome
 (done / failed / cancelled / timeout) is surfaced as a compact event in
 `.notification/daemon/<daemon-id>.json` — never as ordinary parent request text.
 The typed Store's daemon-only owner mutation is the append hot path: it takes the

@@ -22,20 +22,6 @@ def _make_openai_service(monkeypatch, raw_response):
     return OpenAIVisionService(api_key="sk-test", model="gpt-4o", base_url="http://127.0.0.1:34891")
 
 
-def _make_mimo_service(monkeypatch, raw_response):
-    """Build a MiMoVisionService whose client returns `raw_response`."""
-    completions = MagicMock()
-    completions.create.return_value = raw_response
-    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    openai_cls = MagicMock(return_value=client)
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=openai_cls))
-
-    from lingtai.services.vision.mimo import MiMoVisionService
-
-    svc = MiMoVisionService(api_key="sk-test", model="mimo-v2.5")
-    return svc, completions
-
-
 def test_openai_vision_raises_clear_error_on_string_response(monkeypatch, tmp_path):
     """Bug G: a raw `str` body (proxy served HTML/non-JSON) raises a clear RuntimeError.
 
@@ -85,39 +71,6 @@ def test_openai_vision_returns_content_on_valid_response(monkeypatch, tmp_path):
     assert svc.analyze_image(str(img)) == "a candlestick chart"
 
 
-def test_mimo_vision_returns_content_on_valid_response(monkeypatch, tmp_path):
-    """A well-formed MiMo ChatCompletion returns its message content."""
-    img = tmp_path / "chart.png"
-    img.write_bytes(b"\x89PNG fake")
-
-    message = SimpleNamespace(content="a candlestick chart")
-    choice = SimpleNamespace(message=message)
-    raw = SimpleNamespace(choices=[choice])
-    svc, completions = _make_mimo_service(monkeypatch, raw)
-
-    assert svc.analyze_image(str(img), prompt="what is shown?") == "a candlestick chart"
-    kwargs = completions.create.call_args.kwargs
-    assert kwargs["model"] == "mimo-v2.5"
-    assert kwargs["max_completion_tokens"] == 1024
-    content = kwargs["messages"][0]["content"]
-    assert content[0]["type"] == "image_url"
-    assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
-    assert content[1] == {"type": "text", "text": "what is shown?"}
-
-
-def test_mimo_vision_returns_empty_string_on_empty_choices(monkeypatch, tmp_path):
-    """Empty MiMo choices keep the existing empty-string behavior."""
-    img = tmp_path / "chart.png"
-    img.write_bytes(b"\x89PNG fake")
-
-    svc, completions = _make_mimo_service(monkeypatch, SimpleNamespace(choices=[]))
-
-    assert svc.analyze_image(str(img)) == ""
-    content = completions.create.call_args.kwargs["messages"][0]["content"]
-    assert content[0]["type"] == "image_url"
-    assert content[1] == {"type": "text", "text": "Describe this image."}
-
-
 def test_anthropic_vision_service_accepts_base_url(monkeypatch):
     """C-2 sibling: AnthropicVisionService accepts base_url for local proxies."""
     anthropic_cls = MagicMock()
@@ -145,8 +98,6 @@ def test_anthropic_vision_service_omits_base_url_when_unset(monkeypatch):
     [
         ("openai", "lingtai.services.vision.openai"),
         ("anthropic", "lingtai.services.vision.anthropic"),
-        ("gemini", "lingtai.services.vision.gemini"),
-        ("mimo", "lingtai.services.vision.mimo"),
     ],
 )
 @pytest.mark.parametrize("api_key", [None, "", "  \t"])
@@ -174,8 +125,6 @@ def test_factory_rejects_blank_api_key_before_provider_import(
     [
         ("openai", "openai", "lingtai.services.vision.openai", "OpenAIVisionService"),
         ("anthropic", "anthropic", "lingtai.services.vision.anthropic", "AnthropicVisionService"),
-        ("gemini", "google", "lingtai.services.vision.gemini", "GeminiVisionService"),
-        ("mimo", "openai", "lingtai.services.vision.mimo", "MiMoVisionService"),
     ],
 )
 @pytest.mark.parametrize("api_key", [None, "", "  \t"])
@@ -207,3 +156,20 @@ def test_factory_preserves_original_nonblank_key(monkeypatch):
 
     create_vision_service("openai", api_key="  sk-preserve  ")
     openai_cls.assert_called_once_with(api_key="  sk-preserve  ")
+
+
+@pytest.mark.parametrize("provider", ["gemini", "mimo", "minimax", "zhipu", "custom"])
+def test_factory_rejects_removed_vision_providers(provider):
+    """Only the openai/anthropic/codex/mlx services remain in the factory."""
+    from lingtai.services.vision import create_vision_service
+
+    with pytest.raises(ValueError, match="Unsupported vision provider"):
+        create_vision_service(provider, api_key="sk-test")
+
+
+@pytest.mark.parametrize("module", ["gemini", "mimo"])
+def test_removed_vision_service_modules_are_gone(module):
+    import importlib
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module(f"lingtai.services.vision.{module}")

@@ -120,8 +120,7 @@ def _create_codex_session(events: list[Event], *, model: str = "gpt-5.5"):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
     )
     adapter._client = FakeClient(events)
     return adapter.create_chat(
@@ -421,8 +420,7 @@ def _create_codex_session_cfg(events, *, model="gpt-5.5", **adapter_kw):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         **adapter_kw,
     )
     adapter._client = FakeClient(events)
@@ -594,8 +592,7 @@ def _build_codex_adapter(events, **adapter_kw):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         **adapter_kw,
     )
     adapter._client = FakeClient(events)

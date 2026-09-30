@@ -2,14 +2,8 @@
 from __future__ import annotations
 
 import logging
-import math
 
-from lingtai.kernel.config import (
-    THINKING_LEVELS,
-    THINKING_NATIVE_PROVIDERS,
-    THINKING_PROVIDERS,
-    llm_supports_thinking,
-)
+from lingtai.kernel.config import THINKING_LEVELS
 
 log = logging.getLogger(__name__)
 
@@ -153,25 +147,20 @@ LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "api_key": (str, NoneType),
     "api_key_env": str,
     "base_url": (str, NoneType),
-    # OpenAI-compatible wire selection. ``auto`` preserves legacy behavior;
-    # ``chat_completions``/``responses`` force the respective wire path even
-    # for custom base URLs. Scoped to OpenAI-compatible providers.
+    # ``openai`` wire selection: ``chat_completions`` (default) or
+    # ``responses`` (stateless full-history replay). The legacy value
+    # ``auto`` is accepted and means the same as omitting the field.
     "wire_api": str,
     # Generic OpenAI-compatible ``reasoning_content`` round-trip fallback:
     # default-on per-turn-unique stub injection on assistant turns after the
     # first tool_call that lack real thinking (env LINGTAI_INJECT_REASONING_FALLBACK
-    # to disable; explicit config wins). Honored by the openai, custom
-    # (api_compat=openai), and deepseek factories; openrouter/zhipu/mimo
-    # currently ignore these manifest keys.
+    # to disable; explicit config wins). Honored by the ``openai`` factory.
     "inject_reasoning_fallback": (bool, NoneType),
-    # Chat Completions ``reasoning_effort`` vocabulary: ``openai`` (high/low
-    # mapping) or retained ``seven_tier`` kernel-level passthrough compatibility.
-    "reasoning_effort_vocab": (str, NoneType),
     # Fixed provider namespace for the auto-derived ``prompt_cache_key``.
     "prompt_cache_namespace": (str, NoneType),
-    # Service tier (``fast`` -> wire ``priority``). Codex validates supported
-    # values; the openai/custom(api_compat=openai) factories forward
-    # recognized values and ignore the rest.
+    # Standard service tier for ``openai`` and ``codex``: ``fast`` -> wire
+    # ``priority``; ``auto``/``default``/``flex``/``priority`` verbatim; any
+    # other value fails validation. ``anthropic``/``claude-code`` ignore it.
     "service_tier": str,
 }
 LLM_SPECIAL_KNOWN: set[str] = {"thinking"}
@@ -185,27 +174,84 @@ LLM_LEGACY_IGNORED: set[str] = {
     # ``context_management`` any more.
     "compact_threshold",
     # The in-kernel Codex account pool was removed; pooling is provided by the
-    # external subs-pool proxy (see ``REMOVED_CODEX_POOL_PROVIDERS``).
+    # external subs-pool proxy (see ``REMOVED_LLM_PROVIDERS``).
     "codex_auth_pool_path",
+    # Per-vendor wire routing retired with the four-family collapse: the
+    # ``custom`` provider's ``api_compat`` selector, the Chat Completions
+    # ``reasoning_effort_vocab`` projection (``thinking`` is now sent verbatim
+    # as the standard field), and the legacy ``use_responses_api`` preference
+    # (``wire_api`` alone selects the wire).
+    "api_compat",
+    "reasoning_effort_vocab",
+    "use_responses_api",
 }
 
-# Provider spellings of the removed in-kernel Codex account pool. Configs that
-# still name them fail validation with a pointer to the external subs-pool.
-REMOVED_CODEX_POOL_PROVIDERS = frozenset({"codex-pool", "codex_pool"})
+# LLM provider names LingTai no longer ships. LingTai keeps exactly four LLM
+# provider families — ``openai`` (any OpenAI-compatible endpoint),
+# ``anthropic`` (any Anthropic-compatible endpoint), ``codex``, and
+# ``claude-code``. A config that still names one of these fails validation
+# with a pointer to the replacement instead of failing later at adapter
+# construction.
+REMOVED_LLM_PROVIDERS = frozenset({
+    # Per-vendor adapters and aliases.
+    "deepseek",
+    "zhipu",
+    "glm",
+    "mimo",
+    "minimax",
+    "openrouter",
+    "grok",
+    "qwen",
+    "kimi",
+    "gemini",
+    "kimi-code",
+    "kimi_code",
+    # The generic ``custom`` provider (``api_compat`` routing) and the
+    # underscore spelling of Claude Code.
+    "custom",
+    "claude_code",
+    # The removed in-kernel Codex account pool.
+    "codex-pool",
+    "codex_pool",
+})
+
+# Capabilities whose ``provider`` key names a search engine rather than an LLM
+# provider route. Their retired/unknown engine names keep the capability's own
+# legacy runtime fallback and are never rejected here.
+_NON_LLM_PROVIDER_CAPABILITIES = frozenset({"web", "web_search"})
 
 
-def _removed_codex_pool_message(path: str, provider: str) -> str:
-    return (
-        f"{path}: provider {provider!r} was removed from LingTai. Codex account "
-        "pooling is provided by the external subs-pool proxy "
-        "(https://github.com/Lingtai-AI/subs-pool): point this agent at it with "
-        "provider 'custom', api_compat 'openai', wire_api 'responses', "
-        "base_url 'http://127.0.0.1:<port>/v1', and api_key_env naming the "
-        "subs-pool access key, or use provider 'codex' for a single account. "
-        "See the subs-pool skill."
+def removed_provider_message(path: str, provider: str) -> str:
+    """Return the actionable validation error for a removed LLM provider.
+
+    The replacement provider names are deliberately unquoted: the init reader's
+    safe error excerpt redacts every quoted substring (it may be user data), and
+    the pointer must survive that redaction to stay actionable.
+    """
+    message = (
+        f"{path}: provider {provider!r} was removed from LingTai; use provider "
+        "openai (OpenAI-compatible: base_url + wire_api responses|"
+        "chat_completions) or anthropic (Anthropic-compatible: base_url), or "
+        "an external pool such as sub2api/subs-pool for subscriptions."
     )
+    normalized = provider.strip().lower()
+    if normalized in {"codex-pool", "codex_pool"}:
+        message += (
+            " Codex account pooling is provided by subs-pool "
+            "(https://github.com/Lingtai-AI/subs-pool); use provider codex "
+            "for a single account. See the subs-pool skill."
+        )
+    elif normalized == "claude_code":
+        message += " For the Claude Code CLI login use provider claude-code."
+    return message
+
+
+def is_removed_llm_provider(provider: object) -> bool:
+    """Return whether *provider* names a removed LLM provider (any case)."""
+    return isinstance(provider, str) and provider.strip().lower() in REMOVED_LLM_PROVIDERS
+
+
 LLM_PASS_THROUGH_KNOWN: set[str] = {
-    "api_compat",
     "codex_session_anchor",
     "codex_thread_salt",
     "codex_auth_path",
@@ -221,30 +267,6 @@ LLM_KNOWN: set[str] = (
     | LLM_PASS_THROUGH_KNOWN
     | LLM_LEGACY_IGNORED
 )
-
-
-def _is_json_finite(value: object) -> bool:
-    """Check finite floats with an iterative, cycle-safe canonical-container walk."""
-    pending = [value]
-    seen_containers: set[int] = set()
-    while pending:
-        current = pending.pop()
-        if isinstance(current, float) and not math.isfinite(current):
-            return False
-        if type(current) is dict:
-            identity = id(current)
-            if identity in seen_containers:
-                continue
-            seen_containers.add(identity)
-            for key, item in current.items():
-                pending.extend((key, item))
-        elif type(current) in (list, tuple):
-            identity = id(current)
-            if identity in seen_containers:
-                continue
-            seen_containers.add(identity)
-            pending.extend(current)
-    return True
 
 
 def strip_deprecated(data: dict) -> list[str]:
@@ -412,67 +434,12 @@ def validate_init(data: dict) -> list[str]:
 
     llm = manifest["llm"]
     _require_keys(llm, LLM_REQUIRED, prefix="manifest.llm")
-    if str(llm["provider"]).lower() in REMOVED_CODEX_POOL_PROVIDERS:
+    if is_removed_llm_provider(llm["provider"]):
         raise ValueError(
-            _removed_codex_pool_message("manifest.llm.provider", llm["provider"])
+            removed_provider_message("manifest.llm.provider", llm["provider"])
         )
     _optional_keys(llm, LLM_OPTIONAL, prefix="manifest.llm")
-    if "api_compat" in llm and not _is_json_finite(llm["api_compat"]):
-        raise ValueError(
-            "manifest.llm.api_compat: expected recursively JSON-finite value"
-        )
-    if "wire_api" in llm:
-        wire_api = llm["wire_api"]
-        allowed_wire_api = {"auto", "chat_completions", "responses"}
-        if wire_api not in allowed_wire_api:
-            raise ValueError(
-                "manifest.llm.wire_api: expected one of "
-                f"{', '.join(sorted(allowed_wire_api))}, got {wire_api!r}"
-            )
-        # The wire_api field is scoped to OpenAI-compatible wire semantics.
-        # Non-auto values are allowed only for the official OpenAI provider,
-        # DeepSeek (whose adapter now supports both wires), or a custom
-        # OpenAI-compatible endpoint (api_compat omitted/openai).
-        # Every other provider/compat is rejected — including Codex, which is
-        # forcibly on Responses and out of scope here — so misuse fails loudly.
-        # ``auto`` is harmless everywhere and is left through unchanged.
-        if wire_api != "auto":
-            provider = str(llm.get("provider", "")).lower()
-            api_compat = str(llm.get("api_compat", "openai")).lower() or "openai"
-            allowed_scope = provider in {"openai", "deepseek"} or (
-                provider == "custom" and api_compat == "openai"
-            )
-            if not allowed_scope:
-                raise ValueError(
-                    "manifest.llm.wire_api is scoped to OpenAI-compatible "
-                    "providers; it cannot be used with "
-                    f"provider={llm.get('provider')!r}"
-                    + (f" api_compat={llm.get('api_compat')!r}" if llm.get("api_compat") else "")
-                )
-    if "thinking" in llm:
-        # DeepSeek owns its own effort surface: what a manifest may carry
-        # depends on the exact model and wire, so validation delegates to the
-        # DeepSeek module rather than to the kernel-global level tuple. That
-        # tuple is deliberately NOT extended with DeepSeek vocabulary.
-        from lingtai.llm.deepseek.policy import owns_provider, validate_llm_block
-
-        if owns_provider(llm.get("provider")):
-            validate_llm_block(llm)
-        elif not llm_supports_thinking(llm):
-            raise ValueError(
-                "manifest.llm.thinking is supported only for "
-                "thinking-capable providers — the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)}), "
-                f"{', '.join(THINKING_NATIVE_PROVIDERS)}, or any "
-                "OpenAI-compatible block (api_compat=openai)"
-            )
-        else:
-            thinking = llm["thinking"]
-            if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
-                raise ValueError(
-                    "manifest.llm.thinking: expected one of "
-                    f"{', '.join(THINKING_LEVELS)}"
-                )
+    validate_llm_standard_parameters(llm, prefix="manifest.llm")
     for key in llm:
         if key not in LLM_KNOWN:
             warnings.append(f"unknown field in manifest.llm: {key}")
@@ -510,19 +477,7 @@ def validate_init(data: dict) -> list[str]:
     # Validate manifest.capabilities.skills shape if present.
     caps = manifest.get("capabilities") or {}
     if isinstance(caps, dict):
-        for cap_name, cap_cfg in caps.items():
-            if not isinstance(cap_cfg, dict):
-                continue
-            cap_provider = cap_cfg.get("provider")
-            if (
-                isinstance(cap_provider, str)
-                and cap_provider.lower() in REMOVED_CODEX_POOL_PROVIDERS
-            ):
-                raise ValueError(
-                    _removed_codex_pool_message(
-                        f"manifest.capabilities.{cap_name}.provider", cap_provider
-                    )
-                )
+        validate_capability_providers(caps, prefix="manifest.capabilities")
         cap_name = "skills"
         cfg = caps.get(cap_name)
         if cfg is not None:
@@ -544,6 +499,67 @@ def validate_init(data: dict) -> list[str]:
                     )
 
     return warnings
+
+
+def validate_llm_standard_parameters(llm: dict, *, prefix: str) -> None:
+    """Validate the standard ``wire_api``/``thinking``/``service_tier`` knobs.
+
+    Shared by init validation and the preset loader so a preset and an
+    ``init.json`` accept exactly the same values. Raises ``ValueError``.
+    """
+    provider = str(llm.get("provider") or "").strip().lower()
+    if "wire_api" in llm:
+        wire_api = llm["wire_api"]
+        allowed_wire_api = {"auto", "chat_completions", "responses"}
+        if wire_api not in allowed_wire_api:
+            raise ValueError(
+                f"{prefix}.wire_api: expected one of chat_completions, "
+                f"responses (legacy auto means chat_completions), got {wire_api!r}"
+            )
+        # The selector belongs to the ``openai`` provider. The legacy ``auto``
+        # value is inert everywhere; any explicit wire on another provider
+        # fails loudly instead of being silently ignored.
+        if wire_api != "auto" and provider != "openai":
+            raise ValueError(
+                f"{prefix}.wire_api is supported only for provider openai; "
+                f"it cannot be used with provider={llm.get('provider')!r}"
+            )
+    if "thinking" in llm:
+        thinking = llm["thinking"]
+        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+            raise ValueError(
+                f"{prefix}.thinking: expected one of "
+                f"{', '.join(THINKING_LEVELS)}"
+            )
+    if "service_tier" in llm:
+        from lingtai.llm._register import _normalize_service_tier
+
+        try:
+            _normalize_service_tier(llm["service_tier"])
+        except ValueError as exc:
+            raise ValueError(f"{prefix}.service_tier: {exc}") from exc
+
+
+def validate_capability_providers(caps: dict, *, prefix: str) -> None:
+    """Reject capability ``provider`` values that name a removed LLM provider.
+
+    Only LLM provider routes are checked: ``web``/``web_search`` providers are
+    search-engine names with their own legacy fallback, and non-LLM values
+    such as ``duckduckgo``, ``local``, ``mlx``, ``inherit``, or ``whisper`` are
+    never removed provider names.
+    """
+    for cap_name, cap_cfg in caps.items():
+        if not isinstance(cap_cfg, dict):
+            continue
+        if cap_name in _NON_LLM_PROVIDER_CAPABILITIES:
+            continue
+        cap_provider = cap_cfg.get("provider")
+        if is_removed_llm_provider(cap_provider):
+            raise ValueError(
+                removed_provider_message(
+                    f"{prefix}.{cap_name}.provider", cap_provider
+                )
+            )
 
 
 def _require_keys(

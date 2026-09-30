@@ -7,13 +7,13 @@ import time
 import pytest
 
 from lingtai.agent import Agent
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 
 
 @pytest.fixture
 def shell_agent(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="shell-tool-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"shell": {"yolo": True}},
@@ -132,7 +132,7 @@ def test_default_shell_is_permissive_on_every_composition_route(tmp_path):
 
     def _agent(name: str, capabilities: dict) -> Agent:
         return Agent(
-            service=make_gemini_mock_service(), agent_name=name,
+            service=make_mock_llm_service(), agent_name=name,
             working_dir=tmp_path / name, capabilities=capabilities,
         )
 
@@ -203,7 +203,7 @@ def test_normal_shell_setup_and_manifest_reject_detached_only_overrides(tmp_path
     from lingtai.tools.registry import setup_capability
 
     ordinary = Agent(
-        service=make_gemini_mock_service(), working_dir=tmp_path / "ordinary", capabilities={},
+        service=make_mock_llm_service(), working_dir=tmp_path / "ordinary", capabilities={},
     )
     try:
         # Shell is an ordinary Agent default. Both rejected calls leave that
@@ -224,7 +224,7 @@ def test_normal_shell_setup_and_manifest_reject_detached_only_overrides(tmp_path
     # surface, so detached-only values cannot install a poisoned normal binding.
     with pytest.raises(RuntimeError, match="async_handoff.*notification_port"):
         Agent(
-            service=make_gemini_mock_service(), working_dir=tmp_path / "manifest",
+            service=make_mock_llm_service(), working_dir=tmp_path / "manifest",
             capabilities={"shell": {
                 "notification_port": "not-a-port", "async_handoff": "not-a-daemon-handoff",
             }},

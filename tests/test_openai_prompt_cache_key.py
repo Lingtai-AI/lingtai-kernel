@@ -7,14 +7,14 @@ successive turns of an agent hit the provider's cross-request prompt cache.
 The key is derived from the adapter's identity (official OpenAI vs. a custom
 base_url) and the model, so distinct endpoints/models never share a cache
 namespace. The probe (``reports/prompt-cache-key-openai-compat-probe-*.json``)
-confirmed DeepSeek, Zhipu/GLM, and MiMo Chat Completions all accept the field.
+confirmed several OpenAI-compatible vendors' Chat Completions accept the field.
 
 Invariants asserted here:
   * Chat Completions sends a stable ``prompt_cache_key`` by default.
   * The Responses API (non-Codex) sends a stable ``prompt_cache_key`` by default.
   * Official OpenAI (no base_url) and custom-base_url paths get distinct,
     deterministic namespaces.
-  * The DeepSeek shared-adapter factory and Zhipu / MiMo subclasses get provider-scoped keys.
+  * A configured ``prompt_cache_namespace`` gives a provider-scoped key.
   * ``prompt_cache_retention`` is never sent (Codex rejects it; we keep the
     whole OpenAI-compatible surface uniform).
   * No Anthropic-style ``cache_control`` leaks into the request.
@@ -32,8 +32,6 @@ from lingtai.llm.openai.adapter import (
     OpenAIChatSession,
     OpenAIResponsesSession,
 )
-from lingtai.llm.zhipu.adapter import ZhipuAdapter
-from lingtai.llm.mimo.adapter import MimoAdapter
 from lingtai.kernel.llm.base import FunctionSchema
 
 
@@ -192,10 +190,9 @@ def test_chat_completions_streaming_sends_default_prompt_cache_key():
 
 
 def test_responses_sends_default_prompt_cache_key():
-    # Official OpenAI Responses path (no base_url, force_responses so the
-    # adapter picks the Responses session even without hitting OpenAI).
+    # Official OpenAI Responses path (no base_url, wire_api="responses").
     adapter = OpenAIAdapter(
-        api_key="fake", use_responses=True, force_responses=True
+        api_key="fake", wire_api="responses"
     )
     adapter._client = _FakeResponsesClient()
     session = adapter.create_chat("gpt-5.5", "system prompt")
@@ -213,12 +210,13 @@ def test_responses_sends_default_prompt_cache_key():
 # ---------------------------------------------------------------------------
 
 
-def test_deepseek_chat_sends_provider_scoped_key():
-    # DeepSeek defaults collapsed into generic OpenAIAdapter params.
+def test_prompt_cache_namespace_chat_sends_provider_scoped_key():
+    # A thinking-mode compatible vendor configured through the generic
+    # ``openai`` provider with a fixed namespace.
     adapter = OpenAIAdapter(
         api_key="fake",
+        base_url="https://api.deepseek.com",
         inject_reasoning_fallback=True,
-        reasoning_effort_vocab="seven_tier",
         prompt_cache_namespace="deepseek",
     )
     adapter._client = _chat_client()
@@ -230,27 +228,15 @@ def test_deepseek_chat_sends_provider_scoped_key():
     assert sent["prompt_cache_key"] == "lingtai-deepseek:deepseek-v4:v1"
 
 
-def test_zhipu_chat_sends_provider_scoped_key():
-    adapter = ZhipuAdapter(api_key="fake", base_url="https://open.bigmodel.cn/api/paas/v4")
+def test_compatible_base_url_without_namespace_uses_host_scoped_key():
+    adapter = OpenAIAdapter(api_key="fake", base_url="https://open.bigmodel.cn/api/paas/v4")
     adapter._client = _chat_client()
     session = adapter.create_chat("glm-4.6", "system prompt")
 
     session.send("hello")
 
     sent = _chat_kwargs(adapter._client)
-    assert sent["prompt_cache_key"] == "lingtai-zhipu:glm-4.6:v1"
-
-
-def test_mimo_chat_escape_hatch_sends_provider_scoped_key():
-    # MiMo defaults to Responses; Chat Completions remains an explicit escape hatch.
-    adapter = MimoAdapter(api_key="fake", base_url="https://api.mimo.example/v1", wire_api="chat_completions")
-    adapter._client = _chat_client()
-    session = adapter.create_chat("mimo-7b", "system prompt")
-
-    session.send("hello")
-
-    sent = _chat_kwargs(adapter._client)
-    assert sent["prompt_cache_key"] == "lingtai-mimo:mimo-7b:v1"
+    assert sent["prompt_cache_key"] == "lingtai-openai-compat:open.bigmodel.cn:glm-4.6:v1"
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +268,7 @@ def test_disabled_prompt_cache_key_omits_field_chat():
 
 def test_disabled_prompt_cache_key_omits_field_responses():
     adapter = OpenAIAdapter(
-        api_key="fake", use_responses=True, force_responses=True, prompt_cache_key=False
+        api_key="fake", wire_api="responses", prompt_cache_key=False
     )
     adapter._client = _FakeResponsesClient()
     session = adapter.create_chat("gpt-5.5", "system prompt")

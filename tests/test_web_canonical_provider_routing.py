@@ -1,10 +1,12 @@
-"""Focused table-driven checks for the canonical web provider ownership/routing
-change: the real no-config default path, settings-only Anthropic/Gemini
-opt-in with canonical-backend eligibility, explicit retired-provider
-rejection, the one typed-error-only OpenAI->DuckDuckGo runtime fallback, and
-usable (URL-bearing) results from all three canonical providers. Each case
-protects a distinct invariant from the 2026-07-28 web-canonical-provider-
-routing contract and its 2026-07-28 21:40 PDT repair addendum.
+"""Focused table-driven checks for the web provider ownership/routing rules:
+the real no-config default path, backend-gated OpenAI/Anthropic engines (each
+runs only for an Agent whose own LLM provider is that family), settings-only
+Anthropic opt-in, explicit retired-provider rejection, the legacy DuckDuckGo
+fallback for unrecognized names (including the removed ``gemini`` engine), the
+one typed-error-only OpenAI->DuckDuckGo runtime fallback, and usable
+(URL-bearing) results from both canonical providers. Each case protects a
+distinct invariant from the web-canonical-provider-routing contract, its
+2026-07-28 21:40 PDT repair addendum, and the four-LLM-family collapse.
 """
 from __future__ import annotations
 
@@ -17,7 +19,6 @@ import pytest
 
 from lingtai.services.websearch import SearchProviderError, SearchResult, SearchService
 from lingtai.services.websearch.anthropic import AnthropicSearchError, AnthropicSearchService, _extract_results as anthropic_extract
-from lingtai.services.websearch.gemini import GeminiSearchError, GeminiSearchService, _extract_results as gemini_extract
 from lingtai.services.websearch.openai import OpenAISearchError, OpenAISearchService, _extract_results as openai_extract
 from lingtai.tools.web_search import PROVIDERS, RetiredProviderError, SettingsOnlyProviderError, _same_provider_identity, setup
 
@@ -84,34 +85,54 @@ def _write_settings(tmp_path: Path, engine: str) -> None:
     (settings_dir / "web.search.json").write_text(json.dumps({"schema_version": 1, "engine": engine}))
 
 
-# ─── Canonical backend identity predicate (private to web_search) ─────────
+# ─── Backend identity predicate (private to web_search) ──────────────────
 
-def test_same_provider_identity_exact_match_only():
-    assert _same_provider_identity(_ProviderIdentityPort("anthropic"), "anthropic") is True
-    assert _same_provider_identity(_ProviderIdentityPort("gemini"), "gemini") is True
+@pytest.mark.parametrize("engine", ["anthropic", "openai"])
+def test_same_provider_identity_exact_match_only(engine):
+    assert _same_provider_identity(_ProviderIdentityPort(engine), engine) is True
 
 
-@pytest.mark.parametrize("provider", ["claude-code", "claude_code", "custom", "openrouter", "codex", "ANTHROPIC-compat"])
+@pytest.mark.parametrize("provider", ["claude-code", "claude_code", "custom", "openrouter", "codex", "openai", "ANTHROPIC-compat"])
 def test_same_provider_identity_rejects_aliases_and_substrings(provider):
     assert _same_provider_identity(_ProviderIdentityPort(provider), "anthropic") is False
 
 
+@pytest.mark.parametrize("provider", ["codex", "claude-code", "anthropic", "custom", "deepseek", "OPENAI-compat"])
+def test_same_provider_identity_rejects_non_openai_labels_for_openai(provider):
+    # ``codex`` speaks an OpenAI wire but is its own family; only the exact
+    # ``openai`` provider label is eligible for the OpenAI engine.
+    assert _same_provider_identity(_ProviderIdentityPort(provider), "openai") is False
+
+
 def test_same_provider_identity_handles_unavailable_port_value():
     assert _same_provider_identity(_ProviderIdentityPort(None), "anthropic") is False
+    assert _same_provider_identity(_ProviderIdentityPort(None), "openai") is False
 
 
-def test_same_provider_identity_rejects_non_gated_name():
-    # openai is a real canonical provider but not one of the two
-    # settings-gated engines, so it is never a valid *name* argument here.
-    assert _same_provider_identity(_ProviderIdentityPort("openai"), "openai") is False
+@pytest.mark.parametrize("name", ["duckduckgo", "gemini"])
+def test_same_provider_identity_rejects_non_gated_name(name):
+    # DuckDuckGo needs no backend identity, and ``gemini`` is no longer an
+    # engine at all, so neither is ever a valid *name* argument here.
+    assert _same_provider_identity(_ProviderIdentityPort(name), name) is False
 
 
 # ─── PROVIDERS admission list ───────────────────────────────────────────────
 
-def test_minimax_and_zhipu_absent_from_built_in_providers():
-    assert "minimax" not in PROVIDERS["providers"]
-    assert "zhipu" not in PROVIDERS["providers"]
-    assert set(PROVIDERS["providers"]) == {"duckduckgo", "gemini", "anthropic", "openai"}
+def test_admitted_engines_are_exactly_duckduckgo_openai_anthropic():
+    assert PROVIDERS["providers"] == ["duckduckgo", "anthropic", "openai"]
+    assert PROVIDERS["default"] == "duckduckgo"
+
+
+@pytest.mark.parametrize("name", ["minimax", "zhipu", "gemini"])
+def test_retired_and_removed_names_absent_from_built_in_providers(name):
+    assert name not in PROVIDERS["providers"]
+
+
+def test_search_service_factory_no_longer_builds_gemini():
+    from lingtai.services.websearch import create_search_service
+
+    with pytest.raises(ValueError, match="Unknown web search provider"):
+        create_search_service("gemini", api_key="x")
 
 
 # ─── Real no-config default path (repair item 1) ───────────────────────────
@@ -119,8 +140,7 @@ def test_minimax_and_zhipu_absent_from_built_in_providers():
 def test_real_no_config_default_selects_openai_via_standard_env_var(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-env-test")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    agent = _official_host(tmp_path, "claude-code")  # deliberately not "openai" -- must never matter
+    agent = _official_host(tmp_path, "openai")
     with patch("lingtai.services.websearch.create_search_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=SearchService)
         # No engines=, no provider=, no default_engine=, no search_service=:
@@ -132,11 +152,28 @@ def test_real_no_config_default_selects_openai_via_standard_env_var(tmp_path, mo
     mock_factory.assert_called_once_with("openai", api_key="sk-real-env-test", model=None)
 
 
+@pytest.mark.parametrize("backend", ["claude-code", "anthropic", "codex", None])
+def test_real_no_config_default_never_selects_openai_on_a_non_openai_backend(tmp_path, monkeypatch, backend):
+    # The OpenAI engine is backend-gated: even with its standard credential
+    # genuinely present, the built-in default stays DuckDuckGo unless the
+    # Agent's own LLM provider is ``openai``.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-env-test")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    agent = _official_host(tmp_path, backend)
+    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
+        mock_factory.return_value.search.return_value = []
+        mgr = setup(agent, browser_port=_Port())
+        result = mgr.handle({"action": "search", "input": {"query": "q"}})
+    assert result["current_setting"]["source"] == "built_in_default"
+    assert result["engine"] == "duckduckgo"
+    # The OpenAI provider service is never constructed on this backend.
+    assert all(call.args[0] != "openai" for call in mock_factory.call_args_list)
+
+
 def test_real_no_config_default_falls_back_to_duckduckgo_without_openai_key(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    agent = _official_host(tmp_path, None)
+    agent = _official_host(tmp_path, "openai")
     mgr = setup(agent, browser_port=_Port())
     with patch("lingtai.services.websearch.duckduckgo.DuckDuckGoSearchService") as mock_ddg_cls:
         mock_ddg_cls.return_value.search.return_value = [
@@ -149,24 +186,23 @@ def test_real_no_config_default_falls_back_to_duckduckgo_without_openai_key(tmp_
     mock_ddg_cls.return_value.search.assert_called_once_with("q", max_results=None)
 
 
-def test_real_no_config_default_reports_anthropic_and_gemini_as_selectable_but_unselected(tmp_path, monkeypatch):
+def test_real_no_config_default_reports_anthropic_as_selectable_but_unselected(tmp_path, monkeypatch):
     # Only current_setting/engine-selection diagnostics are asserted here, no
     # search execution needed -- browse the diagnostics without ever
     # constructing (let alone calling) any provider service.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-gem-test")
-    agent = _official_host(tmp_path, None)
+    agent = _official_host(tmp_path, "anthropic")
     mgr = setup(agent, browser_port=_Port())
     with patch("lingtai.services.websearch.duckduckgo.DuckDuckGoSearchService") as mock_ddg_cls:
         mock_ddg_cls.return_value.search.return_value = []
         result = mgr.handle({"action": "search", "input": {"query": "q"}})
     names = set(result["current_setting"]["available_engine_names"])
-    assert names == {"duckduckgo", "openai", "anthropic", "gemini"}
+    assert names == {"duckduckgo", "openai", "anthropic"}
     statuses = result["current_setting"]["available_engine_status"]
     assert statuses["anthropic"] == "available"
-    assert statuses["gemini"] == "available"
-    # present and available, but never the *selected* default:
+    # present and available, but never the *selected* default -- even on
+    # the matching anthropic backend:
     assert result["engine"] == "duckduckgo"
 
 
@@ -182,25 +218,122 @@ def test_real_no_config_default_never_touches_official_host_service_credentials(
     assert mock_factory.call_args.kwargs["api_key"] != "should-never-be-read"
 
 
-# ─── Anthropic/Gemini: settings-only opt-in (repair item 2) ───────────────
+# ─── Anthropic: settings-only opt-in (repair item 2) ─────────────────────
 
-@pytest.mark.parametrize("engine", ["anthropic", "gemini"])
-def test_default_engine_kwarg_rejects_gated_engines_at_composition(tmp_path, engine):
-    # Anthropic/Gemini are active canonical providers, never "retired" --
-    # this must raise SettingsOnlyProviderError, distinct from
-    # RetiredProviderError (reserved for minimax/zhipu, g2 repair item 1).
+def test_default_engine_kwarg_rejects_settings_only_engine_at_composition(tmp_path):
+    # Anthropic is an active engine, never "retired" -- this must raise
+    # SettingsOnlyProviderError, distinct from RetiredProviderError (reserved
+    # for minimax/zhipu, g2 repair item 1).
     with pytest.raises(SettingsOnlyProviderError):
-        setup(_official_host(tmp_path, engine), default_engine=engine, engines={engine: {"api_key": "x"}}, browser_port=_Port())
+        setup(_official_host(tmp_path, "anthropic"), default_engine="anthropic", engines={"anthropic": {"api_key": "x"}}, browser_port=_Port())
 
 
-@pytest.mark.parametrize("engine", ["anthropic", "gemini"])
-def test_provider_kwarg_rejects_gated_engines_at_composition(tmp_path, engine):
+def test_provider_kwarg_rejects_settings_only_engine_at_composition(tmp_path):
     with (
         patch("lingtai.services.websearch.create_search_service") as mock_factory,
         pytest.raises(SettingsOnlyProviderError),
     ):
-        setup(_official_host(tmp_path, engine), provider=engine, api_key="x", browser_port=_Port())
+        setup(_official_host(tmp_path, "anthropic"), provider="anthropic", api_key="x", browser_port=_Port())
     mock_factory.assert_not_called()
+
+
+# ─── OpenAI: composable, but backend-gated at search time ────────────────
+
+def test_provider_kwarg_openai_on_openai_backend_searches(tmp_path, monkeypatch):
+    monkeypatch.delenv("LINGTAI_WEB_ENGINE", raising=False)
+    agent = _official_host(tmp_path, "openai")
+    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
+        service = MagicMock(spec=SearchService)
+        service.search.return_value = [SearchResult(title="t", url="https://example.test", snippet="s")]
+        mock_factory.return_value = service
+        mgr = setup(agent, provider="openai", api_key="sk-op", browser_port=_Port())
+        result = mgr.handle({"action": "search", "input": {"query": "q"}})
+    assert result["status"] == "ok"
+    assert result["engine"] == "openai"
+    assert result["current_setting"]["source"] == "operator_default"
+    mock_factory.assert_called_once_with("openai", api_key="sk-op", model=None)
+
+
+@pytest.mark.parametrize("backend", ["anthropic", "claude-code", "codex", None])
+def test_provider_kwarg_openai_on_non_openai_backend_is_ineligible(tmp_path, backend):
+    # Composing ``provider="openai"`` is accepted (no composition-time error:
+    # existing configs keep loading), but the backend gate refuses the search
+    # itself -- no provider construction, no search call, no silent
+    # DuckDuckGo substitution.
+    agent = _official_host(tmp_path, backend)
+    with (
+        patch("lingtai.services.websearch.create_search_service") as mock_factory,
+        patch("lingtai.services.websearch.duckduckgo.DuckDuckGoSearchService") as mock_ddg_cls,
+    ):
+        mgr = setup(agent, provider="openai", api_key="sk-op", browser_port=_Port())
+        result = mgr.handle({"action": "search", "input": {"query": "q"}})
+    assert result["status"] == "failed"
+    assert result["error_code"] == "PROVIDER_BACKEND_INELIGIBLE"
+    mock_factory.assert_not_called()
+    mock_ddg_cls.assert_not_called()
+    assert "sk-op" not in json.dumps(result)
+
+
+def test_engines_map_default_engine_openai_on_non_openai_backend_is_ineligible(tmp_path):
+    agent = _official_host(tmp_path, "anthropic")
+    service = MagicMock(spec=SearchService)
+    mgr = setup(
+        agent,
+        engines={"openai": {"search_service": service}, "duckduckgo": {}},
+        default_engine="openai",
+        browser_port=_Port(),
+    )
+    result = mgr.handle({"action": "search", "input": {"query": "q"}})
+    assert result["status"] == "failed"
+    assert result["error_code"] == "PROVIDER_BACKEND_INELIGIBLE"
+    assert not service.search.called
+
+
+# ─── Unrecognized/removed names keep the legacy DuckDuckGo fallback ───────
+
+@pytest.mark.parametrize("name", ["gemini", "some-old-preset-provider"])
+def test_provider_kwarg_removed_or_unknown_name_falls_back_to_duckduckgo(tmp_path, name):
+    agent = _official_host(tmp_path, "openai")
+    ddg = MagicMock(spec=SearchService)
+    ddg.search.return_value = [SearchResult(title="t", url="https://example.test", snippet="s")]
+    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
+        mgr = setup(agent, provider=name, api_key_env="GEMINI_API_KEY", search_service=ddg, browser_port=_Port())
+        result = mgr.handle({"action": "search", "input": {"query": "q"}})
+    mock_factory.assert_not_called()
+    assert result["status"] == "ok"
+    assert result["actual_engine"] == "duckduckgo"
+    assert result["current_setting"]["legacy_fallback_from"] == name
+
+
+def test_engines_map_gemini_falls_back_to_duckduckgo_without_error(tmp_path):
+    agent = _official_host(tmp_path, "openai")
+    real_ddg = MagicMock(spec=SearchService)
+    real_ddg.search.return_value = [SearchResult(title="t", url="https://example.test", snippet="s")]
+    mgr = setup(
+        agent,
+        engines={"gemini": {"api_key": "x"}, "duckduckgo": {"search_service": real_ddg}},
+        browser_port=_Port(),
+    )
+    result = mgr.handle({"action": "search", "input": {"query": "q"}})
+    assert result["status"] == "ok"
+    assert result["actual_engine"] == "duckduckgo"
+    assert result["current_setting"]["legacy_fallback_from"] == "gemini"
+    assert "gemini" not in result["current_setting"]["available_engine_names"]
+
+
+def test_settings_file_selecting_removed_gemini_fails_without_substitution(tmp_path, monkeypatch):
+    # The settings/env selector admits only composed engines; the removed
+    # ``gemini`` name is not one, so the call fails loudly (no exception, no
+    # silent substitution) exactly like any other non-admitted selector.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    agent = _official_host(tmp_path, "openai")
+    mgr = setup(agent, browser_port=_Port())
+    _write_settings(tmp_path, "gemini")
+    with patch("lingtai.services.websearch.duckduckgo.DuckDuckGoSearchService") as mock_ddg_cls:
+        result = mgr.handle({"action": "search", "input": {"query": "q"}})
+    mock_ddg_cls.assert_not_called()
+    assert result["status"] == "failed"
+    assert result["error_code"] == "WEB_SETTINGS_INVALID"
 
 
 def test_settings_only_provider_error_is_not_a_retired_provider_error():
@@ -211,12 +344,13 @@ def test_settings_only_provider_error_is_not_a_retired_provider_error():
     assert not issubclass(RetiredProviderError, SettingsOnlyProviderError)
 
 
-@pytest.mark.parametrize("engine", ["anthropic", "gemini"])
-def test_gated_engine_present_in_engines_map_is_never_the_default(tmp_path, engine):
+@pytest.mark.parametrize("engine,backend", [("anthropic", "anthropic"), ("openai", "claude-code")])
+def test_gated_engine_present_in_engines_map_is_never_an_ineligible_default(tmp_path, engine, backend):
     # engines={} may still declare a bounded spec for credential/service
-    # injection (tests/integration), but composing it must never make it the
-    # *default* selection -- only a settings-file selection can.
-    agent = _official_host(tmp_path, engine)
+    # injection (tests/integration), but composing it must never make an
+    # ineligible gated engine the *default* selection: Anthropic only through
+    # a settings-file selection, OpenAI only on an ``openai`` backend.
+    agent = _official_host(tmp_path, backend)
     service = MagicMock(spec=SearchService)
     mgr = setup(agent, engines={engine: {"search_service": service}}, browser_port=_Port())
     result = mgr.handle({"action": "search", "input": {"query": "q"}})
@@ -229,7 +363,7 @@ def test_gated_engine_present_in_engines_map_is_never_the_default(tmp_path, engi
     assert not service.search.called
 
 
-@pytest.mark.parametrize("engine", ["anthropic", "gemini"])
+@pytest.mark.parametrize("engine", ["anthropic", "openai"])
 def test_settings_file_selection_succeeds_on_canonical_backend(tmp_path, engine):
     agent = _official_host(tmp_path, engine)
     service = MagicMock(spec=SearchService)
@@ -242,8 +376,10 @@ def test_settings_file_selection_succeeds_on_canonical_backend(tmp_path, engine)
     service.search.assert_called_once_with("q", max_results=None)
 
 
-@pytest.mark.parametrize("engine", ["anthropic", "gemini"])
-@pytest.mark.parametrize("backend", ["claude-code", "openai", "openrouter", "custom", "codex"])
+@pytest.mark.parametrize("engine,backend", [
+    *(("anthropic", b) for b in ("claude-code", "openai", "codex", None)),
+    *(("openai", b) for b in ("claude-code", "anthropic", "codex", None)),
+])
 def test_settings_file_selection_fails_on_every_noncanonical_backend(tmp_path, engine, backend):
     agent = _official_host(tmp_path, backend)
     service = MagicMock(spec=SearchService)
@@ -279,7 +415,7 @@ def test_settings_file_selection_is_hot_read_live_change_no_refresh(tmp_path):
     ddg_service.search.assert_called_once_with("q", max_results=None)
 
 
-@pytest.mark.parametrize("engine", ["anthropic", "gemini"])
+@pytest.mark.parametrize("engine", ["anthropic"])
 def test_settings_selected_engine_runtime_failure_does_not_silently_fall_back(tmp_path, engine):
     agent = _official_host(tmp_path, engine)
     service = MagicMock(spec=SearchService)
@@ -295,7 +431,7 @@ def test_settings_selected_engine_runtime_failure_does_not_silently_fall_back(tm
     assert result["error_code"] == "SEARCH_FAILED"
 
 
-# ─── Typed provider errors: no swallow-to-[], no DDG for Anthropic/Gemini (g2 repair item 2) ─
+# ─── Typed provider errors: no swallow-to-[], no DDG for Anthropic (g2 repair item 2) ─
 
 def test_anthropic_service_raises_typed_error_on_sdk_failure():
     svc = AnthropicSearchService(api_key="sk-test")
@@ -305,18 +441,6 @@ def test_anthropic_service_raises_typed_error_on_sdk_failure():
         with pytest.raises(AnthropicSearchError) as excinfo:
             svc.search("q")
     assert excinfo.value.provider == "anthropic"
-    assert excinfo.value.failure_class == "RuntimeError"
-    assert "sk-super-secret-token" not in str(excinfo.value)
-
-
-def test_gemini_service_raises_typed_error_on_sdk_failure():
-    svc = GeminiSearchService(api_key="sk-test")
-    fake_client = MagicMock()
-    fake_client.models.generate_content.side_effect = RuntimeError("boom: sk-super-secret-token")
-    with patch("google.genai.Client", return_value=fake_client):
-        with pytest.raises(GeminiSearchError) as excinfo:
-            svc.search("q")
-    assert excinfo.value.provider == "gemini"
     assert excinfo.value.failure_class == "RuntimeError"
     assert "sk-super-secret-token" not in str(excinfo.value)
 
@@ -335,7 +459,6 @@ def test_anthropic_extract_results_raises_on_in_body_web_search_tool_result_erro
 
 @pytest.mark.parametrize("engine,service_cls,error_cls", [
     ("anthropic", AnthropicSearchService, AnthropicSearchError),
-    ("gemini", GeminiSearchService, GeminiSearchError),
 ])
 def test_settings_selected_engine_typed_provider_error_end_to_end_never_calls_ddg(tmp_path, engine, service_cls, error_cls):
     # Provider-shaped end-to-end: the real adapter class raises its own
@@ -357,14 +480,12 @@ def test_settings_selected_engine_typed_provider_error_end_to_end_never_calls_dd
     assert result["provider_failure_class"] == "AuthenticationError"
 
 
-def test_error_hierarchy_openai_anthropic_gemini_share_search_provider_error_base():
+def test_error_hierarchy_openai_anthropic_share_search_provider_error_base():
     assert issubclass(OpenAISearchError, SearchProviderError)
     assert issubclass(AnthropicSearchError, SearchProviderError)
-    assert issubclass(GeminiSearchError, SearchProviderError)
-    # Only OpenAISearchError triggers the DDG fallback -- the other two must
-    # not be (mis)treated as that exact subclass.
+    # Only OpenAISearchError triggers the DDG fallback -- Anthropic's error
+    # must not be (mis)treated as that exact subclass.
     assert not issubclass(AnthropicSearchError, OpenAISearchError)
-    assert not issubclass(GeminiSearchError, OpenAISearchError)
 
 
 # ─── Retired providers fail explicitly, never DuckDuckGo (repair item 3) ──
@@ -560,32 +681,6 @@ def test_anthropic_extract_results_falls_back_to_bounded_narrative_with_no_url()
     raw = SimpleNamespace(content=[text_block])
     results = anthropic_extract(raw, 5)
     assert results == [SearchResult(title="Anthropic Web Search", url="", snippet="narrative only, no sources")]
-
-
-def test_gemini_extract_results_uses_real_grounding_chunks():
-    web = SimpleNamespace(uri="https://example.com/page", title="example.com")
-    chunk = SimpleNamespace(web=web)
-    grounding_metadata = SimpleNamespace(grounding_chunks=[chunk])
-    part = SimpleNamespace(text="Grounded answer", thought=False)
-    content = SimpleNamespace(parts=[part])
-    candidate = SimpleNamespace(content=content, grounding_metadata=grounding_metadata)
-    raw = SimpleNamespace(candidates=[candidate])
-    results = gemini_extract(raw, 5)
-    assert results == [SearchResult(title="example.com", url="https://example.com/page", snippet="")]
-
-
-def test_gemini_extract_results_falls_back_to_bounded_narrative_when_grounding_metadata_is_none():
-    part = SimpleNamespace(text="answer with no grounding", thought=False)
-    content = SimpleNamespace(parts=[part])
-    candidate = SimpleNamespace(content=content, grounding_metadata=None)
-    raw = SimpleNamespace(candidates=[candidate])
-    results = gemini_extract(raw, 5)
-    assert results == [SearchResult(title="Gemini Web Search", url="", snippet="answer with no grounding")]
-
-
-def test_gemini_extract_results_handles_empty_candidates():
-    raw = SimpleNamespace(candidates=[])
-    assert gemini_extract(raw, 5) == []
 
 
 def test_web_manager_preserves_real_citation_as_link_ref(tmp_path):

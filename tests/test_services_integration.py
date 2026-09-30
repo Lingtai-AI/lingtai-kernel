@@ -1,7 +1,7 @@
 """Integration tests for standalone services — hits real APIs.
 
 Run with: python -m pytest tests/test_services_integration.py -v -s
-Requires .env with GEMINI_API_KEY.
+Keyed tests read OPENAI_API_KEY / ANTHROPIC_API_KEY from .env and skip without them.
 Saves outputs to ~/Downloads/lingtai-service-tests/
 """
 from __future__ import annotations
@@ -23,13 +23,14 @@ if _env_path.is_file():
 OUT_DIR = Path.home() / "Downloads" / "lingtai-service-tests"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 
 # ─── Web Search ──────────────────────────────────────────────────────────
-# MiniMax was retired from create_search_service 2026-07-28 (issue 11114);
-# its live-API integration test was removed with it rather than left as a
-# permanently-failing skipif stub.
+# MiniMax was retired from create_search_service 2026-07-28 (issue 11114) and
+# Gemini with the four-family LLM collapse; their live-API integration tests
+# were removed with them rather than left as permanently-failing skipif stubs.
 
 class TestWebSearch:
     def test_duckduckgo(self):
@@ -40,14 +41,6 @@ class TestWebSearch:
         print(f"\n  DuckDuckGo: {len(results)} results")
         for r in results:
             print(f"    {r.title}: {r.url}")
-
-    @pytest.mark.skipif(not GEMINI_KEY, reason="GEMINI_API_KEY not set")
-    def test_gemini(self):
-        from lingtai.services.websearch import create_search_service
-        svc = create_search_service("gemini", api_key=GEMINI_KEY)
-        results = svc.search("what is lingtai AI agent framework")
-        assert len(results) > 0
-        print(f"\n  Gemini search: {results[0].snippet[:100]}...")
 
 
 # ─── Vision ──────────────────────────────────────────────────────────────
@@ -80,11 +73,20 @@ class TestVision:
         img_path.write_bytes(png)
         return str(img_path)
 
-    @pytest.mark.skipif(not GEMINI_KEY, reason="GEMINI_API_KEY not set")
-    def test_gemini(self, test_image):
+    @pytest.mark.skipif(not OPENAI_KEY, reason="OPENAI_API_KEY not set")
+    def test_openai(self, test_image):
         from lingtai.services.vision import create_vision_service
-        svc = create_vision_service("gemini", api_key=GEMINI_KEY)
+        svc = create_vision_service("openai", api_key=OPENAI_KEY, model="gpt-4o")
         result = svc.analyze_image(test_image, prompt="What color is this image?")
         assert result
         assert len(result) > 5
-        print(f"\n  Gemini vision: {result[:100]}")
+        print(f"\n  OpenAI vision: {result[:100]}")
+
+    @pytest.mark.skipif(not ANTHROPIC_KEY, reason="ANTHROPIC_API_KEY not set")
+    def test_anthropic(self, test_image):
+        from lingtai.services.vision import create_vision_service
+        svc = create_vision_service("anthropic", api_key=ANTHROPIC_KEY)
+        result = svc.analyze_image(test_image, prompt="What color is this image?")
+        assert result
+        assert len(result) > 5
+        print(f"\n  Anthropic vision: {result[:100]}")

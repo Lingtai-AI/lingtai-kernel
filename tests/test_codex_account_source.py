@@ -260,5 +260,13 @@ def test_service_tier_absent_omits():
 
 def test_service_tier_invalid_fails_loud():
     """Unsupported service_tier values fail at the common factory boundary."""
-    with pytest.raises(ValueError, match="auto"):
-        _normalize_service_tier("auto")
+    with pytest.raises(ValueError, match="Unsupported service_tier"):
+        _normalize_service_tier("turbo")
+    with pytest.raises(ValueError, match="Unsupported service_tier"):
+        _codex_adapter("codex", {"service_tier": "turbo"})
+
+
+@pytest.mark.parametrize("value", ["auto", "default", "flex", "priority"])
+def test_service_tier_standard_values_reach_codex_verbatim(value):
+    adapter = _codex_adapter("codex", {"service_tier": value})
+    assert adapter._codex_service_tier == value

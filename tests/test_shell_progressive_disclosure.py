@@ -73,13 +73,13 @@ def test_shell_installed_routes_and_full_prompt(tmp_path, monkeypatch):
     import re
     import socket
     from lingtai.agent import Agent
-    from tests._service_helpers import make_gemini_mock_service
+    from tests._service_helpers import make_mock_llm_service
 
     def no_connect(*args, **kwargs):
         raise AssertionError("network forbidden in manual proof")
 
     monkeypatch.setattr(socket.socket, "connect", no_connect)
-    agent = Agent(service=make_gemini_mock_service(), agent_name="shell-manual-proof",
+    agent = Agent(service=make_mock_llm_service(), agent_name="shell-manual-proof",
                   working_dir=tmp_path / "agent", capabilities={"shell": {}})
     try:
         agent._reconstruct_context()

@@ -4,12 +4,14 @@ Providers:
 - DuckDuckGoSearchService — zero-API-key search via ddgs package.
 - AnthropicSearchService — Anthropic native web search tool.
 - OpenAISearchService — OpenAI canonical Responses API web search tool.
-- GeminiSearchService — Gemini Google Search grounding.
 
 MiniMax and Zhipu were retired from this factory 2026-07-28 (Jason authorized
 deletion, issue 11114): they are no longer built-in web search providers.
 Wire either through a third-party MCP server instead — see
 src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md.
+The Gemini Google Search grounding service was removed with the Gemini LLM
+provider (LingTai keeps four LLM provider families: openai, anthropic, codex,
+claude-code).
 
 Factory:
     create_search_service(provider, api_key) — instantiate by provider name.
@@ -34,10 +36,10 @@ class SearchProviderError(RuntimeError):
     Carries a bounded, secret-free failure class and the provider name so
     callers (the ``web`` capability's use-case policy) can report typed,
     actionable failure without ever logging or returning raw SDK exception
-    text, request bodies, or credentials. Earned once, shared by all three
-    canonical adapters (``anthropic.py``, ``openai.py``, ``gemini.py``)
-    rather than three near-identical private classes or one speculative
-    cross-tool error hierarchy.
+    text, request bodies, or credentials. Earned once, shared by both
+    canonical adapters (``anthropic.py``, ``openai.py``) rather than
+    near-identical private classes or one speculative cross-tool error
+    hierarchy.
     """
 
     def __init__(self, provider: str, failure_class: str) -> None:
@@ -80,7 +82,7 @@ def create_search_service(
 
     Args:
         provider: Provider name (``"duckduckgo"``, ``"anthropic"``,
-                  ``"openai"``, ``"gemini"``).
+                  ``"openai"``).
         api_key: API key for the provider (required for all except duckduckgo).
         model: Optional model override.
 
@@ -118,14 +120,7 @@ def create_search_service(
             kwargs["model"] = model
         return OpenAISearchService(**kwargs)
 
-    if name == "gemini":
-        from .gemini import GeminiSearchService
-        kwargs = {"api_key": _require_key()}
-        if model:
-            kwargs["model"] = model
-        return GeminiSearchService(**kwargs)
-
     raise ValueError(
         f"Unknown web search provider: {provider!r}. "
-        f"Supported: duckduckgo, anthropic, openai, gemini."
+        f"Supported: duckduckgo, anthropic, openai."
     )
