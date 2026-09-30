@@ -914,28 +914,10 @@ def _read_molt_count(agent_json_path: Path) -> int:
         return 0
 
 
-def _validate_compact_threshold(value: int | None) -> int | None:
-    """Normalize the OpenAI Responses auto-compaction threshold.
-
-    ``None`` intentionally disables Responses ``context_management``.  Any
-    concrete value must be a positive integer; reject bool explicitly because
-    it is an ``int`` subclass in Python but not a valid token threshold.
-    """
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("compact_threshold must be a positive int or None")
-    if value <= 0:
-        raise ValueError("compact_threshold must be > 0 or None")
-    return value
-
-
 def _validate_codex_compact_token_limit(value: int | None) -> int | None:
     """Normalize the Codex standalone-compaction context-token threshold.
 
-    Distinct from ``compact_threshold``/``context_management`` (the generic
-    OpenAI Responses auto-compaction the Codex backend rejects — see
-    ``_create_responses_session``). ``None`` means "no explicit task limit";
+    ``None`` means "no explicit task limit";
     the caller resolves the effective threshold from the session's
     ``context_window()``. A concrete value must be a positive integer; bool is
     rejected explicitly because it is an ``int`` subclass in Python but not a
@@ -2891,7 +2873,6 @@ class OpenAIResponsesSession(ChatSession):
         tool_choice: str | None,
         extra_kwargs: dict,
         previous_response_id: str | None = None,
-        compact_threshold: int | None = None,
         interface: ChatInterface | None = None,
         prompt_cache_key: str | None = None,
         base_url: str | None = None,
@@ -2914,7 +2895,6 @@ class OpenAIResponsesSession(ChatSession):
         # on (env LINGTAI_INJECT_REASONING_FALLBACK to disable); explicit
         # param wins.
         self._inject_reasoning_fallback = bool(inject_reasoning_fallback)
-        self._compact_threshold = _validate_compact_threshold(compact_threshold)
         self._interface = interface or ChatInterface()
         # Optional OpenAI Responses ``prompt_cache_key`` — opts the request
         # into cross-request prompt caching keyed by a stable string. Sent
@@ -3126,10 +3106,6 @@ class OpenAIResponsesSession(ChatSession):
                     kwargs["tool_choice"] = self._tool_choice
             if self._response_id and not self._stateless_replay:
                 kwargs["previous_response_id"] = self._response_id
-            if self._compact_threshold:
-                kwargs["context_management"] = [
-                    {"type": "compaction", "compact_threshold": self._compact_threshold}
-                ]
             if self._prompt_cache_key:
                 kwargs["prompt_cache_key"] = self._prompt_cache_key
 
@@ -3194,10 +3170,6 @@ class OpenAIResponsesSession(ChatSession):
                     kwargs["tool_choice"] = self._tool_choice
             if self._response_id and not self._stateless_replay:
                 kwargs["previous_response_id"] = self._response_id
-            if self._compact_threshold:
-                kwargs["context_management"] = [
-                    {"type": "compaction", "compact_threshold": self._compact_threshold}
-                ]
             if self._prompt_cache_key:
                 kwargs["prompt_cache_key"] = self._prompt_cache_key
 
@@ -3290,7 +3262,6 @@ class OpenAIAdapter(LLMAdapter):
         wire_api: str | None = None,
         max_rpm: int = 0,
         default_headers: dict | None = None,
-        compact_threshold: int | None = 100_000,
         prompt_cache_key: str | bool | None = None,
         responses_stateless_replay: bool = False,
         inject_reasoning_fallback: bool | None = None,
@@ -3324,13 +3295,6 @@ class OpenAIAdapter(LLMAdapter):
             self._prompt_cache_key_policy = _AUTO_PROMPT_CACHE_KEY
         else:
             self._prompt_cache_key_policy = prompt_cache_key
-        # Responses-API auto-compaction threshold (input tokens). The host
-        # injects its resolved config value via the adapter factory
-        # (lingtai/llm/_register.py:_openai reads provider defaults); when
-        # unset we fall back to the intended 100k default. ``None`` disables
-        # compaction entirely. Config is injected at construction here, never
-        # read from a global module — see lingtai.kernel.config's contract.
-        self._compact_threshold = _validate_compact_threshold(compact_threshold)
         self._responses_stateless_replay = bool(responses_stateless_replay)
         # Generic ``reasoning_content`` round-trip fallback (the former
         # DeepSeek-specific behavior, now available to any OpenAI-compatible
@@ -3518,7 +3482,6 @@ class OpenAIAdapter(LLMAdapter):
             tool_choice=tool_choice,
             extra_kwargs=extra_kwargs,
             previous_response_id=None,
-            compact_threshold=self._compact_threshold,
             interface=interface,
             prompt_cache_key=self._resolve_prompt_cache_key(model),
             context_window=context_window,
@@ -4172,8 +4135,6 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         # auth material, or raw provider objects.
         self._last_effort_dispatch: dict[str, Any] | None = None
         # Standalone Codex compaction (daemon task ``context_token_limit``).
-        # Distinct axis from ``compact_threshold``/``context_management``,
-        # which Codex never receives (see ``_create_responses_session``).
         # ``None`` -> no explicit task limit; the effective threshold falls
         # back to ``context_window()`` at check time (see
         # ``_effective_compact_token_limit``). Validated once here (in the
@@ -5131,8 +5092,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
     # (``POST /responses/compact``) to fold prior context into an opaque
     # ``compaction_summary`` + trailing ``message`` pair, which is then
     # replayed as the new provider-context prefix, with only strict-additive
-    # entries appended on top — never ``context_management`` (Codex rejects
-    # it; see ``_create_responses_session``). The projected-token trigger,
+    # entries appended on top. The projected-token trigger,
     # boundary selection, and opaque replay basis are shared with any other
     # standalone-compaction session via ``_StandaloneCompactionMixin``; only
     # the wire-shaping (``_compaction_prefix_input``, Codex's per-session
@@ -6086,10 +6046,6 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                     kwargs["tool_choice"] = self._tool_choice
             if previous_response_id:
                 kwargs["previous_response_id"] = previous_response_id
-            if self._compact_threshold:
-                kwargs["context_management"] = [
-                    {"type": "compaction", "compact_threshold": self._compact_threshold}
-                ]
             # Resolve this request's cache-affinity values — the single stable
             # per-agent id (a pure hash of the agent path). All three levers
             # (prompt_cache_key / session_id / thread_id) carry the same value on
@@ -6670,10 +6626,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             str(codex_service_tier) if codex_service_tier else None
         )
         # Standalone Codex compaction threshold (daemon task
-        # ``context_token_limit``), Codex-only and orthogonal to the generic
-        # ``compact_threshold``/``context_management`` this adapter always
-        # forces to ``None`` in ``_create_responses_session`` (Codex rejects
-        # that parameter). ``None`` here means "no explicit override"; the
+        # ``context_token_limit``), Codex-only. ``None`` here means "no explicit override"; the
         # session resolves its effective threshold from its own
         # ``context_window()`` at check time. Validated eagerly so an invalid
         # daemon task value fails at adapter construction, before any request.
@@ -7426,8 +7379,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             thinking = "xhigh"
         extra_kwargs.update(_responses_reasoning_kwargs(thinking))
 
-        # Codex's backend doesn't accept context_management compaction —
-        # leave compact_threshold unset.
         # service_tier: common Codex capability (REST + WS).  Omitted when None.
         if self._codex_service_tier is not None:
             extra_kwargs["service_tier"] = self._codex_service_tier
@@ -7441,7 +7392,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             tool_choice=tool_choice,
             extra_kwargs=extra_kwargs,
             previous_response_id=None,
-            compact_threshold=None,
             interface=interface,
             # On the normal/root path this resolves to the SAME per-agent
             # (anchor, molt_count) hash as session_id / thread_id (see

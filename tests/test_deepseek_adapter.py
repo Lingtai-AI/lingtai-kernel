@@ -424,17 +424,15 @@ def test_deepseek_responses_wire_selection():
 
 
 def test_deepseek_responses_defaults_are_stateless_no_compaction():
-    """DeepSeek's Responses opt-in kept the old adapter's stateless, no
-    context-management defaults on the generic adapter."""
+    """DeepSeek's Responses opt-in kept the old adapter's stateless replay
+    default on the generic adapter."""
     adapter = OpenAIAdapter(
         api_key="x",
         wire_api="responses",
-        compact_threshold=None,
         responses_stateless_replay=True,
         **_DEEPSEEK_DEFAULTS,
     )
     assert adapter._responses_stateless_replay is True
-    assert adapter._compact_threshold is None
 
 
 def test_deepseek_responses_reasoning_fallback_injection():

@@ -46,7 +46,6 @@ _EXPECTED_SYSTEM_SETTING_KEYS = (
     "llm.api_key",
     "llm.api_key_env",
     "llm.base_url",
-    "llm.compact_threshold",
     "llm.wire_api",
     "llm.inject_reasoning_fallback",
     "llm.reasoning_effort_vocab",
@@ -105,7 +104,6 @@ _EXPECTED_GEMINI_DEFAULTS = {
     "llm.api_key": "<redacted>",
     "llm.api_key_env": "<redacted>",
     "llm.base_url": "<redacted>",
-    "llm.compact_threshold": None,
     "llm.wire_api": None,
     "llm.inject_reasoning_fallback": None,
     "llm.reasoning_effort_vocab": None,
@@ -364,7 +362,7 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
     rows = result["settings"]
     assert system_settings.SYSTEM_SETTING_KEYS == _EXPECTED_SYSTEM_SETTING_KEYS
     assert tuple(row["key"] for row in rows) == _EXPECTED_SYSTEM_SETTING_KEYS
-    assert len(rows) == len({row["key"] for row in rows}) == 56
+    assert len(rows) == len({row["key"] for row in rows}) == 55
     for row in rows:
         assert tuple(row) == (
             "key", "current", "default", "configurable", "comment",
@@ -390,7 +388,6 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
             "language",
             "context_limit",
             "summarize_notification_threshold",
-            "llm.compact_threshold",
             "llm.reasoning_effort_vocab",
             "llm.api_compat",
             "llm.codex_tui_dir",
@@ -400,7 +397,6 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
         "language": "en",
         "context_limit": 272_000,
         "summarize_notification_threshold": 3_000,
-        "llm.compact_threshold": None,
         "llm.reasoning_effort_vocab": None,
         "llm.api_compat": None,
         "llm.codex_tui_dir": "<redacted>",
@@ -638,7 +634,6 @@ def test_system_settings_runtime_policy_rows_use_env_v2_default_precedence(
 
 
 _NULLABLE_LLM_KEYS = (
-    "llm.compact_threshold",
     "llm.reasoning_effort_vocab",
     "llm.api_compat",
 )
@@ -667,14 +662,14 @@ def _assert_nullable_llm_projection(
 @pytest.mark.parametrize(
     "authored,current",
     (
-        ({}, (100_000, "openai", None)),
+        ({}, ("openai", None)),
         (
             {
                 "compact_threshold": None,
                 "reasoning_effort_vocab": None,
                 "api_compat": None,
             },
-            (None, "openai", None),
+            ("openai", None),
         ),
         (
             {
@@ -682,7 +677,7 @@ def _assert_nullable_llm_projection(
                 "reasoning_effort_vocab": "seven_tier",
                 "api_compat": "anthropic",
             },
-            (4_321, "seven_tier", None),
+            ("seven_tier", None),
         ),
     ),
     ids=("omitted", "null", "authored"),
@@ -694,7 +689,7 @@ def test_system_settings_nullable_llm_openai_route_current_and_default(
     from lingtai.llm.openai.adapter import OpenAIAdapter
 
     adapter_signature = signature(OpenAIAdapter.__init__)
-    assert adapter_signature.parameters["compact_threshold"].default == 100_000
+    assert "compact_threshold" not in adapter_signature.parameters
     assert adapter_signature.parameters["reasoning_effort_vocab"].default == "openai"
     _assert_nullable_llm_projection(
         monkeypatch,
@@ -702,7 +697,7 @@ def test_system_settings_nullable_llm_openai_route_current_and_default(
         provider="openai",
         authored=authored,
         current=current,
-        default=(100_000, "openai", None),
+        default=("openai", None),
     )
 
 
@@ -710,14 +705,14 @@ def test_system_settings_nullable_llm_openai_route_current_and_default(
 @pytest.mark.parametrize(
     "authored,current",
     (
-        ({}, (100_000, "openai", "openai")),
+        ({}, ("openai", "openai")),
         (
             {
                 "compact_threshold": None,
                 "reasoning_effort_vocab": None,
                 "api_compat": None,
             },
-            (None, "openai", "openai"),
+            ("openai", "openai"),
         ),
         (
             {
@@ -725,7 +720,7 @@ def test_system_settings_nullable_llm_openai_route_current_and_default(
                 "reasoning_effort_vocab": "seven_tier",
                 "api_compat": None,
             },
-            (None, "seven_tier", "openai"),
+            ("seven_tier", "openai"),
         ),
         (
             {
@@ -733,7 +728,7 @@ def test_system_settings_nullable_llm_openai_route_current_and_default(
                 "reasoning_effort_vocab": "seven_tier",
                 "api_compat": "openai",
             },
-            (4_321, "seven_tier", "openai"),
+            ("seven_tier", "openai"),
         ),
     ),
     ids=("omitted", "all-null", "compat-null-forwarded-axes", "authored"),
@@ -751,7 +746,7 @@ def test_system_settings_nullable_llm_custom_factory_openai_routes(
         provider=provider,
         authored=authored,
         current=current,
-        default=(100_000, "openai", "openai"),
+        default=("openai", "openai"),
     )
 
 
@@ -788,7 +783,6 @@ def test_custom_explicit_compat_null_reaches_registered_factory_after_normalizat
         provider: {
             "max_rpm": 60,
             "reasoning_effort_vocab": "seven_tier",
-            "compact_threshold": None,
         }
     }
 
@@ -801,7 +795,7 @@ def test_custom_explicit_compat_null_reaches_registered_factory_after_normalizat
     )
     assert service._adapters[(provider, llm["base_url"])] is not None
     assert captured["api_compat"] == "openai"
-    assert captured["compact_threshold"] is None
+    assert "compact_threshold" not in captured
     assert captured["reasoning_effort_vocab"] == "seven_tier"
 
 
@@ -826,8 +820,8 @@ def test_system_settings_nullable_llm_custom_fallback_uses_openai_defaults(
             "reasoning_effort_vocab": "seven_tier",
             "prompt_cache_namespace": "ignored-namespace",
         },
-        current=(100_000, "openai", "openai"),
-        default=(100_000, "openai", "openai"),
+        current=("openai", "openai"),
+        default=("openai", "openai"),
     )
     assert (
         rows["llm.inject_reasoning_fallback"]["current"],
@@ -895,22 +889,22 @@ def test_system_settings_nullable_llm_custom_non_openai_route(
         tmp_path,
         provider="custom",
         authored=authored,
-        current=(None, None, "anthropic"),
-        default=(None, None, "openai"),
+        current=(None, "anthropic"),
+        default=(None, "openai"),
     )
 
 
 @pytest.mark.parametrize(
     "authored,current",
     (
-        ({}, (None, None, None)),
+        ({}, (None, None)),
         (
             {
                 "compact_threshold": None,
                 "reasoning_effort_vocab": None,
                 "api_compat": None,
             },
-            (None, None, None),
+            (None, None),
         ),
         (
             {
@@ -918,7 +912,7 @@ def test_system_settings_nullable_llm_custom_non_openai_route(
                 "reasoning_effort_vocab": "seven_tier",
                 "api_compat": "openai",
             },
-            (4_321, None, None),
+            (None, None),
         ),
     ),
     ids=("omitted", "null", "authored"),
@@ -932,7 +926,7 @@ def test_system_settings_nullable_llm_deepseek_route(
         provider="deepseek",
         authored=authored,
         current=current,
-        default=(None, None, None),
+        default=(None, None),
     )
 
 
@@ -961,8 +955,8 @@ def test_system_settings_nullable_llm_gemini_ignored_route(
         tmp_path,
         provider="gemini",
         authored=authored,
-        current=(None, None, None),
-        default=(None, None, None),
+        current=(None, None),
+        default=(None, None),
     )
 
 
@@ -992,8 +986,8 @@ def test_system_settings_nullable_llm_native_codex_routes_ignore_generic_axes(
         tmp_path,
         provider=provider,
         authored=authored,
-        current=(None, None, None),
-        default=(None, None, None),
+        current=(None, None),
+        default=(None, None),
     )
 
 

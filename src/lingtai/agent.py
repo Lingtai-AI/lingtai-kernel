@@ -2257,7 +2257,7 @@ class Agent(BaseAgent):
         )
         # Compare the resolved provider-defaults bucket as a whole so explicit
         # init.json changes (codex_session_anchor, default_headers,
-        # compact_threshold, max_rpm, api_compat, etc.) rebuild coherently.
+        # max_rpm, api_compat, etc.) rebuild coherently.
         if (
             codex_force_rebuild
             or new_provider != self.service.provider

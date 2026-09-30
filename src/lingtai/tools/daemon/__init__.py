@@ -3085,7 +3085,6 @@ class DaemonManager:
             "codex_auth_pool_path",
             "codex_session_anchor",
             "codex_thread_salt",
-            "compact_threshold",
             "default_headers",
             "max_rpm",
             "wire_api",

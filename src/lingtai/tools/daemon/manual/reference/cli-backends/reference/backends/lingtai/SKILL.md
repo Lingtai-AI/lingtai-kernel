@@ -59,8 +59,9 @@ or window setting. It is honored only for native LingTai LLM providers
 it. An
 explicit preset resolves the comparison window from canonical
 `manifest.llm.context_limit`; without a preset, use the inherited parent
-effective window. Codex Responses uses `context_management` with
-stateless/full-history replay; compaction failure is non-fatal. Native mimo
+effective window. Codex Responses compacts via standalone `/responses/compact`
+(never `context_management`) with stateless/full-history replay; compaction
+failure is non-fatal. Native mimo
 compaction failure is a hard failure. The external `mimo`/`mimocode` CLI alias
 is unrelated.
 

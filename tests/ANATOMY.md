@@ -272,7 +272,7 @@ related_files:
   - tests/test_nudge_inline_cap.py
   - tests/test_nudge_policy.py
   - tests/test_nudge_prompts.py
-  - tests/test_openai_compact_threshold.py
+  - tests/test_responses_no_context_management.py
   - tests/test_openai_overflow_recovery.py
   - tests/test_openai_prompt_cache_key.py
   - tests/test_openai_responses_streaming.py

@@ -127,12 +127,6 @@ SYSTEM_INIT_SETTING_SPECS: tuple[_InitSettingSpec, ...] = (
         comment=_LLM_COMMENT,
         sensitive=True,
     ),
-    _init(
-        "llm.compact_threshold",
-        "/manifest/llm/compact_threshold",
-        None,
-        comment=_LLM_COMMENT,
-    ),
     _init("llm.wire_api", "/manifest/llm/wire_api", None, comment=_LLM_COMMENT),
     _init(
         "llm.inject_reasoning_fallback",
@@ -259,6 +253,8 @@ SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
         "/manifest/stamina",
         "/manifest/llm/codex_thread_salt",
         "/manifest/llm/context_limit",
+        # Retired generic Responses auto-compaction; recognized-and-ignored.
+        "/manifest/llm/compact_threshold",
     }
 )
 
@@ -896,7 +892,6 @@ class _SelectedLLMRoute:
 # on the same route without maintaining a second alias registry here.
 _SELECTED_FACTORY_LLM_SETTING_KEYS = frozenset(
     {
-        "llm.compact_threshold",
         "llm.wire_api",
         "llm.inject_reasoning_fallback",
         "llm.reasoning_effort_vocab",
@@ -944,8 +939,8 @@ def _selected_llm_route(
         return _SelectedLLMRoute("openai")
     if selected is factories.get("custom"):
         # Runtime drops authored api_compat=null before _custom. Omitted/null
-        # therefore both take its OpenAI default and forward preserved compact
-        # null plus any authored non-null reasoning vocabulary.
+        # therefore both take its OpenAI default and forward any authored
+        # non-null reasoning vocabulary.
         effective_compat = normalized.get(
             "api_compat", _custom_adapter_default("api_compat")
         )
@@ -955,7 +950,7 @@ def _selected_llm_route(
             return _SelectedLLMRoute("custom_other", effective_compat)
         # create_custom_adapter sends every other admitted value (including
         # non-lowercase/structured values) to OpenAIAdapter, but _register's
-        # _custom does not forward compact/reasoning axes unless compat is the
+        # _custom does not forward reasoning axes unless compat is the
         # exact lowercase string "openai".
         return _SelectedLLMRoute("custom_openai_fallback", "openai")
     if selected is factories.get("deepseek"):
@@ -974,21 +969,6 @@ def _effective_nullable_llm_values(
 ) -> tuple[Any, Any]:
     """Return selected-route ``(current, default)`` without constructing clients."""
     route = _selected_llm_route(llm, normalized)
-
-    if key == "llm.compact_threshold":
-        if route.factory == "deepseek":
-            # _register._deepseek consumes a positive authored value and
-            # otherwise pins the generic OpenAI adapter to disabled/null.
-            return normalized.get("compact_threshold"), None
-        if route.factory in {"openai", "custom_openai"}:
-            default = _openai_adapter_default("compact_threshold")
-            # _register preserves explicit None on these two forwarding routes.
-            current = normalized.get("compact_threshold", default)
-            return current, default
-        if route.factory == "custom_openai_fallback":
-            default = _openai_adapter_default("compact_threshold")
-            return default, default
-        return None, None
 
     if key == "llm.reasoning_effort_vocab":
         if route.factory in {"openai", "custom_openai"}:

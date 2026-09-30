@@ -77,14 +77,8 @@ def register_all_adapters() -> None:
     def _openai(*, model=None, defaults=None, **kw):
         from .openai.adapter import OpenAIAdapter
         kw.pop("model", None)
-        # Honor a host-configured Responses-API compaction threshold. Absent
-        # from defaults -> let OpenAIAdapter's 100k constructor default stand;
-        # explicit None -> disable Responses context_management.
         adapter_kw = {k: v for k, v in kw.items() if v is not None}
         d = defaults or {}
-        if "compact_threshold" in d:
-            # Preserve explicit None after the general None-pruning pass above.
-            adapter_kw["compact_threshold"] = d["compact_threshold"]
         # Canonical ``wire_api`` and the legacy ``use_responses_api`` preference
         # are independent and both may be present (as in the openai DEFAULTS).
         # Pass each when present — do NOT ``elif`` them — so ``auto`` can delegate
@@ -117,10 +111,6 @@ def register_all_adapters() -> None:
         d = defaults or {}
         compat = d.get("api_compat", "openai")
         adapter_kw = {k: v for k, v in kw.items() if v is not None}
-        if compat == "openai" and "compact_threshold" in d:
-            # Preserve explicit None so custom OpenAI Responses users can disable
-            # generic context management just like official OpenAI users.
-            adapter_kw["compact_threshold"] = d["compact_threshold"]
         # Canonical ``wire_api`` and the legacy ``use_responses_api`` preference
         # are independent and both may be present. Pass each when present — do NOT
         # ``elif`` them — so ``auto`` can delegate to the legacy flag while an
@@ -250,9 +240,6 @@ def register_all_adapters() -> None:
             adapter_kw["wire_api"] = d["wire_api"]
         if "use_responses_api" in d:
             adapter_kw["use_responses"] = d["use_responses_api"]
-        if "compact_threshold" in d:
-            # Preserve explicit None after the general None-pruning pass above.
-            adapter_kw["compact_threshold"] = d["compact_threshold"]
         # Lift the generic reasoning knobs from manifest defaults so DeepSeek
         # users get the manifest-level off switch too (fable R2 M); the
         # setdefaults below then only fill gaps for programmatic callers.
@@ -264,7 +251,7 @@ def register_all_adapters() -> None:
                 adapter_kw[_k] = d[_k]
         # DeepSeek defaults collapsed into generic OpenAIAdapter params.
         # setdefault (not plain =) so an explicit caller override wins,
-        # matching the neighbouring wire_api/compact_threshold lines (fable F3).
+        # matching the neighbouring wire_api lines (fable F3).
         adapter_kw.setdefault("base_url", "https://api.deepseek.com")
         adapter_kw.setdefault("inject_reasoning_fallback", True)
         adapter_kw.setdefault("prompt_cache_namespace", "deepseek")
@@ -279,11 +266,8 @@ def register_all_adapters() -> None:
         # that DeepSeek never actually served.
         adapter_kw.setdefault("reasoning_policy", apply_reasoning)
         # Preserve the old DeepSeekAdapter Responses-wire fidelity: stateless
-        # replay (no server-side response storage) and no generic
-        # context_management unless explicitly configured (MiMo/Codex
-        # precedent). Chat Completions ignores both.
+        # replay (no server-side response storage). Chat Completions ignores it.
         adapter_kw.setdefault("responses_stateless_replay", True)
-        adapter_kw.setdefault("compact_threshold", None)
         return OpenAIAdapter(**adapter_kw)
 
     LLMService.register_adapter("deepseek", _deepseek)
