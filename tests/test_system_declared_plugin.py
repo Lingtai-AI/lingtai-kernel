@@ -1332,6 +1332,48 @@ def test_system_settings_service_tier_is_codex_only(
     assert (row["current"], row["default"]) == ("fast", None)
 
 
+@pytest.mark.parametrize("provider", ("openai", "custom", "grok"))
+def test_system_settings_service_tier_reports_fast_on_openai_compatible_routes(
+    monkeypatch, tmp_path, provider
+):
+    _clear_system_setting_env(monkeypatch)
+    _write_init(
+        tmp_path,
+        manifest={
+            "llm": {
+                "provider": provider,
+                "model": "tier-test",
+                "service_tier": " fast ",
+            }
+        },
+    )
+    row = {row["key"]: row for row in _settings_call(tmp_path, {})["settings"]}[
+        "llm.service_tier"
+    ]
+    assert (row["current"], row["default"]) == ("fast", None)
+
+
+def test_system_settings_service_tier_is_null_for_custom_non_openai_compat(
+    monkeypatch, tmp_path
+):
+    _clear_system_setting_env(monkeypatch)
+    _write_init(
+        tmp_path,
+        manifest={
+            "llm": {
+                "provider": "custom",
+                "model": "tier-test",
+                "api_compat": "anthropic",
+                "service_tier": "fast",
+            }
+        },
+    )
+    row = {row["key"]: row for row in _settings_call(tmp_path, {})["settings"]}[
+        "llm.service_tier"
+    ]
+    assert (row["current"], row["default"]) == (None, None)
+
+
 @pytest.mark.parametrize("provider", ("openai", "custom", "mimo", "gemini"))
 def test_system_settings_service_tier_is_null_for_ignoring_routes(
     monkeypatch, tmp_path, provider

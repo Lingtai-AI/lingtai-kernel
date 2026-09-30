@@ -169,7 +169,9 @@ LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "reasoning_effort_vocab": (str, NoneType),
     # Fixed provider namespace for the auto-derived ``prompt_cache_key``.
     "prompt_cache_namespace": (str, NoneType),
-    # Common Codex service tier; the factory validates supported values.
+    # Service tier (``fast`` -> wire ``priority``). Codex validates supported
+    # values; the openai/custom(api_compat=openai) factories forward
+    # recognized values and ignore the rest.
     "service_tier": str,
 }
 LLM_SPECIAL_KNOWN: set[str] = {"thinking"}
