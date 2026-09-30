@@ -1412,22 +1412,19 @@ def test_stateless_prompt_and_tool_updates_affect_replayed_request():
     assert session.interface.current_tools == [_tool().to_dict()]
 
 
-def test_stateless_custom_responses_preserves_context_management_compaction_request():
+def test_stateless_custom_responses_never_sends_context_management():
     adapter = create_custom_adapter(
         api_key="fake",
         api_compat="openai",
         base_url="https://sub2api.example/v1",
         wire_api="responses",
-        compact_threshold=12345,
     )
     adapter._client = _Client(_Responses([_text_raw("resp_1", "ok")]))
     session = adapter.create_chat("gpt-test", "system")
 
     session.send("hi")
 
-    assert adapter._client.responses.kwargs[0]["context_management"] == [
-        {"type": "compaction", "compact_threshold": 12345}
-    ]
+    assert "context_management" not in adapter._client.responses.kwargs[0]
 
 
 def test_official_openai_responses_remains_stateful_nonstreaming_and_streaming():

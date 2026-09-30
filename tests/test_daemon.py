@@ -3006,7 +3006,8 @@ def test_run_emanation_codex_preset_gets_daemon_cache_anchor(tmp_path, monkeypat
     assert captured["init"]["base_url"] == "https://chatgpt.com/backend-api/codex"
     defaults = captured["init"]["provider_defaults"]
     assert defaults["codex"]["max_rpm"] == 11
-    assert defaults["codex"]["compact_threshold"] is None
+    # Retired key on a preset is ignored, never forwarded to the adapter.
+    assert "compact_threshold" not in defaults["codex"]
     assert defaults["codex"]["codex_session_anchor"] == str((run_dir.path / "daemon.json").resolve())
 
 

@@ -184,11 +184,20 @@ def test_manifest_disable_rejects_every_non_string_entry(value, index, type_name
         validate_init(data)
 
 
-def test_compact_threshold_rejects_bool_via_check_type():
+def test_int_field_rejects_bool_via_check_type():
+    data = _valid_init()
+    data["manifest"]["summarize_notification_threshold"] = True
+    with pytest.raises(
+        ValueError, match=r"manifest\.summarize_notification_threshold.*bool"
+    ):
+        validate_init(data)
+
+
+def test_retired_llm_compact_threshold_is_ignored_without_warning():
     data = _valid_init()
     data["manifest"]["llm"]["compact_threshold"] = True
-    with pytest.raises(ValueError, match=r"manifest\.llm\.compact_threshold.*bool"):
-        validate_init(data)
+    warnings = validate_init(data)
+    assert not any("compact_threshold" in w for w in warnings)
 
 
 def test_check_type_bool_allowed_when_listed():
@@ -720,6 +729,7 @@ def test_top_optional_fields_all_in_known():
 def test_llm_known_fields_compose_from_schema_sets():
     from lingtai.init_schema import (
         LLM_KNOWN,
+        LLM_LEGACY_IGNORED,
         LLM_OPTIONAL,
         LLM_PASS_THROUGH_KNOWN,
         LLM_REQUIRED,
@@ -731,6 +741,7 @@ def test_llm_known_fields_compose_from_schema_sets():
         | set(LLM_OPTIONAL)
         | LLM_SPECIAL_KNOWN
         | LLM_PASS_THROUGH_KNOWN
+        | LLM_LEGACY_IGNORED
     )
     assert LLM_KNOWN == expected
 
@@ -745,17 +756,16 @@ def test_manifest_soul_is_legacy_ignored_not_optional():
 
 
 def test_provider_default_manifest_llm_keys_are_known():
-    from lingtai.init_schema import LLM_KNOWN, LLM_OPTIONAL
+    from lingtai.init_schema import LLM_KNOWN, LLM_LEGACY_IGNORED
     from lingtai.llm import service as llm_service
 
     pass_through = set(llm_service._PROVIDER_DEFAULTS_PASS_THROUGH_KEYS) | {
         "default_headers"
     }
-    preserve_none = set(llm_service._PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS)
 
     assert pass_through <= LLM_KNOWN
-    assert preserve_none <= set(LLM_OPTIONAL)
-    assert preserve_none <= LLM_KNOWN
+    # Retired keys are known (no warning) but never forwarded to adapters.
+    assert not (pass_through & LLM_LEGACY_IGNORED)
 
 
 def test_manifest_accepts_pseudo_agent_subscriptions():

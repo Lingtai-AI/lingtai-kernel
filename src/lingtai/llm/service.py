@@ -124,7 +124,6 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     "reasoning_effort_vocab",
     "prompt_cache_namespace",
 )
-_PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS = ("compact_threshold",)
 
 # Accepted Codex config spellings that get the automatic per-agent
 # ``codex_session_anchor`` (the resolved ``init.json`` path). They all resolve to
@@ -172,9 +171,6 @@ def build_provider_defaults_from_manifest_llm(
         value = llm.get(key)
         if value is not None:
             per_provider[key] = value
-    for key in _PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS:
-        if key in llm:
-            per_provider[key] = llm[key]
 
     # Default per-agent Codex identity from the agent path only. The adapter
     # hashes this anchor together with the current molt_count into one 8-char

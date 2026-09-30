@@ -153,7 +153,6 @@ LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "api_key": (str, NoneType),
     "api_key_env": str,
     "base_url": (str, NoneType),
-    "compact_threshold": (int, NoneType),
     # OpenAI-compatible wire selection. ``auto`` preserves legacy behavior;
     # ``chat_completions``/``responses`` force the respective wire path even
     # for custom base URLs. Scoped to OpenAI-compatible providers.
@@ -174,6 +173,16 @@ LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "service_tier": str,
 }
 LLM_SPECIAL_KNOWN: set[str] = {"thinking"}
+# manifest.llm fields retired from the active schema but still tolerated on
+# existing init.json/presets: recognized-and-ignored (no type-check, no
+# "unknown field" warning), never read by any boot, refresh, or preset path.
+LLM_LEGACY_IGNORED: set[str] = {
+    # The generic OpenAI Responses ``context_management`` auto-compaction was
+    # removed: server-side compaction rewrote the context prefix on every turn
+    # above the threshold and defeated prompt caching. No adapter sends
+    # ``context_management`` any more.
+    "compact_threshold",
+}
 LLM_PASS_THROUGH_KNOWN: set[str] = {
     "api_compat",
     "codex_session_anchor",
@@ -186,7 +195,11 @@ LLM_PASS_THROUGH_KNOWN: set[str] = {
     "wire_api",
 }
 LLM_KNOWN: set[str] = (
-    set(LLM_REQUIRED) | set(LLM_OPTIONAL) | LLM_SPECIAL_KNOWN | LLM_PASS_THROUGH_KNOWN
+    set(LLM_REQUIRED)
+    | set(LLM_OPTIONAL)
+    | LLM_SPECIAL_KNOWN
+    | LLM_PASS_THROUGH_KNOWN
+    | LLM_LEGACY_IGNORED
 )
 
 
@@ -384,12 +397,6 @@ def validate_init(data: dict) -> list[str]:
         raise ValueError(
             "manifest.llm.api_compat: expected recursively JSON-finite value"
         )
-    if "compact_threshold" in llm:
-        compact_threshold = llm["compact_threshold"]
-        if isinstance(compact_threshold, int) and compact_threshold <= 0:
-            raise ValueError(
-                "manifest.llm.compact_threshold: expected positive int or null"
-            )
     if "wire_api" in llm:
         wire_api = llm["wire_api"]
         allowed_wire_api = {"auto", "chat_completions", "responses"}

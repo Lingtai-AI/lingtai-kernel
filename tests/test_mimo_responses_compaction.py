@@ -263,23 +263,13 @@ def test_never_sends_context_management():
     session, fake = _make_session(
         compact_token_limit=100,
         # Cross the standalone threshold deterministically; the single turn
-        # still has no safe boundary, and generic context_management remains
-        # absent regardless of tokenizer behavior.
+        # still has no safe boundary, and context_management remains absent
+        # regardless of tokenizer behavior.
         projected_provider_tokens=[250],
         turns=[_message_response("ok", 10)],
     )
-    assert session._compact_threshold is None
     session.send("hello")
     assert "context_management" not in fake.create_calls[0]
-
-
-def test_generic_compact_threshold_stays_none_even_if_adapter_default_would_set_one():
-    """MimoAdapter forces compact_threshold=None for its Responses session
-    regardless of the base OpenAIAdapter's normal 100k default."""
-    adapter = _make_adapter()
-    adapter._client = FakeClient([_message_response("ok", 10)])
-    session = adapter.create_chat("mimo-v2.5-pro", "system prompt", tools=None)
-    assert session._compact_threshold is None
 
 
 # ---------------------------------------------------------------------------

@@ -13,8 +13,7 @@ the docs say only documented parameters are processed, explicitly mark
 ``function_call_output``, and require callers to manage context manually
 (retaining prior reasoning items themselves). ``store`` and ``conversation``
 are likewise unsupported. So the default MiMo Responses session never sends
-``store``/``previous_response_id``/``conversation``/generic
-``context_management`` — every turn replays the full raw canonical
+``store``/``previous_response_id``/``conversation`` — every turn replays the full raw canonical
 interface (or, once standalone compaction has fired, the opaque compacted
 prefix plus a strict-additive delta).
 
@@ -118,7 +117,7 @@ class MimoCompactionHardFailure(RuntimeError):
 
     Unlike Codex (compaction failure is non-fatal — see
     ``CodexResponsesSession._compact_now``), MiMo's documented Responses API
-    gives LingTai no generic ``context_management`` fallback and no
+    gives LingTai no server-side compaction fallback and no
     server-side state to lean on (``store``/``previous_response_id``/
     ``conversation`` are all unsupported) — a MiMo session that silently kept
     replaying full, ever-growing history past its configured
@@ -136,11 +135,7 @@ class MimoResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
     ``conversation`` — all three are documented-unsupported on MiMo's
     Responses API) — or, once standalone compaction has fired, the opaque
     compacted prefix plus the strict-additive delta since the boundary (see
-    ``_StandaloneCompactionMixin``). The generic OpenAI Responses
-    ``context_management`` auto-compaction is never used for MiMo: the
-    session is always constructed with ``compact_threshold=None`` (see
-    ``MimoAdapter._create_responses_session``), and MiMo's docs mark
-    ``context_management`` explicitly incompatible.
+    ``_StandaloneCompactionMixin``).
 
     Standalone compaction failure is a HARD failure for MiMo — see
     ``MimoCompactionHardFailure`` and ``_compact_now``. This is the one
@@ -279,8 +274,7 @@ class MimoAdapter(OpenAIAdapter):
 
     Defaults to the native OpenAI Responses wire (``MimoResponsesSession`` —
     stateless full-history/opaque-compacted replay, no ``store``/
-    ``previous_response_id``/``conversation``, never generic
-    ``context_management``). An explicit ``wire_api="chat_completions"``
+    ``previous_response_id``/``conversation``). An explicit ``wire_api="chat_completions"``
     still selects the Chat Completions escape hatch (``MimoChatSession``,
     the ``reasoning_content`` round-trip session) — the canonical
     ``wire_api`` selector inherited from ``OpenAIAdapter`` already supports
@@ -292,7 +286,6 @@ class MimoAdapter(OpenAIAdapter):
     def __init__(self, *args, wire_api: str | None = None, compact_token_limit: int | None = None, **kwargs):
         # Default -> Responses (native MiMo wire). Explicit "chat_completions"
         # (or "auto"/"responses") from the caller still wins verbatim.
-        kwargs.setdefault("compact_threshold", None)
         kwargs.setdefault("responses_stateless_replay", True)
         super().__init__(*args, wire_api=wire_api or "responses", **kwargs)
         # Standalone MiMo compaction threshold (daemon task
@@ -354,9 +347,6 @@ class MimoAdapter(OpenAIAdapter):
             tool_choice=tool_choice,
             extra_kwargs=extra_kwargs,
             previous_response_id=None,
-            # Never the generic OpenAI Responses auto-compaction for MiMo —
-            # its docs mark ``context_management`` explicitly incompatible.
-            compact_threshold=None,
             interface=interface,
             prompt_cache_key=self._resolve_prompt_cache_key(model),
             context_window=context_window,

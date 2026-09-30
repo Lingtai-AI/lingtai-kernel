@@ -130,9 +130,9 @@ effort).
 The `openai` adapter (`OpenAIAdapter` in `src/lingtai/llm/openai/adapter.py`)
 serves OpenAI-compatible endpoints over Chat Completions or the Responses API.
 The Responses API can be selected with `wire_api=responses` or the legacy
-`use_responses_api=true` provider default. A host-configured Responses
-compaction threshold can be passed via the `compact_threshold` provider
-default (see `_register.py`).
+`use_responses_api=true` provider default. The adapter never sends the
+Responses `context_management` auto-compaction field; it would rewrite the
+context prefix every turn and defeat prompt caching.
 
 ## Anthropic / Gemini / MiniMax / DeepSeek / Zhipu / MiMo
 

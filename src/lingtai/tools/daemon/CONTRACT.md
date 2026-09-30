@@ -388,8 +388,7 @@ otherwise the inherited valid parent effective window, otherwise 272,000. An
 explicit `context_token_limit` value wins only for this separate provider
 compaction threshold. Native
 `mimo` defaults to the stateless OpenAI Responses wire (full-history replay;
-never `store`/`previous_response_id`/`conversation`/generic
-`context_management`) — an explicit `wire_api="chat_completions"` on the
+never `store`/`previous_response_id`/`conversation`/`context_management`) — an explicit `wire_api="chat_completions"` on the
 preset selects the Chat Completions escape hatch instead. **Failure policy
 differs by provider:** a standalone-compaction failure is non-fatal for Codex
 (that turn's compaction is skipped; the loop continues on full history) but a
@@ -799,8 +798,7 @@ general skills/MCP/completion/backend-support invariants above:
   daemon context window; an explicit task value always wins for the threshold.
 - When the threshold is reached, the Codex or native-MiMo Responses session
   compacts prior context via that provider's standalone `POST /responses/compact`
-  endpoint and continues the same tool loop; neither uses the generic OpenAI
-  Responses `context_management` axis.
+  endpoint and continues the same tool loop.
 - **Failure policy differs by provider.** A standalone compact call/parse
   failure is non-fatal for Codex; for the native `mimo` provider the same class
   of failure is a hard failure.
