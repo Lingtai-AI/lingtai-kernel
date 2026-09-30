@@ -43,7 +43,6 @@ SOL = {
     "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
 }
 TTL = {**SOL, "cache_creation_input_token_cost_above_1hr": 4e-06}
-LABEL = "STANDARD API TOKEN list-price ESTIMATE USD (LiteLLM):"
 
 
 def _catalog_bytes(models: dict) -> bytes:
@@ -184,7 +183,7 @@ def test_line_never_leaks_inf_or_nan_and_total_overflow_is_unknown():
     bill = {"model": "big", "input": 1, "cached": 1, "cache_write_tokens": 0, "billable_output_tokens": 1}
     line = api_cost.usage_line(1.0, {"output": 1, "bill": bill}, catalog)
     assert "inf" not in line.lower() and "nan" not in line.lower()
-    assert "total ?" in line and "known" not in line  # finite parts sum to inf: unknown
+    assert "cost ?" in line and "≈" not in line  # finite parts sum to inf: unknown
 
 
 @pytest.mark.parametrize("delay", [1e-320, 5e-324, 1e-300])
@@ -219,34 +218,37 @@ def test_line_complete_partial_and_unknown():
                                     "cache_write_tokens": 120, "billable_output_tokens": 50}}
     line = api_cost.usage_line(2.0, full, catalog)
     assert line == (
-        f"avg out 25.0 tok/s · {LABEL} input $0.0010 | write $0.0003"
-        " | read <$0.0001 | output $0.0005 | total $0.0018 (catalog 1970-01-01)"
+        "25.0 tok/s · ≈$0.0018 (in $0.0010 · write $0.0003 · read <$0.0001 · out $0.0005)"
     )
-    assert "?" not in line
+    assert "?" not in line and "+" not in line
     partial = {"output": 50, "bill": {"model": "sol", "input": 1000, "cached": 400, "billable_output_tokens": 50}}
     text = api_cost.usage_line(2.0, partial, catalog)
-    assert "input ? | write ?" in text
-    # Partial: total is UNKNOWN with the known subtotal shown; never a bound.
-    assert "total ? (known $0.0005)" in text
-    assert "≥" not in text and "total $" not in text
+    assert "(in ? · write ?" in text
+    # Partial: the known subtotal with a trailing "+" (unknown buckets are
+    # non-negative, so it is a lower bound).
+    assert "≈$0.0005+ (" in text
     nothing = {"output": 5, "bill": {"model": "sol", "input": 100, "cached": 0}}
     # Only a real known-zero read bucket: total stays unknown, subtotal is $0.
-    assert "total ? (known $0)" in api_cost.usage_line(1.0, nothing, catalog)
+    assert "≈$0+ (" in api_cost.usage_line(1.0, nothing, catalog)
     unpriced = {"output": 5, "bill": {"model": "sol", "input": 100, "cached": 10}}
-    assert "total ?" in api_cost.usage_line(1.0, unpriced, catalog)
-    assert api_cost.usage_line(None, {"output": 5}, catalog) == f"{LABEL} n/a (model unknown)"
+    assert "(in ?" in api_cost.usage_line(1.0, unpriced, catalog)
+    assert api_cost.usage_line(None, {"output": 5}, catalog) == "cost n/a (model unknown)"
     unlisted = {"output": 5, "bill": {"model": "nope", "input": 10, "cached": 0}}
     assert api_cost.usage_line(0, unlisted, catalog).endswith("n/a (model not listed)")
     estimated = {"output": 5, "bill": {"estimated": True}}
-    assert api_cost.usage_line(1.0, estimated, catalog) == f"{LABEL} n/a (estimated tokens)"
+    assert api_cost.usage_line(1.0, estimated, catalog) == "cost n/a (estimated tokens)"
     assert api_cost.usage_line(1.0, None, catalog) == ""
 
 
-def test_line_says_estimate_and_never_invoice_or_routing_claims():
-    line = api_cost.usage_line(1.0, {"output": 5}, api_cost.PriceCatalog(lambda *a: b""))
-    assert "list-price ESTIMATE" in line and "STANDARD" in line and "LiteLLM" in line
-    for forbidden in ("bill", "invoice", "charged", "discount", "priority", "batch"):
-        assert forbidden not in line.lower()
+def test_line_marks_estimate_and_never_invoice_or_routing_claims():
+    catalog = _ready_catalog({"sol": SOL})
+    priced = {"output": 50, "bill": {"model": "sol", "input": 1000, "cached": 400,
+                                      "cache_write_tokens": 120, "billable_output_tokens": 50}}
+    for line in (api_cost.usage_line(1.0, priced, catalog),
+                 api_cost.usage_line(1.0, {"output": 5}, api_cost.PriceCatalog(lambda *a: b""))):
+        assert "≈" in line or "cost " in line  # always marked as an estimate / cost note
+        for forbidden in ("bill", "invoice", "charged", "discount", "priority", "batch"):
+            assert forbidden not in line.lower()
 
 
 @pytest.mark.parametrize("delay", [None, 0, -1, True, float("inf"), float("nan")])
@@ -303,7 +305,7 @@ def test_catalog_failure_backs_off_then_recovers_and_stale_is_labelled():
     stale_line = api_cost.usage_line(
         1.0, {"output": 5, "bill": {"model": "sol", "input": 100, "cached": 0,
                                     "cache_write_tokens": 0, "billable_output_tokens": 5}}, catalog)
-    assert stale_line.endswith("(catalog 1970-01-01, stale)")
+    assert stale_line.endswith(") stale prices")
 
 
 def test_thread_start_failure_releases_inflight_and_paces_retry(monkeypatch):
@@ -495,7 +497,7 @@ def test_render_pure_text_group_with_bill_gets_line():
     text = TaskCardEventProjection.render_event_groups(
         [{"events": [{"kind": "text", "text": "hello", "_ts": 1.0, "api_delay_s": 2.0, "_usage": usage}]}],
         normal_rows=3, usage_line=lambda d, u: api_cost.usage_line(d, u, catalog))
-    assert f"avg out 25.0 tok/s · {LABEL} input" in text and "total $" in text
+    assert "25.0 tok/s · ≈$" in text and "(in $" in text
 
 
 # ---------------------------------------------------------------- providers

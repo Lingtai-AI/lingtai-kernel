@@ -33,7 +33,8 @@ FETCH_DEADLINE_S = 30.0
 _READ_CHUNK = 64 * 1024
 REFRESH_AFTER_S = 6 * 3600.0
 RETRY_AFTER_S = 300.0
-LINE_LABEL = "STANDARD API TOKEN list-price ESTIMATE USD (LiteLLM):"
+# Compact bucket labels for the rendered line, in display order.
+_SHORT_BUCKETS = (("input", "in"), ("write", "write"), ("read", "read"), ("output", "out"))
 
 _TIER_THRESHOLDS = ((272_000, "272k"), (200_000, "200k"))
 _BUCKET_FIELDS = {
@@ -319,7 +320,13 @@ def usage_line(
     usage: dict[str, Any] | None,
     catalog: PriceCatalog | None = None,
 ) -> str:
-    """One line: average output tok/s plus API list-price estimate, or ``""``."""
+    """One compact line: output tok/s plus a list-price estimate, or ``""``.
+
+    ``6.5 tok/s · ≈$0.0249+ (in ? · write ? · read $0.0243 · out $0.0006)``:
+    ``≈`` marks a STANDARD list-price estimate; a trailing ``+`` means some
+    buckets are unknown, so the figure is the known subtotal (every bucket is
+    non-negative, so it is a lower bound).
+    """
     if not isinstance(usage, dict) or not usage:
         return ""
     bill = usage.get("bill")
@@ -327,38 +334,35 @@ def usage_line(
     tps = _avg_tps(api_delay_s, usage, bill)
     parts = []
     if tps is not None:
-        parts.append(f"avg out {tps} tok/s")
-    label = LINE_LABEL
+        parts.append(f"{tps} tok/s")
     if bill.get("estimated") is True:
-        parts.append(f"{label} n/a (estimated tokens)")
+        parts.append("cost n/a (estimated tokens)")
     elif not isinstance(bill.get("model"), str):
-        parts.append(f"{label} n/a (model unknown)")
+        parts.append("cost n/a (model unknown)")
     else:
-        status, entry, as_of = (catalog or CATALOG).lookup(bill["model"])
+        status, entry, _as_of = (catalog or CATALOG).lookup(bill["model"])
         if entry is None:
-            note = {
-                "loading": "loading",
-                "unavailable": "n/a (catalog unavailable)",
-                "unlisted": "n/a (model not listed)",
-            }[status]
-            parts.append(f"{label} {note}")
+            parts.append({
+                "loading": "cost loading",
+                "unavailable": "cost n/a (prices unavailable)",
+                "unlisted": "cost n/a (model not listed)",
+            }[status])
         else:
             costs = estimate_costs(bill, entry)
-            cells = [
-                f"{name} {_money(costs[name]) if costs[name] is not None else '?'}"
-                for name in ("input", "write", "read", "output")
-            ]
             known = [value for value in costs.values() if value is not None]
             subtotal = _finite(sum(known)) if known else None
-            if len(known) == len(costs) and subtotal is not None:
-                cells.append(f"total {_money(subtotal)}")
-            elif subtotal is not None:
-                # Partial: the total is unknown; show only the known subtotal,
-                # never a bound (rounded-up dollars would not be a proof).
-                cells.append(f"total ? (known {_money(subtotal)})")
+            if subtotal is None:
+                head = "cost ?"
+            elif len(known) == len(costs):
+                head = f"≈{_money(subtotal)}"
             else:
-                cells.append("total ?")
-            text = f"{label} " + " | ".join(cells)
-            text += f" (catalog {as_of}, stale)" if status == "stale" else f" (catalog {as_of})"
+                head = f"≈{_money(subtotal)}+"
+            cells = " · ".join(
+                f"{short} {_money(costs[name]) if costs[name] is not None else '?'}"
+                for name, short in _SHORT_BUCKETS
+            )
+            text = f"{head} ({cells})"
+            if status == "stale":
+                text += " stale prices"
             parts.append(text)
     return " · ".join(parts)
