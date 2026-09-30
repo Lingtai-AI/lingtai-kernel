@@ -53,7 +53,7 @@ Under each API-call metrics row (`↻ <delay> ↓out ↑miss ◌ ctx | cache%`) 
 automatic Telegram card adds one plain line, for example:
 
 ```text
-250.0 tok/s · ≈$0.0084 (in $0.0050 · write $0.0020 · read $0.0004 · out $0.0010)
+250.0 tok/s · ≈$0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004
 ```
 
 Reading it:
@@ -68,20 +68,20 @@ Reading it:
   background; `stale prices` is appended once the snapshot is older than six
   hours and a refresh has not landed. Above 200k/272k total input the
   catalog's above-threshold rates are used when the model lists them.
-- **Four buckets.** `in` is uncached input (total input minus cache read
-  minus cache write); `write` is the cache-write count; `read` is the cache-read
-  count; `out` is the provider-billable output (thinking included exactly
+- **Mirrors the metrics row.** `↓` is the provider-billable output; `↑` is the
+  cache-miss input (total input minus cache read — uncached input plus any
+  cache writes, the writes at the catalog's cache-write rate when it lists one,
+  otherwise at the input rate); `|` is the cache-hit (cache-read) input,
+  the `| hit%` share of `◌`. `↓` is the provider-billable output (thinking included exactly
   once). `<$0.0001` is a nonzero amount that rounds below the display precision.
-- **Unknowns are never zero.** A bucket shows `?` when the provider wire did not
-  state its count (for example OpenAI/Codex do not report cache-write
-  tokens, so `write` and the uncached `input` stay `?`), when the catalog lacks
-  that rate, or when the counts are incoherent (for example a 1-hour cache-write
-  part larger than the whole write). If any bucket is unknown the total is NOT
-  a full sum: the headline is the known subtotal with a trailing `+`
-  (`≈$0.0249+`, a lower bound), or `cost ?` when nothing is known.
-  Other notes: `cost n/a (model unknown)` (old history, no round facts),
-  `cost n/a (model not listed)`, `cost n/a (prices unavailable)`,
-  `cost loading`, `cost n/a (estimated tokens)`.
+- **Unknowns are never zero.** A part shows `?` when a count it needs is
+  unknown (for example the catalog prices cache writes separately but the
+  wire did not report a write count; OpenAI-compatible backends such as Codex
+  report it as `input_tokens_details.cache_write_tokens`), when the catalog
+  lacks that rate, or when the counts are incoherent (for example a 1-hour
+  cache-write part larger than the whole write). If any part is unknown the
+  total is NOT a full sum: the headline is the known subtotal with a trailing
+  `+` (`≈$0.0249+`, a lower bound), or `cost ?` when nothing is known.
 - **`tok/s` vs decode speed.** The leading `<n> tok/s` is billable output tokens
   divided by the existing displayed API gap. That gap may include waiting,
   prefill, streaming and orchestration; it is not an independently measured

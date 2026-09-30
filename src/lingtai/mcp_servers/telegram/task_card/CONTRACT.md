@@ -101,10 +101,15 @@ semantics live here. The public producer contract lives in
    malformed, or output-less count is omitted without a dangling parenthesis,
    preserving old-event rendering and never exposing reasoning text.
     Telegram alone also opts into one extra plain line immediately after that
-    metrics row per API call, compact on one line:
-    `<n> tok/s · ≈$<total>[+] (in <$> · write <$> · read <$> · out <$>)[ stale prices]`
-    (or `cost n/a (<reason>)` / `cost loading` / `cost ?`). `≈` marks a STANDARD
-    public per-token list-price (LiteLLM) estimate. It is a STANDARD public per-token list-price
+    metrics row per API call, compact on one line and mirroring that row's
+    symbols: `<n> tok/s · ≈$<total>[+] · ↓<$> ↑<$> | <$>[ stale prices]` where
+    `↓` prices the billable output, `↑` the cache-miss input (uncached input
+    plus any cache writes: at the catalog's cache-write rate when it prices
+    writes separately and the wire reports the write count, else — when the
+    catalog has no cache-write price — at the input rate), and `|` the
+    cache-hit (cache-read) input (or `cost n/a (<reason>)` / `cost loading` /
+    `cost ?`). `≈` marks a STANDARD public per-token list-price (LiteLLM)
+    estimate. It is a STANDARD public per-token list-price
     estimate as of the catalog fetch — not an invoice, not the actual
     subscription/Codex-pool bill, no routed-tier/discount claim, and `total`
     excludes search/grounding/image fixed fees — from that exact round's own
@@ -115,9 +120,9 @@ semantics live here. The public producer contract lives in
     count), invalid above-threshold tier rates (never a silent fallback to the
     base rate) and non-finite/overflowing products are `?`; `n/a` notes cover
     model-unknown/unlisted/catalog-unavailable/estimated rounds. When any
-    bucket is unknown the line shows the known subtotal with a trailing `+`
-    (every bucket is non-negative, so the subtotal is a lower bound) and the
-    unknown buckets as `?`; with no known bucket it shows `cost ?`. The catalog
+    part is unknown the line shows the known subtotal with a trailing `+`
+    (every part is non-negative, so the subtotal is a lower bound) and the
+    unknown parts as `?`; with no known bucket it shows `cost ?`. The catalog
     date is not rendered; `stale prices` is appended once the snapshot is stale.
     Prices come from a process-local
     background-refreshed LiteLLM snapshot fetched from one fixed URL with an

@@ -916,6 +916,19 @@ def _read_molt_count(agent_json_path: Path) -> int:
         return 0
 
 
+def _wire_cache_write_tokens(details: object) -> int | None:
+    """Cache-write count from a usage details object, else unknown.
+
+    OpenAI-compatible backends (e.g. the Codex backend) may report
+    ``input_tokens_details.cache_write_tokens`` / ``prompt_tokens_details.
+    cache_write_tokens``. Only a real non-negative int counts; an absent field
+    stays ``None`` (unknown, never zero).
+    """
+    if details is None:
+        return None
+    return checked_count(getattr(details, "cache_write_tokens", None))
+
+
 def _validate_codex_compact_token_limit(value: int | None) -> int | None:
     """Normalize the Codex standalone-compaction context-token threshold.
 
@@ -1446,6 +1459,7 @@ def _parse_response(raw) -> LLMResponse:
             and getattr(raw.usage.completion_tokens_details, "reasoning_tokens", 0)
             or 0,
             cached_tokens=cached_tokens,
+            cache_write_tokens=_wire_cache_write_tokens(cached),
         )
 
     return LLMResponse(
@@ -2046,6 +2060,7 @@ def _parse_responses_api_response(raw) -> LLMResponse:
             and getattr(raw.usage.output_tokens_details, "reasoning_tokens", 0)
             or 0,
             cached_tokens=cached_tokens,
+            cache_write_tokens=_wire_cache_write_tokens(cached),
         )
 
     return LLMResponse(
@@ -2194,6 +2209,7 @@ def _consume_responses_stream(
                         getattr(details, "reasoning_tokens", 0) or 0 if details else 0
                     ),
                     cached_tokens=cached_tokens,
+                    cache_write_tokens=_wire_cache_write_tokens(cached),
                 )
 
     accumulated = acc.finalize(usage=usage)
@@ -2800,6 +2816,7 @@ class OpenAIChatSession(ChatSession):
                                 or 0
                             ),
                             cached_tokens=cached_tokens,
+                            cache_write_tokens=_wire_cache_write_tokens(cached),
                         )
                     continue
                 delta = chunk.choices[0].delta
@@ -6267,8 +6284,9 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                             input_tokens=input_tokens,
                             output_tokens=getattr(event.response.usage, "output_tokens", 0) or 0,
                             # Responses wire output_tokens already includes
-                            # reasoning; absent stays unknown. Cache-write is not
-                            # a Responses wire field, so it stays unknown too.
+                            # reasoning; absent stays unknown. Cache writes come
+                            # from input_tokens_details.cache_write_tokens when
+                            # the backend reports them, else stay unknown.
                             billable_output_tokens=checked_count(
                                 getattr(event.response.usage, "output_tokens", None)
                             ),
@@ -6282,6 +6300,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                             )
                             or 0,
                             cached_tokens=cached_tokens,
+                            cache_write_tokens=_wire_cache_write_tokens(cached),
                             extra=self._usage_extra(
                                 affinity_headers,
                                 effective_cache_key,
