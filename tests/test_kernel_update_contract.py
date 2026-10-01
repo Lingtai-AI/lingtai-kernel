@@ -58,8 +58,7 @@ def test_migration_is_a_manual_release_migration_for_legacy_daemon_config():
     assert "This document does not establish a corrected publication." not in body
     assert "`manifest.capabilities.daemon.max_emanations`" in body
     assert "`max_emanations` was removed before that release." in body
-    assert "`1.0.11` keeps the Agent running" in body
-    assert "configuration Nudge that says daemon is unavailable" in body
+    assert "`1.0.11` refuses this configuration at startup or refresh" in body
     assert "start or refresh the agent and verify the daemon tool is present" in body
     assert "daemon capability setup can be skipped in `1.0.10`" in body
     assert "`manager_pool_size=100`" in body

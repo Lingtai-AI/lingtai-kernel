@@ -476,18 +476,19 @@ def validate_init(data: dict) -> list[str]:
                 "(Agent Plugin package directories)"
             )
 
-    # This retired daemon option is not equivalent to manager_pool_size.  Keep
-    # the Agent available for repair, but report the lost daemon capability
-    # through the reader's config-shape Nudge instead of treating it as a
-    # fully effective configuration.
+    # This retired daemon option is not equivalent to manager_pool_size.  If
+    # forwarded to daemon.setup it disables the entire capability after boot;
+    # require an explicit owner choice before accepting this configuration.
     caps = manifest.get("capabilities") or {}
     if isinstance(caps, dict):
         daemon_cfg = caps.get("daemon")
         if isinstance(daemon_cfg, dict) and "max_emanations" in daemon_cfg:
-            warnings.append(
-                "retired daemon option: "
-                "manifest.capabilities.daemon.max_emanations disables daemon "
-                "until it is removed"
+            raise ValueError(
+                "manifest.capabilities.daemon.max_emanations was retired; "
+                "remove it, then explicitly choose whether to use the "
+                "default manager_pool_size=100 or set daemon.manager_pool_size "
+                "in init.json. These settings are not equivalent; see "
+                "migration/migration.md"
             )
 
         # Validate manifest.capabilities.skills shape if present.

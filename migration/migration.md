@@ -29,10 +29,9 @@ open update interval `(current, target]`.
 If an existing `init.json` has
 `manifest.capabilities.daemon.max_emanations`, daemon capability setup can be
 skipped in `1.0.10` because `max_emanations` was removed before that release.
-`1.0.11` keeps the Agent running, marks the exact key as ignored, and emits a
-configuration Nudge that says daemon is unavailable and how to repair it.
-Before upgrading, inspect the agent's raw `init.json` and each selectable
-preset for the key. Do not rely on a Nudge alone if nudges have been disabled.
+`1.0.11` refuses this configuration at startup or refresh with the exact path,
+so the missing daemon capability cannot remain unnoticed. Before upgrading,
+inspect the agent's raw `init.json` and each selectable preset for the key.
 The configuration owner must choose explicitly:
 
 1. Remove `max_emanations` and accept the current default

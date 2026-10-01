@@ -409,23 +409,7 @@ def read_init(
         )
 
     ignored = _ignored_paths(data, warnings)
-    retired_daemon = "manifest.capabilities.daemon.max_emanations" in ignored
     status = InitReadStatus.READ_OK_WITH_IGNORED_FIELDS if ignored else InitReadStatus.FULLY_EFFECTIVE
-    next_step = None
-    if retired_daemon:
-        next_step = (
-            "Daemon is unavailable: remove "
-            "manifest.capabilities.daemon.max_emanations from init.json or the "
-            "active preset. It is not equivalent to manager_pool_size; choose "
-            "the default manager_pool_size=100 or set daemon.manager_pool_size "
-            "explicitly. Then refresh and verify daemon is present. See "
-            "migration/migration.md. The reader does not edit configuration."
-        )
-    elif ignored or shape is InitShapeDecision.NUDGE:
-        next_step = (
-            "Have the Agent explicitly repair or replace the listed raw paths, "
-            "then rerun the same reader; the reader will not modify init.json."
-        )
     return InitReadOutcome(
         status,
         display_path,
@@ -436,7 +420,12 @@ def read_init(
         shape_decision=shape,
         warnings=list(warnings),
         behavior="CONTINUE",
-        next_step=next_step,
+        next_step=(
+            "Have the Agent explicitly repair or replace the listed raw paths, then rerun the same reader; "
+            "the reader will not modify init.json."
+            if ignored or shape is InitShapeDecision.NUDGE
+            else None
+        ),
         effective_config_source=effective_source,
     )
 
@@ -449,11 +438,6 @@ def _ignored_paths(data: dict[str, Any], warnings: list[str]) -> list[str]:
             paths.append(key)
     manifest = data.get("manifest")
     if isinstance(manifest, dict):
-        caps = manifest.get("capabilities")
-        if isinstance(caps, dict):
-            daemon_cfg = caps.get("daemon")
-            if isinstance(daemon_cfg, dict) and "max_emanations" in daemon_cfg:
-                paths.append("manifest.capabilities.daemon.max_emanations")
         for key in ("molt_notice", "molt_pressure", "molt_urgency", "molt_prompt", "stamina", "soul"):
             if key in manifest:
                 paths.append(f"manifest.{key}")
