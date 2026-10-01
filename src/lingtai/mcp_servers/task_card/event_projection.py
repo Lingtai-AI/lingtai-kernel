@@ -1365,6 +1365,17 @@ class TaskCardEventProjection:
             if line1_parts
             else None
         )
+        # Optional adapter-preformatted since-molt cost row under Session. Only
+        # Telegram supplies it; without the key every frame is byte-identical.
+        session_cost = metadata.get("session_cost")
+        cost_line = (
+            f"Cost · {session_cost.strip()}"
+            if session_line is not None
+            and isinstance(session_cost, str)
+            and session_cost.strip()
+            and len(session_cost.strip()) <= 192
+            else None
+        )
 
         # Keep all identity values behind the strict machine_identifier allowlist.
         # In particular, working_dir is never rendered from an arbitrary string.
@@ -1504,8 +1515,9 @@ class TaskCardEventProjection:
         sections: list[list[str]] = []
         priorities: list[list[int]] = []
         if session_line is not None:
-            sections.append([session_line])
-            priorities.append([0])
+            session_rows = [session_line] if cost_line is None else [session_line, cost_line]
+            sections.append(session_rows)
+            priorities.append([0] * len(session_rows))
         if identity_line is not None:
             sections.append([identity_line])
             priorities.append([1])
