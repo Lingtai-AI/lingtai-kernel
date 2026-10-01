@@ -2262,3 +2262,145 @@ def test_price_lines_stay_whole_under_the_text_budget(tmp_path, monkeypatch):
             # A price line is either whole or absent; never cut mid-number.
             assert re.search(r"\| (?:<?\$[\d.,]+|\?)(?: stale prices)?$", line) or "cost " in line
             assert len(line) <= TaskCardEventProjection.EVENT_TEXT_CAP
+
+
+# ---------------------------------------------------------------------------
+# SESSION Cost row: since-molt sum of the per-call estimates
+# ---------------------------------------------------------------------------
+
+
+def _cost_llm(index, ts, *, molt=4, model="tiny"):
+    """A priced ``llm_response`` ($0.0084 on tiny) carrying a coherent v1 snapshot."""
+    event = json.loads(_priced_llm(f"api-{molt}-{index}", ts, billing={**_BILL, "model": model}))
+    total, cached, out = 10_000, 4_000, 500
+    cum_in, cum_cached = total * index, cached * index
+    event["session_usage"] = {
+        "schema": TaskCardEventProjection.SESSION_USAGE_SCHEMA,
+        "molt_count": molt, "api_call_index": index, "api_calls": index,
+        "input_tokens": cum_in, "output_tokens": out * index, "cached_tokens": cum_cached,
+        "avg_input_tokens_per_api_call": total,
+        "session_cache_rate": round(cum_cached / cum_in, 5),
+        "cache_miss_tokens": cum_in - cum_cached, "cache_miss_budget": 1_000_000,
+        "cache_miss_remaining_tokens": 1_000_000 - (cum_in - cum_cached),
+        "context_tokens": total,
+    }
+    return json.dumps(event)
+
+
+def _cost_rows(text):
+    return [line for line in text.splitlines() if line.startswith("<b>Cost</b> · ")]
+
+
+def test_session_cost_row_sums_each_live_response_once_under_session(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY, "tiny2": _TINY2})
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    manager._poll_event_tail()  # no journal yet: later lines take the live append path
+    assert manager._task_card_event_path == path and not path.exists()
+    _write_lines(path, [
+        # One API round with two tool calls is still one response.
+        _priced_tool_call("api-4-1", "c1", 100.0),
+        _priced_tool_call("api-4-1", "c2", 100.5),
+        _cost_llm(1, 101.0),
+        _priced_tool_call("api-4-2", "c3", 102.5),
+        _cost_llm(2, 103.0, model="tiny2"),
+    ])
+    manager._poll_event_tail()
+
+    text = _last_edit(acct)
+    # $0.0084 (tiny) + $0.0168 (tiny2): each response at its own recorded model.
+    assert _cost_rows(text) == ["<b>Cost</b> · total ~$0.0252 · in $0.0150 · write $0.0060 · read $0.0012 · out $0.0030 USD est."]
+    lines = text.splitlines()
+    session_at, cost_at = lines.index("📊 <b>SESSION</b>"), lines.index(_cost_rows(text)[0])
+    assert session_at < cost_at and all(
+        line.startswith("<b>") and "$" not in line for line in lines[session_at + 1:cost_at]
+    )
+    # The per-call price line is unchanged and the Cost row is not one.
+    _assert_price_line_after_metrics(text, _TINY2_LINE)
+
+    # The visible row window and re-broadcasts neither shrink nor recount it.
+    service.normal_rows = 2
+    manager._broadcast_task_card_event_window()
+    manager._poll_event_tail()
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0252 · in $0.0150 · write $0.0060 · read $0.0012 · out $0.0030 USD est."]
+    assert len(_price_lines(_last_edit(acct))) == 2
+
+
+def test_session_cost_row_rehydrates_complete_or_honestly_partial(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY, "tiny2": _TINY2})
+    acct = FakeAccount()
+    _pre_resident(acct, 555, None)
+    _write_lines(_events_path(tmp_path), [
+        _priced_tool_call("api-4-1", "c1", 100.0),
+        _cost_llm(1, 101.0),
+        _priced_tool_call("api-4-2", "c2", 102.0),
+        _cost_llm(2, 103.0, model="tiny2"),
+        _priced_tool_call("api-4-3", "c3", 104.0),
+        _cost_llm(3, 105.0),
+    ])
+
+    # Restart/refresh: the existing bounded tail still holds calls 1-3.
+    restarted, _ = _manager(tmp_path, acct)
+    restarted._init_event_tail()
+    restarted._broadcast_task_card_event_window()
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0336 · in $0.0200 · write $0.0080 · read $0.0016 · out $0.0040 USD est."]
+
+    # A tail window that no longer reaches call 1 is a lower bound, not $0
+    # and not a complete total.
+    bounded, _ = _manager(tmp_path, acct)
+    bounded._TASK_CARD_EVENT_WINDOW = 2
+    bounded._init_event_tail()
+    bounded._broadcast_task_card_event_window()
+    assert _cost_rows(_last_edit(acct)) == [
+        "<b>Cost</b> · total ≥$0.0252 · in $0.0150+ · write $0.0060+ · read $0.0012+ · out $0.0030+ USD est. · partial"
+    ]
+
+
+def test_session_cost_row_resets_at_molt_and_is_absent_for_legacy_history(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    _write_lines(path, [
+        _priced_tool_call("api-0", "c0", 100.0),
+        _priced_tool_call("api-1", "c1", 102.0),
+        _priced_llm("api-1", 103.0, billing=_BILL),  # no v1 snapshot: no session total
+    ])
+    manager._poll_event_tail()
+    assert _cost_rows(_last_edit(acct)) == []
+
+    _write_lines(path, [
+        _priced_tool_call("api-4-1", "c2", 104.0), _cost_llm(1, 105.0),
+        _priced_tool_call("api-4-2", "c3", 106.0), _cost_llm(2, 107.0),
+    ])
+    manager._poll_event_tail()
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0168 · in $0.0100 · write $0.0040 · read $0.0008 · out $0.0020 USD est."]
+
+    _write_lines(path, [
+        json.dumps({"type": "psyche_molt", "molt_count": 5}),
+        _priced_tool_call("api-5-1", "c4", 108.0), _cost_llm(1, 109.0, molt=5),
+    ])
+    manager._poll_event_tail()
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0084 · in $0.0050 · write $0.0020 · read $0.0004 · out $0.0010 USD est."]
+
+
+def test_session_cost_row_is_escaped_inside_the_telegram_session_section():
+    from lingtai.mcp_servers.telegram.manager import _telegram_task_card_html
+
+    divider = TaskCardEventProjection.METADATA_DIVIDER
+    html = _telegram_task_card_html("\n".join([
+        divider, "Session · sol", "Cost · session <b>&", divider, "Identity · path · /w",
+    ]))
+    assert html.splitlines() == [
+        "📊 <b>SESSION</b>",
+        "<b>Agent</b> · sol",
+        "<b>Cost</b> · session &lt;b&gt;&amp;",
+        "",
+        "🪪 <b>IDENTITY</b>",
+        "<b>Path</b> · <code>/w</code>",
+    ]
+    # Outside the Session section the same text is ordinary escaped content.
+    assert _telegram_task_card_html("Cost · <x>") == "Cost · &lt;x&gt;"

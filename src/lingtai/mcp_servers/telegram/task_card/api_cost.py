@@ -5,7 +5,9 @@ small process-local snapshot of LiteLLM's public price data. Rendering never per
 refresh and the line degrades honestly until it lands. Prices are STANDARD
 public TOKEN list-price ESTIMATES as of the catalog fetch: not an invoice, not
 subscription/pool billing, and not batch/priority/routed-tier or discounted
-prices; search, grounding and image fixed fees are not included.
+prices; search, grounding and image fixed fees are not included. The SESSION
+``Cost`` row sums the same per-round estimates over the since-molt responses
+this process has observed, and says ``partial`` whenever any is missing.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from lingtai.kernel.llm.base import checked_count as _count
+from lingtai.mcp_servers.task_card.event_projection import TaskCardEventProjection
 
 CATALOG_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/main/"
@@ -392,3 +395,153 @@ def usage_line(
                 text += " stale prices"
             parts.append(text)
     return " · ".join(parts)
+
+
+def fold_session_cost(
+    cost: dict[str, Any] | None,
+    session: dict[str, Any] | None,
+    event: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Fold one journal-ordered event into since-molt per-response bill facts.
+
+    ``session`` is the shared SESSION reducer state AFTER ``event``. A main
+    ``llm_response`` is recorded once, keyed by its v1 ``api_call_index``, and
+    only when its own coherent v1 projection is exactly the snapshot that
+    reducer accepted, so replays, multi-tool groups and rejected/older
+    snapshots never double count or contribute a bad bill. A response the
+    reducer had to invalidate on is ``unaccounted``. A new generation (molt)
+    starts empty and a molt of unknown generation drops the facts. ``latest``
+    follows the reducer's index, so an unseen response leaves a gap. Either
+    keeps the total partial. Mutates and returns the caller-owned ``cost``.
+    """
+    session = session or {}
+    generation = session.get("molt_count")
+    if session.get("awaiting_new_generation") or type(generation) is not int:
+        return None
+    if not isinstance(cost, dict) or cost.get("generation") != generation:
+        cost = {"generation": generation, "latest": 0, "bills": {}, "unaccounted": False}
+    index = session.get("api_call_index")
+    if type(index) is int:
+        cost["latest"] = max(cost["latest"], index)
+    if event.get("type") != "llm_response":
+        return cost
+    accepted = TaskCardEventProjection.project_llm_response_session_usage(event)
+    if accepted and session.get("source") == "v1" and session.get("snapshot") == accepted:
+        index = accepted["api_call_index"]
+        if index not in cost["bills"]:
+            usage = TaskCardEventProjection.project_llm_response_usage(event)
+            bill = usage[1].get("bill") if usage is not None else None
+            cost["bills"][index] = bill if isinstance(bill, dict) else None
+    elif session.get("invalidated"):
+        # The reducer could not accept a current/newer response, so its cost
+        # is unknown and this generation's total can no longer be complete.
+        cost["unaccounted"] = True
+    return cost
+
+
+def _split_miss(
+    bill: dict[str, Any], entry: dict[str, float | None], miss: float | None,
+) -> tuple[float | None, float | None]:
+    """Split an exact ``estimate_parts`` ``miss`` into disjoint (input, write) USD.
+
+    Ordinary input (total - read - write) is charged at the tier's input rate
+    and the rest of ``miss`` is the cache write, so ``input + write == miss``
+    and nothing is charged twice; a catalog without a separate write price thus
+    books a known write count at the input rate under ``write``. A floor-only or
+    unknown ``miss``, no recorded write count, or incoherent counts/TTL leave
+    the split unknown — never ``write = 0``.
+    """
+    total = _count(bill.get("input"))
+    read = _count(bill.get("cached"))
+    write = _count(bill.get("cache_write_tokens"))
+    raw_one_hour = bill.get("cache_write_1h_tokens")
+    one_hour = _count(raw_one_hour)
+    if (
+        miss is None
+        or total is None
+        or read is None
+        or write is None
+        or read + write > total
+        or (raw_one_hour is not None and (one_hour is None or one_hour > write))
+    ):
+        return None, None
+    rate = entry.get(_BUCKET_FIELDS["input"] + _tier_suffix(entry, total))
+    ordinary = _charge(total - read - write, rate)
+    if ordinary is None or ordinary > miss:
+        return None, None
+    return ordinary, miss - ordinary
+
+
+def session_cost_text(
+    cost: dict[str, Any] | None,
+    catalog: PriceCatalog | None = None,
+) -> str:
+    """One since-molt line, e.g.
+    ``total ~$0.0018 · in $0.0010 · write $0.0003 · read <$0.0001 · out $0.0005 USD est.``
+
+    Each recorded response is priced with ITS OWN recorded model: the total
+    sums ``estimate_parts`` once per round (incl. its #1775 ``miss`` floor),
+    and the disjoint ``in``/``write`` buckets come from ``_split_miss`` while
+    ``read``/``out`` are its ``hit``/``output``. A known total may sit beside an
+    unknown in/write split. A bucket is ``?`` when nothing is known, else its
+    known sum with ``+`` when any round's part is unknown or a floor; the total
+    shows ``≥`` likewise. An unseen, unaccounted or unpriceable response
+    (missing usage/billing/model/price) appends ``partial`` and makes every
+    figure a lower bound. Never blocks on the catalog; ``""`` without state.
+    """
+    if not isinstance(cost, dict):
+        return ""
+    bills = cost.get("bills") or {}
+    partial = bool(cost.get("unaccounted")) or len(bills) != cost.get("latest")
+    sums = dict.fromkeys(("total", "in", "write", "read", "out"), 0.0)
+    known: set[str] = set()
+    short: set[str] = set()  # some round's part is unknown or only a floor
+    stale = False
+    entries: dict[str, tuple[str, dict[str, float | None] | None]] = {}
+    for bill in bills.values():
+        model = bill.get("model") if isinstance(bill, dict) else None
+        if isinstance(model, str) and model not in entries:
+            status, entry, _as_of = (catalog or CATALOG).lookup(model)
+            entries[model] = (status, entry)
+        status, entry = entries.get(model, ("", None)) if isinstance(model, str) else ("", None)
+        if entry is None:
+            partial = True  # no usage/billing/model, estimated tokens, or no price
+            continue
+        stale = stale or status == "stale"
+        costs, floors = estimate_parts(bill, entry)
+        ordinary, write = _split_miss(bill, entry, None if floors else costs["miss"])
+        parts = [value for value in costs.values() if value is not None]
+        if floors or len(parts) != len(costs):
+            short.add("total")
+        values = {
+            "total": sum(parts) if parts else None,
+            "in": ordinary,
+            "write": write,
+            "read": costs["hit"],
+            "out": costs["output"],
+        }
+        for name, value in values.items():
+            if value is None:
+                short.add(name)
+            else:
+                known.add(name)
+                sums[name] += value
+
+    def figure(name: str, mark: str = "") -> str:
+        value = _finite(sums[name])
+        lower = partial or name in short
+        if value is None or (lower and name not in known):
+            return "?"
+        if name == "total":
+            return ("≥" if lower else "~") + _money(value)
+        return _money(value) + ("+" if lower else "")
+
+    text = (
+        f"total {figure('total')} · in {figure('in')} · write {figure('write')}"
+        f" · read {figure('read')} · out {figure('out')} USD est."
+    )
+    if partial or "total" in short:
+        text += " · partial"
+    if stale:
+        text += " · stale prices"
+    return text

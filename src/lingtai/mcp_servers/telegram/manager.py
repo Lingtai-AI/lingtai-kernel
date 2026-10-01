@@ -388,6 +388,10 @@ def _telegram_task_card_html(text: str) -> str:
                 rendered.extend((f"⚙️ {heading}" if section == "async" else heading, *rows))
                 previous_metadata_section = section
                 continue
+            if previous_metadata_section == "session" and line.startswith("Cost · "):
+                cost = html_escape(line[len("Cost · "):], quote=False)
+                rendered.append(f"<b>Cost</b> · {cost}")
+                continue
             if previous_metadata_section == "async":
                 async_row = next(
                     (
@@ -1009,6 +1013,9 @@ class TelegramManager:
         # authoritative for SESSION telemetry.  Legacy notification carriers are
         # fallback only; generation/order fences remain hidden in this state.
         self._task_card_session_usage_state: dict | None = None
+        # Since-molt per-response bill facts folded beside that reducer; priced
+        # only at render into the SESSION ``Cost`` row (see ``api_cost``).
+        self._task_card_session_cost_state: dict | None = None
         self._task_card_event_metadata: dict | None = None
         self._task_card_event_lock = threading.Lock()
         # Blanket-delivery dedupe: the last automatic frame fingerprint seen per
@@ -2910,6 +2917,9 @@ class TelegramManager:
         with self._task_card_event_lock:
             metadata = self._task_card_event_metadata
             snapshot = dict(metadata) if isinstance(metadata, dict) else {}
+            session_cost = _api_cost.session_cost_text(self._task_card_session_cost_state)
+        if session_cost:
+            snapshot["session_cost"] = session_cost
         lifecycle = self._task_card_agent_lifecycle_status()
         if lifecycle is not None:
             snapshot["agent_lifecycle"] = lifecycle
@@ -3208,6 +3218,7 @@ class TelegramManager:
                 self._task_card_event_identity = None
                 self._task_card_event_groups = []
                 self._task_card_session_usage_state = None
+                self._task_card_session_cost_state = None
                 self._task_card_event_metadata = None
             return
 
@@ -3225,9 +3236,10 @@ class TelegramManager:
                 self._task_card_event_identity = None
                 self._task_card_event_groups = []
                 self._task_card_session_usage_state = None
+                self._task_card_session_cost_state = None
                 self._task_card_event_metadata = None
             return
-        rows, offset, session_state, usages = result
+        rows, offset, session_state, usages, cost_state = result
         with self._task_card_event_lock:
             self._task_card_event_path = path
             self._task_card_event_offset = offset
@@ -3240,12 +3252,13 @@ class TelegramManager:
                 self._task_card_event_groups, usages,
             )
             self._task_card_session_usage_state = session_state
+            self._task_card_session_cost_state = cost_state
             metadata = TaskCardEventProjection.session_usage_metadata(session_state)
             self._task_card_event_metadata = metadata or None
 
     def _reverse_tail_latest_rows(
         self, path: Path, size: int,
-    ) -> tuple[list[dict], int, dict | None, dict[str, dict]] | None:
+    ) -> tuple[list[dict], int, dict | None, dict[str, dict], dict | None] | None:
         """Reverse-scan bounded chunks from EOF to collect the latest-N matches.
 
         Reads growing chunks backward from the end of the file until either
@@ -3255,10 +3268,12 @@ class TelegramManager:
         The tail chunk may start mid-line; the leading partial fragment is
         discarded (its predecessor chunk will complete it on the next round).
 
-        Returns ``(rows, offset, session_state, usages)`` where ``offset`` is the
+        Returns ``(rows, offset, session_state, usages, cost_state)`` where
+        ``offset`` is the
         forward byte offset the poller should resume from and ``session_state`` is
         the shared journal-ordered SESSION reducer state (or ``None`` when no
-        relevant event exists)
+        relevant event exists); ``cost_state`` holds only the bill facts of the
+        same bounded window, so an older unseen response stays partial
         — ``size`` unless the file's final line
         has no trailing newline yet (writer mid-append), in which case it is
         the start of that incomplete tail so the poller re-reads it whole once
@@ -3365,13 +3380,15 @@ class TelegramManager:
             groups, summary_times, summary_usages,
         )
         session_state = None
+        cost_state = None
         for event_order, event in enumerate(session_events):
             session_state = TaskCardEventProjection.reduce_session_usage_event(
                 session_state, event, event_order=event_order,
             )
+            cost_state = _api_cost.fold_session_cost(cost_state, session_state, event)
         return self._flatten_task_card_groups(
             groups, include_group_id=True,
-        ), tail_offset, session_state, per_call_usages
+        ), tail_offset, session_state, per_call_usages, cost_state
 
     @staticmethod
     def _decode_event_line(raw: bytes) -> dict | None:
@@ -3504,14 +3521,17 @@ class TelegramManager:
         summary_usages = self._read_apriori_summary_usages(set(summary_times))
         with self._task_card_event_lock:
             session_state = self._task_card_session_usage_state
+            cost_state = self._task_card_session_cost_state
             for event in session_events:
                 session_state = TaskCardEventProjection.reduce_session_usage_event(
                     session_state, event,
                 )
+                cost_state = _api_cost.fold_session_cost(cost_state, session_state, event)
             metadata = TaskCardEventProjection.session_usage_metadata(session_state)
             rendered_metadata = metadata or None
             metadata_changed = rendered_metadata != self._task_card_event_metadata
             self._task_card_session_usage_state = session_state
+            self._task_card_session_cost_state = cost_state
             self._task_card_event_metadata = rendered_metadata
             self._task_card_event_offset = new_offset
             self._task_card_event_size = size

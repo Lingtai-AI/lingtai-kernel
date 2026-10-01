@@ -5,8 +5,9 @@ description: |
   public `task_card` tool is intrinsic and documented at
   src/lingtai/tools/task_card/manual/SKILL.md; Telegram only projects the
   intrinsic taskcard/status + taskcard/taskcard.md artifact read-only. It also
-  explains the Telegram-only per-call API token list-price estimate line.
-last_changed_at: 2026-09-29T00:00:00Z
+  explains the Telegram-only per-call API token list-price estimate line and
+  its since-molt SESSION Cost total.
+last_changed_at: 2026-09-30T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/telegram/SKILL.md
 - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -95,3 +96,25 @@ Reading it:
   last snapshot marked `stale prices`). Old events written before this feature carry no
   round facts and show `cost n/a (model unknown)`; no price is invented for them.
   Feishu and other channels render exactly as before.
+
+## SESSION Cost row (Telegram only)
+
+Under SESSION the card adds one row with the since-molt total of the same
+per-call estimates:
+
+```text
+Cost · total ~$0.1234 · in $0.0200 · write $0.0100 · read $0.0034 · out $0.0900 USD est.
+```
+
+Each main-Agent API response since the last molt is counted once (however many
+tool calls it made) and priced at the model that made it. A molt starts a new
+total. Daemon and other-Agent calls are not included. The total is only shown as
+complete (`~`) when this Telegram process has seen every response of the
+current session with priced facts. After a restart or refresh it rebuilds only
+from the existing bounded event tail, so an older session shows
+`total ≥$x · [per-bucket amounts or ?] USD est. · partial`; the same lower-bound form covers
+responses with missing usage, billing facts, model or price. With nothing
+priceable it shows `total ? · in ? · write ? · read ? · out ? USD est. · partial`. It is never shown as `$0` for
+unknown history, and it is still a list-price estimate, not a bill.
+
+The SESSION line splits ordinary input, cache writes, cache reads and output without double charging. Unknown write counts keep input/write allocation unknown even when the combined total is known.

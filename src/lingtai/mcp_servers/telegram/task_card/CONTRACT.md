@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 12
+contract_version: 13
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -188,6 +188,26 @@ semantics live here. The public producer contract lives in
     snapshots render no SESSION; lower generation/index snapshots cannot replace
     a newer accepted state. Per-call dividers and all non-token metadata retain
     their existing sources and rendering.
+15. Telegram alone adds one SESSION row directly after Session's existing rows:
+    `Cost · total ~$<total> · in $<input> · write $<write> · read $<read> · out $<output> USD est.` (HTML `<b>Cost</b> · …`). It
+    sums, over the since-molt main `llm_response` rounds whose v1 snapshot the
+    shared reducer accepted, the same `estimate_parts` list-price estimate as
+    rule 9, each round priced at its own recorded billing model (never the
+    current model over aggregate tokens). Each `(molt_count, api_call_index)`
+    counts once across multi-tool groups, replays, re-broadcasts, `/taskcard N`
+    and resident rotation; `psyche_molt` starts a new total. It is complete only
+    when every index `1..N` of the current generation was observed with fully
+    priced facts. An unseen response (restart/refresh rehydrate beyond the
+    bounded window) or rejected one, missing usage/billing/model/price, or an
+    unknown or lower-bound total part renders
+    `total ≥$<known> · [per-bucket amounts or ?] USD est. · partial`, and nothing known renders
+    `total ? · in ? · write ? · read ? · out ? USD est. · partial` — never `$0` or a fake complete total.
+    `stale prices` is appended when any priced round used a stale snapshot. No
+    v1 generation (legacy history, unknown-generation molt) renders no row.
+    Rendering never waits on the catalog; daemon/other-Agent costs never enter.
+    Per-call lines and non-Telegram frames are unchanged.
+    Ordinary input and writes are disjoint allocations of cache-miss cost;
+    absent write counts leave both allocations `?` even if the total is known.
 
 ## Port
 
@@ -273,7 +293,11 @@ this component.
     its bounded event tail through the shared pure projector. Restart rehydrate
     applies the existing event window to SESSION events even when the recent tail
     has no projectable activity rows; it must not retain or scan the full history
-    merely to recover an older visible row.
+    merely to recover an older visible row. The behavior 15 Cost row is the only
+    Telegram-side sum: per-round bill facts fold beside the same reducer over the
+    same live-append and bounded-rehydrate inputs, are priced in memory at
+    render, and any coverage it cannot prove is shown as partial instead of being
+    repaired by a wider scan or a new store.
 
 ## Tests
 
@@ -292,7 +316,15 @@ this component.
   v1 SESSION updates (including the 93.8k-to-150.3k stale regression),
   carrier-less invalidation, molt clearing, live/rehydrate parity, plus correlated
   a-priori summary time/input/output rendering from existing events and a bounded
-  ledger tail with fail-closed legacy/malformed cases.
+  ledger tail with fail-closed legacy/malformed cases. It also covers the
+  SESSION Cost row: once-per-response live sums with mixed models, row-window
+  and re-broadcast stability, complete versus bounded-partial rehydrate, molt
+  reset, legacy absence, and HTML escaping.
+- `tests/test_telegram_task_card_api_cost.py` covers per-call estimation and
+  catalog behavior plus the Cost row fold/format: replay/carrier dedupe, gaps
+  and rejected snapshots, missing model/price/usage/billing as partial, n/a
+  without blocking, and the opt-in shared `session_cost` metadata row within the
+  metadata budget with byte-identical default output.
 - `tests/test_telegram_task_card_rows.py` proves strict common `async_work`
   consumption, missing/malformed/stale omission, mixed-lane rendering, and
   pending sync-versus-async Shell wording without raw-argument leakage.
@@ -311,3 +343,5 @@ this component.
   `normal_rows`/`locale`/`display_expression`/`max_refreshes` siblings in both
   the persisted file and the next manager projection tick.
 - `tests/test_mcp_skill_manuals.py` covers packaged docs for this subpackage.
+
+The SESSION line splits ordinary input, cache writes, cache reads and output without double charging. Unknown write counts keep input/write allocation unknown even when the combined total is known.

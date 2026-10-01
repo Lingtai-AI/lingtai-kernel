@@ -630,6 +630,147 @@ def test_claude_code_usage_preserves_explicit_write_and_output_else_unknown():
     assert claude_code_map_usage(None).cache_write_tokens is None
 
 
+# ---------------------------------------------------------------- session total
+
+SOL2 = {name: rate * 2 for name, rate in SOL.items()}
+_SOL_BILLING = {"cache_write_tokens": 120, "billable_output_tokens": 50}  # $0.0018 on SOL
+
+
+def _v1_llm(index, *, molt=1, model="sol", billing=None, total=1000, cached=400, out=50, **extra):
+    """A coherent kernel ``llm_response`` whose v1 snapshot has ``index`` equal calls."""
+    cum_in, cum_cached = total * index, cached * index
+    event = {
+        "type": "llm_response", "api_call_id": f"api-{molt}-{index}", "input_tokens": total,
+        "output_tokens": out, "thinking_tokens": 0, "cached_tokens": cached, "estimated": False,
+        "usage_billing": {"model": model, **_SOL_BILLING} if billing is None else billing,
+        "session_usage": {
+            "schema": TaskCardEventProjection.SESSION_USAGE_SCHEMA,
+            "molt_count": molt, "api_call_index": index, "api_calls": index,
+            "input_tokens": cum_in, "output_tokens": out * index, "cached_tokens": cum_cached,
+            "avg_input_tokens_per_api_call": total,
+            "session_cache_rate": round(cum_cached / cum_in, 5) if cum_in else 0.0,
+            "cache_miss_tokens": cum_in - cum_cached, "cache_miss_budget": 1_000_000,
+            "cache_miss_remaining_tokens": 1_000_000 - (cum_in - cum_cached),
+            "context_tokens": total,
+        },
+    }
+    event.update(extra)
+    return event
+
+
+def _fold(events, cost=None, session=None):
+    for event in events:
+        session = TaskCardEventProjection.reduce_session_usage_event(session, event)
+        cost = api_cost.fold_session_cost(cost, session, event)
+    return cost, session
+
+
+def test_session_cost_sums_each_round_at_its_own_recorded_model():
+    catalog = _ready_catalog({"sol": SOL, "sol2": SOL2})
+    cost, _ = _fold([_v1_llm(1, model="sol"), _v1_llm(2, model="sol2")])
+    # 0.0018 (sol) + 0.0036 (sol2); neither model applied to the 2k aggregate
+    # (0.0036 / 0.0072) — each response keeps its own billing model.
+    assert api_cost.session_cost_text(cost, catalog) == "total ~$0.0054 · in $0.0029 · write $0.0009 · read $0.0001 · out $0.0015 USD est."
+    single, _ = _fold([_v1_llm(1)])
+    assert api_cost.session_cost_text(single, catalog) == "total ~$0.0018 · in $0.0010 · write $0.0003 · read <$0.0001 · out $0.0005 USD est."
+
+
+def test_session_cost_counts_each_response_once_across_replays_and_carriers():
+    catalog = _ready_catalog({"sol": SOL})
+    first, second = _v1_llm(1), _v1_llm(2)
+    carrier = {"type": "notification_block_injected", "call_id": "t1", "_meta": {"agent_meta": {
+        "agent_state": {"token_usage": {"current_call": {"output": 50}, "session": {"api_calls": 9}}}}}}
+    # Two tool calls of one API round add no response; replays and an older
+    # snapshot after a newer one are not recounted.
+    cost, _ = _fold([first, carrier, carrier, second, second, first, carrier])
+    assert sorted(cost["bills"]) == [1, 2] and cost["latest"] == 2
+    assert api_cost.session_cost_text(cost, catalog) == "total ~$0.0036 · in $0.0019 · write $0.0006 · read <$0.0001 · out $0.0010 USD est."
+
+
+def test_session_cost_molt_resets_and_unknown_generation_drops_the_total():
+    catalog = _ready_catalog({"sol": SOL})
+    cost, session = _fold([_v1_llm(1), _v1_llm(2)])
+    cost, session = _fold([{"type": "psyche_molt", "molt_count": 2}], cost, session)
+    assert api_cost.session_cost_text(cost, catalog) == "total ~$0 · in $0 · write $0 · read $0 · out $0 USD est."
+    cost, session = _fold([_v1_llm(1, molt=2)], cost, session)
+    assert api_cost.session_cost_text(cost, catalog) == "total ~$0.0018 · in $0.0010 · write $0.0003 · read <$0.0001 · out $0.0005 USD est."
+    # A stale molt for an older generation is ignored like the SESSION reducer.
+    cost, session = _fold([{"type": "psyche_molt", "molt_count": 1}], cost, session)
+    assert api_cost.session_cost_text(cost, catalog) == "total ~$0.0018 · in $0.0010 · write $0.0003 · read <$0.0001 · out $0.0005 USD est."
+    cost, session = _fold([{"type": "psyche_molt"}], cost, session)
+    assert cost is None and api_cost.session_cost_text(cost, catalog) == ""
+
+
+def test_session_cost_unseen_or_rejected_history_is_partial_never_complete():
+    catalog = _ready_catalog({"sol": SOL})
+    # Bounded rehydrate window that starts at call 3: calls 1-2 are unseen.
+    cost, _ = _fold([_v1_llm(3), _v1_llm(4)])
+    assert api_cost.session_cost_text(cost, catalog) == "total ≥$0.0036 · in $0.0019+ · write $0.0006+ · read <$0.0001+ · out $0.0010+ USD est. · partial"
+    # An incoherent v1 snapshot advances the index without a recorded response.
+    broken = _v1_llm(2)
+    broken["session_usage"]["cache_miss_tokens"] += 1
+    cost, _ = _fold([_v1_llm(1), broken, _v1_llm(3)])
+    assert sorted(cost["bills"]) == [1, 3] and cost["latest"] == 3
+    assert api_cost.session_cost_text(cost, catalog).startswith("total ≥$0.0036")
+    # Legacy history without any v1 snapshot renders no session total at all.
+    legacy = _v1_llm(1)
+    legacy.pop("session_usage")
+    assert _fold([legacy])[0] is None
+
+
+_PARTIAL_ONE = "total ≥$0.0018 · in $0.0010+ · write $0.0003+ · read <$0.0001+ · out $0.0005+ USD est. · partial"
+
+
+@pytest.mark.parametrize("change, expected", [
+    ({"usage_billing": None}, _PARTIAL_ONE),  # pre-feature round: no billing facts
+    ({"billing": {"billable_output_tokens": 50}}, _PARTIAL_ONE),  # model unknown
+    ({"model": "unlisted"}, _PARTIAL_ONE),
+    ({"estimated": True}, _PARTIAL_ONE),
+    # Writes priced but not recorded: only a floor (600 at input rate) is known.
+    ({"billing": {"model": "sol", "billable_output_tokens": 50}},
+     "total ≥$0.0035 · in $0.0010+ · write $0.0003+ · read <$0.0001 · out $0.0010 USD est. · partial"),
+])
+def test_session_cost_missing_model_price_or_usage_is_partial_never_zero(change, expected):
+    catalog = _ready_catalog({"sol": SOL})
+    cost, _ = _fold([_v1_llm(1), _v1_llm(2, **change)])
+    assert api_cost.session_cost_text(cost, catalog) == expected
+    # A coherent v1 round without usable usage counts is unknown, not $0.
+    zero, _ = _fold([_v1_llm(1, total=0, cached=0)])
+    assert api_cost.session_cost_text(zero, catalog) == "total ? · in ? · write ? · read ? · out ? USD est. · partial"
+
+
+def test_session_cost_with_nothing_priced_is_n_a_and_never_blocks():
+    cost, _ = _fold([_v1_llm(1), _v1_llm(2, model="unlisted")])
+    started = time.monotonic()
+    unavailable = api_cost.PriceCatalog(lambda *a: b"")  # loading, then unavailable
+    assert api_cost.session_cost_text(cost, unavailable) == "total ? · in ? · write ? · read ? · out ? USD est. · partial"
+    assert time.monotonic() - started < 1.0
+    assert api_cost.session_cost_text(None, unavailable) == ""
+
+
+def test_session_cost_row_is_opt_in_shared_metadata_and_default_is_unchanged():
+    base = {"model": "sol", "api_calls": 2, "working_dir": "/w/.lingtai/a"}
+    default = TaskCardEventProjection.format_metadata(base)
+    row = "total ~$0.0054 · in $0.0029 · write $0.0009 · read $0.0001 · out $0.0015 USD est."
+    lines = TaskCardEventProjection.format_metadata({**base, "session_cost": row})
+    assert lines == [default[0], f"Cost · {row}", *default[1:]]
+    for inert in ("", "  ", "x" * 193, 5, None):
+        assert TaskCardEventProjection.format_metadata({**base, "session_cost": inert}) == default
+    # No Session section means no orphan Cost row.
+    identity = {"working_dir": "/w/.lingtai/a"}
+    assert TaskCardEventProjection.format_metadata({**identity, "session_cost": row}) == (
+        TaskCardEventProjection.format_metadata(identity))
+    # The row is a Session row inside the 500-char metadata budget: a long
+    # Identity is shortened first and the Cost row survives.
+    crowded = {"model": "m" * 128, "thinking": "t" * 48, "service_tier": "s" * 48,
+               "endpoint": "e" * 96, "device_short_name": "d" * 64,
+               "working_dir": "/" + "p" * 219, "session_cost": row}
+    lines = TaskCardEventProjection.format_metadata(crowded)
+    assert lines[1] == f"Cost · {row}"
+    assert len("\n".join(lines)) <= TaskCardEventProjection.METADATA_MAX_CHARS
+    assert lines[-1].startswith("Identity · ") and lines[-1].endswith("…")
+
+
 @pytest.mark.parametrize("null_rate", [None, "junk", -1])
 def test_null_or_invalid_declared_tier_stays_unknown(null_rate):
     entry = api_cost.parse_catalog(_catalog_bytes({"m": {
@@ -655,3 +796,34 @@ def test_unknown_declared_one_hour_price_never_becomes_base_write_price():
     entry["cache_creation_input_token_cost_above_1hr"] = 4e-6
     entry["cache_creation_input_token_cost_above_200k_tokens"] = 3e-6
     assert api_cost.estimate_costs({**bill, "input": 300_000}, entry)["miss"] is None
+
+
+def test_session_split_known_write_unknown_write_and_ttl():
+    plain = {"input_cost_per_token": 2e-6, "cache_read_input_token_cost": 1e-7, "output_cost_per_token": 1e-5}
+    bill = {"input": 1000, "cached": 400, "cache_write_tokens": 120, "billable_output_tokens": 50}
+    amounts, _ = api_cost.estimate_parts(bill, plain)
+    ordinary, write = api_cost._split_miss(bill, plain, amounts["miss"])
+    assert ordinary == pytest.approx(480 * 2e-6)
+    assert write == pytest.approx(120 * 2e-6)
+    assert ordinary + write == pytest.approx(amounts["miss"])
+    unknown = {**bill, "cache_write_tokens": None}
+    assert api_cost._split_miss(unknown, plain, amounts["miss"]) == (None, None)
+    cost, _ = _fold([_v1_llm(1, billing={"model": "plain", "billable_output_tokens": 50})])
+    text = api_cost.session_cost_text(cost, _ready_catalog({"plain": plain}))
+    assert text == "total ~$0.0017 · in ? · write ? · read <$0.0001 · out $0.0005 USD est."
+    ttl = {**bill, "cache_write_1h_tokens": 40}
+    parts, floors = api_cost.estimate_parts(ttl, TTL)
+    ordinary, write = api_cost._split_miss(ttl, TTL, parts["miss"])
+    assert not floors
+    assert write == pytest.approx(80 * 2.5e-6 + 40 * 4e-6)
+    assert ordinary + write == pytest.approx(parts["miss"])
+
+
+def test_session_cost_rejected_same_index_cannot_poison_known_bill():
+    event = _v1_llm(1)
+    cost, session = _fold([event])
+    bad = _v1_llm(1, model="sol2")
+    bad["session_usage"]["cache_miss_tokens"] += 1
+    cost, _ = _fold([bad], cost, session)
+    assert cost["bills"][1]["model"] == "sol"
+    assert "partial" in api_cost.session_cost_text(cost, _ready_catalog({"sol": SOL}))

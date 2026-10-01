@@ -58,9 +58,13 @@ onto its one tracked resident Task Card target per account+chat.
   high-water supersession, Telegram API classification, real transport, resident
   persistence, and programmable file projection callbacks. Representative
   owning ranges are delivery/deferred coordination
-  (`src/lingtai/mcp_servers/telegram/manager.py:2342-2753`), event and usage
-  projection (`src/lingtai/mcp_servers/telegram/manager.py:2822-3506`), and
-  programmable/resident lifecycle (`src/lingtai/mcp_servers/telegram/manager.py:3508-4355`).
+  (`src/lingtai/mcp_servers/telegram/manager.py:2349-2760`), event and usage
+  projection (`src/lingtai/mcp_servers/telegram/manager.py:2829-3523`), and
+  programmable/resident lifecycle (`src/lingtai/mcp_servers/telegram/manager.py:3526-4375`).
+  Beside the SESSION reducer state it keeps `_task_card_session_cost_state`,
+  folded by `api_cost.fold_session_cost` in both live append and bounded
+  rehydrate, and `_task_card_event_metadata_snapshot()` prices it at render
+  into the `session_cost` metadata value.
   `_taskcard_display_expression()` reads the durable declarative display
   expression from `TelegramService` at each automatic projection tick
   (`_broadcast_task_card_event_window`, `_ensure_task_card_resident`) and
@@ -99,10 +103,14 @@ onto its one tracked resident Task Card target per account+chat.
   supported HTML by escaping the complete frame before substituting only exact
   static presentation lines; within the shared source budget it shortens only
   escaped dynamic content for fixed tag overhead, while Feishu consumes the
-  shared frame unchanged. In Telegram HTML, `_telegram_task_card_html`
-  (`src/lingtai/mcp_servers/telegram/manager.py:291-413`) gives Session the
-  cumulative compact `out` value, puts Async Work in a separate icon-free
-  section, and leaves the per-call metrics line as plain text. The separate
+  shared frame unchanged. `format_metadata` renders an adapter-supplied,
+  preformatted `session_cost` metadata string as one `Cost · …` row inside the
+  Session section (budgeted like Session; absent key means byte-identical
+  output). In Telegram HTML, `_telegram_task_card_html`
+  (`src/lingtai/mcp_servers/telegram/manager.py:292-418`) gives Session the
+  cumulative compact `out` value and a bold `Cost` row, puts Async Work in a
+  separate icon-free section, and leaves the per-call metrics line as plain
+  text. The separate
   `_telegram_resident_task_card_html` transport adapter
   (`src/lingtai/mcp_servers/telegram/manager.py:196-288`) isolates only the
   programmable suffix after Telegram's injected header and escape-first renders
@@ -130,7 +138,11 @@ onto its one tracked resident Task Card target per account+chat.
   finite-checked and unknown on overflow. Providers that state the counts on
   their wire: Anthropic (write, 1h TTL, output), Claude Code (write, output),
   and OpenAI chat/Responses and native Codex (output only) — the four LLM
-  provider families.
+  provider families. `fold_session_cost` records each reducer-accepted v1
+  `llm_response`'s bill facts once per since-molt `api_call_index` (molt
+  resets); `session_cost_text` prices them at render with each round's own
+  model through `estimate_parts` and marks gaps or unknown/lower-bound totals `partial`, and unknown
+  allocations `?` (contract behavior 15).
 - `SKILL.md` — packaged Telegram-facing manual/procedure material for this
   component.
 - Retained legacy files in this package (`controller.py`, `_family.py`,
