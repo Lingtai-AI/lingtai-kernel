@@ -602,6 +602,19 @@ Clause IDs are stable; each rule composes the linked normative source.
    continuation, state, or notice handlers execute. The envelope still needs
    its independent typed-origin check at the final inbox-to-provider boundary.
 
+14. `agent-runtime.puffo-post-send-completion.v1` — A semantically empty
+   provider continuation after a tool batch ends the turn normally only when
+   that batch contains exactly one successful Puffo `send_message` or
+   `send_message_with_attachments` receipt in `sent` state, with every
+   requested cover recorded, human-visible routing, and a Puffo turn-bound
+   coverage attestation reporting zero uncovered active human messages.
+   A held send, missing cover or attestation, positive uncovered count,
+   concurrent tool call, explicitly hidden send, or any tool error retains the ordinary
+   `EmptyLLMResponseError` recovery path. The exception is scoped to the
+   immediately preceding batch; an empty response at turn start or after a
+   later unrelated batch remains a recovery event. Guarded by
+   [BA007](BEHAVIORS.md#behavior-ba007).
+
 ## Contract tests
 
 Composed behavior is pinned by the linked capability suites plus:

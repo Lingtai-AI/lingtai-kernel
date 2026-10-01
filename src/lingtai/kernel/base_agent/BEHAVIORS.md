@@ -226,3 +226,26 @@ Pass when the focused suite proves fresh fail-closed admission and the one-hop l
 
 ### Pass / Fail
 Pass when the suite is green and the inspection matches the Contract. Fail if the poisoned process retries, if a refresh-success request is sent while a redo is enqueued, if a `provider_started` record is replayed, if a `continuation` redo carries the original text, if a `tc_wake` hang is left to notification resync, or if replay text survives a terminal status; record the evidence trail in the task report.
+
+## Behavior BA007 — empty continuation after a settled visible Puffo reply ends the turn
+
+- **id**: BA007
+- **title**: empty continuation after a settled visible Puffo reply ends the turn
+- **guards**: `agent-runtime.puffo-post-send-completion.v1` in [CONTRACT.md](CONTRACT.md#contract-rules)
+- **pinned by**: `tests/test_tool_result_restore_after_continuation_failure.py::test_empty_completion_after_sent_and_covered_puffo_reply_settles_turn` and `::test_empty_completion_still_retries_without_visible_settled_reply`
+- **runner**: any LingTai coding agent with `shell` access to this repository
+- **prerequisites**: the project Python with pytest; no provider or Puffo credentials are required
+
+### Steps
+
+1. Run `python -m pytest -q tests/test_tool_result_restore_after_continuation_failure.py -k empty_completion`.
+2. Inspect the positive case for a `sent` receipt with every cover recorded and a zero-uncovered active-turn attestation. Inspect negative cases for missing or positive attestation, held, uncovered, hidden threaded, and `agent_only` sends, plus a concurrent admission call.
+
+### Expected evidence
+
+- [ ] The positive case returns normally after one continuation with no `empty_llm_response` event.
+- [ ] Each negative case raises `EmptyLLMResponseError`, preserving AED recovery.
+
+### Pass / Fail
+
+Pass when both assertions hold and no test sends a real message. Fail if a hidden, partially covered, or unattested reply settles the turn, or if a fully attested visible reply causes an AED retry.
