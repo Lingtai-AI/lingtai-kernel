@@ -78,6 +78,14 @@ repair them. Retired prompt fields and ignored runtime knobs are never new-write
 shapes. The six former init prompt fields (`base_prompt`, `base_prompt_file`,
 `covenant`, `covenant_file`, `comment`, `comment_file`) are compatibility-known
 but inert: this reader does not type-check, path-resolve, or consume them.
+The retired `manifest.capabilities.daemon.max_emanations` option fails validation
+with its exact path and migration instructions. Passing it to daemon setup would
+silently leave the daemon capability absent; `manager_pool_size` has different
+semantics and requires an explicit owner choice (see `migration/migration.md`).
+For this exact boot failure, the CLI prints a short, static, secret-free
+`error:` line after its structured JSON error. Older ACP drivers select the
+last error line and truncate it; this line carries the full repair route even
+before their structured-error display is updated.
 Psyche owns the active six-field surface through its independent strict
 `settings/psyche.json` v1 reader at Agent reconstruction. Live refresh resolves
 one immutable Psyche prompt plan exactly once immediately after a successful init
