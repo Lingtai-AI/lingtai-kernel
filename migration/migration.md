@@ -28,7 +28,10 @@ open update interval `(current, target]`.
 
 If an existing `init.json` has
 `manifest.capabilities.daemon.max_emanations`, daemon capability setup can be
-skipped after upgrade because `max_emanations` was removed before `1.0.11`.
+skipped in `1.0.10` because `max_emanations` was removed before that release.
+`1.0.11` refuses this configuration at startup or refresh with the exact path,
+so the missing daemon capability cannot remain unnoticed. Before upgrading,
+inspect the agent's raw `init.json` and each selectable preset for the key.
 The configuration owner must choose explicitly:
 
 1. Remove `max_emanations` and accept the current default
@@ -37,7 +40,9 @@ The configuration owner must choose explicitly:
    `manager_pool_size`.
 
 These controls are not a 1:1 mapping; no automatic conversion exists. If this
-legacy key is absent, leave existing configuration unchanged.
+legacy key is absent, leave existing configuration unchanged. After editing,
+start or refresh the agent and verify the daemon tool is present and its `list`
+output reports the selected `manager_pool_size` (100 when omitted).
 
 Before mutation, confirm that the installer selected the intended
 `LINGTAI_RUNTIME_PYTHON`. If more than one LingTai runtime is present, rerun with
