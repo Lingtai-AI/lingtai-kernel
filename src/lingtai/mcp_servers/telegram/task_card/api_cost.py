@@ -477,7 +477,7 @@ def session_cost_text(
     catalog: PriceCatalog | None = None,
 ) -> str:
     """One since-molt line, e.g.
-    ``total ~$0.0018 · in $0.0010 · write $0.0003 · read <$0.0001 · out $0.0005 USD est.``
+    ``total ~$0.0018 · in $0.0010 · write $0.0003 · read <$0.0001 · out $0.0005``
 
     Each recorded response is priced with ITS OWN recorded model: the total
     sums ``estimate_parts`` once per round (incl. its #1775 ``miss`` floor),
@@ -538,7 +538,7 @@ def session_cost_text(
 
     text = (
         f"total {figure('total')} · in {figure('in')} · write {figure('write')}"
-        f" · read {figure('read')} · out {figure('out')} USD est."
+        f" · read {figure('read')} · out {figure('out')}"
     )
     if partial or "total" in short:
         text += " · partial"
