@@ -348,6 +348,33 @@ def test_config_shape_nudge_consumes_outcome_and_clears_after_explicit_repair(tm
     assert _entries(tmp_path) == []
 
 
+def test_retired_daemon_option_nudge_names_repair_and_clears(tmp_path):
+    agent = _Agent(tmp_path)
+    init = tmp_path / "init.json"
+    config = {
+        "manifest": {
+            "llm": {"provider": "openai", "model": "gpt-4o"},
+            "capabilities": {"daemon": {"max_emanations": 30}},
+        },
+        "pad": "",
+    }
+    init.write_text(json.dumps(config), encoding="utf-8")
+    check_init_config(agent, read_init(tmp_path))
+
+    entry = _entries(tmp_path)[0]
+    assert entry["kind"] == "init_config_shape"
+    assert entry["shape_decision"] == "PASS"
+    assert entry["finding_decision"] == "NUDGE"
+    assert "manifest.capabilities.daemon.max_emanations" in entry["ignored_paths"]
+    assert "Daemon is unavailable" in entry["next_step"]
+    assert "manager_pool_size=100" in entry["next_step"]
+
+    config["manifest"]["capabilities"]["daemon"] = {"manager_pool_size": 30}
+    init.write_text(json.dumps(config), encoding="utf-8")
+    check_init_config(agent, read_init(tmp_path))
+    assert _entries(tmp_path) == []
+
+
 def _seed_finding(tmp_path, agent):
     """Seed an init_config_shape finding via the real consumer/store path."""
     from lingtai.kernel.nudge.init_config import check as check_init_config

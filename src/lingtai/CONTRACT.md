@@ -78,9 +78,10 @@ repair them. Retired prompt fields and ignored runtime knobs are never new-write
 shapes. The six former init prompt fields (`base_prompt`, `base_prompt_file`,
 `covenant`, `covenant_file`, `comment`, `comment_file`) are compatibility-known
 but inert: this reader does not type-check, path-resolve, or consume them.
-The retired `manifest.capabilities.daemon.max_emanations` option fails validation
-with its exact path and migration instructions. Passing it to daemon setup would
-silently leave the daemon capability absent; `manager_pool_size` has different
+The retired `manifest.capabilities.daemon.max_emanations` option leaves the
+Agent running but makes daemon unavailable. The reader classifies its exact
+path as ignored and emits the config-shape Nudge with migration instructions;
+it never claims that daemon remains active. `manager_pool_size` has different
 semantics and requires an explicit owner choice (see `migration/migration.md`).
 Psyche owns the active six-field surface through its independent strict
 `settings/psyche.json` v1 reader at Agent reconstruction. Live refresh resolves

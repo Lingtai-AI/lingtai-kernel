@@ -26,6 +26,24 @@ def test_kernel_canonical_init_jsonc_is_parseable_and_has_current_shape():
     assert data["pad"] == ""
 
 
+def test_retired_daemon_limit_keeps_agent_readable_and_nudges_repair(tmp_path):
+    data = {**_REQUIRED, "manifest": {
+        **_REQUIRED["manifest"],
+        "capabilities": {"daemon": {"max_emanations": 30}},
+    }}
+    raw = json.dumps(data)
+    _write_init(tmp_path, raw)
+
+    outcome = read_init(tmp_path)
+
+    assert outcome.status is InitReadStatus.READ_OK_WITH_IGNORED_FIELDS
+    assert outcome.finding_decision is InitShapeDecision.NUDGE
+    assert "manifest.capabilities.daemon.max_emanations" in outcome.ignored_paths
+    assert "Daemon is unavailable" in outcome.next_step
+    assert "manager_pool_size=100" in outcome.next_step
+    assert (tmp_path / "init.json").read_text() == raw
+
+
 def test_real_reader_reports_ignored_legacy_paths_without_mutating_input(tmp_path):
     legacy_prompt_inputs = {
         "base_prompt": {"legacy": "inert"},

@@ -31,13 +31,11 @@ def test_valid_init_passes():
     validate_init(_valid_init())  # should not raise
 
 
-def test_retired_daemon_limit_requires_explicit_migration():
+def test_retired_daemon_limit_warns_for_explicit_migration():
     data = _valid_init()
     data["manifest"]["capabilities"] = {"daemon": {"max_emanations": 1}}
-    with pytest.raises(
-        ValueError, match=r"manifest\.capabilities\.daemon\.max_emanations.*manager_pool_size"
-    ):
-        validate_init(data)
+    warnings = validate_init(data)
+    assert any("manifest.capabilities.daemon.max_emanations" in w for w in warnings)
 
 
 def test_migrated_daemon_limit_is_accepted():
