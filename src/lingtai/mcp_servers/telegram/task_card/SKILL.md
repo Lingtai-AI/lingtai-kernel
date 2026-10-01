@@ -103,7 +103,7 @@ Under SESSION the card adds one row with the since-molt total of the same
 per-call estimates:
 
 ```text
-Cost · total ~$0.1234 · in $0.0200 · write $0.0100 · read $0.0034 · out $0.0900 USD est.
+Cost · total ~$0.1234 · in $0.0200 · write $0.0100 · read $0.0034 · out $0.0900
 ```
 
 Each main-Agent API response since the last molt is counted once (however many
@@ -112,9 +112,9 @@ total. Daemon and other-Agent calls are not included. The total is only shown as
 complete (`~`) when this Telegram process has seen every response of the
 current session with priced facts. After a restart or refresh it rebuilds only
 from the existing bounded event tail, so an older session shows
-`total ≥$x · [per-bucket amounts or ?] USD est. · partial`; the same lower-bound form covers
+`total ≥$x · [per-bucket amounts or ?] · partial`; the same lower-bound form covers
 responses with missing usage, billing facts, model or price. With nothing
-priceable it shows `total ? · in ? · write ? · read ? · out ? USD est. · partial`. It is never shown as `$0` for
+priceable it shows `total ? · in ? · write ? · read ? · out ? · partial`. It is never shown as `$0` for
 unknown history, and it is still a list-price estimate, not a bill.
 
 The SESSION line splits ordinary input, cache writes, cache reads and output without double charging. Unknown write counts keep input/write allocation unknown even when the combined total is known.

@@ -2311,7 +2311,7 @@ def test_session_cost_row_sums_each_live_response_once_under_session(tmp_path, m
 
     text = _last_edit(acct)
     # $0.0084 (tiny) + $0.0168 (tiny2): each response at its own recorded model.
-    assert _cost_rows(text) == ["<b>Cost</b> · total ~$0.0252 · in $0.0150 · write $0.0060 · read $0.0012 · out $0.0030 USD est."]
+    assert _cost_rows(text) == ["<b>Cost</b> · total ~$0.0252 · in $0.0150 · write $0.0060 · read $0.0012 · out $0.0030"]
     lines = text.splitlines()
     session_at, cost_at = lines.index("📊 <b>SESSION</b>"), lines.index(_cost_rows(text)[0])
     assert session_at < cost_at and all(
@@ -2324,7 +2324,7 @@ def test_session_cost_row_sums_each_live_response_once_under_session(tmp_path, m
     service.normal_rows = 2
     manager._broadcast_task_card_event_window()
     manager._poll_event_tail()
-    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0252 · in $0.0150 · write $0.0060 · read $0.0012 · out $0.0030 USD est."]
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0252 · in $0.0150 · write $0.0060 · read $0.0012 · out $0.0030"]
     assert len(_price_lines(_last_edit(acct))) == 2
 
 
@@ -2345,7 +2345,7 @@ def test_session_cost_row_rehydrates_complete_or_honestly_partial(tmp_path, monk
     restarted, _ = _manager(tmp_path, acct)
     restarted._init_event_tail()
     restarted._broadcast_task_card_event_window()
-    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0336 · in $0.0200 · write $0.0080 · read $0.0016 · out $0.0040 USD est."]
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0336 · in $0.0200 · write $0.0080 · read $0.0016 · out $0.0040"]
 
     # A tail window that no longer reaches call 1 is a lower bound, not $0
     # and not a complete total.
@@ -2354,7 +2354,7 @@ def test_session_cost_row_rehydrates_complete_or_honestly_partial(tmp_path, monk
     bounded._init_event_tail()
     bounded._broadcast_task_card_event_window()
     assert _cost_rows(_last_edit(acct)) == [
-        "<b>Cost</b> · total ≥$0.0252 · in $0.0150+ · write $0.0060+ · read $0.0012+ · out $0.0030+ USD est. · partial"
+        "<b>Cost</b> · total ≥$0.0252 · in $0.0150+ · write $0.0060+ · read $0.0012+ · out $0.0030+ · partial"
     ]
 
 
@@ -2377,14 +2377,14 @@ def test_session_cost_row_resets_at_molt_and_is_absent_for_legacy_history(tmp_pa
         _priced_tool_call("api-4-2", "c3", 106.0), _cost_llm(2, 107.0),
     ])
     manager._poll_event_tail()
-    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0168 · in $0.0100 · write $0.0040 · read $0.0008 · out $0.0020 USD est."]
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0168 · in $0.0100 · write $0.0040 · read $0.0008 · out $0.0020"]
 
     _write_lines(path, [
         json.dumps({"type": "psyche_molt", "molt_count": 5}),
         _priced_tool_call("api-5-1", "c4", 108.0), _cost_llm(1, 109.0, molt=5),
     ])
     manager._poll_event_tail()
-    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0084 · in $0.0050 · write $0.0020 · read $0.0004 · out $0.0010 USD est."]
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0084 · in $0.0050 · write $0.0020 · read $0.0004 · out $0.0010"]
 
 
 def test_session_cost_row_is_escaped_inside_the_telegram_session_section():

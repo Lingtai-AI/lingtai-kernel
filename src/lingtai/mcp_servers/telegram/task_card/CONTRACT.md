@@ -189,7 +189,7 @@ semantics live here. The public producer contract lives in
     a newer accepted state. Per-call dividers and all non-token metadata retain
     their existing sources and rendering.
 15. Telegram alone adds one SESSION row directly after Session's existing rows:
-    `Cost · total ~$<total> · in $<input> · write $<write> · read $<read> · out $<output> USD est.` (HTML `<b>Cost</b> · …`). It
+    `Cost · total ~$<total> · in $<input> · write $<write> · read $<read> · out $<output>` (HTML `<b>Cost</b> · …`). It
     sums, over the since-molt main `llm_response` rounds whose v1 snapshot the
     shared reducer accepted, the same `estimate_parts` list-price estimate as
     rule 9, each round priced at its own recorded billing model (never the
@@ -200,8 +200,8 @@ semantics live here. The public producer contract lives in
     priced facts. An unseen response (restart/refresh rehydrate beyond the
     bounded window) or rejected one, missing usage/billing/model/price, or an
     unknown or lower-bound total part renders
-    `total ≥$<known> · [per-bucket amounts or ?] USD est. · partial`, and nothing known renders
-    `total ? · in ? · write ? · read ? · out ? USD est. · partial` — never `$0` or a fake complete total.
+    `total ≥$<known> · [per-bucket amounts or ?] · partial`, and nothing known renders
+    `total ? · in ? · write ? · read ? · out ? · partial` — never `$0` or a fake complete total.
     `stale prices` is appended when any priced round used a stale snapshot. No
     v1 generation (legacy history, unknown-generation molt) renders no row.
     Rendering never waits on the catalog; daemon/other-Agent costs never enter.
