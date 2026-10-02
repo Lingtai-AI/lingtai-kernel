@@ -1603,4 +1603,10 @@ def test_tool_executor_runtime_counter_stamped_at_boundary():
 
     holder = attach_active_runtime(agent, [block], prior_holder=None)
     assert holder is block
-    assert block.metadata["agent_meta"]["agent_state"]["active_turn_tool_calls"] == 500
+    # The default tail is slim: the counter is on demand via system(action="meta").
+    from lingtai.kernel.meta_block import build_full_runtime_meta
+
+    assert "active_turn_tool_calls" not in block.metadata["agent_meta"]["agent_state"]
+    assert build_full_runtime_meta(
+        SimpleNamespace(_executor=executor, _config=SimpleNamespace(time_awareness=False))
+    )["agent_state"]["active_turn_tool_calls"] == 500

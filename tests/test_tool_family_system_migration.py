@@ -42,7 +42,7 @@ from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 # ``context`` and the two name actions arrived from ``psyche``.
 _LEGACY_ACTIONS = (
     "refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear",
-    "nirvana", "presets", "name_set", "name_nickname", "manual",
+    "nirvana", "presets", "name_set", "name_nickname", "meta", "manual",
 )
 _PUBLIC_ACTIONS = (*_LEGACY_ACTIONS[:-1], "settings", "manual")
 
@@ -156,6 +156,7 @@ def test_children_consume_no_model_tool_slots() -> None:
         ("presets", set()),
         ("name_set", {"content"}),
         ("name_nickname", {"content"}),
+        ("meta", set()),
         ("manual", set()),
     ],
 )
@@ -442,7 +443,7 @@ def test_self_actions_need_no_karma(tmp_path: Path) -> None:
 
     gated = _KARMA_ACTIONS | _NIRVANA_ACTIONS
     self_actions = {
-        "sleep", "refresh", "presets", "name_set", "name_nickname", "settings", "manual",
+        "sleep", "refresh", "presets", "name_set", "name_nickname", "meta", "settings", "manual",
     }
     assert self_actions.isdisjoint(gated)
     assert gated == {"lull", "interrupt", "suspend", "cpr", "clear", "nirvana"}

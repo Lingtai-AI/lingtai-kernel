@@ -30,7 +30,7 @@ Before a call, root `summarize=true` requests a generated, noncanonical, lossy s
 
 ## Record a summary
 
-Summarize only a completed result you have read. Pick targets from the newest `_meta.agent_meta.agent_state.current_tool_result_chars.top_results` IDs. In each item, `tool_call_id` is the producer call ID, not the visible `_tool_call_id` event reference; preserve any `raw_locator` or spill path. Preserve the conclusion, evidence or error, paths/URLs/IDs, validation status, risks, and next step—enough to decide whether the raw result must be reopened. Batch several already-digested results when useful:
+Summarize only a completed result you have read. Pick targets from the `current_tool_result_chars.top_results` IDs returned by `system(action="meta", input={})` (the per-result tail no longer lists them). In each item, `tool_call_id` is the producer call ID, not the visible `_tool_call_id` event reference; preserve any `raw_locator` or spill path. Preserve the conclusion, evidence or error, paths/URLs/IDs, validation status, risks, and next step—enough to decide whether the raw result must be reopened. Batch several already-digested results when useful:
 
 ```json
 {

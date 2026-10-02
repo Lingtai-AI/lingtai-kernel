@@ -10,6 +10,7 @@ related_files:
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/agent.py
   - src/lingtai/tools/system/schema.py
+  - src/lingtai/tools/system/meta.py
   - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/kernel/base_agent/lifecycle.py
@@ -322,6 +323,7 @@ siblings.
 | `presets` | — | — | `{status: "ok", active, available: [...]}` | `{status: "error", message}` on unreadable init.json |
 | `name_set` | `content` | — | `{status: "ok", name}` | `{error}` when empty or when a true name is already set (immutable) |
 | `name_nickname` | `content` | — | `{status: "ok", nickname}` (`null` when cleared) | — (empty `content` clears the nickname) |
+| `meta` | — | — | `{status: "ok", agent_state: {current_time, token_usage{current_call, session}, context warnings, current_tool_result_chars, adapter_comment, active_turn_tool_calls, ...}}` — the complete current runtime diagnostics from the kernel's one `build_full_runtime_meta` builder; read-only (never refreshes, molts, changes configuration, or consumes the one-shot reconstruction event) | — |
 | `settings` | — | — | `{"settings":[...]}` in the stable System catch-all order; every row has exactly `key`, `current`, `default`, `configurable`, `comment` | fixed no-row failure for invalid input, unavailable current, malformed provider row, unserializable value, or oversized complete response |
 
 `manual` takes the canonical strict-empty `input` and returns the flat
@@ -464,7 +466,7 @@ drive it are `context`'s.
 | PRIVATE ENGINE: runtime threshold mutation is rejected | `src/lingtai/tools/system/summarize.py:_summarize` | `tests/test_system_summarize.py::test_summarize_runtime_threshold_change_rejected` |
 | Notification/dismiss actions are dropped from the `system` schema | `src/lingtai/tools/system/schema.py` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss`, `tests/test_notification_tool.py::test_system_rejects_dismiss_action` |
 | Karma signal files clear a target channel path end-to-end | `src/lingtai/tools/system/karma.py` | `tests/test_system_dismiss.py` |
-| The model-facing root is the closed LTP v2 envelope with eleven operational actions followed by reserved `settings`, `manual` | `src/lingtai/tools/system/__init__.py:get_schema` | `tests/test_tool_family_system_migration.py::test_root_envelope_is_exactly_the_four_ltp_v2_fields`, `::test_public_tool_name_and_action_inventory_adds_only_reserved_settings` |
+| The model-facing root is the closed LTP v2 envelope with twelve operational actions (including read-only `meta`) followed by reserved `settings`, `manual` | `src/lingtai/tools/system/__init__.py:get_schema` | `tests/test_tool_family_system_migration.py::test_root_envelope_is_exactly_the_four_ltp_v2_fields`, `::test_public_tool_name_and_action_inventory_adds_only_reserved_settings` |
 | Each action's arguments live only in its own strict `input` | `src/lingtai/tools/system/schema.py:INPUT_SCHEMAS` | `tests/test_tool_family_system_migration.py::test_action_input_fields_match_what_the_handler_reads` |
 | A cross-action smuggle is rejected before any lifecycle I/O | `src/lingtai/tools/tool_family/__init__.py:ToolFamily.handle` | `tests/test_tool_family_system_migration.py::test_cross_action_input_is_rejected_before_any_lifecycle_io` |
 | Envelope metadata never reaches a child handler | `src/lingtai/tools/system/__init__.py:_build_children` | `tests/test_tool_family_system_migration.py::test_envelope_metadata_never_reaches_a_child_handler` |

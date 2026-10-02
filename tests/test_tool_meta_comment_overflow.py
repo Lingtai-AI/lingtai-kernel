@@ -61,9 +61,7 @@ def _tool_meta(block):
 def test_builder_single_overflow_topic_with_required_subkeys():
     comment = build_tool_meta_overflow_comment("tc-abc")
     assert set(comment.keys()) == {
-        "summary",
         "full_original",
-        "how_to_retrieve",
         "after_consuming",
     }
     # Single topic only: no retrieval/summarize sibling headings.
@@ -81,12 +79,11 @@ def test_builder_references_events_jsonl_and_call_id_not_saved_path():
     assert "tmp/tool-results" not in blob
 
 
-def test_builder_mentions_retrieval_and_summarize_within_overflow():
+def test_builder_mentions_locator_and_context_summarize_within_overflow():
     comment = build_tool_meta_overflow_comment("tc-1")
-    assert "grep" in comment["how_to_retrieve"]
-    assert "lingtai-agent log query" in comment["how_to_retrieve"]
-    assert "daemon" in comment["how_to_retrieve"] or "subagent" in comment["how_to_retrieve"]
-    assert "summarize" in comment["after_consuming"]
+    assert "tool_call_id=tc-1" in comment["full_original"]
+    assert 'context(action="summarize")' in comment["after_consuming"]
+    assert "system(action" not in comment["after_consuming"]
 
 
 # -- spilled (capped) result ------------------------------------------------

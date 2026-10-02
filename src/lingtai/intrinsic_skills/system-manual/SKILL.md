@@ -66,7 +66,10 @@ read one route below for unfamiliar or consequential work.
 Use `action` with only that action's `input` fields and a short `reasoning`;
 `summarize` is optional. Fetch the installed manual with
 `system(action="manual", input={})` and keep it unsummarized. `settings` is
-read-only and its `comment` points to the owner; `presets` is allowed-only, so
+read-only and its `comment` points to the owner; `meta` (`input={}`) is the
+read-only on-demand full runtime snapshot — the per-result tail carries only
+time, context size and active warnings — and neither refreshes, molts, nor
+consumes one-shot events; `presets` is allowed-only, so
 pass an exact returned path. Availability is not authority. Normal waiting is
 IDLE; positive `sleep.delay` is only a last-resort alarm without a reliable
 completion notification, and pending notifications require intentional `force`.

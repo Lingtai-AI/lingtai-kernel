@@ -878,6 +878,157 @@ def test_pure_text_turn_renders_api_usage_from_llm_response(tmp_path):
 
 
 
+def _call_line(call_id, api_id, ts):
+    return json.dumps({
+        "type": "tool_call", "ts": ts, "tool_name": "bash",
+        "tool_call_id": call_id, "api_call_id": api_id,
+        "tool_args": {"action": "run"},
+    })
+
+
+def _result_line(call_id, ts, status="ok"):
+    return json.dumps({
+        "type": "tool_result", "ts": ts, "tool_call_id": call_id,
+        "status": status, "elapsed_ms": 158,
+    })
+
+
+def _usage_line(api_id, total, cached, out, ts, **extra):
+    return json.dumps({
+        "type": "llm_response", "ts": ts, "api_call_id": api_id,
+        "input_tokens": total, "cached_tokens": cached,
+        "output_tokens": out, "thinking_tokens": 0, **extra,
+    })
+
+
+def _row_usages(manager):
+    return {
+        row.get("_tool_call_id"): row.get("_usage")
+        for group in manager._task_card_event_groups_snapshot()
+        for row in group["events"]
+    }
+
+
+def test_response_first_split_poll_still_feeds_later_rows(tmp_path):
+    acct = FakeAccount()
+    manager, _service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    path.touch()
+    manager._init_event_tail()
+
+    _write_lines(path, [_usage_line("api_1", 198_526, 197_376, 258, 10.0)])
+    manager._poll_event_tail()
+    assert _row_usages(manager) == {}
+
+    _write_lines(path, [_call_line("c1", "api_1", 9.0)])
+    manager._poll_event_tail()
+    usage = _row_usages(manager)["c1"]
+    assert usage["output"] == 258
+    assert usage["cache_miss"] == 1_150
+    assert usage["context"] == 198_526
+
+    _write_lines(path, [_result_line("c1", 11.0)])
+    manager._poll_event_tail()
+    usage = _row_usages(manager)["c1"]
+    assert usage["output"] == 258
+    row = next(
+        r for g in manager._task_card_event_groups_snapshot() for r in g["events"]
+    )
+    assert row["status"] == "success"
+
+
+def test_same_poll_and_rows_first_usage_after(tmp_path):
+    acct = FakeAccount()
+    manager, _service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    path.touch()
+    manager._init_event_tail()
+
+    _write_lines(path, [
+        _call_line("c1", "api_1", 1.0),
+        _usage_line("api_1", 1_000, 900, 10, 2.0),
+    ])
+    manager._poll_event_tail()
+    assert _row_usages(manager)["c1"]["output"] == 10
+
+    _write_lines(path, [_call_line("c2", "api_2", 3.0)])
+    manager._poll_event_tail()
+    assert _row_usages(manager)["c2"] is None
+    _write_lines(path, [_usage_line("api_2", 2_000, 0, 20, 4.0)])
+    manager._poll_event_tail()
+    usages = _row_usages(manager)
+    assert usages["c2"]["output"] == 20
+    assert "cache_rate" not in usages["c2"]
+    assert usages["c1"]["output"] == 10
+
+
+def test_multiple_apis_do_not_cross_contaminate_across_polls(tmp_path):
+    acct = FakeAccount()
+    manager, _service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    path.touch()
+    manager._init_event_tail()
+
+    _write_lines(path, [
+        _usage_line("api_1", 1_000, 0, 11, 1.0),
+        _usage_line("api_2", 2_000, 0, 22, 2.0),
+    ])
+    manager._poll_event_tail()
+    _write_lines(path, [_call_line("c2", "api_2", 3.0)])
+    manager._poll_event_tail()
+    _write_lines(path, [_call_line("c1", "api_1", 4.0), _call_line("c3", "api_3", 5.0)])
+    manager._poll_event_tail()
+    usages = _row_usages(manager)
+    assert usages["c1"]["output"] == 11
+    assert usages["c2"]["output"] == 22
+    assert usages["c3"] is None
+
+
+def test_split_poll_preserves_billing_facts(tmp_path):
+    acct = FakeAccount()
+    manager, _service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    path.touch()
+    manager._init_event_tail()
+
+    line = json.loads(_usage_line("api_1", 1_000, 0, 10, 1.0))
+    expected = TaskCardEventProjection.project_llm_response_usage(line)[1]
+    _write_lines(path, [json.dumps(line)])
+    manager._poll_event_tail()
+    _write_lines(path, [_call_line("c1", "api_1", 2.0)])
+    manager._poll_event_tail()
+    assert _row_usages(manager)["c1"] == expected
+
+
+def test_call_usage_cache_is_bounded_and_resets_on_truncation(tmp_path, monkeypatch):
+    acct = FakeAccount()
+    manager, _service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    monkeypatch.setattr(manager, "_TASK_CARD_EVENT_WINDOW", 2)
+    path = _events_path(tmp_path)
+    path.touch()
+    manager._init_event_tail()
+
+    _write_lines(path, [
+        _usage_line(f"api_{i}", 1_000, 0, i + 1, float(i)) for i in range(20)
+    ])
+    manager._poll_event_tail()
+    assert len(manager._task_card_call_usages) == 8
+    assert "api_0" not in manager._task_card_call_usages
+    assert "api_19" in manager._task_card_call_usages
+
+    path.write_text("", encoding="utf-8")
+    manager._poll_event_tail()
+    assert manager._task_card_call_usages == {}
+    _write_lines(path, [_call_line("c1", "api_19", 1.0)])
+    manager._poll_event_tail()
+    assert _row_usages(manager)["c1"] is None
+
+
 def test_divider_context_fallbacks():
     cases = (
         (

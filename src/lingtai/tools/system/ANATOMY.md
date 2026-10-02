@@ -14,6 +14,7 @@ related_files:
   - src/lingtai/tools/system/karma.py
   - src/lingtai/tools/system/preset.py
   - src/lingtai/tools/system/schema.py
+  - src/lingtai/tools/system/meta.py
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/system/name.py
   - src/lingtai/kernel/base_agent/lifecycle.py
@@ -44,6 +45,7 @@ related_files:
   - tests/test_cli.py
   - tests/test_tool_family_system_migration.py
   - tests/test_meta_block.py
+  - tests/test_runtime_meta_slim.py
   - tests/test_init_reader.py
   - tests/test_system_sleep_alarm.py
   - tests/test_system_declared_plugin.py
@@ -107,8 +109,8 @@ the POSIX transaction in `change_name.py`, the incomplete-target launch gate in
   - `get_description` (re-exported from `schema.py`) — tool registration prose.
   - `DECLARATION`, `_bind()`, and `_SystemHandlerHost` — System's static declaration and its normal mounted-handler route. `_bind()` creates the private compatibility-shaped bridge from only the granted `workdir`, `system_runtime`, and `identity` ports, calls `_build_family(bridge, host.workdir)`, and returns a `BoundToolPlugin` whose handler closes over that family; it never receives an Agent.
   - `get_schema()` — the composed model-facing family schema. It is built here, not in `schema.py`, because composition belongs next to the child registry it is generated from; it overwrites the generic composer's neutral `action` description with system's own `ACTION_ENUM_DESCRIPTION`.
-  - `_ACTION_HANDLERS` — the one canonical operational action→handler registry (eleven entries; reserved `settings` and `manual` are absent). Each handler keeps its historical `(agent, args)` signature and its module home. `summarize` is absent from this registry — that public action left for `context` — while `name_set`/`name_nickname` are present, bound to `name.py`.
-  - `_build_children()` — builds the eleven operational `ChildTool`s from declaration-derived action/schema data and appends the declaration-owned `system-manual` child; `ToolFamily` injects the provider-bound `settings` child immediately before it. `subject=None` yields schema-only children; normal mounting supplies the port-only `_SystemHandlerHost` bridge and `host.workdir` as the settings/manual source, while direct compatibility supplies the caller's Agent-like subject for both.
+  - `_ACTION_HANDLERS` — the one canonical operational action→handler registry (twelve entries, including read-only `meta` bound to `meta.py:_meta`, which returns the kernel's `meta_block.build_full_runtime_meta` snapshot through the granted `SystemRuntimePort.runtime_meta()`; reserved `settings` and `manual` are absent). Each handler keeps its historical `(agent, args)` signature and its module home. `summarize` is absent from this registry — that public action left for `context` — while `name_set`/`name_nickname` are present, bound to `name.py`.
+  - `_build_children()` — builds the twelve operational `ChildTool`s from declaration-derived action/schema data and appends the declaration-owned `system-manual` child; `ToolFamily` injects the provider-bound `settings` child immediately before it. `subject=None` yields schema-only children; normal mounting supplies the port-only `_SystemHandlerHost` bridge and `host.workdir` as the settings/manual source, while direct compatibility supplies the caller's Agent-like subject for both.
   - `_FAMILY` — the module-level schema-only `ToolFamily`. Building it at import time is also the registry's duplicate/reserved-name collision check: a collision raises `ToolFamilyError` at import rather than shipping silently. It never dispatches.
   - `_build_family()` — builds a family for its supplied subject and optional workdir/manual source, binding the read-only `system_settings_provider()` to that exact workdir. Its normal mounted call is `_build_family(bridge, host.workdir)`, where `bridge` is the port-only `_SystemHandlerHost` made by `_bind()`; that one family is retained by the per-Agent mounted `BoundToolPlugin.handler`. Its compatibility call is `_build_family(agent, agent)` from `handle(agent, args)`, which constructs a fresh family and dispatches immediately against the caller's Agent-like subject. System is an intrinsic *module*, not a per-Agent manager object, so there is no instance to cache a family on; `_bind()` owns one family per mount, while only the direct compatibility route constructs one per call, and neither is stored in module state when one process serves several agents.
   - `_strip_nulls()` — drops explicit nulls so "absent" and "null" mean the same downstream, preserving the pre-existing handlers' `args.get(...)` defaulting exactly (notably `refresh`'s preset/revert conflict check and `clear`'s fallback to the caller's own name).

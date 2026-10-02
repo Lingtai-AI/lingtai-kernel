@@ -156,7 +156,7 @@ def test_system_declaration_is_static_and_the_real_agent_mounts_it_once(tmp_path
     assert DECLARATION.name == "system"
     assert DECLARATION.public_actions == (
         "refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear",
-        "nirvana", "presets", "name_set", "name_nickname", "settings", "manual",
+        "nirvana", "presets", "name_set", "name_nickname", "meta", "settings", "manual",
     )
     assert DECLARATION.requires == ("workdir", "system_runtime", "identity")
     assert get_schema()["properties"]["action"]["enum"] == list(DECLARATION.public_actions)

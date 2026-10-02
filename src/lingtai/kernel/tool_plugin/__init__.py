@@ -586,6 +586,9 @@ class SystemRuntimePort(Protocol):
 
     def token_usage(self) -> Mapping[str, Any]: ...
 
+    def runtime_meta(self) -> Mapping[str, Any]:
+        """Read-only complete current runtime diagnostics (``system.meta``)."""
+
     def load_preset(self, name: str) -> dict: ...
 
     def activate_preset(self, name: str) -> None: ...

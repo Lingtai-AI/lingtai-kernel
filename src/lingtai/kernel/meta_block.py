@@ -487,32 +487,18 @@ def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
     by ``tool_call_id`` rather than at any external sidecar/saved-path file.
 
     There is deliberately exactly one comment topic for this feature —
-    ``overflow``.  All guidance (what happened, where the original is, how to
-    retrieve it, what to do after consuming it) lives under this single key, not
-    split across parallel ``comment.retrieval`` / ``comment.summarize`` headings.
+    ``overflow``.  It is a compact retrieval locator plus one cleanup
+    instruction; retrieval procedure lives in the sqlite-log-query manual.
     """
     call_id = tool_call_id or "<unknown>"
     return {
-        "summary": (
-            "The model-visible context for this tool result is capped or large; "
-            "what you see here may be a preview or compacted form, not the full payload."
-        ),
         "full_original": (
-            f"The full original is preserved in logs/events.jsonl under "
-            f"tool_call_id={call_id}."
-        ),
-        "how_to_retrieve": (
-            f"Retrieve it from the durable log by tool_call_id: "
-            f"grep '{call_id}' <workdir>/logs/events.jsonl, or use "
-            f"`lingtai-agent log query` (see the sqlite-log-query manual). For a "
-            f"broad extraction, delegate to a daemon/subagent with the "
-            f"tool_call_id and the exact question instead of pulling the whole "
-            f"original back into your own context."
+            f"Visible payload may be capped; full original: "
+            f"<workdir>/logs/events.jsonl, tool_call_id={call_id}."
         ),
         "after_consuming": (
-            "After you have consumed what you need, call "
-            "system(action=\"summarize\") for this tool_call_id to replace the "
-            "visible payload with your own agent-authored summary."
+            "Once consumed, context(action=\"summarize\") replaces the visible "
+            "payload with your own summary."
         ),
     }
 
@@ -712,8 +698,7 @@ DEFAULT_LARGE_RESULT_THRESHOLD = 3000
 TOOL_RESULT_CHARS_README = (
     "listing top 5 tool results over 1000 chars by char count "
     "(id, tool_name, chars; no preview); no need to summarize this helper "
-    "(it rides on agent_meta; read the current final-carrier snapshot for the "
-    "current list); these are summarize candidates, "
+    "(read it with system(action=\"meta\", input={})); these are summarize candidates, "
     "not a directive to summarize "
     "every entry: prefer summarizing prior results that are already "
     "consumed/digested and useless, irrelevant, obsolete, or no longer needed "
@@ -805,9 +790,12 @@ def build_meta_readme() -> dict:
             "name when needed, completion time, elapsed time, status/error phase, "
             "character counts, spill, and a-priori-summary effects. It has no "
             "agent/session/current-state semantics and remains valid historically. "
-            "Token diagnostics live in the nested "
-            "`agent_meta.agent_state.token_usage` block: "
-            "`token_usage.current_call` contains this result's own "
+            "The default `agent_meta.agent_state` is small: `current_time`, "
+            "`token_usage.session.context_tokens/context_window/context_usage`, "
+            "and active warnings only. Call `system(action=\"meta\", input={})` "
+            "(read-only) for the complete nested "
+            "`agent_meta.agent_state.token_usage` diagnostics: "
+            "`token_usage.current_call` contains the latest provider call's own "
             "token/cache/output facts; `token_usage.session` contains the "
             "since-last-molt `session_cache_rate`, `api_calls`, cumulative token "
             "fields, context fields, and the ALWAYS-ON "
@@ -820,15 +808,17 @@ def build_meta_readme() -> dict:
         AGENT_META_KEY: {
             "instruction": AGENT_META_INSTRUCTION,
             "agent_state": (
-                "Timely current main-agent/runtime state and diagnostics, including "
-                "`agent_meta.agent_state.token_usage` with nested "
-                "`current_call` and `session` halves. only the NEWEST emission "
-                "is current; older payloads remain historical traces. Replay "
-                "preserves those historical holders and does not strip them. "
-                "`current_tool_result_chars` reports total/threshold/count and "
-                "`top_results` entries with id, tool_name, and chars; entries "
-                "have no preview and are proactive summarization candidates. "
-                "`adapter_comment` carries dynamic adapter state."
+                "Timely current main-agent state: `current_time`, context size, "
+                "and active `context`/`events` warnings; the nested "
+                "`agent_meta.agent_state.token_usage` and full diagnostics are on "
+                "demand via `system(action=\"meta\", input={})`. only the NEWEST "
+                "emission is current; older payloads remain historical traces. "
+                "Replay preserves those historical holders and does not strip "
+                "them. The full snapshot's `current_tool_result_chars` reports "
+                "total/threshold/count and `top_results` entries with id, "
+                "tool_name, and chars; entries have no preview and are proactive "
+                "summarization candidates. `adapter_comment` carries dynamic "
+                "adapter state."
             ),
             "notifications": (
                 "Timely current notifications and persistent communication "
@@ -2073,6 +2063,110 @@ def build_meta(agent) -> dict:
     # not suppress current state on later results.
 
     return meta
+
+
+# ---------------------------------------------------------------------------
+# Default (slim) vs on-demand (full) runtime snapshot.
+#
+# ``build_meta`` above stays the single full fact source.  The default
+# model-visible tail snapshot is a small projection of it
+# (:func:`slim_agent_state_for_tail`); the complete diagnostics are available
+# on demand through ``system(action="meta")`` (:func:`build_full_runtime_meta`).
+# Neither projection invents numbers: both read what ``build_meta`` computed.
+# ---------------------------------------------------------------------------
+
+# Diagnostics that are only carried by the on-demand full snapshot.
+_FULL_ONLY_STATE_KEYS = frozenset({
+    "current_tool_result_chars",
+    "adapter_comment",
+    "active_turn_tool_calls",
+})
+_TAIL_CONTEXT_STATE_KEYS = (
+    TOKEN_USAGE_CONTEXT_TOKENS_KEY,
+    TOKEN_USAGE_CONTEXT_WINDOW_KEY,
+    TOKEN_USAGE_CONTEXT_USAGE_KEY,
+)
+_PROMOTED_CONTEXT_KEYS = (
+    TOOL_META_CONTEXT_REBUILD_KEY,
+    "molt",
+    TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY,
+    TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY,
+    TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY,
+)
+
+
+def agent_state_from_meta(meta: Mapping[str, Any]) -> dict:
+    """Project a :func:`build_meta` result into the ``agent_state`` shape.
+
+    Transit keys are promoted exactly like ``ToolExecutor._attach_tool_block``
+    does (token usage, context warnings); the emission-event transit key is
+    dropped so projecting never causes a log event.
+    """
+    state: dict = {}
+    for key, value in meta.items():
+        if key == TOOL_META_TOKEN_USAGE_PENDING_KEY:
+            if isinstance(value, Mapping) and value:
+                state[TOOL_META_TOKEN_USAGE_KEY] = _copy.deepcopy(dict(value))
+        elif key == TOOL_META_CONTEXT_PENDING_KEY:
+            if isinstance(value, Mapping):
+                promoted = {
+                    context_key: value[context_key]
+                    for context_key in _PROMOTED_CONTEXT_KEYS
+                    if value.get(context_key)
+                }
+                if promoted:
+                    state[TOOL_META_CONTEXT_KEY] = promoted
+        elif key == TOOL_META_CONTEXT_EVENT_PENDING_KEY:
+            continue
+        else:
+            state[key] = value
+    return state
+
+
+def slim_agent_state_for_tail(agent_state: Mapping[str, Any]) -> dict:
+    """Return the small default ``agent_state`` carried on every final result.
+
+    Keeps ``current_time``, the current context size
+    (``token_usage.session.context_tokens/context_window/context_usage``),
+    and every active warning or one-shot event (``context``, ``events``,
+    ``daemon``, ``notification_wake``).  Cumulative token/cache statistics, the
+    result-size candidate list, adapter diagnostics, and the tool-call counter
+    are left to ``system(action="meta")``.
+    """
+    slim: dict = {}
+    for key, value in agent_state.items():
+        if key in _FULL_ONLY_STATE_KEYS:
+            continue
+        if key == TOOL_META_TOKEN_USAGE_KEY:
+            session = value.get(TOKEN_USAGE_SESSION_KEY) if isinstance(value, Mapping) else None
+            if not isinstance(session, Mapping):
+                continue
+            context = {
+                name: session[name] for name in _TAIL_CONTEXT_STATE_KEYS if name in session
+            }
+            if context:
+                slim[key] = {TOKEN_USAGE_SESSION_KEY: context}
+            continue
+        slim[key] = value
+    return slim
+
+
+def build_full_runtime_meta(agent) -> dict:
+    """Return the complete current runtime diagnostics for ``system(action="meta")``.
+
+    Read-only: it reuses :func:`build_meta` (same token, context, warning and
+    result-size builders as the default tail) and never takes the one-shot
+    reconstruction event, logs an emission event, refreshes, or mutates state.
+    The adapter comment is the full dynamic view, not the tail-slimmed one.
+    """
+    state = agent_state_from_meta(build_meta(agent))
+    comment = dynamic_adapter_comment(agent)
+    if comment:
+        state["adapter_comment"] = dict(comment)
+    calls = _active_turn_tool_calls(agent)
+    if calls is not None:
+        state["active_turn_tool_calls"] = calls
+    return {"agent_state": state}
 
 
 # ---------------------------------------------------------------------------
@@ -3999,6 +4093,8 @@ def build_synthetic_meta_envelope(
         state[TOOL_META_TOKEN_USAGE_KEY] = token_usage
     if isinstance(context, dict) and context:
         state[TOOL_META_CONTEXT_KEY] = context
+    # Same small default snapshot as a real final carrier.
+    state = slim_agent_state_for_tail(state)
     envelope: dict = {
         TOOL_META_KEY: tool_meta,
         AGENT_META_KEY: {
@@ -4644,9 +4740,9 @@ def attach_active_runtime(
 
       * Build the candidate ``agent_meta`` from the final block's private runtime
         capture:
-        kernel runtime state, including token/context/reconstruction state, plus
-        ``elapsed_ms`` + ``active_turn_tool_calls``
-        + ``current_tool_result_chars`` + a slimmed dynamic ``adapter_comment``.
+        the slim :func:`slim_agent_state_for_tail` projection (current time,
+        context size, active warnings and one-shot events).  Full diagnostics
+        are on demand via ``system(action="meta")``.
       * Compute the diagnostic signature and record it.  Always promote the
         complete ``agent_meta`` + the ``_meta.agent_meta.guidance`` ref onto
         the new target and return the new holder.  The prior holder RETAINS its
@@ -4715,28 +4811,15 @@ def attach_active_runtime(
         return prior_holder
 
     agent_state = pending.get("agent_state", {}) if isinstance(pending, dict) else {}
-    agent_meta: dict = {"agent_state": dict(agent_state) if isinstance(agent_state, dict) else {}}
-    agent_meta.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
-    # Defensive backstop: current_time belongs in agent_state. Hand-built tests
-    # or future producers must not create a second top-level state axis.
-    agent_meta.pop(TOOL_META_CURRENT_TIME_KEY, None)
-    # Context/rebuild/molt transit keys belong in agent_state; keep them out of
-    # the compatibility signature's top-level carrier.
-    agent_meta.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
-    agent_meta.pop(TOOL_META_CONTEXT_EVENT_PENDING_KEY, None)
-    calls = _active_turn_tool_calls(agent)
-    if calls is not None:
-        agent_meta["active_turn_tool_calls"] = calls
-    agent_meta["current_tool_result_chars"] = current_tool_result_chars(
-        agent, extra_results=tool_results
-    )
-    # The adapter_comment carries both dynamic per-turn scalars and static
-    # rule-like prose plus a long cache ledger.  The static content is resident
-    # in the ``meta_guidance`` system-prompt section, so the tail keeps only the
-    # slim dynamic view plus a ref back to that section.
-    comment = dynamic_adapter_comment(agent)
-    if comment:
-        agent_meta["adapter_comment"] = slim_adapter_comment_for_tail(comment)
+    # The default tail is deliberately small: time, context size, and active
+    # warnings/events only.  Full diagnostics (cumulative token/cache numbers,
+    # result-size candidates, adapter state) are on demand via
+    # ``system(action="meta")``; see :func:`slim_agent_state_for_tail`.
+    agent_meta: dict = {
+        "agent_state": slim_agent_state_for_tail(
+            agent_state if isinstance(agent_state, dict) else {}
+        )
+    }
 
     # The signature is diagnostic/compatibility state only. The final block
     # always receives the newest whole snapshot.
@@ -4758,10 +4841,6 @@ def attach_active_runtime(
                and "transient" in existing_agent_meta["guidance"] else {}),
         },
     }
-    # Keep runtime diagnostics alongside the state, never as a second wrapper.
-    target_block.metadata[AGENT_META_KEY]["agent_state"].update(
-        {k: v for k, v in agent_meta.items() if k != "agent_state"}
-    )
     try:
         agent._agent_meta_signature = signature
     except Exception:

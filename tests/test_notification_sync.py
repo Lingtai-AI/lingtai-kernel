@@ -2235,9 +2235,9 @@ def test_inject_notification_pair_strips_legacy_tool_meta_context_transit_keys(
     assert body["injection_seq"] == 1
     assert body == {"_synthesized": True, "injection_seq": 1}
     result_meta = result_block.metadata
-    assert result_meta["agent_meta"]["agent_state"]["current_tool_result_chars"] == {
-        "total_chars": 1
-    }
+    # The synthesized pair carries the same slim default snapshot as a real
+    # final carrier: no result-size candidate list.
+    assert "current_tool_result_chars" not in result_meta["agent_meta"]["agent_state"]
     assert result_meta["agent_meta"]["agent_state"]["context"] == {
         "molt": "transit molt prose"
     }

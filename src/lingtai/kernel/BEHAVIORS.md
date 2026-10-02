@@ -60,7 +60,8 @@ including its source-drift/dev-runtime detection and fail-safe diagnostic
 direction), the source-drift nudge (`source_drift`), the retired `eigen`
 identity surface (K003), the `context.molt` summary guard (K004), the promise
 that a large tool result never becomes a notification (it is ranked in
-`_meta.agent_meta.current_tool_result_chars` instead), and the per-result
+`meta_block.current_tool_result_chars`, read on demand via
+`system(action="meta")`, instead), and the per-result
 `_meta.tool_meta.comment.overflow` hint. Every LABT below observes real
 artifacts written by the real runtime into a scratch working dir
 (`.notification/*.json`, `.nudge_state.json`, `ToolResultBlock` metadata, real
@@ -426,12 +427,13 @@ python -c "import sys,os,json,types; sys.path.insert(0, os.path.join(r'<repo-roo
 Pass when both pinned error strings are returned verbatim. Fail if an empty
 summary is accepted or a non-error result is returned.
 
-## Behavior K005 — a large tool result never becomes a notification; `_meta.agent_meta.current_tool_result_chars` ranks it instead
+## Behavior K005 — a large tool result never becomes a notification; `meta_block.current_tool_result_chars` ranks it instead
 
 - **id**: K005
 - **title**: large tool results produce no `large_tool_result` system
   notification (neither per-result nor at the turn boundary); the same result
-  is reported through `_meta.agent_meta.current_tool_result_chars` with
+  is reported by `meta_block.current_tool_result_chars` (surfaced on demand in
+  `system(action="meta")`; the slim default tail omits it) with
   `total_chars`, `threshold`, `over_threshold_count`, and `top_results`
 - **guards**: `notification-tool` § Behavior — agents MUST NOT route
   large-result compaction through the notification tool, and the kernel no
@@ -552,7 +554,7 @@ publish does not land in `system.json`.
   while ordinary small results carry no comment and the `tool_meta` identity
   fields (`id`, `char_count`, `elapsed_ms`) stay intact
 - **guards**: `notification-tool` § Behavior — large-result compaction is
-  guidance, not notification; the digest action is `system(action="summarize")`
+  guidance, not notification; the digest action is `context(action="summarize")`
   ([CONTRACT.md](../tools/notification/CONTRACT.md#behavior))
 - **supersedes**: `tests/test_tool_meta_comment_overflow.py::test_spilled_result_carries_overflow_comment`,
   `tests/test_tool_meta_comment_overflow.py::test_large_inline_result_carries_overflow_comment`,
@@ -603,15 +605,13 @@ def make_executor(dispatch, workdir, max_result_chars, threshold):
         summarize_notification_threshold=threshold,
     )
 
-# Builder shape: exactly one guidance topic, four subkeys, references the durable log.
+# Builder shape: exactly one guidance topic, two subkeys, references the durable log.
 c = build_tool_meta_overflow_comment("tc-abc")
 blob = json.dumps(c)
-assert set(c) == {"summary", "full_original", "how_to_retrieve", "after_consuming"}
+assert set(c) == {"full_original", "after_consuming"}
 assert "logs/events.jsonl" in blob and "tool_call_id=tc-abc" in blob
 assert "saved_path" not in blob
-assert "grep" in c["how_to_retrieve"] and "lingtai-agent log query" in c["how_to_retrieve"]
-assert ("daemon" in c["how_to_retrieve"] or "subagent" in c["how_to_retrieve"])
-assert "summarize" in c["after_consuming"]
+assert 'context(action="summarize")' in c["after_consuming"]
 
 # Spilled result (payload over the 500-char cap) -> status spilled + comment.
 ex = make_executor(lambda tc: {"data": big.read_text(encoding="utf-8")}, root / "wd1", 500, None)
@@ -651,11 +651,10 @@ print("K006 OK: builder-shape, spilled, large-inline, small-no-comment")
 ### Expected evidence
 - [ ] The script exits 0 and prints `K006 OK: ...`.
 - [ ] `_DEFAULT_MAX_RESULT_CHARS` is `200000` (the preventive spill ceiling).
-- [ ] The builder returns exactly `{summary, full_original, how_to_retrieve,
-      after_consuming}`; `full_original` names `logs/events.jsonl` and
-      `tool_call_id=<id>`; no `saved_path`; `how_to_retrieve` offers `grep`
-      and `lingtai-agent log query`; `after_consuming` recommends
-      `system(action="summarize")`.
+- [ ] The builder returns exactly `{full_original, after_consuming}`;
+      `full_original` names `logs/events.jsonl` and `tool_call_id=<id>`; no
+      `saved_path`; `after_consuming` recommends
+      `context(action="summarize")`.
 - [ ] A spilled result reports `status: spilled` with
       `tool_meta.comment.overflow`, `spilled_char_count`, and a preserved
       spill artifact under `<workdir>/tmp/tool-results/`; a large inline

@@ -159,7 +159,7 @@ _SUMMARIZE_ITEMS_DESCRIPTION = (
     "block) and 'summary' (your agent-authored text). Supports multiple items "
     "per call. The original is NOT deleted — it remains retrievable from "
     "events.jsonl by tool_call_id. Pick targets from "
-    "the newest `_meta.agent_meta.agent_state.current_tool_result_chars.top_results` IDs. "
+    "`current_tool_result_chars.top_results` IDs from `system(action=\"meta\", input={})`. "
     "The item `tool_call_id` is the producer call ID, not the visible `_tool_call_id` "
     "event reference; preserve any `raw_locator` or spill path for recovery. "
     "This action RECORDS ONLY: the active provider context may still carry "
