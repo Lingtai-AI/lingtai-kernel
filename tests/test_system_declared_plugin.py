@@ -87,7 +87,7 @@ _EXPECTED_ANTHROPIC_DEFAULTS = {
     "max_rpm": 60,
     "max_aed_attempts": 3,
     "aed_timeout": 360.0,
-    "streaming": False,
+    "streaming": True,
     "activeness": "balanced",
     "admin": "<redacted>",
     "time_awareness": True,
@@ -613,7 +613,7 @@ def test_system_settings_runtime_policy_rows_use_env_v2_default_precedence(
         "max_rpm": (30, 60),
         "max_aed_attempts": (5, 3),
         "aed_timeout": (42.0, 360.0),
-        "streaming": (True, False),
+        "streaming": (True, True),
         "activeness": ("focused", "balanced"),
     }
     for key, values in expected.items():

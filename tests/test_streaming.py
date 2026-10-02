@@ -396,3 +396,44 @@ def test_thoughts_property_includes_unfinished():
     acc.finish_thought()
     acc.add_thought("in progress")
     assert acc.thoughts == ["done", "in progress"]
+
+
+def test_visible_text_timing_ignores_empty_and_reasoning(monkeypatch):
+    now = [10.0]
+    monkeypatch.setattr("lingtai.kernel.llm.streaming.time.monotonic", lambda: now[0])
+    acc = StreamingAccumulator(request_started_at=10.0)
+    now[0] = 11.0
+    acc.add_text("")
+    acc.add_thought("reasoning first")
+    now[0] = 12.0
+    acc.add_text("hello")
+    now[0] = 13.0
+    acc.add_text(" world")
+    now[0] = 16.0
+    acc.finish_generation()
+    usage = acc.finalize(UsageMetadata(generation_tokens=180)).usage
+    assert usage.first_token_s == 2.0
+    assert usage.generation_s == 4.0
+    assert usage.generation_tokens == 180
+
+
+def test_untimed_or_incomplete_stream_stays_unknown(monkeypatch):
+    monkeypatch.setattr("lingtai.kernel.llm.streaming.time.monotonic", lambda: 12.0)
+    acc = StreamingAccumulator()
+    acc.add_text("nonstream fallback")
+    assert acc.finalize().usage.first_token_s is None
+    acc = StreamingAccumulator(request_started_at=10.0)
+    acc.add_text("partial")
+    usage = acc.finalize().usage
+    assert usage.first_token_s == 2.0
+    assert usage.generation_s is None
+    assert usage.generation_tokens is None
+
+
+def test_mixed_tool_output_has_no_visible_text_speed(monkeypatch):
+    monkeypatch.setattr("lingtai.kernel.llm.streaming.time.monotonic", lambda: 12.0)
+    acc = StreamingAccumulator(request_started_at=10.0)
+    acc.add_text("calling")
+    acc.add_tool(ToolCall(name="read", args={}))
+    acc.finish_generation()
+    assert acc.finalize(UsageMetadata(generation_tokens=100)).usage.generation_tokens is None

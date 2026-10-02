@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 from .base import LLMResponse, ToolCall, UsageMetadata
@@ -39,7 +40,10 @@ class StreamingAccumulator:
     Text and thought deltas are simple appends.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, request_started_at: float | None = None) -> None:
+        self._request_started_at = request_started_at
+        self._first_text_at: float | None = None
+        self._generation_end_at: float | None = None
         self._text_parts: list[str] = []
         self._thought_parts: list[str] = []
         self._thoughts: list[str] = []
@@ -53,8 +57,10 @@ class StreamingAccumulator:
 
     # -- Text ---------------------------------------------------------------
 
-    def add_text(self, delta: str) -> None:
+    def add_text(self, delta: str, *, received_at: float | None = None) -> None:
         """Append a text delta."""
+        if delta and self._request_started_at is not None and self._first_text_at is None:
+            self._first_text_at = received_at if received_at is not None else time.monotonic()
         self._text_parts.append(delta)
 
     # -- Thoughts -----------------------------------------------------------
@@ -138,6 +144,10 @@ class StreamingAccumulator:
         """Add a fully-formed tool call (no accumulation needed)."""
         self._tool_calls.append(tool_call)
 
+    def finish_generation(self) -> None:
+        """Latch arrival of final provider usage, not local finalization time."""
+        self._generation_end_at = time.monotonic()
+
     # -- Finalization -------------------------------------------------------
 
     @property
@@ -188,10 +198,19 @@ class StreamingAccumulator:
         if len(thoughts) > 1:
             thoughts = ["".join(thoughts)]
 
+        usage = usage or UsageMetadata()
+        if self._first_text_at is not None and self._request_started_at is not None:
+            usage.first_token_s = self._first_text_at - self._request_started_at
+            if self._generation_end_at is not None:
+                usage.generation_s = self._generation_end_at - self._first_text_at
+        if self._tool_calls or self._first_text_at is None:
+            # No timed text, or wire output includes non-text tool tokens.
+            usage.generation_tokens = None
+
         return LLMResponse(
             text=self.text,
             tool_calls=self._tool_calls,
-            usage=usage or UsageMetadata(),
+            usage=usage,
             thoughts=thoughts,
             raw=raw,
         )

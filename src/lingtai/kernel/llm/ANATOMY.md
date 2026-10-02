@@ -95,6 +95,13 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
 
 - **Ephemeral:** `ChatInterface._entries`, `_next_id`, current system/tools, and `_pending_system` live in memory for one session (`llm/interface.py:305-318`).
 - **Ephemeral:** `StreamingAccumulator` stores partial text, tool args, and thoughts until `finalize()` (`llm/streaming.py:42-52`, `llm/streaming.py:148-184`).
+- **Optional stream timing:** `UsageMetadata.first_token_s`, `generation_s`,
+  and `generation_tokens` carry observed visible-text evidence, not inferred
+  latency. `StreamingAccumulator(request_started_at=...)` latches the first
+  nonempty text delta and `finish_generation()` latches final wire usage;
+  untimed adapters and tool/mixed output do not claim text speed. These fields
+  travel through `SessionManager._track_usage` to `llm_response.stream_timing`
+  (`base.py:155-162`, `streaming.py:60-64`, `streaming.py:147-149`).
 - **Persistent writes:** none in this folder. `session.py` writes `history/chat_history.jsonl`; token/state persistence happens in sibling modules that consume these types.
 
 ## Notes

@@ -86,7 +86,7 @@ from valid `LINGTAI_<FIELD>` environment values, then a valid closed-v2
 | `max_rpm` | `60` | integer `>= 0`; `0` disables the request gate | boot and System refresh before rebuilding the LLM service |
 | `max_aed_attempts` | `3` | integer `>= 1` | boot and System refresh |
 | `aed_timeout` | `360.0` seconds | finite positive number | boot and System refresh |
-| `streaming` | `false` | canonical boolean words in the environment / JSON boolean in v2 | boot and System refresh, including the live SessionManager flag |
+| `streaming` | `true` (on; explicit OFF retained) | canonical boolean words in the environment / JSON boolean in v2 | boot and System refresh, including the live SessionManager flag |
 | `activeness` | `balanced` | non-blank environment string / non-blank string or `null` in v2 | boot and System refresh; compatibility posture only |
 
 The corresponding environment names are `LINGTAI_CONTEXT_LIMIT`,

@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 13
+contract_version: 14
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -100,8 +100,17 @@ semantics live here. The public producer contract lives in
    `thinking_tokens` fallback produce the same representation. A missing,
    malformed, or output-less count is omitted without a dangling parenthesis,
    preserving old-event rendering and never exposing reasoning text.
-    Telegram alone also opts into one extra plain line immediately after that
-    metrics row per API call, compact on one line and mirroring that row's
+    Telegram opts into two metrics lines: time first (`12.4s · ⚡1.2s`),
+    tokens next (existing output/thinking/cache/context symbols, with optional
+    `45 tok/s`). `⚡` is seconds from actual dispatch to first nonempty visible
+    text, excluding reasoning, lifecycle, heartbeat, usage and empty events.
+    Speed is final provider non-reasoning text tokens / measured
+    first-text-to-final-usage seconds, only with explicit compatible counts
+    and a finite positive interval. Tool/mixed, estimated, missing-usage and
+    untimed/nonstream rounds omit speed; unknown first text is omitted, never
+    shown as inferred zero. Total existing API delay remains unchanged.
+    Other channels keep their existing layout. Telegram alone also opts into
+    one extra plain price line immediately after the token metrics line per API call, compact on one line and mirroring that row's
     symbols: `$<total>[+] · ↓<$> ↑<$> | <$>[ stale prices]` (no tokens/second figure) where
     `↓` prices the billable output, `↑` the cache-miss input (uncached input
     plus any cache writes: at the catalog's cache-write rate when it prices

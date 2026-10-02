@@ -133,7 +133,7 @@ def test_build_agent_constructs_correctly(mock_mail, mock_agent, mock_llm, tmp_p
     assert call_kwargs.kwargs["agent_name"] == "test-agent"
     assert call_kwargs.kwargs["admin"] == {"karma": True}
     assert call_kwargs.kwargs["working_dir"] == tmp_path
-    assert call_kwargs.kwargs["streaming"] is False
+    assert call_kwargs.kwargs["streaming"] is True
     assert call_kwargs.kwargs["_from_init_boot"] is True
     # covenant, memory, capabilities, addons no longer passed to constructor —
     # they are loaded by _setup_from_init() from init.json

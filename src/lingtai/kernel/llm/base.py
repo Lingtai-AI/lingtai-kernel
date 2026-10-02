@@ -153,6 +153,13 @@ class UsageMetadata:
     cache_write_tokens: int | None = None
     cache_write_1h_tokens: int | None = None
     billable_output_tokens: int | None = None
+    # Optional streaming evidence, in monotonic seconds. First visible text
+    # (not reasoning, lifecycle, usage or empty deltas); generation ends at
+    # final wire usage. generation_tokens excludes reasoning and is unknown
+    # for tool/mixed output or a wire without an explicit reasoning count.
+    first_token_s: float | None = None
+    generation_s: float | None = None
+    generation_tokens: int | None = None
 
 
 def checked_count(value: object) -> int | None:

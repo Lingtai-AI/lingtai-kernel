@@ -770,3 +770,39 @@ def test_responses_stream_without_completion_does_not_invent_raw_response():
     assert response.text == "partial"
     assert response_id == "resp_partial"
     assert response.raw is None
+
+
+@pytest.mark.parametrize("reasoning", [20, None, True, -1])
+def test_responses_real_dispatch_visible_text_timing(monkeypatch, reasoning):
+    now = [10.0]
+    monkeypatch.setattr("lingtai.llm.openai.adapter.time.monotonic", lambda: now[0])
+
+    class TimedResponses:
+        def create(self, **kwargs):
+            assert kwargs["stream"] is True
+            assert now[0] == 10.0
+            def events():
+                now[0] = 11.0
+                yield Event("response.created")
+                yield Event("heartbeat")
+                yield Event("response.output_text.delta", delta="")
+                yield Event("response.reasoning_summary_text.delta", delta="thought")
+                now[0] = 12.0
+                yield Event("response.output_text.delta", delta="hello")
+                now[0] = 16.0
+                wire_usage = _usage()
+                wire_usage.output_tokens = 200
+                wire_usage.output_tokens_details.reasoning_tokens = reasoning
+                yield Event("response.completed", response=SimpleNamespace(
+                    id="resp_timed", usage=wire_usage,
+                ))
+            return events()
+
+    session = OpenAIResponsesSession(
+        client=SimpleNamespace(responses=TimedResponses()), model="gpt-test",
+        instructions=None, tools=None, tool_choice=None, extra_kwargs={},
+    )
+    response = session.send_stream("hello")
+    assert response.usage.first_token_s == 2.0
+    assert response.usage.generation_s == 4.0
+    assert response.usage.generation_tokens == (180 if reasoning == 20 else None)

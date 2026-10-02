@@ -2016,7 +2016,7 @@ def _responses_merge_normalized_response(
     return LLMResponse(
         text=trailer.text or accumulated.text,
         tool_calls=trailer.tool_calls or accumulated.tool_calls,
-        usage=trailer.usage,
+        usage=accumulated.usage,
         thoughts=trailer.thoughts or accumulated.thoughts,
         raw=trailer.raw,
     )
@@ -2145,12 +2145,22 @@ def _decode_responses_sse_text(raw: str) -> list[Any]:
     return events
 
 
+def _visible_output_tokens(total: object, details: object) -> int | None:
+    """Non-reasoning output from explicit wire counts; absent is unknown."""
+    output = checked_count(total)
+    reasoning = checked_count(getattr(details, "reasoning_tokens", None))
+    if output is None or reasoning is None or reasoning > output:
+        return None
+    return output - reasoning
+
+
 def _consume_responses_stream(
     stream: Any,
     on_chunk: Callable[[str], None] | None = None,
+    *, request_started_at: float | None = None,
 ) -> tuple[LLMResponse, str | None]:
     """Consume typed SDK events or locally decoded Responses SSE events."""
-    acc = StreamingAccumulator()
+    acc = StreamingAccumulator(request_started_at=request_started_at)
     response_id = None
     raw_response = None
     usage = UsageMetadata()
@@ -2189,6 +2199,7 @@ def _consume_responses_stream(
                 acc.set_tool_args_if_empty(getattr(event.item, "arguments", None))
                 acc.finish_tool()
         elif event.type == "response.completed":
+            acc.finish_generation()
             raw_response = getattr(event, "response", None)
             # Locally decoded gateway SSE is raw JSON, not an SDK model: every
             # field here is optional and must be probed, never dotted.
@@ -2200,6 +2211,9 @@ def _consume_responses_stream(
                 )
                 details = getattr(raw_usage, "output_tokens_details", None)
                 usage = UsageMetadata(
+                    generation_tokens=_visible_output_tokens(
+                        getattr(raw_usage, "output_tokens", None), details,
+                    ),
                     input_tokens=getattr(raw_usage, "input_tokens", 0) or 0,
                     output_tokens=getattr(raw_usage, "output_tokens", 0) or 0,
                     billable_output_tokens=checked_count(
@@ -2237,6 +2251,8 @@ def _consume_responses_stream(
     # incomplete/error streams therefore cannot commit partial raw history.
     # Match non-streaming LLMResponse.raw without projecting provider metadata
     # into canonical history or the safe token-ledger extension.
+    if response.tool_calls:
+        response.usage.generation_tokens = None
     response.raw = raw_response
     setattr(response, "_openai_responses_output_items", output_items)
     return response, response_id
@@ -2773,17 +2789,20 @@ class OpenAIChatSession(ChatSession):
         # stream and pull the first chunk inside the recovery wrapper; once
         # that succeeds, we hand off to the regular streaming loop.
         def _open_and_first_chunk():
-            stream = self._client.chat.completions.create(**_build_kwargs())
+            nonlocal acc
+            kwargs = _build_kwargs()
+            acc = StreamingAccumulator(request_started_at=time.monotonic())
+            stream = self._client.chat.completions.create(**kwargs)
             it = iter(stream)
             try:
                 first = next(it)
             except StopIteration:
                 first = None
-            return stream, it, first
+            return stream, it, first, time.monotonic()
 
         # 3. Stream; revert interface on error
         try:
-            (stream, it, first_chunk), total_dropped, rounds = (
+            (stream, it, first_chunk, first_chunk_at), total_dropped, rounds = (
                 self._run_with_overflow_recovery(_open_and_first_chunk)
             )
             if rounds > 0:
@@ -2799,9 +2818,14 @@ class OpenAIChatSession(ChatSession):
             for chunk in _chunks():
                 if not chunk.choices:
                     if chunk.usage:
+                        acc.finish_generation()
                         cached = getattr(chunk.usage, "prompt_tokens_details", None)
                         cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
                         usage = UsageMetadata(
+                            generation_tokens=_visible_output_tokens(
+                                getattr(chunk.usage, "completion_tokens", None),
+                                getattr(chunk.usage, "completion_tokens_details", None),
+                            ),
                             input_tokens=chunk.usage.prompt_tokens or 0,
                             output_tokens=chunk.usage.completion_tokens or 0,
                             billable_output_tokens=checked_count(
@@ -2823,7 +2847,10 @@ class OpenAIChatSession(ChatSession):
                 if delta is None:
                     continue
                 if delta.content:
-                    acc.add_text(delta.content)
+                    acc.add_text(
+                        delta.content,
+                        received_at=first_chunk_at if chunk is first_chunk else None,
+                    )
                     if on_chunk:
                         on_chunk(delta.content)
                 # OpenRouter (and OpenAI o-series under some SDKs) streams
@@ -3209,8 +3236,11 @@ class OpenAIResponsesSession(ChatSession):
             if self._prompt_cache_key:
                 kwargs["prompt_cache_key"] = self._prompt_cache_key
 
+            request_started_at = time.monotonic()
             stream = self._client.responses.create(**kwargs)
-            response, response_id = _consume_responses_stream(stream, on_chunk)
+            response, response_id = _consume_responses_stream(
+                stream, on_chunk, request_started_at=request_started_at,
+            )
             if self._stateless_replay:
                 self._record_assistant_response(
                     response,

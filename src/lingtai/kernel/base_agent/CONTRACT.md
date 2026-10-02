@@ -571,6 +571,13 @@ Clause IDs are stable; each rule composes the linked normative source.
    session into the session timeout worker under a copy of the submitting
    context. Main-turn retries, recovery, tool-result continuation, and stream
    continuation all return through one of those two `SessionManager` paths.
+   Optional adapter-measured streaming evidence passes through the existing
+   `llm_response.stream_timing` event: monotonic seconds to first nonempty
+   visible text (`first_token_s`), first-text-to-final-usage seconds
+   (`generation_s`), and final provider text tokens excluding reasoning
+   (`generation_tokens`). Missing evidence stays absent/unknown; nonstream
+   latency and estimated tokens MUST NOT establish stream speed. This additive
+   projection does not change retry or partial-stream terminal boundaries.
    If provider RPM gating is configured, `APICallGate` runs *after* the outer
    admitted-session proxy has made its Port decision; it never performs an
    additional admission lookup. `ProviderAdmittedLLMService.generate()` makes

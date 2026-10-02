@@ -879,6 +879,18 @@ class TaskCardEventProjection:
         bill = TaskCardEventProjection._project_billing_facts(event, total, cached)
         if bill:
             usage["bill"] = bill
+        raw_timing = event.get("stream_timing")
+        if isinstance(raw_timing, dict):
+            timing = {}
+            for key in ("first_token_s", "generation_s"):
+                value = raw_timing.get(key)
+                if type(value) in (int, float) and math.isfinite(value) and value >= 0:
+                    timing[key] = float(value)
+            tokens = checked_count(raw_timing.get("generation_tokens"))
+            if tokens is not None and tokens <= output and event.get("estimated") is not True:
+                timing["generation_tokens"] = tokens
+            if timing:
+                usage["stream_timing"] = timing
         return (call_id, usage)
 
     @staticmethod
@@ -938,6 +950,13 @@ class TaskCardEventProjection:
                     )
                     if bill:
                         usage = {**usage, "bill": bill}
+                if "stream_timing" not in usage:
+                    previous = row.get("_usage")
+                    timing = (by_api or {}).get("stream_timing") or (
+                        previous.get("stream_timing") if isinstance(previous, dict) else None
+                    )
+                    if timing:
+                        usage = {**usage, "stream_timing": timing}
                 if row.get("_usage") == usage:
                     continue
                 row["_usage"] = usage
@@ -1084,6 +1103,7 @@ class TaskCardEventProjection:
         locale: str = "en",
         display_expression: tuple[str, ...] | None = None,
         usage_line: Callable[[float | None, dict[str, Any] | None], str] | None = None,
+        stream_metrics: bool = False,
     ) -> str:
         """Render grouped rows; ``usage_line`` is an opt-in per-group formatter
         (pure, called once per group with ``(api_delay_s, usage)``) whose
@@ -1124,9 +1144,9 @@ class TaskCardEventProjection:
                     usage = u
                 if api_delay_s is not None and usage is not None:
                     break
-            info = cls.format_divider_info(api_delay_s, usage)
-            if info:
-                rows.append({"kind": "api_info", "text": info})
+            info = cls.format_divider_info(api_delay_s, usage, stream_metrics=stream_metrics)
+            for line in info.splitlines():
+                rows.append({"kind": "api_info", "text": line})
             if usage_line is not None:
                 extra = usage_line(api_delay_s, usage)
                 if extra:
@@ -1150,6 +1170,7 @@ class TaskCardEventProjection:
         cls,
         api_delay_s: float | None,
         usage: dict[str, Any] | None,
+        *, stream_metrics: bool = False,
     ) -> str:
         """Compact divider: `↻ x s ↓out (think) ↑miss ◌ ctx | cache%`.
 
@@ -1191,7 +1212,30 @@ class TaskCardEventProjection:
                 parts.append(f"\u25cc {context}")
             elif rate_text is not None:
                 parts.append(rate_text)
-        return " ".join(parts)
+        if not stream_metrics:
+            return " ".join(parts)
+        # Telegram opts into separate time/token lines. Other consumers keep
+        # their existing frame, including every established token symbol.
+        time_parts = []
+        if api_delay_s is not None and api_delay_s > 0:
+            time_parts.append(f"{api_delay_s:.1f}s")
+            parts.pop(0)
+        timing = usage.get("stream_timing") if isinstance(usage, dict) else None
+        if isinstance(timing, dict):
+            first = timing.get("first_token_s")
+            if type(first) in (int, float) and math.isfinite(first) and first >= 0:
+                time_parts.append(f"⚡{first:.1f}s")
+                interval = timing.get("generation_s")
+                tokens = checked_count(timing.get("generation_tokens"))
+                if (tokens is not None and type(interval) in (int, float)
+                        and math.isfinite(interval) and interval > 0):
+                    try:
+                        speed = tokens / interval
+                    except OverflowError:
+                        speed = math.inf
+                    if math.isfinite(speed):
+                        parts.append(f"{speed:.0f} tok/s")
+        return "\n".join(line for line in (" · ".join(time_parts), " ".join(parts)) if line)
 
     @classmethod
     def format_task_card_text(

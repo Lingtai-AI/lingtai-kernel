@@ -494,3 +494,38 @@ def test_send_terminal_overflow_untrimmable_no_notice():
     # else was touched.
     assert len(iface._entries) == 1
     assert iface._entries[0].role == "system"
+
+
+def test_chat_stream_dispatch_timer_resets_on_overflow(monkeypatch):
+    now = [10.0]
+    monkeypatch.setattr("lingtai.llm.openai.adapter.time.monotonic", lambda: now[0])
+    client = MagicMock()
+    attempts = []
+    def create(**kwargs):
+        attempts.append(now[0])
+        if len(attempts) == 1:
+            now[0] = 20.0
+            raise _make_overflow_error()
+        def chunks():
+            now[0] = 21.0
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(
+                content="", tool_calls=[], reasoning_content="thinking",
+            ))])
+            now[0] = 22.0
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(
+                content="hello", tool_calls=[],
+            ))])
+            now[0] = 26.0
+            yield SimpleNamespace(choices=[], usage=SimpleNamespace(
+                prompt_tokens=10, completion_tokens=200, prompt_tokens_details=None,
+                completion_tokens_details=SimpleNamespace(reasoning_tokens=20),
+            ))
+        return chunks()
+    client.chat.completions.create.side_effect = create
+    session = _make_session(client)
+    _seed_history(session.interface)
+    usage = session.send_stream("hi").usage
+    assert attempts == [10.0, 20.0]
+    assert usage.first_token_s == 2.0
+    assert usage.generation_s == 4.0
+    assert usage.generation_tokens == 180
