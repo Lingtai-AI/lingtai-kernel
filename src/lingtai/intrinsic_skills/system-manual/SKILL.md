@@ -76,7 +76,7 @@ completion notification, and pending notifications require intentional `force`.
 `name_set` is immutable, `name_nickname` mutable, and neither moves the
 address/workdir. Route mechanical Agent/Project address or workdir movement
 through [migration-guide](reference/migration-guide/SKILL.md).
-`notification` owns reads/dismissals; `context` owns summarize/rebuild/molt and
+`notification` owns reads, hooks, and delay (delivery is one-shot); `context` owns summarize/rebuild/molt and
 provider replay.
 
 ## Consequential use

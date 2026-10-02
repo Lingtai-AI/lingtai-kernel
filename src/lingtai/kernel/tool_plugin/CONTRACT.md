@@ -232,7 +232,7 @@ capability.
 | `AvatarParentPort` | `parent_name`, `venv_path` | Avatar-only parent context: the identity placed in a newborn prompt and optional runtime location inherited into its init. It grants no mutable admin/configuration surface or Agent reference. Avatar owns no rules-distribution action, so this port no longer carries an authorization-bit method for one (**contract_version 4**, breaking: `has_rule_privilege()` removed). |
 | `ContextRuntimePort` | `molt(args)`, `summarize(args)`, `rebuild(args)` | Context-only lifecycle-operation boundary. It preserves the live molt, record-only summary, and reconstruction/replay engines without granting Context the Agent or unrelated private state. |
 | `DaemonRuntimePort` | named model/tool/preset-policy/notification/log operations | Daemon-only host-runtime boundary: optional inherited service and regular tool snapshots, explicit-preset requirement + authorization, preset sandbox/load, notification route, time, Task Card, logging, and resolved manager options. Agent composition authorizes through its allowlist; standalone composition requires and directly loads caller-supplied preset paths. It never grants an Agent or a mount operation. |
-| `NotificationStatePort` | `dismiss(channel, *, force, reason, event_id=None, ref_id=None)`, `delay(channel, seconds)`, hook operations, `read_settings() -> tuple[int, int]`, bounded `log` | Notification-only Core delegation. `read_settings` returns the fresh effective payload cap and delay ceiling through canonical resolvers; it grants no configuration object or writer. `AgentNotificationStateAdapter` owns only callbacks bound to the live Agent; it hands the family no Agent, Store, fingerprint, producer state, generic dispatch, or mount seam. Notification Core retains dismissal authorization, stale-delivery comparison, producer guards, acknowledgement, delay/timer, hook-manifest, and logging policy. |
+| `NotificationStatePort` | `delay(channel, seconds)`, hook operations (no dismissal operation: notification delivery is one-shot), `read_settings() -> tuple[int, int]`, bounded `log` | Notification-only Core delegation. `read_settings` returns the fresh effective payload cap and delay ceiling through canonical resolvers; it grants no configuration object or writer. `AgentNotificationStateAdapter` owns only callbacks bound to the live Agent; it hands the family no Agent, Store, fingerprint, producer state, generic dispatch, or mount seam. Notification Core retains delay/timer, hook-manifest, and logging policy. |
 | `EmailRuntimePort` (Email-owned) | `handle_email(EmailRuntimeRequest) -> EmailResult` | Email-only manager boundary. The host `AgentEmailRuntimeAdapter` rejects foreign declared actions, reads the current `agent._email_manager` at call time, and invokes it once with already-normalized `{'action': request.action, **dict(request.input)}`; it neither captures `_intrinsics` nor recurses through an official handler. |
 | `PluginCatalogPort` | `read_state() -> PluginCatalogState` | Return a detached read-only projection of Agent Plugins registration/discovery facts: boot snapshot, configured plugin paths, inherited skill paths, and skills availability. It cannot validate, register, prune, launch, write, or mount. |
 | `PsycheSettingsPort` | `read_snapshot() -> PsycheSettingsSnapshotPort` | Return only Psyche's last completely applied immutable structural snapshot: `pad` / `pad_file` plus `base_prompt`, `covenant`, and `comment` with their file pointers. It grants no Agent, owner-source read, prompt mutation, reconstruction, or settings write. |
@@ -323,8 +323,7 @@ snapshot on every `read_state()`, and returns a frozen `PluginCatalogState`. A
 tool result mutated by a caller therefore cannot reach the Agent's snapshot or
 capability configuration, and the adapter exposes no registration, prune,
 launch, config-write, or mount operation.
-`AgentNotificationStateAdapter` holds only Notification Core callbacks: a
-`dismiss_channel(..., invoked_by="notification")` partial, delay, hook, fresh
+`AgentNotificationStateAdapter` holds only Notification Core callbacks: delay, hook, fresh
 effective-settings read, and bounded logging operations. The payload cap uses
 the live Agent hook so System-v2 file precedence is preserved; the delay ceiling
 uses the same live environment resolver without a logging callback, keeping SHOW
@@ -532,7 +531,8 @@ preserve Notification Core delay/timer and Store behavior:
   grant, no-Agent/no-Store/no-writer boundary, package-owned canonical manual,
   exact two-row fresh settings projection, unchanged `check` placeholder, one
   claimed/mounted schema and handler under both capability opt-out forms on
-  construction and refresh, and real Core-backed `dismiss_channel` behavior.
+  construction and refresh, and the closed schema's rejection of the removed
+  `dismiss_channel` action.
 - Task Card's static `DECLARATION`, exact
   `workdir`/`shutdown`/`task_card_lifecycle`/`task_card_notifications` grant,
   one retained `TaskCardManager` that survives refresh and is rebound, one

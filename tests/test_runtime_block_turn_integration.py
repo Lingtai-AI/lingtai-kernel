@@ -302,12 +302,12 @@ def test_notification_unchanged_not_restamped_on_newer_result_at_boundary(tmp_pa
 
     _second_batch(agent)
 
-    # The final carrier owns the current notification snapshot; the prior
-    # block remains a historical trace.
-    assert agent._notification_live_holder is not first_holder
+    # An unchanged event is not copied to the later carrier. The first
+    # delivered event remains available as an untouched historical trace.
+    assert agent._notification_live_holder is first_holder
     assert "notifications" in first_holder.metadata["agent_meta"]
     second_result = agent._chat.committed[-1][0]
-    assert "notifications" in second_result.metadata["agent_meta"]
+    assert not second_result.metadata["agent_meta"].get("notifications")
 
 
 def test_notification_material_change_reattaches_at_boundary(tmp_path):

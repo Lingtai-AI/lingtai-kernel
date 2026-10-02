@@ -811,12 +811,12 @@ all — its manual says so explicitly (see
 shared-domain rule above: `info` and `manual` are two actions of one skill-
 catalogue authority, not two related tools grouped for convenience.
 
-`notification` (`check | dismiss_channel | dismiss_event | dismiss_ref | add |
-drop | edit | list | delay | settings | manual`) is the tenth: its final model-facing root
-is likewise exactly `action`, `input`, `reasoning`, and `summarize`, and each
-action's arguments live only in that action's own strict `input` (so `channel`
-belongs to `dismiss_channel`, `event_id` only to `dismiss_event`, and `ref_id`
-only to `dismiss_ref`). It is the sixth accepted declared official family: its
+`notification` (`check | add | drop | edit | list | delay | settings | manual`;
+the former `dismiss_channel`/`dismiss_event`/`dismiss_ref` actions were removed
+with no alias when notification delivery became one-shot) is the tenth: its final
+model-facing root is likewise exactly `action`, `input`, `reasoning`, and
+`summarize`, and each action's arguments live only in that action's own strict
+`input`. It is the sixth accepted declared official family: its
 static declaration binds an agent-hosted ToolFamily through only `workdir` and
 `notification_state`, while Notification Core remains the sole authority for
 stateful policy and Store mutation. Its declaration-bound read-only provider

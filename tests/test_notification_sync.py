@@ -2015,8 +2015,9 @@ def test_notification_replay_e2e_redacted_secret_marks_and_reconciles(
     tmp_path: Path,
 ) -> None:
     """Security contract: the raw secret never lands in events.jsonl; a
-    redacted replay carries the _meta.redacted marker and resets the
-    committed fingerprint so the next sync re-injects full producer state."""
+    redacted replay carries the _meta.redacted marker and resets the wake
+    fingerprint, but retains successful delivery identity. New source versions
+    still inject, and raw secrets never enter the durable event journal."""
     import copy as copy_mod
 
     from lingtai.kernel.trace_redaction import redact_for_trajectory
@@ -2063,15 +2064,22 @@ def test_notification_replay_e2e_redacted_secret_marks_and_reconciles(
     assert replayed["recovered_redacted"] is True
     assert "notification_redacted_replay_resync" in types
 
-    # Fingerprint reset → the unchanged producer state re-injects fully.
+    # Wake-fingerprint resync must not replay an already successfully delivered
+    # snapshot. Redacted history remains redacted; a new source version retries.
     assert agent._notification_fp == ()
     entries_before = len(iface.entries)
+    agent._sync_notifications()
+    assert len(iface.entries) == entries_before
+    assert agent._notification_fp == committed_fp
+    assert secret not in json.dumps([recovered.content, recovered.metadata])
+    publish_test_payload(tmp_path, "system", {
+        "data": {"events": [{"source": "daemon", "body": f"new deploy failure: {secret}"}]},
+    })
     agent._sync_notifications()
     assert len(iface.entries) == entries_before + 2
     final = iface.entries[-1].content[0]
     assert final.synthesized is True
-    assert secret in json.dumps([final.content, final.metadata])
-    assert agent._notification_fp == committed_fp
+    assert f"new deploy failure: {secret}" in json.dumps([final.content, final.metadata])
     assert secret not in events_path.read_text(encoding="utf-8")
 
 

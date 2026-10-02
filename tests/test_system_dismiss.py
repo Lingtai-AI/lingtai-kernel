@@ -1,13 +1,13 @@
-"""Tests for notification dismissal — the kernel ``dismiss_channel`` helper as
-exercised through the standalone ``notification`` tool.
+"""Tests for the private kernel ``dismiss_channel`` helper.
 
-The ``system`` tool no longer exposes any dismiss/notification verb (see
-``test_notification_tool.py`` for the no-compatibility regression anchors).
-Dismissal is atomic on the ``notification`` tool:
+Neither the ``system`` nor the ``notification`` tool exposes any dismiss verb
+any more (see ``test_notification_tool.py`` for the removed-action regression
+anchors: closed schema, no alias, no side effects). The Core helper in
+``lingtai.kernel.notifications`` is retained as a private/compatibility
+function, and these tests keep its behavior pinned by calling it directly:
 
-* ``notification(action="dismiss_channel", channel=...)`` → whole-channel clear,
-* ``notification(action="dismiss_event", event_id=..., [channel="system"])``,
-* ``notification(action="dismiss_ref", ref_id=..., [channel="system"])``.
+* whole-channel clear,
+* ``event_id=...`` / ``ref_id=...`` targeted system/daemon removal.
 
 Generic dismiss clears one ``.notification/<channel>.json`` file while
 preserving producer-specific state semantics.
@@ -23,10 +23,9 @@ from uuid import uuid4
 from lingtai.kernel.notifications import (
     DISMISS_CAUSE_ALREADY_EMPTY,
     DISMISS_CAUSE_NO_MATCHING_EVENT,
+    dismiss_channel as _core_dismiss_channel,
     is_generic_dismiss_guarded,
 )
-from tests._tool_plugin_helpers import dispatch_declared_tool
-from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
 from tests._notification_store_helpers import snapshot_notifications, fingerprint_notifications, publish_test_payload
 
 # Shared with test_notification_tool.py — see tests/_notification_helpers.py.
@@ -38,28 +37,23 @@ from tests._notification_helpers import (
 )
 
 
-# Since the LTP v2 migration ``notification`` is a ToolFamily: each action's
-# arguments go in its own strict ``input`` object under the closed
-# ``action``/``input``/``reasoning`` envelope. The three helpers below build
-# that envelope so every test in this file exercises the real dispatch path,
-# including the pre-handler input validation.
-def _call(agent, action, **action_input):
-    return dispatch_declared_tool(NOTIFICATION_DECLARATION,
-        agent,
-        {"action": action, "input": dict(action_input), "reasoning": "test"},
-    )
-
-
+# The three helpers below call the retained private Core helper directly with
+# the argument defaults the (removed) public adapters used to apply: ``force``
+# falsy by default, event/ref targets default to the ``system`` channel, and a
+# null optional is the same as an absent one.
 def _dismiss_channel(agent, channel, **kwargs):
-    return _call(agent, "dismiss_channel", channel=channel, **kwargs)
+    kwargs = {key: value for key, value in kwargs.items() if value is not None}
+    return _core_dismiss_channel(agent, channel, invoked_by="notification", **kwargs)
 
 
 def _dismiss_event(agent, **kwargs):
-    return _call(agent, "dismiss_event", **kwargs)
+    kwargs = {key: value for key, value in kwargs.items() if value is not None}
+    channel = kwargs.pop("channel", "system")
+    return _core_dismiss_channel(agent, channel, invoked_by="notification", **kwargs)
 
 
 def _dismiss_ref(agent, **kwargs):
-    return _call(agent, "dismiss_ref", **kwargs)
+    return _dismiss_event(agent, **kwargs)
 
 
 def test_dismiss_channel_clears_existing_file(tmp_path: Path) -> None:
@@ -107,24 +101,10 @@ def test_dismiss_mcp_dotted_channel(tmp_path: Path) -> None:
 def test_dismiss_validation_errors(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
 
-    # A well-formed envelope that simply omits the channel still reaches the
-    # handler and gets the unchanged ``missing_channel`` refusal.
-    missing = _dismiss_channel(agent, None)
-    assert missing["status"] == "error"
-    assert missing["reason"] == "missing_channel"
-
-    # A malformed envelope (no ``input`` object at all) is a different
-    # failure: LTP v2 requires ``input``, so this is rejected at the envelope
-    # boundary before dispatch rather than being read as "channel omitted".
-    malformed = dispatch_declared_tool(NOTIFICATION_DECLARATION, agent, {"action": "dismiss_channel"})
-    assert malformed["status"] == "failed"
-    assert malformed["error_code"] == "INVALID_ARGUMENT"
-
     for bad in ["", "../escape", "..hidden", "bad/slash"]:
         res = _dismiss_channel(agent, bad)
         assert res["status"] == "error"
-        # Empty string channel is treated as missing by the tool guard;
-        # syntactically-invalid names reach the kernel allowlist check.
+        # Syntactically-invalid names are refused by the kernel allowlist check.
         assert res["reason"] in ("invalid_channel", "missing_channel")
 
 

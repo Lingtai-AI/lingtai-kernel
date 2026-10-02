@@ -55,7 +55,7 @@ transaction; do not copy its happy-path sequence here.
 | How is a normal user install/update performed? | The current `https://lingtai.ai/install.sh --help` output. |
 | May a download, migration, config write, or disruptive relaunch proceed? | Only explicit human/config-owner authority after the proposed action is shown. |
 | How is the one refresh performed and receipted? | `reference/refresh-precheck/SKILL.md`. |
-| How is a nudge dismissed? | `notification-manual`, after the matching fact is interpreted or resolved. |
+| How is a nudge acknowledged? | It is delivered once; there is no notification dismiss action. Interpret or resolve the matching fact. |
 
 ## Nudge lifecycle and meanings
 
@@ -200,9 +200,10 @@ channel round trip, and failure recovery. Do not duplicate them here.
 | New code did not activate | Refresh cannot pull or repair code. Compare the expected cutover receipt to the new process and route the transaction failure to `refresh-precheck` mode C. |
 | Interpreter/import source is unknown | Stop all update/cutover action and ask the launcher owner which process and selectors are authoritative. |
 
-To acknowledge interpreted nudges, follow `notification-manual`; its narrow form
-is `notification(action="dismiss_channel", input={"channel":"nudge","force":null,"reason":null}, reasoning="acknowledge interpreted nudges")`.
-Do not call notification check merely to confirm dismissal.
+Nudges are delivered once and never cleared by delivery; there is no notification
+dismiss action, so interpreted nudges need no acknowledgement call. A changed
+finding is delivered again. Use `notification(action="check")` only to reread the
+current mirror deliberately.
 
 ## Boundaries
 

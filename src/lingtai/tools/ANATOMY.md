@@ -175,8 +175,8 @@ capability names and lazy adapters.
   package's only schema/description pair, while `ShellManager` remains the
   unchanged execution engine behind an internal-only flat call shape.
 - `notification/` — always-on declared official family owning the public
-  `notification` action set (`check`, three atomic dismiss actions, hook-registry
-  actions, `delay`, read-only `settings`, and `manual`;
+  `notification` action set (`check`, hook-registry actions, `delay`, read-only
+  `settings`, and `manual`; public generic dismiss actions are removed;
   `src/lingtai/tools/notification/ANATOMY.md`).
   Its static `DECLARATION` is registered through the official host-plugin route,
   binds only `workdir` and `notification_state`, and preserves the ToolFamily

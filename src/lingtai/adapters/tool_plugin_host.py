@@ -289,13 +289,11 @@ class AgentNotificationStateAdapter:
     The adapter retains callbacks only. It never exposes the Agent, Store,
     notification fingerprints, or producer state to a plugin. Each callback
     still enters the existing Core function with the live Agent bound by the
-    composition root, so producer guards, stale-delivery checks,
-    acknowledgement, timers, hook manifests, and Store semantics remain in
+    composition root, so timers, hook manifests, and Store semantics remain in
     :mod:`lingtai.kernel.notifications`.
     """
 
     __slots__ = (
-        "_dismiss",
         "_delay",
         "_add",
         "_drop",
@@ -308,7 +306,6 @@ class AgentNotificationStateAdapter:
     def __init__(
         self,
         *,
-        dismiss: Callable[..., dict[str, Any]],
         delay: Callable[[str, int], dict[str, Any]],
         add_hook: Callable[[dict[str, Any]], dict[str, Any]],
         drop_hook: Callable[[str], dict[str, Any]],
@@ -317,7 +314,6 @@ class AgentNotificationStateAdapter:
         read_settings: Callable[[], tuple[int, int]],
         log: Callable[..., None],
     ) -> None:
-        self._dismiss = dismiss
         self._delay = delay
         self._add = add_hook
         self._drop = drop_hook
@@ -325,23 +321,6 @@ class AgentNotificationStateAdapter:
         self._list = list_hooks
         self._read_settings = read_settings
         self._log = log
-
-    def dismiss(
-        self,
-        channel: str,
-        *,
-        force: bool,
-        reason: str | None,
-        event_id: str | None = None,
-        ref_id: str | None = None,
-    ) -> dict[str, Any]:
-        return self._dismiss(
-            channel,
-            force=force,
-            reason=reason,
-            event_id=event_id,
-            ref_id=ref_id,
-        )
 
     def delay(self, channel: str, seconds: int) -> dict[str, Any]:
         return self._delay(channel, seconds)
@@ -1357,7 +1336,6 @@ def agent_host_ports(
         from lingtai.kernel.notifications import (
             add_hook,
             delay_notification_channel,
-            dismiss_channel,
             drop_hook,
             edit_hook,
             list_hooks,
@@ -1366,7 +1344,6 @@ def agent_host_ports(
         from lingtai.kernel.meta_block import _notification_persistent_max_chars
 
         ports["notification_state"] = AgentNotificationStateAdapter(
-            dismiss=partial(dismiss_channel, agent, invoked_by="notification"),
             delay=partial(delay_notification_channel, agent),
             add_hook=partial(add_hook, agent),
             drop_hook=partial(drop_hook, agent),

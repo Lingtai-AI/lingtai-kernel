@@ -2,11 +2,11 @@
 name: goal-manual
 description: >
   Goal notification manual: `.notification/goal.json` source-of-truth, fields,
-  instructions, idle reminders, protected dismiss behavior, and cancellation or
+  instructions, idle reminders, protected goal behavior, and cancellation or
   completion semantics.
-version: 0.2.2
+version: 0.3.0
 tags: [lingtai, goal, notifications, reminders]
-last_changed_at: 2026-07-27T00:00:00Z
+last_changed_at: 2026-10-02T00:00:00Z
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/kernel/nudge/goal.py
@@ -42,8 +42,8 @@ When you receive a `source="goal.request"` event:
    permission to invent goal details.
 2. **Explain the mechanism briefly to the human.** Tell them that an active goal
    lives in `.notification/goal.json`, idle reminders are short
-   `goal.reminder` system events, and dismissing a reminder only hides the
-   reminder.
+   `goal.reminder` system events, and a reminder being delivered never changes
+   the goal.
 3. **Ask for the missing goal fields.** At minimum, clarify:
    - objective: what should be accomplished;
    - criteria: how the human and agent will know it is done;
@@ -53,23 +53,17 @@ When you receive a `source="goal.request"` event:
    - constraints: deadlines, channels to report on, what not to do, or approval
      gates.
 4. **Explain cancellation and completion before writing** — see "Protected
-   dismiss behavior" below for the exact semantics.
+   goal behavior" below for the exact semantics.
 5. **Write `.notification/goal.json` only after confirmation.** If the human gave
    a complete inline draft with `/goal <text>`, restate the structured goal and
    ask for confirmation unless the instruction explicitly and unambiguously says
    to create it now.
-6. **Dismiss the request after handling it.** Use the event `ref_id` so other
-   system events survive:
+6. **The request is delivered once.** The `goal.request` event is not
+   re-attached automatically and there is no notification dismiss action; handling
+   it means writing (or deliberately not writing) `goal.json`.
 
-```text
-notification(action="dismiss_ref",
-             input={"ref_id": "goal.request:<timestamp>", "channel": null,
-                    "force": null, "reason": null},
-             reasoning="the goal request is handled")
-```
-
-If the human changes their mind during setup, dismiss the `goal.request` event
-without creating `goal.json`. If a previous active goal exists, do not overwrite
+If the human changes their mind during setup, simply do not create `goal.json`.
+If a previous active goal exists, do not overwrite
 it silently; explain the existing goal and ask whether to complete, cancel, or
 replace it.
 
@@ -81,11 +75,11 @@ replace it.
   "icon": "🎯",
   "priority": "high",
   "published_at": "2026-06-10T00:00:00Z",
-  "instructions": "Current active goal. Read data.objective and data.criteria. This channel is protected: do not dismiss it. To cancel the goal, delete .notification/goal.json. See the goal manual under system-manual.",
+  "instructions": "Current active goal. Read data.objective and data.criteria. This channel is protected source of truth. To cancel the goal, delete .notification/goal.json. See the goal manual under system-manual.",
   "data": {
     "id": "notification-pr",
     "status": "active",
-    "objective": "Implement notification whitelist, atomic system-event dismiss, and goal reminders.",
+    "objective": "Implement notification whitelist, one-shot delivery, and goal reminders.",
     "criteria": ["tests pass", "manuals updated", "PR opened"],
     "reminder_delay_seconds": 120
   }
@@ -107,23 +101,16 @@ The top-level `instructions` field should explicitly say to read the goal data,
 that the `goal` channel is protected, and that this manual has the mechanism
 details.
 
-## Protected dismiss behavior
+## Protected goal behavior
 
-`goal` is not an ordinary dismissible notification mirror. Generic dismiss refuses:
-
-```text
-notification(action="dismiss_channel",
-             input={"channel": "goal", "force": null, "reason": null},
-             reasoning="...")  # refused
-```
+`goal` is protected source of truth, not a notification mirror to clear; the
+notification tool has no dismiss action.
 
 To cancel the goal, delete `.notification/goal.json` or mark `data.status`
 `inactive`/`cancelled`/`canceled`. To complete or supersede it, mark
 `data.status` `done`/`complete`/`completed`/`superseded`, or delete/replace the
-file. Dismissing a `goal.reminder` does **not** cancel the goal. Agents are
-trusted to decide when the source-of-truth file should change; the protection only
-prevents misleading API semantics where dismissing a notification looks like
-canceling a goal.
+file. Receiving a `goal.reminder` does **not** cancel or complete the goal. Agents
+are trusted to decide when the source-of-truth file should change.
 
 ## Idle reminder behavior
 
@@ -143,18 +130,13 @@ the configured delay, the kernel publishes one short event into
 ```
 
 The reminder is intentionally brief. The actual goal and instructions stay in
-`goal.json`. Dismissing the reminder clears only the system event:
-
-Same call shape as the goal-request dismiss above, with
-`ref_id="goal:<id>"`.
-
-Cancellation and completion semantics are above, under "Protected dismiss
-behavior": dismissing a reminder never cancels the goal, so if the goal remains
-active a fresh idle interval can generate another reminder. If `goal.json` is
-deleted or marked inactive/done while a reminder is already present, the next
-IDLE goal check clears that stale `goal.reminder` system event.
+`goal.json`. The reminder event is delivered once; while it stays in the system
+mirror it is not re-attached or re-published. Cancellation and completion
+semantics are above, under "Protected goal behavior". If `goal.json` is deleted
+or marked inactive/done while a reminder is already present, the next IDLE goal
+check clears that stale `goal.reminder` system event.
 
 ## Cross-reference
 
-For notification channels, envelopes, allowlist behavior, and atomic system-event
-dismiss, read the first-level `notification-manual` skill.
+For notification channels, envelopes, allowlist behavior, and one-shot delivery,
+read the first-level `notification-manual` skill.

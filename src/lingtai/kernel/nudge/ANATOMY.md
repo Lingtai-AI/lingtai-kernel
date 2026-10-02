@@ -103,10 +103,9 @@ cheap policy/current-fact evaluation remains synchronous while the one
 heartbeat;
 protected goal reminders are dispatched separately by
 `run_system_notifications`. Producer checks call `upsert`/`remove`; the shared
-`NotificationStorePort` persists `nudge.json`. `notification(action="dismiss_channel", input={"channel": "nudge", ...},
-reasoning=...)` remains
-the only transport-facing dismissal path and calls `record_dismissal` so dismiss
-means mute, not resolved. Effective config is reread on every Nudge operation;
+`NotificationStorePort` persists `nudge.json`. Nudge delivery is one-shot and the public
+notification dismiss actions are gone; `record_dismissal` is retained only as a
+private policy hook (dismiss means mute, not resolved) that no public path calls. Effective config is reread on every Nudge operation;
 invalid values fail safe to defaults and are diagnostic-only.
 
 ## Composition

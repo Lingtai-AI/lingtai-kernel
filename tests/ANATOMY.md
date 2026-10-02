@@ -259,6 +259,7 @@ related_files:
   - tests/test_notification_schema_wire_scrub.py
   - tests/test_notification_settings.py
   - tests/test_notification_store.py
+  - tests/test_notification_one_shot.py
   - tests/test_notification_sync.py
   - tests/test_notification_tool.py
   - tests/test_nudge_inline_cap.py

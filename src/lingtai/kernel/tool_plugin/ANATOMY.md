@@ -164,7 +164,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 - `src/lingtai/adapters/tool_plugin_host.py` — the production Adapter set,
   outside the kernel package. It supplies callback-only adapters for
   Plugin's detached read-only catalog projection
-  and Notification Core's dismissal, delay, hook, and logging operations,
+  and Notification Core's delay, hook, and logging operations (no dismissal),
   alongside the existing MCP, Avatar, Context, Daemon, and Email adapters,
   plus `AgentPsycheSettingsAdapter` for the one read-through applied Psyche
   owner-input snapshot, and
@@ -235,8 +235,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   slice. Its static `DECLARATION` preserves the LTP envelope, adds the reserved
   read-only `settings` action immediately before `manual`, and binds only
   `workdir` plus `notification_state`. The callback-only adapter delegates every
-  dismissal, stale-delivery comparison, producer guard, delay, timer,
-  hook-manifest, logging decision, and fresh two-scalar effective-settings read
+  delay, timer, hook-manifest, logging decision (it exposes no dismissal), and fresh two-scalar effective-settings read
   to the canonical owners; the family receives no Agent, Store, fingerprint,
   configuration object, writer, or local parallel state machine. Its
   package-owned `manual/SKILL.md` is the one canonical installed

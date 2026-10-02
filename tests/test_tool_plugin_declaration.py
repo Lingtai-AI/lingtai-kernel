@@ -339,8 +339,7 @@ def test_official_notification_mount_preserves_core_state_and_packaged_manual(
     monkeypatch.delenv("LINGTAI_NOTIFICATION_MAX_CHARS", raising=False)
     monkeypatch.delenv("LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS", raising=False)
     assert DECLARATION.public_actions == (
-        "check", "dismiss_channel", "dismiss_event", "dismiss_ref", "add",
-        "drop", "edit", "list", "delay", "settings", "manual",
+        "check", "add", "drop", "edit", "list", "delay", "settings", "manual",
     )
     assert DECLARATION.requires == ("workdir", "notification_state")
     assert mcp_agent.official_tool_plugins["notification"] is DECLARATION
@@ -371,21 +370,16 @@ def test_official_notification_mount_preserves_core_state_and_packaged_manual(
     assert manual["notification_manual"]
     assert manual["manual_path"].endswith("capabilities/notification/SKILL.md")
 
-    submit(mcp_agent, "system", data={"events": []}, header="dismiss me")
-    dismissed = handler(
+    submit(mcp_agent, "system", data={"events": []}, header="keep me")
+    rejected = handler(
         {
             "action": "dismiss_channel",
             "input": {"channel": "system", "force": True, "reason": None},
-            "reasoning": "clear the mirror only",
+            "reasoning": "the removed action must not clear anything",
         }
     )
-    assert dismissed == {
-        "status": "ok",
-        "channel": "system",
-        "cleared": True,
-        "forced": True,
-    }
-    assert not (mcp_agent.working_dir / ".notification" / "system.json").exists()
+    assert rejected.get("status") in ("error", "failed")
+    assert (mcp_agent.working_dir / ".notification" / "system.json").exists()
 
 
 @pytest.mark.parametrize(

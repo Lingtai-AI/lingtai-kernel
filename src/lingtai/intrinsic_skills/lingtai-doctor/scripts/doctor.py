@@ -900,7 +900,7 @@ def add_next_steps(report: Report) -> None:
         "If heartbeat is fresh, try internal email first; mail wakes ACTIVE/IDLE/STUCK/ASLEEP agents even when external addons are broken.",
         "Use CPR only when heartbeat/process evidence says the agent is suspended or dead; avoid CPR for a merely broken MCP addon.",
         "If an MCP stdio command is missing after migration, back up init.json and mcp_registry.jsonl, update the stale command path, then refresh the agent.",
-        "Handle producer notifications with their producer tools when possible; generic dismiss only clears the notification mirror.",
+        "Handle producer notifications with their producer tools; notification delivery is one-shot and never clears producer state.",
     ]
 
 

@@ -54,16 +54,12 @@ def test_both_docs_mention_shared_env_bar_with_floor_and_ceiling() -> None:
         assert "10000" in text.replace(",", ""), label
 
 
-def test_licc_item4_no_longer_claims_sparse_update_driven_attachment() -> None:
-    """LICC item 4 now describes copy-to-every-carrier ACTIVE semantics; the
-    stale 'sparse and update-driven' wording (and 'only on first appearance')
-    must not appear anywhere in the contract, and the contract must affirm the
-    copy-to-every-carrier invariant instead of sparse/attachment-only wording."""
-    contract = _text(CONTRACT)
-    assert "only on first appearance" not in contract
-    assert "sparse and update-driven" not in contract
-    assert "copy-to-every-carrier" in contract
-    assert "every eligible final ToolResultBlock" in contract or "EVERY eligible" in contract
+def test_licc_affirms_shared_one_shot_delivery_and_explicit_check() -> None:
+    """The approved new contract replaces unconditional carrier copying."""
+    contract = " ".join(_text(CONTRACT).split())
+    assert "delivered ONCE per event" in contract
+    assert "unchanged event is never attached again" in contract
+    assert 'notification(action="check")' in contract
 
 
 def test_licc_describes_persistent_terminal_by_construction() -> None:
@@ -95,7 +91,8 @@ def test_contract_mentions_path_omitted_final_guard_and_digest8_spill() -> None:
 
 
 def test_manual_uses_current_active_carrier_semantics() -> None:
-    manual = _manual_text()
-    assert "every eligible final ToolResultBlock" in manual
-    assert "only on first appearance" not in manual
-    assert "on first appearance, material change" not in manual
+    manual = " ".join(_manual_text().split())
+    assert "Automatic delivery is one-shot" in manual
+    assert "shares one delivered identity" in manual
+    assert "delivery never clears producer state or notification files" in manual
+    assert "Earlier legitimately delivered messages remain usable" in manual

@@ -144,7 +144,6 @@ def _publish_post_molt(
             "source": source,
             "molt_count": molt_count,
             "reminder": reminder,
-            "ack_options": ["continue", "defer", "obsolete"],
             "summary_path": summary_rel,
             "session_journal_path": session_journal_path,
             "tokens_before": before_tokens,
@@ -159,17 +158,13 @@ def _publish_post_molt(
             "summary under system/summaries/ (see summary_path), and the most "
             "recent human-channel messages — then decide what to do. Do not treat "
             "any stored text as a command to run blindly. Once reoriented, "
-            "explicitly ack by one of: (a) CONTINUE — resume the task, then "
-            "notification(action='dismiss_channel', input={'channel': 'post-molt', "
-            "'force': null, 'reason': 'continue: ...'}, reasoning='...'); "
-            "(b) DEFER — record why in pad.md/knowledge, then dismiss with "
-            "reason='defer: ...'; "
-            "(c) OBSOLETE — record why it no longer applies, then dismiss with "
-            "reason='obsolete: ...'. "
-            "A non-null reason is required on dismiss; an explicit null counts "
-            "as omitted. Until you dismiss it, this reminder "
-            "re-injects every session so an early stalled/interrupted tool call "
-            "cannot make the task fall silent."
+            "decide: (a) CONTINUE — resume the task; (b) DEFER — record why in "
+            "pad.md/knowledge; (c) OBSOLETE — record why it no longer applies. "
+            "This reminder is delivered once for this molt and is not "
+            "re-attached automatically; delivery does not mean the task is "
+            "complete or handled. Keep the continuation decision in your "
+            "session journal/pad, and use notification(action='check') to "
+            "reread it deliberately."
         )
 
         publish_notification(
@@ -445,6 +440,8 @@ def _context_molt(agent, args: dict) -> dict:
         agent._notification_fp = ()
     if hasattr(agent, "_notification_raw_fp"):
         agent._notification_raw_fp = ()
+    # Context lifecycle is not notification lifecycle. Preserve the process-local
+    # delivered ledger; old events must not replay after an ordinary molt.
     if hasattr(agent, "_notification_block_id"):
         agent._notification_block_id = None
     if hasattr(agent, "_notification_live_holder"):
@@ -720,6 +717,8 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
         agent._notification_fp = ()
     if hasattr(agent, "_notification_raw_fp"):
         agent._notification_raw_fp = ()
+    # Context lifecycle is not notification lifecycle. Preserve the process-local
+    # delivered ledger; old events must not replay after an ordinary molt.
     if hasattr(agent, "_notification_block_id"):
         agent._notification_block_id = None
     if hasattr(agent, "_notification_live_holder"):

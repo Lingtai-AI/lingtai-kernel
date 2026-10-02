@@ -102,7 +102,7 @@ _PROTECTED_GENERIC_DISMISS: dict[str, str] = {
 
 # Channels whose generic dismissal would leak producer-owned state.
 # Producers with durable unread/state mirrors register themselves here at
-# import time so notification(action="dismiss_channel", channel=...) can refuse
+# import time so the private generic-dismiss helper (no public action) can refuse
 # unsafe generic clears and point the agent at the producer-specific verb.
 _GENERIC_DISMISS_GUARDED: dict[str, str] = {}
 
@@ -404,8 +404,8 @@ def _delay_alarm_payload(completion: dict[str, Any]) -> dict[str, Any]:
         "published_at": completion["expired_at"],
         "instructions": (
             "This is a consumer-only delay alarm. The target producer state was "
-            "not changed; handle the re-exposed target, then dismiss delay-alarm "
-            "when this reminder is no longer needed."
+            "not changed; handle the re-exposed target. This alarm is delivered "
+            "once and is not re-attached automatically."
         ),
         "data": {
             "delay_alarm": {
@@ -1882,12 +1882,10 @@ def dismiss_channel(
     event_id: str | None = None,
     ref_id: str | None = None,
 ) -> dict:
-    """Shared agent-facing notification dismissal helper.
+    """Private compatibility/Core notification clear helper.
 
-    Used by the standalone ``notification`` tool's atomic dismiss verbs
-    (``dismiss_channel``/``dismiss_event``/``dismiss_ref``, all with
-    ``invoked_by="notification"``) and the System family's dismiss route
-    (``invoked_by="system"``).
+    Public notification/system dismiss routes are removed. Producer-specific
+    business operations and private Core callers keep their own lifecycle.
 
     Generic dismiss clears only the notification surface; producer-owned state
     is untouched.
