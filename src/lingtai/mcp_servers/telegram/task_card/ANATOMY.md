@@ -93,7 +93,11 @@ onto its one tracked resident Task Card target per account+chat.
   carrier-less legacy responses invalidate stale fallback, monotonic generation/
   API ordering rejects regressions, and `psyche_molt` clears the old generation.
   Malformed/incoherent values fail closed. It owns no journal I/O, route,
-  resident, or transport state.
+  resident, or transport state. `llm_response.stream_timing` carries optional
+  adapter-measured first-visible-text seconds and compatible generation speed
+  evidence; `apply_tool_usages` preserves it across current-call carriers.
+  Both Telegram render sites opt into `stream_metrics=True` (time line, then
+  established token symbols plus speed); other channels remain opt-out.
   `DISPLAY_SLOTS`/`DEFAULT_DISPLAY_EXPRESSION`/`validate_display_expression`/
   `compose_display` define and enforce the small declarative display-expression
   grammar: an ordered, allowlisted selection of the fragments

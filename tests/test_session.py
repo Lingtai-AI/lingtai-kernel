@@ -745,3 +745,21 @@ def test_reset_session_token_usage_starts_fresh_since_molt_counter():
     assert runtime["input_tokens"] == 0
     assert runtime["cached_tokens"] == 0
     assert runtime["api_calls"] == 0
+
+
+def test_measured_stream_timing_reaches_llm_response_event():
+    from lingtai.kernel.llm.base import LLMResponse, UsageMetadata
+    events = []
+    sm, _, _ = make_session_manager(logger_fn=lambda kind, **fields: events.append((kind, fields)))
+    sm._track_usage(LLMResponse(text="hi", usage=UsageMetadata(
+        input_tokens=100, output_tokens=200, thinking_tokens=20,
+        first_token_s=1.2, generation_s=4.0, generation_tokens=180,
+    )))
+    response = next(fields for kind, fields in events if kind == "llm_response")
+    assert response["stream_timing"] == {
+        "first_token_s": 1.2, "generation_s": 4.0, "generation_tokens": 180,
+    }
+    events.clear()
+    sm._track_usage(LLMResponse(text="nonstream", usage=UsageMetadata(input_tokens=100, output_tokens=5)))
+    response = next(fields for kind, fields in events if kind == "llm_response")
+    assert "stream_timing" not in response

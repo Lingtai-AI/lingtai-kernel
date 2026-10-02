@@ -660,6 +660,13 @@ class SessionManager:
         tokenizer (tiktoken / gemini / char estimate) and sets
         ``token_fallback_used`` so the TUI can warn the user.
         """
+        timing_fields = dict(timing_fields or {})
+        if type(getattr(response.usage, "first_token_s", None)) in (int, float):
+            timing_fields["stream_timing"] = {
+                "first_token_s": response.usage.first_token_s,
+                "generation_s": response.usage.generation_s,
+                "generation_tokens": response.usage.generation_tokens,
+            }
         usage_start = time.monotonic()
         if self._token_decomp_dirty:
             self._update_token_decomposition()

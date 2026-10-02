@@ -768,7 +768,7 @@ def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
     # The api delay is rendered on the group divider line, not in tool rows.
-    assert "↻ 3.4s" in rendered
+    assert "3.4s" in rendered
     # Tool rows no longer carry the api suffix.
     assert "3.4s api" not in rendered
 
@@ -812,11 +812,11 @@ def test_divider_renders_compact_per_call_usage_arrows(tmp_path):
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
     # The visible tail (last group) carries its own API delay + arrows + rate.
-    assert "↻ 3.4s" in rendered
+    assert "3.4s" in rendered
     assert "\u21931.2k" in rendered    # ↓1.2k output tokens
     assert "(56.8k)" in rendered  # 56.8k thinking/reasoning tokens
     assert "\u2191512.3k" in rendered  # ↑512.3k cache miss
-    assert "↻ 3.4s ↓1.2k (56.8k) ↑512.3k ◌ 259.8k | 55.0%" in rendered
+    assert "3.4s\n↓1.2k (56.8k) ↑512.3k ◌ 259.8k | 55.0%" in rendered
     # Usage is private per-row state: projected for rendering but never
     # leaked into the public window rows.
     assert all("_usage" not in row for row in manager._task_card_event_window())
@@ -834,7 +834,7 @@ def test_divider_usage_degrades_when_event_lacks_usage(tmp_path):
     ])
     manager._poll_event_tail()
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    assert "↻ 3.4s" in rendered
+    assert "3.4s" in rendered
     assert "\u2191" not in rendered
     assert "\u2193" not in rendered
 
@@ -2161,12 +2161,12 @@ def _last_edit(acct) -> str:
     return [c for c in acct.calls if c[0] == "edit_message"][-1][3]
 
 
-def _assert_price_line_after_metrics(text, expected, *, metrics="↻ 2.0s"):
+def _assert_price_line_after_metrics(text, expected, *, metrics="↓"):
     lines = text.splitlines()
     cost = [i for i, line in enumerate(lines) if _is_price_line(line)]
     assert len(cost) == 1, text
     assert expected in lines[cost[0]]
-    # The original glyph metrics row is unchanged and directly above.
+    # The established token glyphs stay directly above cost; time is its own line.
     assert metrics in lines[cost[0] - 1]
     assert "$" not in lines[cost[0] - 1]
 
@@ -2555,3 +2555,23 @@ def test_session_cost_row_is_escaped_inside_the_telegram_session_section():
     ]
     # Outside the Session section the same text is ordinary escaped content.
     assert _telegram_task_card_html("Cost · <x>") == "Cost · &lt;x&gt;"
+
+
+def test_actual_telegram_tail_stream_time_and_tokens_use_two_lines(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    event = json.loads(_priced_llm("api_timed", 112.3, total=1000, cached=100, out=200))
+    event["thinking_tokens"] = 20
+    event["stream_timing"] = {
+        "first_token_s": 1.2, "generation_s": 4.0, "generation_tokens": 180,
+    }
+    _write_lines(_events_path(tmp_path), [
+        _priced_tool_call("api_before", "call_before", 100.0),
+        json.dumps(event), _priced_diary("api_timed", 112.4),
+    ])
+    manager._poll_event_tail()
+    text = _last_edit(acct)
+    assert "↻12.4s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
+    assert "TTFT" not in text and "↻" in text

@@ -83,6 +83,15 @@ OpenAI adapter — wraps the `openai` SDK for the `openai` provider (official Op
 - **Base class** — `OpenAIAdapter` extends `LLMAdapter` (`from lingtai.llm.base import LLMAdapter`, `adapter.py:42`).
 - **Kernel types** — imports `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata` from `lingtai.kernel.llm.base`.
 - **Interface converters** — imports `to_openai` and `to_responses_input` from `lingtai.llm.interface_converters` (`adapter.py:44`).
+- **Text/tool stream metrics** — generic Chat Completions and Responses
+  `send_stream` start monotonic timing immediately before the SDK create call;
+  CC overflow retries reset it per dispatch. The accumulator ignores empty,
+  lifecycle and reasoning events for first actual text/tool name/argument
+  payload and ends the interval at final wire usage. `_visible_output_tokens`
+  requires explicit output and reasoning counts and subtracts reasoning exactly
+  once; text, tool-only and mixed output share this matched numerator.
+  Native Codex and nonstream/forced-SSE fallback remain timing-unknown
+  (`adapter.py:2148-2156`, `adapter.py:2789-2805`, `adapter.py:3239-3244`).
 - **Streaming** — imports `StreamingAccumulator` from `lingtai.kernel.llm.streaming` (`adapter.py:45`).
 - **HTTP client** — imports `httpx` for timeout construction (`adapter.py:23`); `openai` SDK for all API calls (`adapter.py:24`).
 - **Subclass hook** — `_default_prompt_cache_key()` (`adapter.py:3367`) for the provider-namespaced cache key (Codex overrides it). The former per-vendor `_session_class` / `_adapter_extra_body` / `reasoning_policy` hooks were removed with the MiMo/Zhipu/OpenRouter/DeepSeek adapters.

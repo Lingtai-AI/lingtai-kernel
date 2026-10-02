@@ -50,8 +50,25 @@ JSON-card renderer, reverse-MCP route, or refresh-ceiling source.
 
 ## API token list-price line (Telegram only)
 
-Under each API-call metrics row (`↻ <delay> ↓out ↑miss ◌ ctx | cache%`) the
-automatic Telegram card adds one plain line, for example:
+The automatic Telegram card shows time and token information on separate
+lines, then adds the plain price line, for example:
+
+```text
+↻12.4s · ⚡1.2s · 45 tok/s
+↓200 (20) ↑900 ◌ 1.0k | 10.0%
+```
+
+`⚡` measures actual stream dispatch to first nonempty **text or tool
+name/argument payload**. Reasoning, ids, lifecycle, heartbeat, usage and empty
+events do not count. `tok/s` uses final provider output (including tools) minus
+explicitly reported reasoning tokens, divided by the measured
+first-output-to-final-usage interval (180 / 4 = 45 here), not the total API gap.
+It is observed output throughput including wire/trailer delay, not server-only
+throughput. Generic OpenAI Chat Completions and Responses streaming currently
+supply this evidence for text, tool-only and mixed rounds. Missing/estimated
+usage, missing explicit reasoning counts, untimed adapters, and
+nonstream/forced-SSE fallback omit speed; unknown timing is omitted, not inferred
+as zero. Total existing delay, its `↻` and token symbols/counts are retained. The following cost line remains independent:
 
 ```text
 $0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004
@@ -85,9 +102,9 @@ Reading it:
   whole write). If any part is a lower bound or unknown, the headline total is
   the known subtotal with a trailing `+` (`$0.0682+`), or `cost ?` when nothing
   is known.
-- **No speed figure.** The line shows no tokens/second: the displayed API
-  gap includes waiting, prefill, streaming and orchestration, so dividing by it
-  would not be a real generation speed.
+- **Independent from speed.** The price line does not calculate tokens/second.
+  The token line above uses only measured compatible stream evidence; the total
+  API gap includes waiting/prefill/orchestration and is not its denominator.
 - **Async cache, offline, old history.** The card never waits for the network:
   the first render may show `cost loading`, one bounded background refresh (fixed
   URL, 8 MiB cap, per-read timeout plus a total deadline, no credentials)

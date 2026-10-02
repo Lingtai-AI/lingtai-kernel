@@ -92,6 +92,10 @@ compatibility-only: it passes the Agent-like subject directly to
 uses it. `tests/test_system_declared_plugin.py` is the compact vertical proof
 of declaration, mount, identity, mounted runtime sleep, and packaged manual.
 
+`settings.py::_policy_defaults` owns the product streaming default (on).
+`resolve_runtime_policy` retains environment > closed-v2 file > default,
+including explicit OFF; boot/refresh installs it on SessionManager.
+
 Physical address/workdir rename remains an operator-only System migration route,
 not a `name_set`/`name_nickname` action: the common procedure lives in the
 migration router, helper detail in its nested Agent-name/Project-move references,

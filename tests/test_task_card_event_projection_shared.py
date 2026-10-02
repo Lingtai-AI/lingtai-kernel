@@ -513,3 +513,44 @@ def test_session_usage_accepts_optional_or_over_window_context_metadata() -> Non
         over_window
     )["metadata"]
     assert metadata["context_usage"] > 1.0
+
+
+def test_stream_metrics_formula_two_lines_and_carrier_preservation():
+    event = {"type": "llm_response", "api_call_id": "api_timed",
+             "input_tokens": 1000, "cached_tokens": 100, "output_tokens": 200,
+             "thinking_tokens": 20,
+             "stream_timing": {"first_token_s": 1.2, "generation_s": 4.0,
+                               "generation_tokens": 180}}
+    _, usage = TaskCardEventProjection.project_llm_response_usage(event)
+    info = TaskCardEventProjection.format_divider_info(12.4, usage, stream_metrics=True)
+    assert info == "↻12.4s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%"
+    # Other consumers opt out, preserving the established single line.
+    assert "⚡" not in TaskCardEventProjection.format_divider_info(12.4, usage)
+    groups = [{"events": [{"kind": "text", "text": "hello", "api_delay_s": 12.4,
+                            "_api_call_id": "api_timed", "_tool_call_id": "tool"}]}]
+    TaskCardEventProjection.apply_tool_usages(groups, {
+        "api_timed": usage, "tool": {"output": 200, "thinking": 20, "cache_miss": 900},
+    })
+    assert groups[0]["events"][0]["_usage"]["stream_timing"] == usage["stream_timing"]
+    frame = TaskCardEventProjection.render_event_groups(groups, normal_rows=10, stream_metrics=True)
+    assert "↻12.4s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900" in frame
+
+
+def test_missing_invalid_estimated_stream_metrics_omit_speed():
+    base = {"type": "llm_response", "api_call_id": "api",
+            "input_tokens": 10, "cached_tokens": 0, "output_tokens": 5}
+    for timing in (None, {}, {"first_token_s": float("nan")},
+                   {"first_token_s": True}, {"first_token_s": 1, "generation_s": 0,
+                                             "generation_tokens": 5},
+                   {"first_token_s": 1, "generation_s": float("inf"),
+                    "generation_tokens": 5}):
+        _, usage = TaskCardEventProjection.project_llm_response_usage({**base, "stream_timing": timing})
+        text = TaskCardEventProjection.format_divider_info(12.4, usage, stream_metrics=True)
+        assert "tok/s" not in text
+    _, usage = TaskCardEventProjection.project_llm_response_usage({
+        **base, "estimated": True, "stream_timing": {
+            "first_token_s": 1, "generation_s": 2, "generation_tokens": 5,
+        },
+    })
+    text = TaskCardEventProjection.format_divider_info(12.4, usage, stream_metrics=True)
+    assert "⚡1.0s" in text and "tok/s" not in text

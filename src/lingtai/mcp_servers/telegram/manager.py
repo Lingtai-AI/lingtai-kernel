@@ -3778,6 +3778,7 @@ class TelegramManager:
             locale=self._taskcard_locale(),
             display_expression=self._taskcard_display_expression(),
             usage_line=_api_cost.usage_line,
+            stream_metrics=True,
         ))
         fingerprint = self._task_card_automatic_fingerprint(automatic)
         for account, chat_id in self._resident_task_card_targets():
@@ -3958,6 +3959,7 @@ class TelegramManager:
             locale=self._taskcard_locale(),
             display_expression=self._taskcard_display_expression(),
             usage_line=_api_cost.usage_line,
+            stream_metrics=True,
         ))
         return self._deliver_channel_frame(
             account,

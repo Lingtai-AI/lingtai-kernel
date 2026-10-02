@@ -777,7 +777,7 @@ def _policy_defaults() -> dict[str, Any]:
     return {
         "context_limit": defaults.context_limit,
         "max_rpm": DEFAULT_MAX_RPM,
-        "streaming": False,
+        "streaming": True,
         "aed_timeout": defaults.aed_timeout,
         "max_aed_attempts": defaults.max_aed_attempts,
         "snapshot_interval": defaults.snapshot_interval,

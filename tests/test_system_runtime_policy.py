@@ -244,7 +244,7 @@ def test_defaults_when_nothing_is_configured(tmp_path):
     defaults = AgentConfig()
     assert policy.context_limit is None
     assert policy.max_rpm == 60
-    assert policy.streaming is False
+    assert policy.streaming is True
     assert policy.aed_timeout == defaults.aed_timeout == 360.0
     assert policy.max_aed_attempts == defaults.max_aed_attempts == 3
     assert policy.snapshot_interval is None
@@ -640,7 +640,7 @@ def test_refresh_applies_and_removes_system_policy_coherently(tmp_path, monkeypa
     assert agent.service._context_window == 272_000
     assert agent._config.max_rpm == 60
     assert agent._config.aed_timeout == 360.0
-    assert agent._session.streaming is False
+    assert agent._session.streaming is True
 
     _write_settings(
         tmp_path,
@@ -674,7 +674,7 @@ def test_refresh_applies_and_removes_system_policy_coherently(tmp_path, monkeypa
     assert agent._config.aed_timeout == 360.0
     assert agent._config.max_aed_attempts == 3
     assert agent._config.activeness == "balanced"
-    assert agent._session.streaming is False
+    assert agent._session.streaming is True
 
 
 def test_refresh_env_beats_system_file_and_invalid_env_falls_through(tmp_path, monkeypatch):

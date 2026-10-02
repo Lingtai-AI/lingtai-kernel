@@ -231,7 +231,9 @@ value rejects the whole document; absent and explicit `null` are distinct. The
 and `Agent._setup_from_init` (through `Agent.resolve_runtime_policy`) apply the
 same resolved policy to the LLM service, `AgentConfig` (via
 `build_agent_config(..., runtime_policy=)`), and the `SessionManager.streaming`
-setter, so boot and refresh never disagree. Enabling `snapshot_interval` on a
+setter, so boot and refresh never disagree. Streaming defaults to **on**;
+explicit valid environment OFF or v2 `streaming: false` still disables it.
+Enabling `snapshot_interval` on a
 started agent initializes the snapshot port before the new config is published;
 on failure snapshots remain off and `snapshot_initialize_failed` is logged. The
 v2 `notification_max_chars` field is exposed only through
