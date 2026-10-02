@@ -18,6 +18,7 @@ import copy
 import functools
 import hashlib
 import json
+import math
 import queue
 import threading
 import time
@@ -1247,7 +1248,8 @@ class BaseAgent:
 
         Owns the hidden idle-timeout bookkeeping: entering IDLE stamps
         ``_idle_since_monotonic``; leaving IDLE (to ACTIVE, STUCK, ASLEEP,
-        or SUSPENDED) clears it.
+        or SUSPENDED) records monotonic ``idle_elapsed_s`` on the existing
+        state event before clearing it. Missing anchors stay unknown.
         """
         old = self._state
         if old == new_state:
@@ -1260,6 +1262,13 @@ class BaseAgent:
 
         # Hidden idle-timeout bookkeeping: IDLE-only.  Stamp on entering
         # IDLE, clear on leaving.
+        idle_fields = {}
+        if old == AgentState.IDLE and self._idle_since_monotonic is not None:
+            elapsed = (
+                self._lifecycle_clock.monotonic_seconds() - self._idle_since_monotonic
+            )
+            if math.isfinite(elapsed) and elapsed >= 0:
+                idle_fields["idle_elapsed_s"] = elapsed
         if new_state == AgentState.IDLE:
             self._idle_since_monotonic = self._lifecycle_clock.monotonic_seconds()
         elif old == AgentState.IDLE:
@@ -1288,7 +1297,9 @@ class BaseAgent:
             self._active_turn_id = None
             self._active_stuck_logged = False
 
-        self._log("agent_state", old=old.value, new=new_state.value, reason=reason)
+        self._log(
+            "agent_state", old=old.value, new=new_state.value, reason=reason, **idle_fields,
+        )
         self._workdir.write_manifest(self._build_manifest())
 
     def _wake_nap(self, reason: str) -> None:

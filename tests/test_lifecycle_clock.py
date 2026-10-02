@@ -460,3 +460,21 @@ def test_heartbeat_loop_survives_io_error_in_tick(tmp_path, caplog):
     # propagating the exception out of the loop's entry point.
     assert len(ticks) == 2
     assert "heartbeat loop caught exception, continuing" in caplog.text
+
+
+@pytest.mark.parametrize("target", [AgentState.ACTIVE, AgentState.ASLEEP, AgentState.STUCK])
+def test_idle_exit_event_is_monotonic_and_excludes_other_states(tmp_path, target):
+    clock = FakeLifecycleClock(wall=8000.0, monotonic=3.0)
+    agent = _make_agent(tmp_path, lifecycle_clock=clock)
+    agent._log = Mock()
+    clock.advance_monotonic(2.5)
+    clock.set_wall(1.0)  # wall jumps cannot change IDLE duration
+    agent._set_state(target)
+    assert agent._log.call_args.kwargs["idle_elapsed_s"] == 2.5
+    agent._log.reset_mock()
+    clock.advance_monotonic(90.0)
+    agent._set_state(AgentState.IDLE)
+    assert "idle_elapsed_s" not in agent._log.call_args.kwargs
+    agent._idle_since_monotonic = None
+    agent._set_state(AgentState.ACTIVE)
+    assert "idle_elapsed_s" not in agent._log.call_args.kwargs

@@ -388,6 +388,47 @@ class TaskCardEventProjection:
         count = cls.EVENT_WINDOW if window is None else window
         return groups[-count:]
 
+    @classmethod
+    def reduce_idle_event(
+        cls, state: dict[str, Any] | None, event: dict[str, Any],
+        row: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Sum fully witnessed IDLE intervals between existing progress rows.
+
+        Journal order establishes containment, never wall-clock subtraction.
+        A partial interval or lifecycle restart invalidates that gap. No idle
+        observation is not proof of zero, so it stays absent.
+        """
+        current = dict(state or {})
+        kind = event.get("type")
+        if kind in {"heartbeat_start", "heartbeat_stop", "agent_stop"}:
+            current = {}
+        elif kind == "agent_state":
+            old, new = event.get("old"), event.get("new")
+            if old == "idle":
+                elapsed = cls._finite_number(event.get("idle_elapsed_s"))
+                if not current.get("pending") or elapsed is None or elapsed < 0:
+                    current["invalid"] = True
+                else:
+                    current["total"] = current.get("total", 0.0) + elapsed
+                    current["observed"] = True
+                current["pending"] = False
+            elif current.get("pending"):
+                current["invalid"] = True
+                current["pending"] = False
+            if new == "idle":
+                current["pending"] = bool(current.get("anchor"))
+                if not current.get("anchor"):
+                    current["invalid"] = True
+        if row is not None and "_ts" in row:
+            if (current.get("anchor") and current.get("observed")
+                    and not current.get("invalid") and not current.get("pending")):
+                total = current.get("total", 0.0)
+                if math.isfinite(total):
+                    row["idle_s"] = total
+            current = {"anchor": True}
+        return current
+
     @staticmethod
     def flatten_groups(
         groups: list[dict[str, Any]],
@@ -1144,7 +1185,11 @@ class TaskCardEventProjection:
                     usage = u
                 if api_delay_s is not None and usage is not None:
                     break
-            info = cls.format_divider_info(api_delay_s, usage, stream_metrics=stream_metrics)
+            events = group.get("events", [])
+            idle_s = events[0].get("idle_s") if events else None
+            info = cls.format_divider_info(
+                api_delay_s, usage, stream_metrics=stream_metrics, idle_s=idle_s,
+            )
             for line in info.splitlines():
                 rows.append({"kind": "api_info", "text": line})
             if usage_line is not None:
@@ -1170,7 +1215,7 @@ class TaskCardEventProjection:
         cls,
         api_delay_s: float | None,
         usage: dict[str, Any] | None,
-        *, stream_metrics: bool = False,
+        *, stream_metrics: bool = False, idle_s: float | None = None,
     ) -> str:
         """Compact divider: `↻ x s ↓out (think) ↑miss ◌ ctx | cache%`.
 
@@ -1220,6 +1265,8 @@ class TaskCardEventProjection:
         if api_delay_s is not None and api_delay_s > 0:
             time_parts.append(f"↻{api_delay_s:.1f}s")
             parts.pop(0)
+        if type(idle_s) in (int, float) and math.isfinite(idle_s) and idle_s >= 0:
+            time_parts.append(f"☕{idle_s:.1f}s")
         timing = usage.get("stream_timing") if isinstance(usage, dict) else None
         if isinstance(timing, dict):
             first = timing.get("first_token_s")

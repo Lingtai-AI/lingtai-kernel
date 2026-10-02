@@ -5,6 +5,7 @@ labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - tests/test_lifecycle_clock.py
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/kernel/base_agent/lifecycle.py
@@ -250,3 +251,22 @@ Pass when the suite is green and the inspection matches the Contract. Fail if th
 ### Pass / Fail
 
 Pass when both assertions hold and no test sends a real message. Fail if a hidden, partially covered, or unattested reply settles the turn, or if a fully attested visible reply causes an AED retry.
+
+
+## Behavior BA008 — IDLE exit records only measured IDLE seconds
+
+- **id**: BA008
+- **title**: IDLE exit records only measured IDLE seconds
+- **guards**: `agent-runtime` § [Contract rules](CONTRACT.md#contract-rules), `agent_state.idle_elapsed_s`
+- **runner**: any LingTai agent with shell access
+- **prerequisites**: checkout of this repository and its test Python
+- **estimate**: ≈ 1 minute
+
+### Steps
+1. Run `python -m pytest -q tests/test_lifecycle_clock.py` from the repository root.
+
+### Expected evidence
+- [ ] IDLE exit to ACTIVE, ASLEEP or STUCK records monotonic duration despite a wall-clock jump; time spent in those other states and a missing anchor produce no duration.
+
+### Pass / Fail
+Pass when the focused producer tests pass; fail on inferred duration or wall-time subtraction.

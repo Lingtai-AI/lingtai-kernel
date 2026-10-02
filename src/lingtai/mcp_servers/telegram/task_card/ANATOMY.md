@@ -96,6 +96,11 @@ onto its one tracked resident Task Card target per account+chat.
   resident, or transport state. `llm_response.stream_timing` carries optional
   adapter-measured first-visible-text seconds and compatible generation speed
   evidence; `apply_tool_usages` preserves it across current-call carriers.
+  `reduce_idle_event` folds ordered `agent_state` entry/exit evidence and
+  monotonic `idle_elapsed_s` into row `idle_s`; manager reverse-tail replays
+  only the existing bounded window and live append retains ephemeral
+  `_task_card_idle_state`. Lifecycle start/stop fences invalidate coverage.
+  Only fully contained intervals appear as coffee on the first time line.
   Both Telegram render sites opt into `stream_metrics=True` (time line, then
   established token symbols plus speed); other channels remain opt-out.
   `DISPLAY_SLOTS`/`DEFAULT_DISPLAY_EXPRESSION`/`validate_display_expression`/

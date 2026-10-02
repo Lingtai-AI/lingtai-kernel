@@ -554,3 +554,11 @@ def test_missing_invalid_estimated_stream_metrics_omit_speed():
     })
     text = TaskCardEventProjection.format_divider_info(12.4, usage, stream_metrics=True)
     assert "⚡1.0s" in text and "tok/s" not in text
+
+
+def test_idle_time_is_opt_in_and_does_not_change_other_channel_frames():
+    legacy = TaskCardEventProjection.format_divider_info(12.4, None)
+    assert TaskCardEventProjection.format_divider_info(12.4, None, idle_s=2.5) == legacy
+    assert TaskCardEventProjection.format_divider_info(
+        12.4, None, stream_metrics=True, idle_s=2.5,
+    ) == "↻12.4s · ☕2.5s"

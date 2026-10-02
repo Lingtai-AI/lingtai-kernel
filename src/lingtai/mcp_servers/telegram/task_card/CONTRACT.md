@@ -110,6 +110,14 @@ semantics live here. The public producer contract lives in
     and mixed rounds use the same formula. Estimated, missing-usage and
     untimed/nonstream rounds omit speed; unknown first output is omitted, never
     shown as inferred zero. Total API delay and its `↻` symbol remain unchanged.
+    `☕X.Ys` on that first time line sums fully witnessed true IDLE intervals
+    contained between the same progress rows that establish the gap. The
+    `agent_state.idle_elapsed_s` producer uses monotonic seconds, never
+    gap-minus-API latency. Missing/partial entry or exit evidence and lifecycle
+    restart boundaries omit coffee, not fabricate zero; zero requires a
+    witnessed zero-length interval. Tools, prompt build, queue/network wait,
+    ASLEEP and STUCK are not counted. Existing gap, stream timing and speed
+    numerator remain unchanged (guarded by [TT002](BEHAVIORS.md#behavior-tt002)).
     Other channels keep their existing layout. Telegram alone also opts into
     one extra plain price line immediately after the token metrics line per API call, compact on one line and mirroring that row's
     symbols: `$<total>[+] · ↓<$> ↑<$> | <$>[ stale prices]` (no tokens/second figure) where

@@ -3,6 +3,8 @@ name: agent-runtime
 contract_version: 1
 root_contract: CONTRACT.md
 related_files:
+  - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
+  - tests/test_lifecycle_clock.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/tools/system/CONTRACT.md
   - src/lingtai/kernel/base_agent/BEHAVIORS.md
@@ -196,6 +198,14 @@ Platform profiles are selector-composed at the composition roots
   (guard honestly absent; the lease remains the authority).
 
 ## Contract rules
+
+`agent_state.idle_elapsed_s` is optional finite nonnegative monotonic seconds
+from true IDLE entry to exit, emitted only when leaving IDLE with an anchor.
+ACTIVE/tools, prompt build, queue/network wait, ASLEEP and STUCK are not IDLE.
+Missing anchors omit the field; it is not recovered across process restart.
+State ordering and wall-domain event `ts` are unchanged. Guarded by
+[BA008](BEHAVIORS.md#behavior-ba008); the consumer procedure is in the
+[Telegram Task Card manual](../../../mcp_servers/telegram/task_card/SKILL.md).
 
 Clause IDs are stable; each rule composes the linked normative source.
 

@@ -62,11 +62,15 @@ Pass when the suite passes and the active/diff-only observations hold. Fail on p
 3. Project one pure-text group whose `llm_response` reports `output_tokens` and `thinking_tokens`, then repeat without a thinking field.
 4. Project text, tool-only and mixed `llm_response.stream_timing` with first actual output 1.2s, generation interval 4s and 180 non-reasoning output tokens; then omit timing or final usage.
 
+5. Replay and live-append measured IDLE intervals between progress rows, then tool-only, missing-field, ASLEEP and restart-crossing gaps.
+
 ### Expected evidence
 - [ ] Step 1: the automatic event-tail suite passes.
 - [ ] Step 2: the divider contains `↓<output> (<thinking>) ↑<cache-miss>` with compact counts, while `_usage` remains private projection state.
 - [ ] Step 3: the `llm_response` fallback renders the same parenthesized form; an old event without thinking tokens preserves the prior output/cache/context line with no dangling parentheses.
 - [ ] Step 4: time and speed occupy their own line (`↻12.4s · ⚡1.2s · 45 tok/s`), token symbols remain on the next line; unavailable evidence omits the new metric, never inferred zero.
+
+- [ ] Step 5: only complete IDLE evidence adds `☕X.Ys` on the first line; gap, first-output and speed values stay unchanged; unknown coverage omits coffee.
 
 ### Pass / Fail
 Pass when both normalized usage paths render the same parenthesized reasoning count immediately after output and legacy missing-field input remains unchanged. Fail if the count is misplaced, reasoning text is exposed, or missing/malformed data leaves a dangling marker.
