@@ -1218,7 +1218,7 @@ class TaskCardEventProjection:
         # their existing frame, including every established token symbol.
         time_parts = []
         if api_delay_s is not None and api_delay_s > 0:
-            time_parts.append(f"{api_delay_s:.1f}s")
+            time_parts.append(f"↻{api_delay_s:.1f}s")
             parts.pop(0)
         timing = usage.get("stream_timing") if isinstance(usage, dict) else None
         if isinstance(timing, dict):

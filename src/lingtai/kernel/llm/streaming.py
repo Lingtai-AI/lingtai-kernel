@@ -42,7 +42,7 @@ class StreamingAccumulator:
 
     def __init__(self, *, request_started_at: float | None = None) -> None:
         self._request_started_at = request_started_at
-        self._first_text_at: float | None = None
+        self._first_output_at: float | None = None
         self._generation_end_at: float | None = None
         self._text_parts: list[str] = []
         self._thought_parts: list[str] = []
@@ -59,9 +59,13 @@ class StreamingAccumulator:
 
     def add_text(self, delta: str, *, received_at: float | None = None) -> None:
         """Append a text delta."""
-        if delta and self._request_started_at is not None and self._first_text_at is None:
-            self._first_text_at = received_at if received_at is not None else time.monotonic()
+        self._observe_output(delta, received_at=received_at)
         self._text_parts.append(delta)
+
+    def _observe_output(self, content: str | None, *, received_at: float | None = None) -> None:
+        """Latch actual text/tool payload, never ids, reasoning or empty events."""
+        if content and self._request_started_at is not None and self._first_output_at is None:
+            self._first_output_at = received_at if received_at is not None else time.monotonic()
 
     # -- Thoughts -----------------------------------------------------------
 
@@ -79,11 +83,13 @@ class StreamingAccumulator:
 
     def start_tool(self, *, id: str, name: str) -> None:
         """Begin accumulating a new tool call."""
+        self._observe_output(name)
         self._pending_tool = {"id": id, "name": name, "args_json": ""}
 
     def add_tool_args(self, delta: str) -> None:
         """Append JSON argument fragment to the current pending tool."""
         if self._pending_tool is not None:
+            self._observe_output(delta)
             self._pending_tool["args_json"] += delta
 
     def set_tool_args_if_empty(self, full: str | None) -> None:
@@ -97,6 +103,7 @@ class StreamingAccumulator:
         if not full:
             return
         if self._pending_tool is not None and not self._pending_tool["args_json"]:
+            self._observe_output(full)
             self._pending_tool["args_json"] = full
 
     def finish_tool(self) -> None:
@@ -114,8 +121,10 @@ class StreamingAccumulator:
         id: str | None = None,
         name: str | None = None,
         args_delta: str | None = None,
+        received_at: float | None = None,
     ) -> None:
         """Feed an index-keyed tool-call delta (OpenAI Completions style)."""
+        self._observe_output(name or args_delta, received_at=received_at)
         if index not in self._pending_tools_by_index:
             self._pending_tools_by_index[index] = {
                 "id": id or "",
@@ -199,12 +208,12 @@ class StreamingAccumulator:
             thoughts = ["".join(thoughts)]
 
         usage = usage or UsageMetadata()
-        if self._first_text_at is not None and self._request_started_at is not None:
-            usage.first_token_s = self._first_text_at - self._request_started_at
+        if self._first_output_at is not None and self._request_started_at is not None:
+            usage.first_token_s = self._first_output_at - self._request_started_at
             if self._generation_end_at is not None:
-                usage.generation_s = self._generation_end_at - self._first_text_at
-        if self._tool_calls or self._first_text_at is None:
-            # No timed text, or wire output includes non-text tool tokens.
+                usage.generation_s = self._generation_end_at - self._first_output_at
+        if self._first_output_at is None:
+            # No observed output payload: counts alone cannot establish timing.
             usage.generation_tokens = None
 
         return LLMResponse(

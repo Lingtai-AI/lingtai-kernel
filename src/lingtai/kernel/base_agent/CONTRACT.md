@@ -573,8 +573,8 @@ Clause IDs are stable; each rule composes the linked normative source.
    continuation all return through one of those two `SessionManager` paths.
    Optional adapter-measured streaming evidence passes through the existing
    `llm_response.stream_timing` event: monotonic seconds to first nonempty
-   visible text (`first_token_s`), first-text-to-final-usage seconds
-   (`generation_s`), and final provider text tokens excluding reasoning
+   text or tool name/argument payload (`first_token_s`), first-output-to-final-usage
+   seconds (`generation_s`), and final provider output tokens excluding reasoning
    (`generation_tokens`). Missing evidence stays absent/unknown; nonstream
    latency and estimated tokens MUST NOT establish stream speed. This additive
    projection does not change retry or partial-stream terminal boundaries.

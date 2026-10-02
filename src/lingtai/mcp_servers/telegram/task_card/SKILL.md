@@ -54,21 +54,21 @@ The automatic Telegram card shows time and token information on separate
 lines, then adds the plain price line, for example:
 
 ```text
-12.4s · ⚡1.2s
+↻12.4s · ⚡1.2s
 ↓200 (20) ↑900 ◌ 1.0k | 10.0% 45 tok/s
 ```
 
-`⚡` measures actual stream dispatch to first nonempty **visible text**. A
-reasoning-first response waits for visible-body text; reasoning, lifecycle,
-heartbeat, usage and empty events do not count. `tok/s` uses final provider
-output minus explicitly reported reasoning tokens, divided by the measured
-first-text-to-final-usage interval (180 / 4 = 45 here), not the total API gap.
-It is observed text throughput including wire/trailer delay, not server-only
+`⚡` measures actual stream dispatch to first nonempty **text or tool
+name/argument payload**. Reasoning, ids, lifecycle, heartbeat, usage and empty
+events do not count. `tok/s` uses final provider output (including tools) minus
+explicitly reported reasoning tokens, divided by the measured
+first-output-to-final-usage interval (180 / 4 = 45 here), not the total API gap.
+It is observed output throughput including wire/trailer delay, not server-only
 throughput. Generic OpenAI Chat Completions and Responses streaming currently
-supply this evidence. Tool/mixed output, missing/estimated usage, missing explicit
-reasoning counts, untimed adapters, and nonstream/forced-SSE fallback omit speed;
-unknown timing is omitted, not inferred as zero. Total existing delay and token
-symbols/counts are retained. The following cost line remains independent:
+supply this evidence for text, tool-only and mixed rounds. Missing/estimated
+usage, missing explicit reasoning counts, untimed adapters, and
+nonstream/forced-SSE fallback omit speed; unknown timing is omitted, not inferred
+as zero. Total existing delay, its `↻` and token symbols/counts are retained. The following cost line remains independent:
 
 ```text
 $0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004

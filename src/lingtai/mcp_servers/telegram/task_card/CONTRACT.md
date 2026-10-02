@@ -100,15 +100,16 @@ semantics live here. The public producer contract lives in
    `thinking_tokens` fallback produce the same representation. A missing,
    malformed, or output-less count is omitted without a dangling parenthesis,
    preserving old-event rendering and never exposing reasoning text.
-    Telegram opts into two metrics lines: time first (`12.4s · ⚡1.2s`),
+    Telegram opts into two metrics lines: time first (`↻12.4s · ⚡1.2s`),
     tokens next (existing output/thinking/cache/context symbols, with optional
-    `45 tok/s`). `⚡` is seconds from actual dispatch to first nonempty visible
-    text, excluding reasoning, lifecycle, heartbeat, usage and empty events.
-    Speed is final provider non-reasoning text tokens / measured
-    first-text-to-final-usage seconds, only with explicit compatible counts
-    and a finite positive interval. Tool/mixed, estimated, missing-usage and
-    untimed/nonstream rounds omit speed; unknown first text is omitted, never
-    shown as inferred zero. Total existing API delay remains unchanged.
+    `45 tok/s`). `⚡` is seconds from actual dispatch to first nonempty text or
+    tool name/argument payload, excluding ids, reasoning, lifecycle, heartbeat,
+    usage and empty events. Speed is final provider non-reasoning output tokens
+    (including tools) / measured first-output-to-final-usage seconds, only with
+    explicit compatible counts and a finite positive interval. Text, tool-only
+    and mixed rounds use the same formula. Estimated, missing-usage and
+    untimed/nonstream rounds omit speed; unknown first output is omitted, never
+    shown as inferred zero. Total API delay and its `↻` symbol remain unchanged.
     Other channels keep their existing layout. Telegram alone also opts into
     one extra plain price line immediately after the token metrics line per API call, compact on one line and mirroring that row's
     symbols: `$<total>[+] · ↓<$> ↑<$> | <$>[ stale prices]` (no tokens/second figure) where

@@ -496,7 +496,8 @@ def test_send_terminal_overflow_untrimmable_no_notice():
     assert iface._entries[0].role == "system"
 
 
-def test_chat_stream_dispatch_timer_resets_on_overflow(monkeypatch):
+@pytest.mark.parametrize("output_kind", ["text", "tool", "mixed"])
+def test_chat_stream_dispatch_timer_resets_on_overflow(monkeypatch, output_kind):
     now = [10.0]
     monkeypatch.setattr("lingtai.llm.openai.adapter.time.monotonic", lambda: now[0])
     client = MagicMock()
@@ -513,8 +514,16 @@ def test_chat_stream_dispatch_timer_resets_on_overflow(monkeypatch):
             ))])
             now[0] = 22.0
             yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(
-                content="hello", tool_calls=[],
+                content="hello" if output_kind == "text" else "",
+                tool_calls=[] if output_kind == "text" else [SimpleNamespace(
+                    index=0, id="call_timed", function=SimpleNamespace(name="read", arguments="{}"),
+                )],
             ))])
+            if output_kind == "mixed":
+                now[0] = 23.0
+                yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(
+                    content="also text", tool_calls=[],
+                ))])
             now[0] = 26.0
             yield SimpleNamespace(choices=[], usage=SimpleNamespace(
                 prompt_tokens=10, completion_tokens=200, prompt_tokens_details=None,

@@ -772,8 +772,9 @@ def test_responses_stream_without_completion_does_not_invent_raw_response():
     assert response.raw is None
 
 
+@pytest.mark.parametrize("output_kind", ["text", "tool", "mixed"])
 @pytest.mark.parametrize("reasoning", [20, None, True, -1])
-def test_responses_real_dispatch_visible_text_timing(monkeypatch, reasoning):
+def test_responses_real_dispatch_visible_text_timing(monkeypatch, reasoning, output_kind):
     now = [10.0]
     monkeypatch.setattr("lingtai.llm.openai.adapter.time.monotonic", lambda: now[0])
 
@@ -788,7 +789,17 @@ def test_responses_real_dispatch_visible_text_timing(monkeypatch, reasoning):
                 yield Event("response.output_text.delta", delta="")
                 yield Event("response.reasoning_summary_text.delta", delta="thought")
                 now[0] = 12.0
-                yield Event("response.output_text.delta", delta="hello")
+                if output_kind in ("tool", "mixed"):
+                    yield Event("response.output_item.added", item=SimpleNamespace(
+                        type="function_call", call_id="call_timed", name="read",
+                    ))
+                    yield Event("response.function_call_arguments.delta", delta="{}")
+                    yield Event("response.output_item.done", item=SimpleNamespace(
+                        type="function_call", arguments="{}",
+                    ))
+                if output_kind in ("text", "mixed"):
+                    now[0] = 13.0 if output_kind == "mixed" else 12.0
+                    yield Event("response.output_text.delta", delta="hello")
                 now[0] = 16.0
                 wire_usage = _usage()
                 wire_usage.output_tokens = 200

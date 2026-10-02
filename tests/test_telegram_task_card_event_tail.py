@@ -2573,5 +2573,5 @@ def test_actual_telegram_tail_stream_time_and_tokens_use_two_lines(tmp_path, mon
     ])
     manager._poll_event_tail()
     text = _last_edit(acct)
-    assert "12.4s · ⚡1.2s\n↓200 (20) ↑900 ◌ 1.0k | 10.0% 45 tok/s" in text
-    assert "TTFT" not in text and "↻" not in text
+    assert "↻12.4s · ⚡1.2s\n↓200 (20) ↑900 ◌ 1.0k | 10.0% 45 tok/s" in text
+    assert "TTFT" not in text and "↻" in text

@@ -2251,8 +2251,6 @@ def _consume_responses_stream(
     # incomplete/error streams therefore cannot commit partial raw history.
     # Match non-streaming LLMResponse.raw without projecting provider metadata
     # into canonical history or the safe token-ledger extension.
-    if response.tool_calls:
-        response.usage.generation_tokens = None
     response.raw = raw_response
     setattr(response, "_openai_responses_output_items", output_items)
     return response, response_id
@@ -2869,6 +2867,7 @@ class OpenAIChatSession(ChatSession):
                             id=tc.id,
                             name=(tc.function.name if tc.function else None),
                             args_delta=(tc.function.arguments if tc.function else None),
+                            received_at=first_chunk_at if chunk is first_chunk else None,
                         )
         except Exception as exc:
             if message is not None:
