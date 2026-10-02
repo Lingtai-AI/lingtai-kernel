@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import uuid
+import errno
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -51,9 +52,67 @@ def _manager_dir(agent_working_dir: Path) -> Path:
     return Path(agent_working_dir) / MANAGER_DIR
 
 
+_SOCKET_UNSUPPORTED_ERRNOS = frozenset(
+    value
+    for value in (
+        getattr(errno, name, None)
+        for name in (
+            "EOPNOTSUPP",
+            "ENOTSUP",
+            "EAFNOSUPPORT",
+            "EPROTONOSUPPORT",
+            "ENOSYS",
+            "EINVAL",
+        )
+    )
+    if isinstance(value, int)
+)
+_SOCKET_DIR_PROBE_CACHE: dict[str, bool] = {}
+
+
+def _unix_socket_usable(directory: Path) -> bool:
+    """Report whether ``directory`` can host a unix domain socket.
+
+    Some filesystems (for example exFAT volumes such as ``/Volumes/HDPH-UTV``)
+    cannot bind a unix socket and fail with ``EOPNOTSUPP``; the capsule socket
+    must then fall back to the private ``/tmp`` directory instead of killing the
+    resident manager with an unlogged bind error. Both the agent process and the
+    resident manager call this helper, so the probe result is cached to keep them
+    deriving the very same socket path.
+    """
+    key = str(directory)
+    cached = _SOCKET_DIR_PROBE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    usable = True
+    try:
+        probe_directory = directory.is_dir()
+    except OSError:
+        probe_directory = False
+    if probe_directory:
+        probe = directory / f".lingtai-socket-probe-{uuid.uuid4().hex[:12]}"
+        probe_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            probe_socket.bind(str(probe))
+        except OSError as exc:
+            if exc.errno in _SOCKET_UNSUPPORTED_ERRNOS:
+                usable = False
+        finally:
+            try:
+                probe_socket.close()
+            finally:
+                try:
+                    probe.unlink()
+                except OSError:
+                    pass
+    _SOCKET_DIR_PROBE_CACHE[key] = usable
+    return usable
+
+
 def _capsule_socket_path(root: Path) -> Path:
+    root = Path(root)
     direct = root / _CAPSULE_SOCKET_NAME
-    if len(str(direct)) < _UNIX_SOCKET_PATH_LIMIT:
+    if len(str(direct)) < _UNIX_SOCKET_PATH_LIMIT and _unix_socket_usable(root):
         return direct
     digest = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:24]
     fallback = Path("/tmp") / f"lingtai-dm-{os.getuid()}-{digest}" / _CAPSULE_SOCKET_NAME
@@ -261,16 +320,23 @@ def _ensure_manager_locked(agent_working_dir: Path, root: Path, *, pool_size: in
     )
     env = _manager_env()
     env["LINGTAI_DAEMON_MANAGER_TOKEN"] = token
-    subprocess.Popen(
-        [sys.executable, "-m", ENTRYPOINT_MODULE, str(agent_working_dir), str(pool_size)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=env,
-        cwd=str(agent_working_dir),
-        start_new_session=True,
-        close_fds=True,
-    )
+    with open(root / "manager.stderr.log", "ab", buffering=0) as manager_stderr:
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                ENTRYPOINT_MODULE,
+                str(agent_working_dir),
+                str(pool_size),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=manager_stderr,
+            env=env,
+            cwd=str(agent_working_dir),
+            start_new_session=True,
+            close_fds=True,
+        )
 
 
 def enqueue_manager_run(
@@ -359,8 +425,27 @@ def run_manager(agent_working_dir: Path, *, pool_size: int) -> None:
         },
     )
     manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=pool_size)
-    manager.start_capsule_server(_capsule_socket_path(root))
-    manager.recover_interrupted_active_runs()
+    try:
+        manager.start_capsule_server(_capsule_socket_path(root))
+        manager.recover_interrupted_active_runs()
+    except Exception as exc:
+        # Record the reason: without it the pid file keeps claiming ``running``
+        # while the manager is already gone, and callers only see a capsule
+        # timeout five seconds later.
+        _write_private_json(
+            root / "manager.pid",
+            {
+                "pid": None,
+                "started_at": time.time(),
+                "pool_size": pool_size,
+                "state": "failed",
+                "failed_at": time.time(),
+                "error": f"{type(exc).__name__}: {exc}",
+                "manager_token": os.environ.get("LINGTAI_DAEMON_MANAGER_TOKEN"),
+                "manager_runtime_identity": _manager_runtime_identity(),
+            },
+        )
+        raise
     manager.run(idle_exit_s=None)
 
 
@@ -833,6 +918,19 @@ def _mark_run_manager_owned(request: DaemonSupervisorRequest, root: Path) -> Non
     run_dir.update_state(**updates)
 
 
+def _manager_start_failure(root: Path) -> str | None:
+    """Return the recorded manager start error, when the resident manager died
+    while starting up (for example because the socket path is unusable)."""
+    try:
+        info = read_json(root / "manager.pid", default={}, expect=dict)
+    except TypeError:
+        return None
+    if not isinstance(info, dict) or info.get("state") != "failed":
+        return None
+    error = info.get("error")
+    return str(error) if error else "unknown startup error"
+
+
 def _send_capsule(
     root: Path,
     run_id: str,
@@ -866,6 +964,11 @@ def _send_capsule(
                     return
                 raise RuntimeError("daemon manager rejected runtime capsule")
         except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError) as exc:
+            failure = _manager_start_failure(root)
+            if failure is not None:
+                raise RuntimeError(
+                    f"central daemon manager failed to start for {run_id!r}: {failure}"
+                ) from exc
             last_error = exc
             time.sleep(_POLL_INTERVAL_S)
     raise RuntimeError(
