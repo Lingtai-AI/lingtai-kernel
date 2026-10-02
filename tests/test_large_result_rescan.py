@@ -325,14 +325,10 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
     agent._notification_fp = fp
     agent._notification_raw_fp = fp
 
-    res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
-        agent,
-        {
-            "action": "dismiss_ref",
-            "input": {"ref_id": stale_ref},
-            "reasoning": "test",
-        },
-    )
+    from lingtai.kernel.notifications import dismiss_channel
+
+    # Private Core helper (no public dismiss action any more).
+    res = dismiss_channel(agent, "system", invoked_by="notification", ref_id=stale_ref)
 
     assert res["status"] == "ok"
     assert stale_ref in res.get("acked_large_result_refs", [])

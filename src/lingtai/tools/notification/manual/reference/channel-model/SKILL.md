@@ -3,8 +3,9 @@ name: notification-manual-channel-model
 description: >
   Notification payload, mirror, allowlist, hook, delivery, delay, and block-cap
   reference. Read after notification-manual when interpreting current channel
-  state or diagnosing delivery; dismissal policy belongs to dismissal-safety.
-version: 0.8.1
+  state or diagnosing delivery; one-shot delivery and producer-state safety belong
+  to dismissal-safety.
+version: 0.9.0
 tags: [lingtai, notifications, channels, protocol, sync, delay, alarm, nudge, hooks, whitelist]
 last_changed_at: "2026-09-11T00:00:00Z"
 related_files:
@@ -22,7 +23,7 @@ maintenance: |
 
 A channel is the filename stem in `.notification/<channel>.json`; for example,
 `system.json` projects to `attention.system` and `mcp.telegram.json` to
-`attention["mcp.telegram"]`. Ordinary channel files are current mirrors. Daemon is a logical aggregate from Store-owned `.notification/daemon/<id>.json` mini-files; sibling `daemon.json` is only a non-authoritative compatibility report. Use Core/tool reads and dismissal, not direct edits.
+`attention["mcp.telegram"]`. Ordinary channel files are current mirrors. Daemon is a logical aggregate from Store-owned `.notification/daemon/<id>.json` mini-files; sibling `daemon.json` is only a non-authoritative compatibility report. Use `check` and producer tools, not direct edits.
 Delivered metadata can be historical, so never treat an old attention snapshot as
 canonical producer state.
 
@@ -54,18 +55,35 @@ A producer writes the current channel as an envelope such as:
 `instructions` is inside the payload, not a channel. Read it before choosing a
 verb: the producer knows whether the file is disposable output, a mirror over
 canonical state, a coalesced event summary, or protected source of truth. A
-notification clear changes only this mirror. It must not mark mail read, change a
-goal, consume an MCP queue, or mutate any other producer-owned record. A producer with canonical state should register a generic-dismiss guard and teach its owner verb in `instructions`; hook registration only widens the allowlist, not dismissal policy. External
+notification is never cleared by delivery and never mutates producer state: it must
+not mark mail read, change a goal, consume an MCP queue, or touch any other
+producer-owned record. A producer with canonical state should teach its owner verb
+in `instructions`; hook registration only widens the allowlist. External
 writers use atomic sibling-temp replacement so readers never see partial JSON.
 
 ## Delivery and voluntary `check`
 
-`check` returns a placeholder; the turn loop stamps the one live payload onto that
-same result. IDLE/ASLEEP wake delivery uses the same shape. During ACTIVE work,
-the current payload is copied to every eligible final ToolResultBlock, even when
-unchanged; only the newest emission is current and older holders are historical
-traces. Delivery signatures are bookkeeping, not an attachment gate. Fingerprints
-and the live holder belong to kernel sync, not `manual` or this handler.
+`check` returns a placeholder; the turn loop stamps the complete current mirrors onto
+that same result (a deliberate read, not a replay). IDLE/ASLEEP wake delivery uses
+the same shape. Automatic delivery is one-shot and shares one delivered identity
+between the ACTIVE tool-result path and the IDLE/ASLEEP synthesized pair: a
+known event/message is attached once: `system`/`daemon` use event IDs, email uses
+mail IDs, and Telegram/WeChat/Feishu/WhatsApp use message or per-update IDs plus
+material source content. New/materially changed records are delivered without
+replaying the other records in their aggregate. Derived current flags, relative
+ages, cursors, headers and counts alone do not create an event. Required reply
+references may accompany a new message as context, not new instructions. Generic
+ID-less hook channels remain versioned snapshots, not a global exactly-once promise.
+Automatic IM seed context uses the native bounded preview window (Telegram 20,
+WeChat/Feishu 10); older context in oversize legacy mirrors is not recorded as
+having been delivered. A deliberate check can reread the complete mirror.
+Identity is committed only after successful delivery from the exact observation;
+blocked, unstable, no-carrier or failed delivery stays pending. The ledger survives
+ordinary molt/rebuild/resync in the same agent process, not Agent/process restart:
+then surviving mirrors can be delivered again. Nothing is persisted for crash
+exactly-once. Earlier delivered messages remain usable task records, subject to
+newer instructions and producer safeguards; older runtime state is not current.
+Fingerprints and the live holder belong to kernel sync, not `manual` or this handler.
 
 ## Consumer delay and expiry
 
@@ -98,7 +116,8 @@ visibility, never silence.
 2. Before starting that watcher, register it with `notification(action='add', input={...})`, supplying `name`,
    `channel`, `source`, `description`, `how_to_modify`, and `how_to_cancel`;
    `version` defaults to `1.0.0`, and `instructions` is optional.
-3. Read with `check`, then follow the producer instruction or narrowest dismiss.
+3. The first publish is delivered once automatically (`check` rereads it); follow
+   the producer instruction through the owning tool.
 
 `list` preserves registry order. `edit` revalidates channel uniqueness; a null-
 only edit is a no-op. `drop` revokes the channel but never stops its process.
@@ -122,4 +141,4 @@ The SHOW row reports the same effective clamped value and never writes, refreshe
 adds `init.json`, or creates a settings file. The notification footprint also
 includes kernel-owned `large_result_acks.json`, `hooks.json`, and the private
 delay state. Inspect read-only; never delete the directory or bulk-remove files,
-because producer guards and stale checks live in the atomic actions.
+because producers own their state and delivery identity lives in the kernel.

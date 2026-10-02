@@ -21,6 +21,7 @@ related_files:
   - src/lingtai/tools/system/karma.py
   - tests/test_aed_recovery.py
   - tests/test_notification_sync.py
+  - tests/test_notification_one_shot.py
   - tests/test_cli_worker_poison_recovery.py
   - tests/test_worker_hang_aed_redo.py
   - tests/test_silence_kill.py

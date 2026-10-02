@@ -465,9 +465,9 @@ terminal completion receipt.
 4. Read the newest tool result's `_meta.agent_meta.agent_state.daemon` summary
    (or `notification(action="check", input={}, reasoning="probe")` plus the same
    metadata on the next result).
-5. Call `notification(action="dismiss", input={"channel": "daemon"},
-   reasoning="probe")`, emanate one more trivial run, let the parent go ASLEEP
-   and be woken by it, then read
+5. Emanate one more trivial run (there is no notification dismiss action; the
+   daemon mirror is never cleared by delivery), let the parent go ASLEEP
+   and be woken once by it, then read
    `_meta.agent_meta.agent_state.notification_wake.daemon` on the injected
    result.
 
@@ -478,9 +478,10 @@ terminal completion receipt.
 - [ ] Step 4: the run is counted once — `run_count` includes `<id>` once,
       `terminal_run_count` counts it once, and `latest_terminal` still names the
       run's original terminal status rather than `follow-up completed`.
-- [ ] Step 5: every `*_delta` in the wake provenance is `>= 0`, and the shrunk
-      baseline is reported as `"baseline_reset": true` rather than a negative
-      count.
+- [ ] Step 5: every `*_delta` in the wake provenance is `>= 0` (a shrunk
+      baseline, if the producer files ever shrink, is reported as
+      `"baseline_reset": true` rather than a negative count), and the new
+      terminal is delivered exactly once.
 - [ ] `daemons/<id>/daemon.json` keeps its terminal state and receipt unchanged
       throughout.
 

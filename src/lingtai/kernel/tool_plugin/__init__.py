@@ -439,24 +439,13 @@ class PluginCatalogPort(Protocol):
 class NotificationStatePort(Protocol):
     """Notification Core operations bound to one live agent's real state.
 
-    The notification family may ask Core to manipulate notification-owned
-    mirrors and hook registration, but it never receives the Agent, its Store,
-    delivery fingerprints, or producer state directly. The host adapter binds
-    each operation to the real agent before the plugin is composed, preserving
-    Core's allowlist, producer-guard, stale-version, acknowledgement, timer,
-    and Store semantics rather than recreating a parallel local state machine.
+    The notification family may ask Core to manipulate hook registration and
+    consumer delay, but it never receives the Agent, its Store, delivery
+    fingerprints, or producer state directly. The host adapter binds each
+    operation to the real agent before the plugin is composed, preserving
+    Core's allowlist, timer, and Store semantics rather than recreating a
+    parallel local state machine. No dismissal operation is exposed.
     """
-
-    def dismiss(
-        self,
-        channel: str,
-        *,
-        force: bool,
-        reason: str | None,
-        event_id: str | None = None,
-        ref_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Ask Notification Core to clear one permitted mirror target."""
 
     def delay(self, channel: str, seconds: int) -> dict[str, Any]:
         """Apply consumer-only delay policy without mutating producer state."""

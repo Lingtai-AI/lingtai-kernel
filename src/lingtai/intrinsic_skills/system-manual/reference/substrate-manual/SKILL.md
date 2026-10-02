@@ -124,23 +124,22 @@ runtime model — raw versus resolved `init.json`, path identity, the two catalo
 main-agent swap/revert, and the daemon task/CLI distinction — is §11 below; the
 pre-swap checklist is `reference/refresh-precheck/SKILL.md`.
 
-### Notifications and dismiss → the `notification` tool
+### Notifications → the `notification` tool
 
-Reading and clearing notification channels is **not** a `system` operation (the
-verbs are on the `notification` tool; its own schema and `notification-manual`
-are the source of truth for them, not resident substrate). The rule
-worth holding here: **prefer producer-specific verbs first** for guarded
-producers (`email.read`, `email.dismiss`, Telegram `read`, other MCP read
-actions); a generic channel dismiss is for channels that do not own their own
-read state, or for stale mirrors when the producer-owned state is already
-handled. Never treat a notification preview as the full source of truth — §4
+Reading notification channels is **not** a `system` operation (the verbs are on
+the `notification` tool; its own schema and `notification-manual` are the source
+of truth for them, not resident substrate). Automatic delivery is one-shot (each
+event attached once; new or changed events again) and never clears anything;
+there is no notification dismiss action. The rule worth holding here: **act
+through producer-specific verbs** (`email.read`, `email.dismiss`, Telegram
+`read`, other MCP read actions), which own their state. Never treat a notification preview as the full source of truth — §4
 lists when to read the producer channel instead. Read the matching producer
 channel manual for its exact message/read/reply contract, alongside
 `notification-manual` for the notification layer.
 
 Everything else — allowlist, envelope shape, protected channels,
-stale-version/force, large-result ranking and the legacy `large_tool_result`
-dismiss — is owned by the first-level `notification-manual` skill.
+one-shot delivery, large-result ranking and the legacy `large_tool_result`
+reminder — is owned by the first-level `notification-manual` skill.
 
 ### Context compression, and where `summarize` lives
 

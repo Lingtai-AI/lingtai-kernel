@@ -29,6 +29,7 @@ related_files:
   - tests/test_cli_integration.py
   - tests/test_molt_notification_persistence.py
   - tests/test_post_molt_notification.py
+  - tests/test_notification_one_shot.py
   - tests/test_preset_context_guard.py
   - tests/test_how_to_change_name_e2e.py
   - tests/test_goal_notification.py
@@ -202,7 +203,7 @@ if process exit + file consumption are observed.
 
 ### Expected evidence
 - [ ] Molt result `status == "ok"` and `molt_count` is an integer ≥ 1.
-- [ ] `.notification/email.json` survived with unchanged content.
+- [ ] `.notification/email.json` survived with unchanged content. Already-delivered event identity remains retained in the same process; no-carrier/failed attempts remain retryable, and new post-molt/new producer events still deliver. Focused executable coverage: `tests/test_notification_one_shot.py::test_real_molt_retains_delivery_identity_and_retries_undelivered`.
 - [ ] `system/pad.md` survived with unchanged content.
 - [ ] The session-journal sub-entry survived.
 - [ ] The summary file exists at `<WD>/system/summaries/molt_<count>_<ts>.md` and
@@ -217,7 +218,7 @@ resolve. Forbidden side effects: the molt must not delete `.notification/`,
 ## Behavior L004 — post-molt continuation channel
 
 - **id**: L004
-- **title**: every molt publishes `.notification/post-molt.json` with continuation identity and a reason-required ack
+- **title**: every molt publishes `.notification/post-molt.json` with continuation identity, delivered once and never auto-cleared
 - **guards**: `context-contract` § Passive lifecycle scenarios
   ([CONTRACT.md](CONTRACT.md#passive-lifecycle-scenarios)) — "updates
   `molt_count`, writes its summary, and publishes the post-molt reminder"
@@ -243,36 +244,33 @@ resolve. Forbidden side effects: the molt must not delete `.notification/`,
    - `data.molt_id` starts with `molt-<molt_count>-`;
    - `data.molt_at` is a non-empty ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`);
    - `data.source_agent` equals the agent's true name;
-   - `data.ack_options == ["continue", "defer", "obsolete"]`;
+   - `data` carries no `ack_options` key (there is no dismiss/ack action);
    - `data.reminder` is non-empty; `data.summary_path` is present;
      `data.session_journal_path` is present; `data.reasoning` equals
      `"LABT: verify post-molt continuation"`.
 4. Verify `data` does NOT contain a `next_action` key (no heuristic extraction).
 5. Verify `instructions` is non-empty and mentions `pad`, `summary`,
-   `human-channel`, the labels `continue`/`defer`/`obsolete`, and the taught
-   dismiss call `notification(action='dismiss_channel', input={'channel': 'post-molt', 'force': null, 'reason': 'continue: ...'}, reasoning='...')`.
-6. Attempt dismissal WITHOUT a reason:
-   ```
-   notification(action="dismiss_channel", input={"channel": "post-molt"}, reasoning="LABT")
-   ```
-   Expect an error result with `reason == "missing_ack_reason"`.
-7. Dismiss WITH a reason:
-   ```
-   notification(action="dismiss_channel", input={"channel": "post-molt", "force": null, "reason": "continue: LABT L004 complete"}, reasoning="LABT")
-   ```
-   Expect `status == "ok"`; verify `<WD>/.notification/post-molt.json` is gone.
+   `human-channel`, the labels `continue`/`defer`/`obsolete`, the session
+   journal/pad, and that the reminder is delivered once; it must NOT mention any
+   `dismiss_channel` call.
+6. Dispatch the removed `dismiss_channel` action for channel `post-molt` through
+   the notification family and expect a closed-schema rejection (the action no
+   longer exists) with no side effects.
+7. Verify `<WD>/.notification/post-molt.json` still exists unchanged: delivery and
+   the rejected call never clear it, and `notification(action="check")` still
+   returns it.
 
 ### Expected evidence
 - [ ] `post-molt.json` exists with every field and value from step 3.
-- [ ] No `next_action` key in `data`.
-- [ ] Dismiss without a reason is refused with `missing_ack_reason`.
-- [ ] Dismiss with `reason: 'continue: ...'` succeeds and clears the channel.
+- [ ] No `next_action` or `ack_options` key in `data`.
+- [ ] The removed dismiss action is rejected and the file is untouched.
+- [ ] `instructions` teaches one-shot delivery, not a dismiss call.
 
 ### Pass / Fail
 Pass when all evidence holds. Fail if fields are missing/mismatched, a
-`next_action` heuristic field appears, or the ack gate is bypassed (dismiss
-succeeds without a reason). Forbidden side effects: legacy `molt` channel
-cleanup must never remove `post-molt.json`.
+`next_action` heuristic field appears, the instructions still teach a dismiss
+call, or the file is cleared by delivery. Forbidden side effects: legacy `molt`
+channel cleanup must never remove `post-molt.json`.
 
 ## Behavior L005 — preset context guard: refresh refused when context exceeds the target preset
 

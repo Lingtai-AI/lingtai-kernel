@@ -233,7 +233,7 @@ ACTION_ENUM_DESCRIPTION = (
     "tail carries only time, context size and warnings.\n"
     "settings: complete read-only SHOW (input={}). manual: return the installed "
     "system-manual (input={}) without changing runtime state.\n"
-    "Notification reads/dismissals belong to notification; context hygiene "
+    "Notification reads belong to notification; producer actions belong to their owning tools; context hygiene "
     "belongs to context(action='summarize'|'rebuild'|'molt')."
 )
 

@@ -76,7 +76,7 @@ then follow the owning manual rather than improvising a repair:
 | `.agent.heartbeat` is fresh | The agent is probably alive; internal email should wake it even if an external addon is broken. | [`email-manual`](../../tools/email/manual/SKILL.md) |
 | Heartbeat and process are both dead | CPR may be appropriate. If the process is alive but status/logs are stale, investigate before CPR. | [`substrate-manual`](../system-manual/reference/substrate-manual/SKILL.md) |
 | An MCP stdio command points at a missing runtime | **Back up `init.json` and `mcp_registry.jsonl` first**, then replace the stale command path and refresh the agent. | [`mcp-manual` troubleshooting](../../tools/mcp/skills/mcp-manual/reference/troubleshooting.md) |
-| Notifications are stale while the agent is healthy | Clear the producer channel after reading/handling it; generic dismiss only clears a mirror, so do not use it for producer state unless you know it is stale. | [`notification-manual` dismissal safety](../../tools/notification/manual/reference/dismissal-safety/SKILL.md) |
+| Notifications are stale while the agent is healthy | Handle it through the producer tool; notification delivery is one-shot, never clears producer state, and there is no generic dismiss action, so an old record that is not re-delivered is not a fault. | [`notification-manual` delivery safety](../../tools/notification/manual/reference/dismissal-safety/SKILL.md) |
 
 ## Scope
 

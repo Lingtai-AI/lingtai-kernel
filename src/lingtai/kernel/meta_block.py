@@ -21,16 +21,19 @@ The canonical runtime sidecar has exactly two model-visible axes:
   re-stamped on every tail result.  It rides with ``agent_meta`` on the
   designated final result.
 - ``agent_meta.notifications`` / ``agent_meta.guidance.transient`` — the
-  notification portion of that same current snapshot. Delivery fingerprints
-  are independent and never suppress the current snapshot.
+  notification portion of that same snapshot. Notification delivery is
+  one-shot: only channels/events not yet delivered (shared identity across the
+  ACTIVE and IDLE paths) are attached; the runtime ``agent_state`` half is
+  still attached every batch.
 
 Channel encoding:
 - Tool-result channel: the executor captures runtime state on a non-serialized
   ToolResultBlock field, which ``attach_active_runtime`` promotes into the final
   block's complete ``agent_meta`` sidecar whenever private capture exists.
-  ``attach_active_notifications`` merges the current channel-owned notification
-  payload into that same final snapshot; delivery fingerprints are diagnostic
-  and compatibility state, not gates on snapshot attachment.
+  ``attach_active_notifications`` merges the not-yet-delivered channel-owned
+  notification payload into that same final snapshot and commits the delivered
+  identity only after stamping; a deliberate ``notification(action="check")``
+  always receives the complete current mirrors.
 - Text-input channel: `render_meta` formats the same dict into a prose
   prefix line. Inbox content is NOT rendered here — it lives in the
   user-turn body, drained by ``_concat_queued_messages`` upstream.
@@ -91,8 +94,10 @@ NOTIFICATIONS_KEY = "notifications"
 NOTIFICATION_GUIDANCE_KEY = "notification_guidance"
 NOTIFICATION_PERSISTENT_KEY = "notification_persistent"
 AGENT_META_INSTRUCTION = (
-    "Only the latest agent_meta in conversation is current; older ones are "
-    "historical traces."
+    "Only the latest agent_meta.agent_state is current runtime state; older "
+    "runtime snapshots are historical traces. Delivered notification messages "
+    "remain usable task records, subject to newer human instructions and "
+    "producer safeguards; an empty later tail does not resolve them."
 )
 # Telegram lives under an `mcp` namespace level to mirror the ephemeral
 # `notifications.mcp.telegram` shape and match Jason #6148: the required path is
@@ -141,8 +146,8 @@ NOTIFICATION_PERSISTENT_FEISHU_SEEN_LIMIT = 200
 
 # WhatsApp lives at `_meta.agent_meta.notifications.persistent.mcp.whatsapp` but runs the
 # shared IM lane in snapshot mode (email-style): every block carries the
-# producer's current bounded context in full, with no delivered-id delta
-# tracking and no previous_block hook, so it has no min-context/seen-limit
+# selected source records (the shared event ledger projects automatic deltas),
+# without a previous_block hook, so it has no min-context/seen-limit
 # tuning knobs.
 NOTIFICATION_PERSISTENT_WHATSAPP_CHANNEL = "whatsapp"
 
@@ -223,10 +228,10 @@ NOTIFICATION_PERSISTENT_FEISHU_TRUNCATED_COMMENT = (
 )
 
 # Concise English comments attached to the WhatsApp persistent block. The
-# WhatsApp lane runs in snapshot mode (email-style): each block carries the
-# producer's current structured context in full, with no delivered-id delta
-# tracking, so the comments focus on producer authority and the Cloud API
-# reply rules rather than block-to-block continuity.
+# WhatsApp lane renders selected source records without a provider-context
+# previous-block hook; the shared event ledger selects automatic message deltas.
+# Comments focus on producer authority and existing reply rules rather than
+# block-to-block continuity.
 NOTIFICATION_PERSISTENT_WHATSAPP_CONTEXT_COMMENT = (
     "Durable WhatsApp context moved here from the legacy input path "
     "_meta.agent_meta.notifications.attention.mcp.whatsapp. The canonical path is "
@@ -256,9 +261,8 @@ NOTIFICATION_PERSISTENT_EMAIL_CONTEXT_COMMENT = (
     "Unread email content moved here from the legacy input path "
     "_meta.agent_meta.notifications.attention.email. The canonical path is "
     "_meta.agent_meta.notifications.persistent.email. Bodies "
-    "are injected in full up to the 50,000 character send-layer limit; prefer "
-    "email.dismiss after handling content, and use email.read/reply for "
-    "source-of-truth actions."
+    "are injected in full up to the 50,000 character send-layer limit, once "
+    "per delivery; use email.read/reply/dismiss for source-of-truth actions."
 )
 NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT = (
     "This legacy email body exceeded the current 50,000 character send-layer "
@@ -821,11 +825,12 @@ def build_meta_readme() -> dict:
                 "adapter state."
             ),
             "notifications": (
-                "Timely current notifications and persistent communication "
-                "context. only the NEWEST emission is current; older payloads "
-                "remain historical traces. Replay preserves those historical "
-                "holders and does not strip them. Older payloads are not current "
-                "instructions; the producer channel is the source of truth."
+                "One-shot event/message records and persistent communication "
+                "context. Earlier delivered messages remain usable for the active "
+                "task after later empty tails, subject to newer human instructions "
+                "and sender/admission/routing/edit safeguards. Replay preserves "
+                "these records; producer channels remain canonical business state. "
+                "Older runtime warnings are not current instructions."
             ),
             "guidance": {
                 "persistent": "Stable references and rules.",
@@ -2216,9 +2221,10 @@ class _ImPersistentLane(NamedTuple):
 
     - ``"delta"`` — seed/delta blocks with in-memory delivered-id tracking and
       a ``previous_block`` hook to the prior block (Telegram, WeChat, Feishu).
-    - ``"snapshot"`` — email-style: every block carries the producer's current
-      bounded context in full under a standing ``snapshot_context_comment``;
-      no delivered-id state, no ``previous_block``, no burst/seed comments
+    - ``"snapshot"`` — render selected source records under a standing
+      ``snapshot_context_comment``; automatic deltas are selected by the shared
+      event ledger upstream. No provider-context ID state, no ``previous_block``,
+      no burst/seed comments
       (WhatsApp, whose producer re-sends the last-10 window per event and
       whose replies are gated by the Cloud API 24-hour window).
 
@@ -2306,9 +2312,8 @@ _WHATSAPP_PERSISTENT_LANE = _ImPersistentLane(
     source_key="mcp.whatsapp",
     path=NOTIFICATION_PERSISTENT_WHATSAPP_PATH,
     display_name="WhatsApp",
-    # Snapshot lane (email-style): full bounded context per block, no
-    # delivered-id delta state, no previous_block hook — see the class
-    # docstring for why WhatsApp deliberately differs from the delta lanes.
+    # Record renderer without provider-context continuity hooks. The shared
+    # event ledger upstream still projects automatic message deltas.
     mode="snapshot",
     self_outgoing_comment=NOTIFICATION_PERSISTENT_WHATSAPP_SELF_OUTGOING_COMMENT,
     truncated_comment=NOTIFICATION_PERSISTENT_WHATSAPP_TRUNCATED_COMMENT,
@@ -2716,11 +2721,13 @@ def _build_snapshot_im_persistent_payload(
 ) -> dict:
     """Build a snapshot (email-style) persistent payload for one IM lane.
 
-    Every block carries the producer's current bounded conversation context in
-    full under a standing ``context_comment``.  There is no delivered-id delta
+    Every block carries the selected source conversation records under a
+    standing ``context_comment``. Automatic callers have already projected the
+    message delta with the shared event ledger; direct/full reads can select
+    the complete current window. There is no provider-context delivered-id
     tracking, no ``previous_block`` hook, and no burst/seed comments: the
-    snapshot lane re-emits the producer's current window each material update
-    and the producer tool remains the source of truth (building this block marks
+    renderer does not select events itself and the producer tool remains the
+    source of truth (building this block marks
     nothing read).  Per-message continuity/truncation/media comments are applied
     via the shared ``_annotate_im_message`` helper.
     """
@@ -2740,7 +2747,7 @@ def _build_snapshot_im_persistent_payload(
 
 
 def _build_im_notification_persistent_payload(
-    agent, notification_payload: dict, lane: _ImPersistentLane
+    agent, notification_payload: dict, lane: _ImPersistentLane, *, event_records: bool = False
 ) -> dict | None:
     """Build the `_meta.agent_meta.notifications.persistent` payload for one IM lane.
 
@@ -2751,10 +2758,14 @@ def _build_im_notification_persistent_payload(
     only carry messages whose producer message IDs have not been delivered yet,
     plus a ``previous_block`` hook pointing at the prior block for this lane.
 
-    ``mode == "snapshot"`` lanes (WhatsApp, email-style) re-emit the producer's
-    current bounded context in full on every material update, with no
-    delivered-id state and no ``previous_block`` hook; see
-    ``_build_snapshot_im_persistent_payload``.
+    Automatic delivery and deliberate checks set ``event_records=True``:
+    records were already selected by the shared ledger (or full mirror read),
+    so provider-context IDs must not hide material edits or re-seed old records.
+    Direct legacy builder callers retain the seed/window selection above.
+
+    ``mode == "snapshot"`` lanes (WhatsApp) render the selected records without
+    provider-context delivered-ID state or a ``previous_block`` hook; automatic
+    event selection still belongs to the shared ledger upstream.
     """
     candidates = _im_persistent_messages_from_notifications(
         notification_payload, lane.source_key
@@ -2790,7 +2801,13 @@ def _build_im_notification_persistent_payload(
     )
 
     is_seed_block = False
-    if candidates and has_recent_context:
+    if event_records:
+        # The shared event ledger already selected these records. Do not run
+        # the provider-context ID/window filter again: edited IDs are material
+        # updates and every selected record must be represented before commit.
+        messages = candidates
+        is_seed_block = not has_previous_block
+    elif candidates and has_recent_context:
         messages = [
             message
             for message in candidates
@@ -3816,7 +3833,7 @@ def _cap_notification_attention(agent, attention: dict) -> dict:
     return _drop_notification_attention_records(attention, marker, comment, max_chars)
 
 
-def build_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
+def build_notification_persistent_payload(agent, notification_payload: dict, *, event_records: bool = False) -> dict | None:
     persistent: dict = {}
 
     email_payload = _build_email_notification_persistent_payload(
@@ -3827,7 +3844,7 @@ def build_notification_persistent_payload(agent, notification_payload: dict) -> 
 
     for lane in _IM_PERSISTENT_LANES:
         lane_payload = _build_im_notification_persistent_payload(
-            agent, notification_payload, lane
+            agent, notification_payload, lane, event_records=event_records
         )
         if lane_payload is not None:
             persistent.setdefault(NOTIFICATION_PERSISTENT_MCP_KEY, {})[
@@ -3981,8 +3998,9 @@ def _sanitize_im_notification_after_persistent(
         f"High-attention {lane.display_name} hook: use notification_persistent "
         "for content/context; when it already has the full current message and "
         f"exact id, act from it directly — do not call {lane.display_name}'s "
-        "read/check merely to reread that same content. When handled, dismiss "
-        "this notification."
+        "read/check merely to reread that same content. This event is delivered "
+        "once and is not re-attached automatically; act through the "
+        f"{lane.display_name} tool, whose own state is not cleared by delivery."
     )
 
 
@@ -4118,8 +4136,15 @@ def build_synthetic_meta_envelope(
     return envelope
 
 
-def _collect_active_notifications(agent):
-    """Return ``(payload, versions)`` for the current active notifications.
+def _collect_active_notifications(agent, *, full: bool = False):
+    """Return ``(payload, versions)`` for the undelivered active notifications.
+
+    ``payload`` carries only channels/events not yet delivered (see
+    :func:`pending_notification_payloads`); ``full=True`` — a deliberate
+    ``notification(action="check")`` read — carries the complete current
+    mirrors instead. ``payload`` is ``None`` when nothing is pending; the caller
+    distinguishes "nothing active" from "everything already delivered" through
+    ``versions.payloads``.
 
     ``versions`` is the ``CoherentAttentionRead`` the payload was built from, so
     the caller can commit the fingerprint **of the bytes it is about to
@@ -4158,7 +4183,14 @@ def _collect_active_notifications(agent):
             return None, None
         if not observed.payloads:
             return None, observed
-        return build_notification_payload(observed.payloads), observed
+        pending = (
+            observed.payloads
+            if full
+            else pending_notification_payloads(agent, observed.payloads)
+        )
+        if not pending:
+            return None, observed
+        return build_notification_payload(pending), observed
     except Exception:
         return None, None
 
@@ -4224,10 +4256,10 @@ def sanitize_email_notification_after_persistent(notification_payload: dict) -> 
     sanitized["data"] = {"email_ids": email_ids}
     sanitized["instructions"] = (
         "High-attention email hook: full unread content lives in "
-        "notification_persistent.email. Prefer email.dismiss after handling; "
-        "use email.read/reply for source-of-truth mailbox actions. When "
-        "handled through the email tool, the producer mirror updates or "
-        "clears this notification."
+        "notification_persistent.email. This event is delivered once and is not "
+        "re-attached automatically; use email.read/reply/dismiss for "
+        "source-of-truth mailbox actions. Handling mail through the email tool "
+        "updates the producer mirror."
     )
     notifications["email"] = sanitized
 
@@ -4267,6 +4299,262 @@ def _is_notification_check_placeholder(content) -> bool:
     own fingerprint-gated path and never reaches here.
     """
     return isinstance(content, dict) and content.get("_notification_placeholder") is True
+
+
+def notification_source_signatures(payloads: Mapping[str, Any]) -> dict[str, str]:
+    """Return bounded deterministic signatures for an observed channel snapshot."""
+    signatures: dict[str, str] = {}
+    for source, payload in payloads.items():
+        try:
+            material = _json.dumps(
+                payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            material = repr(payload).encode("utf-8", "replace")
+        signatures[str(source)] = _hashlib.sha256(material).hexdigest()
+    return signatures
+
+
+_SYSTEM_NOTIFICATION_CHANNEL = "system"
+
+
+def _system_event_signatures(payload: Any) -> dict[str, str]:
+    """Return ``event_id -> signature`` for the events inside a system payload."""
+    from .notifications import _system_events
+
+    signatures: dict[str, str] = {}
+    for event in _system_events(payload):
+        event_id = event.get("event_id") if isinstance(event, dict) else None
+        if isinstance(event_id, str) and event_id:
+            signatures[event_id] = notification_source_signatures({event_id: event})[
+                event_id
+            ]
+    return signatures
+
+
+def _pending_system_payload(agent, payload: Any) -> Any:
+    """Return the system payload restricted to undelivered events, or ``None``.
+
+    ``system.json`` is one aggregate file holding many independent events, so a
+    new event must not re-attach the older ones already delivered. Events
+    without a usable ``event_id`` are always treated as pending (fail toward
+    delivery, never toward silence).
+    """
+    from .notifications import _system_events, _system_payload_with_events
+
+    delivered = getattr(agent, "_notification_delivered_system_events", None)
+    if not isinstance(delivered, Mapping):
+        delivered = {}
+    if not _system_events(payload):
+        # No event list to compare: the aggregate itself is the only identity.
+        return payload
+    pending = []
+    for event in _system_events(payload):
+        event_id = event.get("event_id") if isinstance(event, dict) else None
+        if isinstance(event_id, str) and event_id:
+            signature = notification_source_signatures({event_id: event})[event_id]
+            if delivered.get(event_id) == signature:
+                continue
+        pending.append(event)
+    if not pending:
+        return None
+    if len(pending) == len(_system_events(payload)):
+        return payload
+    return _system_payload_with_events(
+        payload, pending, str(payload.get("published_at") or "")
+    )
+
+
+def _notification_record_signature(record: Any) -> str:
+    """Sign source material, excluding only derived message presentation fields."""
+    def material(value):
+        if isinstance(value, Mapping):
+            return {
+                key: material(item) for key, item in value.items()
+                if key not in {"is_current", "relative_time"}
+            }
+        if isinstance(value, list):
+            return [material(item) for item in value]
+        return value
+    return notification_source_signatures({"record": material(record)})["record"]
+
+
+def _notification_records(source: str, payload: Any) -> dict[str, str]:
+    """Known producer identities. Unknown/ID-less hooks remain versioned snapshots.
+
+    IM message identity includes per-update event IDs (callbacks/edits), sender,
+    routing and source content. Counts, cursors, headers and relative ages are
+    aggregate presentation, not additional events. Reply targets remain context
+    on a retained preview, not independent arrivals.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return {}
+    data = payload["data"]
+    records = {}
+    if source in {"system", "daemon", "email"}:
+        field = "emails" if source == "email" else "events"
+        values = data.get(field)
+        for record in values if isinstance(values, list) else []:
+            if not isinstance(record, dict):
+                continue
+            identity = record.get("id") if source == "email" else record.get("event_id")
+            if isinstance(identity, str) and identity:
+                records[identity] = _notification_record_signature(record)
+    elif source in {lane.source_key for lane in _IM_PERSISTENT_LANES}:
+        for preview in _im_preview_list({NOTIFICATIONS_KEY: {source: payload}}, source):
+            single = {NOTIFICATIONS_KEY: {source: {"data": {"previews": [preview]}}}}
+            route = {key: preview[key] for key in ("platform", "conversation_ref") if key in preview}
+            candidates = _im_persistent_messages_from_notifications(single, source)
+            lane = next(lane for lane in _IM_PERSISTENT_LANES if lane.source_key == source)
+            if lane.min_context:
+                # The established producer preview window bounds historical
+                # seed context (Telegram 20, WeChat/Feishu 10). Oversize legacy
+                # mirrors do not imply that older omitted context was delivered.
+                candidates = candidates[-lane.min_context:]
+            for record in candidates:
+                identity = _im_message_identity(record)
+                if identity:
+                    material = record
+                    if source == "mcp.whatsapp":
+                        # Native WhatsApp's latest record has from/type while
+                        # its recent window has fromMe. Compare their shared
+                        # source fields, not the current-to-history shape.
+                        material = {
+                            key: value for key, value in record.items()
+                            if key not in {"from", "fromMe", "direction", "type"}
+                        }
+                        outgoing = bool(record.get("fromMe")) or record.get("direction") in {"sent", "outgoing"}
+                        material["outgoing"] = outgoing
+                        peer = str(preview.get("conversation_ref", "")).removeprefix("whatsapp:")
+                        material["sender"] = "self" if outgoing else record.get("from") or peer
+                        # Native media type is already source text ([image],
+                        # [audio], etc.) in both current and recent records.
+                        # All other source extensions remain material above.
+                    records[identity] = _notification_record_signature({"message": material, "route": route})
+    return records
+
+
+def _pending_record_payload(agent, source: str, payload: Any) -> Any:
+    """Project a known mirror to new/materially changed records, without mutation."""
+    records = _notification_records(source, payload)
+    if not records:
+        return payload
+    ledger = getattr(agent, "_notification_delivered_events", {})
+    delivered = ledger.get(source, {}) if isinstance(ledger, Mapping) else {}
+    if source == "system":
+        delivered = getattr(agent, "_notification_delivered_system_events", {})
+    pending = {identity for identity, signature in records.items() if delivered.get(identity) != signature}
+    data = payload["data"]
+    projected = dict(payload)
+    projected["data"] = dict(data)
+    if source in {"system", "daemon", "email"}:
+        field, id_field = ("emails", "id") if source == "email" else ("events", "event_id")
+        values = [record for record in data[field] if not isinstance(record, dict) or record.get(id_field) not in records or record.get(id_field) in pending]
+        if not values:
+            return None
+        projected["data"][field] = values
+        if source == "email":
+            projected["data"]["email_ids"] = [record["id"] for record in values if isinstance(record, dict) and "id" in record]
+            projected["data"]["count"] = len(values)
+            projected["header"] = f"{len(values)} email events"
+        else:
+            projected["header"] = f"{len(values)} {source} notifications"
+        return projected
+    previews = []
+    for preview in _im_preview_list({NOTIFICATIONS_KEY: {source: payload}}, source):
+        single = {NOTIFICATIONS_KEY: {source: {"data": {"previews": [preview]}}}}
+        values = _im_persistent_messages_from_notifications(single, source)
+        values = [record for record in values if _im_message_identity(record) in pending]
+        if not values:
+            # Preserve omission/ID-less preview records rather than acknowledge
+            # content we cannot identify. They retain snapshot semantics.
+            if not _im_persistent_messages_from_notifications(single, source):
+                previews.append(dict(preview))
+            continue
+        retained = dict(preview)
+        retained["recent_messages"] = values
+        latest = preview.get("latest_incoming")
+        if isinstance(latest, dict) and _im_message_identity(latest) in pending:
+            retained["latest_incoming"] = latest
+        else:
+            retained.pop("latest_incoming", None)
+            # Never turn a generated legacy-preview display ID into a real
+            # producer reply/routing target. Only update an existing target.
+            if preview.get("message_ref"):
+                retained["message_ref"] = values[-1]["id"]
+            else:
+                retained.pop("message_ref", None)
+            retained.pop("event_id", None)
+        # The retained preview's routing/event fields and referenced_messages
+        # are copied verbatim: a new reply may require an already-seen target.
+        previews.append(retained)
+    if not previews:
+        return None
+    projected["data"]["previews"] = previews
+    projected["data"]["count"] = len(previews)
+    return projected
+
+
+def pending_notification_payloads(agent, payloads: Mapping[str, Any]) -> dict:
+    """Return only the channel payloads whose current state was never delivered.
+
+    This is the one shared delivered identity for the ACTIVE tool-result path
+    and the IDLE/ASLEEP synthesized-pair path. A channel counts as delivered
+    only after :func:`commit_delivered_notification_sources` recorded a
+    successful delivery of that exact observed state; an unchanged channel is
+    not attached again, a changed or new one is. Known system/daemon/email/IM
+    aggregates are projected by event/message identity and material content;
+    unknown ID-less hooks retain channel-version snapshot semantics.
+    """
+    delivered = getattr(agent, "_notification_delivered_source_signatures", None)
+    if not isinstance(delivered, Mapping):
+        delivered = {}
+    signatures = notification_source_signatures(payloads)
+    pending: dict = {}
+    for source, payload in payloads.items():
+        if delivered.get(str(source)) == signatures[str(source)]:
+            continue
+        payload = _pending_record_payload(agent, str(source), payload)
+        if payload is None:
+            continue
+        pending[source] = payload
+    return pending
+
+
+def commit_delivered_notification_sources(agent, payloads: Mapping[str, Any]) -> None:
+    """Record ``payloads`` (one coherent observation) as delivered.
+
+    Callers pass the observation the delivered bytes were built from, never a
+    later reread, so a concurrently published event stays pending. Channels
+    absent from ``payloads`` lose their mirror version, but known event/message
+    identities remain in the process-local ledger. We do not infer business
+    processing from observation. Delivery never touches producer/store state.
+    """
+    try:
+        agent._notification_delivered_source_signatures = (
+            notification_source_signatures(payloads)
+        )
+        ledger = getattr(agent, "_notification_delivered_events", {})
+        ledger = dict(ledger) if isinstance(ledger, Mapping) else {}
+        for source, payload in payloads.items():
+            records = _notification_records(str(source), payload)
+            if records:
+                ledger[str(source)] = {**ledger.get(str(source), {}), **records}
+        agent._notification_delivered_events = ledger
+        agent._notification_delivered_system_events = dict(ledger.get("system", {}))
+    except Exception:
+        pass
+
+
+def reset_delivered_notification_sources(agent) -> None:
+    """Forget empty mirror versions, not already delivered event identities.
+
+    The event ledger lasts for this agent process, including ordinary context
+    rebuild/molt/resync. A new Agent after restart starts a fresh ledger.
+    """
+    agent._notification_delivered_source_signatures = {}
+    if not isinstance(getattr(agent, "_notification_delivered_system_events", None), Mapping):
+        agent._notification_delivered_system_events = {}
 
 
 def _commit_notification_fp(agent, delivered=None) -> None:
@@ -4322,37 +4610,48 @@ def attach_active_notifications(
     *,
     prior_holder: dict | None = None,
 ) -> dict | None:
-    """Attach the current notification payload to the final agent_meta carrier.
+    """Attach not-yet-delivered notification state to the final agent_meta carrier.
 
-    The current channel payload is merged into the newest final
-    ``ToolResultBlock`` on every eligible batch, including when its material
-    content is unchanged. ``agent._notification_payload_signature`` remains for
-    delivery diagnostics and persistent-message bookkeeping; it is not an
-    attachment gate. Older holders remain historical traces.
+    Delivery is one-shot. The shared delivered identity
+    (``agent._notification_delivered_source_signatures`` plus per-event
+    ``_notification_delivered_system_events``) is committed only when this
+    function actually stamps a final carrier — or when the IDLE/ASLEEP
+    synthesized pair is injected — so an unchanged event is never attached or
+    re-delivered through either path, while a new or changed event still is.
+    ``agent._notification_payload_signature`` remains a delivery diagnostic.
+    Older holders remain historical traces and are never rewritten. Producer
+    and notification files are never modified by delivery.
+
+    Serialized under ``agent._notification_sync_lock`` (when present) so an
+    IDLE sync and an ACTIVE batch cannot both deliver the same state.
 
     Contract:
         * When there are no active notifications, no stamping happens,
           ``_notification_fp`` is left untouched, ``prior_holder`` (if any) is
           released (a synthesized pair is skeletonized; a normal tool result
           RETAINS its payload as a historical trace),
-          ``_notification_payload_signature`` is reset to ``None``
-          (so a later reappearance of the same payload attaches afresh as the
-          first active payload), and ``None`` is returned.
-        * When active notifications exist but this batch has no final
+          ``_notification_payload_signature`` is reset to ``None`` and the
+          mirror-version bookkeeping is forgotten (known delivered event IDs
+          remain in the process-local ledger), and ``None`` is returned.
+        * When active notifications exist but are all already delivered, nothing
+          is stamped, the live holder is kept, the fingerprint is committed for
+          the observed state, and ``prior_holder`` is returned.
+        * When undelivered notifications exist but this batch has no final
           ``ToolResultBlock`` to receive them, the prior holder is kept intact,
-          ``_notification_fp`` is left uncommitted, and ``prior_holder`` is
-          returned — the state can still be delivered later.
-        * The current payload is copied for both unchanged and changed
-          signatures, including a deliberate ``notification(action="check")``
-          read. The prior holder is released (a
+          nothing is marked delivered, and ``prior_holder`` is returned — the
+          state can still be delivered later.
+        * Undelivered channels/events are stamped once. A deliberate
+          ``notification(action="check")`` read on the final result always
+          receives the complete current mirrors (a read, not a replay) and
+          marks them delivered. The prior holder is released (a
           synthesized pair is skeletonized; a normal tool result RETAINS its old
           payload as a historical trace — timely transient semantics, Jason
           #4307), the same ``notifications`` + ``notification_guidance`` payload
           shape used by the synthesized notification pair is stamped under
-          ``_meta`` on the latest final result, the fingerprint is
-          committed, the new signature is recorded, and that dict is returned as
-          the new holder.  Only the newest emitted payload is current;
-          model-facing full-history serialization preserves every
+          ``_meta`` on the latest final result, the fingerprint and delivered
+          identity (taken from the same observation the stamped bytes came from)
+          are committed, and that dict is returned as the new holder.
+          Model-facing full-history serialization preserves every
           normal-result holder's content and does not strip ``notifications``
           or ``notification_guidance`` keys (see
           ``lingtai.llm.interface_converters``).
@@ -4375,11 +4674,43 @@ def attach_active_notifications(
     the same notification state from being delivered twice (once via tool-result
     meta, again via the synthesized pair).
     """
-    payload, delivered_versions = _collect_active_notifications(agent)
+    lock = getattr(agent, "_notification_sync_lock", None)
+    if not (hasattr(lock, "__enter__") and hasattr(lock, "__exit__")):
+        # Partial test doubles carry no sync lock.
+        return _attach_active_notifications_locked(
+            agent, tool_results, prior_holder=prior_holder
+        )
+    with lock:
+        return _attach_active_notifications_locked(
+            agent, tool_results, prior_holder=prior_holder
+        )
+
+
+def _attach_active_notifications_locked(
+    agent,
+    tool_results: list,
+    *,
+    prior_holder: dict | None = None,
+) -> dict | None:
     target = _final_tool_result_block(tool_results)
+    # A deliberate check read is a read, not a replay: it gets the complete
+    # current mirrors even when they were already delivered automatically.
+    is_check_read = target is not None and _is_notification_check_placeholder(
+        getattr(target, "content", None)
+    )
+    payload, delivered_versions = _collect_active_notifications(
+        agent, full=is_check_read
+    )
     # A failed or unstable store read is not an authoritative empty state.
     # Preserve the existing live holder and leave fingerprints uncommitted.
     if delivered_versions is None:
+        return prior_holder
+    if not payload and delivered_versions.payloads:
+        # Everything active was already delivered once: attach nothing, keep the
+        # live holder, and only advance the fingerprint/delivered identity to
+        # the observed state (a delivered channel may have disappeared).
+        commit_delivered_notification_sources(agent, delivered_versions.payloads)
+        _commit_notification_fp(agent, delivered_versions)
         return prior_holder
     if not payload:
         # Explicitly clear the current axis on the newest final carrier. Older
@@ -4399,26 +4730,20 @@ def attach_active_notifications(
             agent._notification_payload_signature = None
         except Exception:
             pass
+        reset_delivered_notification_sources(agent)
         return None
 
     if target is None:
-        # Active notifications exist, but this batch has no final
-        # result to receive the moving payload. Keep the prior live holder
-        # (if any) intact and leave _notification_fp uncommitted so the
-        # state can still be delivered later via another tool result or
-        # the IDLE synthesized-pair path.
+        # Undelivered notifications exist, but this batch has no final
+        # result to receive them. Keep the prior live holder (if any) intact
+        # and mark nothing delivered so the state can still be delivered later
+        # via another tool result or the IDLE synthesized-pair path.
         return prior_holder
 
-    # Signature and placeholder status remain delivery/accounting inputs only;
-    # the current payload is always copied onto the final carrier.
+    # The signature is a delivery diagnostic only.
     signature = notification_payload_signature(payload)
-    is_check_read = _is_notification_check_placeholder(getattr(target, "content", None))
-    unchanged = signature == getattr(agent, "_notification_payload_signature", None)
 
-    # ``signature`` and ``is_check_read`` remain delivery/accounting inputs only;
-    # an unchanged active payload is still copied onto this final carrier.
-
-    # Material change (or deliberate check read). Release the previous holder:
+    # New delivery (or deliberate check read). Release the previous holder:
     # a synthesized pair is skeletonized; a normal tool result keeps its old
     # payload as a historical trace (only the newest emission is current).
     if prior_holder is not None:
@@ -4427,7 +4752,7 @@ def attach_active_notifications(
 
     # Nest the canonical notification payload under the result's agent_meta
     # sidecar. Handler content is never used as a transport holder.
-    persistent_payload = build_notification_persistent_payload(agent, payload)
+    persistent_payload = build_notification_persistent_payload(agent, payload, event_records=True)
     # Move (not duplicate): curated durable IM fields are always stripped
     # from the model-visible ephemeral lane, even when every message id was
     # already delivered and no new persistent block is emitted this round.
@@ -4456,20 +4781,23 @@ def attach_active_notifications(
         agent_meta.setdefault("notifications", {})["persistent"] = persistent_payload.get(
             NOTIFICATION_PERSISTENT_KEY, {}
         )
-        if not unchanged or is_check_read:
-            record_notification_persistent_delivery(
-                agent,
-                persistent_payload,
-                tool_call_id=_result_tool_call_id(target),
-            )
+        record_notification_persistent_delivery(
+            agent,
+            persistent_payload,
+            tool_call_id=_result_tool_call_id(target),
+        )
     # Register this dict as the new live holder.
     agent._notification_live_holder = target
 
-    # Record the new signature so a subsequent unchanged batch is recognized.
     try:
         agent._notification_payload_signature = signature
     except Exception:
         pass
+
+    # Mark delivered exactly what this carrier received: the identity comes from
+    # the same coherent observation the payload was built from, never a reread,
+    # so an event published meanwhile stays pending for the next delivery.
+    commit_delivered_notification_sources(agent, delivered_versions.payloads)
 
     # Commit the fingerprint so the IDLE-path `_sync_notifications` will
     # see fp == agent._notification_fp and skip the synthesized pair for

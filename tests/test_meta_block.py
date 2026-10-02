@@ -320,16 +320,11 @@ def test_build_meta_readme_documents_always_on_session_cache_miss_telemetry():
 
 
 def test_build_meta_readme_documents_timely_latest_only_semantics():
-    """agent_meta and notifications are timely transient state: older payloads
-    may remain in historical context/logs as traces (canonical history is no
-    longer retroactively stripped), and only the NEWEST emission is current —
-    old payloads are not current instructions/state, and full-history replay
-    does not strip them out."""
+    """Only the newest runtime snapshot is current. Delivered messages remain
+    usable records after empty tails, with producer/supersession safeguards;
+    old runtime warnings are never revived as current instructions."""
     readme = build_meta_readme()
-    for doc in (
-        readme["agent_meta"]["agent_state"],
-        readme["agent_meta"]["notifications"],
-    ):
+    for doc in (readme["agent_meta"]["agent_state"],):
         assert "timely" in doc.lower()
         assert "only the NEWEST" in doc
         assert "historical trace" in doc
@@ -338,7 +333,10 @@ def test_build_meta_readme_documents_timely_latest_only_semantics():
 
     notification_doc = readme["agent_meta"]["notifications"]
     assert "not current instructions" in notification_doc
-    assert "source of truth" in notification_doc
+    assert "canonical business state" in notification_doc
+    assert "Earlier delivered messages remain usable" in notification_doc
+    assert "after later empty tails" in notification_doc
+    assert "sender/admission/routing/edit safeguards" in notification_doc
 
 
 def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_guidance():
@@ -1933,10 +1931,10 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
             "data": {"email_ids": ["email-1"]},
             "instructions": (
                 "High-attention email hook: full unread content lives in "
-                "notification_persistent.email. Prefer email.dismiss after handling; "
-                "use email.read/reply for source-of-truth mailbox actions. When "
-                "handled through the email tool, the producer mirror updates or "
-                "clears this notification."
+                "notification_persistent.email. This event is delivered once and is not "
+                "re-attached automatically; use email.read/reply/dismiss for "
+                "source-of-truth mailbox actions. Handling mail through the email tool "
+                "updates the producer mirror."
             ),
         }
     }
@@ -1960,27 +1958,32 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
 
 
 def test_attach_active_notifications_unchanged_payload_not_restamped(tmp_path):
-    # The complete current notification snapshot is repeated on the final
-    # carrier, even when its payload is unchanged.
+    # One-shot delivery: an unchanged notification event is attached once and
+    # is not chased onto later ordinary tool results.
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
 
     first = ToolResultBlock(id="t1", name="x", content={"ok": True})
     holder = attach_active_notifications(agent, [first], prior_holder=None)
     assert "notifications" in first.metadata["agent_meta"]
+    before_first = json.dumps(first.metadata, sort_keys=True)
 
-    # Second batch: the notification files are unchanged.  An ordinary tool
-    # result must NOT receive the payload; the prior holder keeps it.
-    second = ToolResultBlock(id="t2", name="x", content={"ok": False})
-    new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
+    # Second and third batches: the notification files are unchanged.  An
+    # ordinary tool result must NOT receive the payload; the prior holder stays.
+    for tool_id in ("t2", "t3"):
+        later = ToolResultBlock(id=tool_id, name="x", content={"ok": False})
+        new_holder = attach_active_notifications(agent, [later], prior_holder=holder)
 
-    assert new_holder is second
-    assert "notifications" in second.metadata["agent_meta"]
+        assert new_holder is holder
+        assert "notifications" not in later.metadata.get("agent_meta", {})
+        assert "guidance" not in later.metadata.get("agent_meta", {})
     # Prior holder remains historical and is not rewritten.
-    assert "notifications" in first.metadata["agent_meta"]
+    assert json.dumps(first.metadata, sort_keys=True) == before_first
     assert first.metadata["agent_meta"]["notifications"]["attention"]["email"]["data"] == {
         "email_ids": ["email-1"]
     }
+    # Explicit producer bytes were never touched by delivery.
+    assert (tmp_path / ".notification" / "email.json").exists()
 
 
 def test_attach_active_notifications_changed_payload_reattaches_and_retains_prior(tmp_path):
@@ -2030,9 +2033,9 @@ def test_attach_active_notifications_changed_payload_reattaches_and_retains_prio
 
 
 def test_attach_active_notifications_unchanged_commits_fp_to_avoid_retry(tmp_path):
-    # Even when an unchanged payload is not restamped, the fingerprint is
-    # committed so an equivalent rewrite / same-material payload does not retry
-    # forever against the IDLE-path synthesized pair.
+    # An unchanged payload is not restamped, but the fingerprint is committed
+    # so an equivalent rewrite / same-material payload does not retry forever
+    # against the IDLE-path synthesized pair.
     from tests._notification_store_helpers import fingerprint_notifications
 
     _write_email_notif(tmp_path)
@@ -2055,16 +2058,17 @@ def test_attach_active_notifications_unchanged_commits_fp_to_avoid_retry(tmp_pat
     second = ToolResultBlock(id="t2", name="x", content={"ok": False})
     new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
 
-    # The current whole snapshot is present and the fingerprint is committed.
-    assert new_holder is second
-    assert "notifications" in second.metadata["agent_meta"]
+    # Nothing new is attached, the live holder is kept, and the fingerprint is
+    # committed.
+    assert new_holder is holder
+    assert "notifications" not in second.metadata.get("agent_meta", {})
     assert agent._notification_fp == fingerprint_notifications(tmp_path)
 
 
-def test_attach_active_notifications_unchanged_signature_without_holder_reattaches(tmp_path):
-    # Defensive regression: if the signature says "unchanged" but the live
-    # holder was lost (e.g. after unusual recovery), do NOT commit an invisible
-    # notification state. Fall through and attach the payload to the target.
+def test_attach_active_notifications_delivered_identity_survives_holder_loss(tmp_path):
+    # The delivered identity — not the live holder — decides one-shot delivery:
+    # losing the holder (e.g. after unusual recovery) must not re-deliver an
+    # event the model already received.
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
 
@@ -2073,13 +2077,12 @@ def test_attach_active_notifications_unchanged_signature_without_holder_reattach
     assert holder is first
     assert "notifications" in first.metadata["agent_meta"]
 
-    # Simulate holder loss while the material signature remains recorded.
     agent._notification_live_holder = None
     second = ToolResultBlock(id="t2", name="x", content={"ok": False})
     new_holder = attach_active_notifications(agent, [second], prior_holder=None)
 
-    assert new_holder is second
-    assert "notifications" in second.metadata["agent_meta"]
+    assert new_holder is None
+    assert "notifications" not in second.metadata.get("agent_meta", {})
 
 
 
@@ -2116,7 +2119,7 @@ def test_attach_active_notifications_check_read_receives_unchanged_payload(tmp_p
 
 def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp_path):
     # When notifications go empty the signature resets to None, so a later
-    # reappearance of the SAME payload attaches again as the first active one.
+    # reappearance of the same known event must not replay; new IDs still attach.
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
 
@@ -2134,12 +2137,17 @@ def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp
     # strip); it is simply no longer the live holder.
     assert "notifications" in first.metadata["agent_meta"]
 
-    # Same payload reappears — must attach afresh (first-active semantics).
+    # The same mail ID/material reappears: it is not a new event merely
+    # because the mirror was cleared. Process-local event identity survives.
     _write_email_notif(tmp_path)
     third = ToolResultBlock(id="t3", name="x", content={"ok": True})
-    new_holder = attach_active_notifications(agent, [third], prior_holder=None)
-    assert new_holder is third
-    assert "notifications" in third.metadata["agent_meta"]
+    assert attach_active_notifications(agent, [third], prior_holder=None) is None
+    assert "notifications" not in third.metadata.get("agent_meta", {})
+    # A genuinely new mail still attaches after the empty observation.
+    _write_email_notif(tmp_path, email_id="email-2", message="new mail")
+    fourth = ToolResultBlock(id="t4", name="x", content={"ok": True})
+    assert attach_active_notifications(agent, [fourth], prior_holder=None) is fourth
+    assert fourth.metadata["agent_meta"]["notifications"]["persistent"]["email"]["email_ids"] == ["email-2"]
 
 
 def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path):
@@ -2312,10 +2320,10 @@ def test_attach_active_notifications_sanitizes_telegram_without_new_persistent_b
 
     assert new_holder is check_result
     meta = check_result.metadata["agent_meta"]
-    # No new message ids, but the routing event hook is Telegram content too, so
-    # it is emitted in persistent while the transient lane stays generic.
+    # Deliberate check rereads all selected mirror records, while attention
+    # remains thin. Automatic delivery of this unchanged event stays suppressed.
     telegram = meta["notifications"]["persistent"]["mcp"]["telegram"]
-    assert telegram["messages"] == []
+    assert [message["id"] for message in telegram["messages"]] == [message["id"] for message in messages]
     assert telegram["events"] == [
         {
             "from": "Jason",
@@ -3307,6 +3315,8 @@ def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):
         "second body",
     ]
     assert all(message["source"] == "notification_preview" for message in telegram["messages"])
+    # Generated display IDs must not become producer routing/reply targets.
+    assert all("message_ref" not in event for event in telegram["events"])
     assert telegram["events"] == [
         {"from": "alice", "subject": "hello"},
         {"from": "bob", "subject": "status"},

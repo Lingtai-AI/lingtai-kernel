@@ -24,6 +24,8 @@ related_files:
   - tests/test_tool_family_context_migration.py
   - tests/test_deep_refresh.py
   - tests/test_context_declared_tool_plugin.py
+  - src/lingtai/tools/notification/CONTRACT.md
+  - tests/test_notification_one_shot.py
 maintenance: |
   Keep related paths real and the paired Anatomy reciprocal. Update schemas,
   model prose, manuals, results, lifecycle wiring, private summary engine, and
@@ -44,6 +46,8 @@ Guarded by: [K003](../../kernel/BEHAVIORS.md#behavior-k003)
 - `summarize` — record compact replacements in local runtime history only;
 - `rebuild` — the **one active full context reconstruction operation**;
 - `manual` — return `context-manual` without a lifecycle operation.
+
+Ordinary molt/rebuild changes conversation context, not notification event lifecycle. Already delivered notification identity survives within the same agent process; failed/no-carrier attempts remain pending. New post-molt notices and new producer events still deliver. A new Agent/process restart starts fresh bookkeeping, not cross-crash exactly-once. The [Notification contract](../notification/CONTRACT.md) owns delivery.
 
 The implementation is an official declared host plugin: its static
 `DECLARATION` owns the identity, actions, schemas, and `context-manual`; its
