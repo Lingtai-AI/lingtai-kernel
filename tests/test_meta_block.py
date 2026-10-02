@@ -513,17 +513,20 @@ def test_attach_active_runtime_tail_adapter_comment_has_no_ledger_rows():
 
     attach_active_runtime(agent, [block])
 
-    tail = block.metadata["agent_meta"]["agent_state"]["adapter_comment"]
-    assert calls == {"legacy": 0, "dynamic": 1}
-    assert tail["adapter"] == "codex"
-    assert tail["turns_since_epoch_reset"] == 4
-    assert "summary" not in tail
-    assert "cache_note" not in tail
-    assert "cache_ledger" not in tail
-    assert "rows" not in json.dumps(tail)
-    assert tail["cache_ledger_summary"] == {"api_calls": 1}
-    assert "reason" not in tail["maintenance_hint"]
-    assert "meta_guidance_ref" not in tail
+    # The default tail carries no adapter diagnostics at all; the adapter is
+    # not even consulted when stamping the final carrier.
+    assert "adapter_comment" not in block.metadata["agent_meta"]["agent_state"]
+    assert calls == {"legacy": 0, "dynamic": 0}
+
+    # The on-demand full snapshot carries the full dynamic adapter view.
+    from lingtai.kernel.meta_block import build_full_runtime_meta
+
+    full_agent = _fake_agent()
+    full_agent._session = agent._session
+    full = build_full_runtime_meta(full_agent)["agent_state"]["adapter_comment"]
+    assert full["turns_since_epoch_reset"] == 4
+    assert full["cache_ledger"]["rows"] == [[0, "F", 0.5, 100.0, 50.0, "sum"]]
+    assert "summary" not in full
 
 def _fake_agent_with_lang(lang: str, *, time_awareness: bool = True):
     return SimpleNamespace(
@@ -1125,10 +1128,9 @@ def test_build_meta_session_cache_rate_clamps_to_fraction():
     assert session["session_cache_rate"] == 1.0
 
 
-def test_synthetic_meta_envelope_shows_token_usage_in_agent_state():
-    # /notification synthetic raw meta carries token diagnostics under
-    # agent_meta.agent_state when pending/session data is available. The nested
-    # current_call/session split is preserved on that current-state axis.
+def test_synthetic_meta_envelope_shows_context_only_in_agent_state():
+    # Synthetic default notifications carry current context only; detailed
+    # current_call/session accounting remains available via system.meta.
     snapshot = {
         "input_tokens": 190_000,
         "cache_miss_tokens": 22_000,
@@ -1144,6 +1146,7 @@ def test_synthetic_meta_envelope_shows_token_usage_in_agent_state():
         "api_calls": 4,
         "input_tokens": 22_000,
         "cached_tokens": 5_500,
+        "ctx_total_tokens": 190_000,
     }
     payload = build_notification_payload({"system": {"events": [{"body": "ping"}]}})
 
@@ -1153,9 +1156,12 @@ def test_synthetic_meta_envelope_shows_token_usage_in_agent_state():
     assert tool_meta["synthetic"] is True
     agent_meta = envelope["agent_meta"]
     state = agent_meta["agent_state"]
-    assert state["token_usage"]["current_call"]["input"] == 190_000
-    assert state["token_usage"]["session"]["session_cache_rate"] == 0.25
-    assert state["token_usage"]["session"]["api_calls"] == 4
+    assert set(state["token_usage"]) == {"session"}
+    assert state["token_usage"]["session"] == {
+        "context_tokens": 190_000,
+        "context_window": 250_000,
+        "context_usage": 0.76,
+    }
     assert "token_efficiency" not in agent_meta
     assert "token_usage" in state
     assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in agent_meta
@@ -3599,7 +3605,7 @@ def _stamped_result(meta, elapsed_ms, *, result=None, id="t1", name="x"):
     )
 
 
-def test_attach_active_runtime_counts_current_batch_tool_result_chars():
+def test_attach_active_runtime_default_tail_omits_tool_result_chars():
     agent = _fake_agent()
     block = _stamped_result(
         build_meta(agent), 12, result={"payload": "B" * 1200}, id="tc-batch", name="bash"
@@ -3607,17 +3613,10 @@ def test_attach_active_runtime_counts_current_batch_tool_result_chars():
 
     attach_active_runtime(agent, [block])
 
-    agent_meta = block.metadata["agent_meta"]
-    current = agent_meta["agent_state"]["current_tool_result_chars"]
-    expected = len(json.dumps({"payload": "B" * 1200}, ensure_ascii=False, default=str))
-    assert current["total_chars"] == expected
-    assert current["top_results"] == [
-        {
-            "id": "tc-batch",
-            "tool_name": "bash",
-            "chars": expected,
-        }
-    ]
+    state = block.metadata["agent_meta"]["agent_state"]
+    assert "current_tool_result_chars" not in state
+    assert "adapter_comment" not in state
+    assert "active_turn_tool_calls" not in state
 
 
 def test_attach_active_runtime_does_not_leak_tool_meta_token_usage_to_agent_meta():
@@ -3652,7 +3651,7 @@ def test_attach_active_runtime_keeps_no_token_efficiency_in_agent_meta():
 
     agent_meta = block.metadata["agent_meta"]
     assert "token_efficiency" not in agent_meta
-    assert agent_meta["agent_state"]["active_turn_tool_calls"] == 3
+    assert "active_turn_tool_calls" not in agent_meta["agent_state"]
 
 
 def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
@@ -3669,8 +3668,8 @@ def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
     assert state["current_time"] == "T"
     assert state["context"] == {"usage": 0.1}
     assert state["elapsed_ms"] == 12
-    # active_turn_tool_calls is sourced from the guard and lives under agent_state.
-    assert state["active_turn_tool_calls"] == 3
+    # The guard counter is a full-snapshot diagnostic (system.meta), not tail.
+    assert "active_turn_tool_calls" not in state
     # Tail guidance is now a lightweight ref/hook pointing at the resident
     # meta_guidance system-prompt section — NOT the full ordered sections,
     # which moved into the system prompt to stop riding on every tail _meta.
@@ -3685,28 +3684,19 @@ def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
 
 
 
-def test_attach_active_runtime_refreshes_adapter_comment_at_batch_boundary():
+def test_attach_active_runtime_drops_adapter_comment_even_if_captured():
     agent = _runtime_agent(total_calls=1)
-
-    def dynamic_comment():
-        return {"adapter": "fake", "next_reset_in": 5}
-
-    agent._session = SimpleNamespace(
-        chat=SimpleNamespace(
-            adapter_comment=lambda: {"adapter": "fake", "summary": "legacy provider note"},
-            dynamic_adapter_comment=dynamic_comment,
-        )
+    block = _stamped_result(
+        {"current_time": "T", "adapter_comment": {"adapter": "fake", "next_reset_in": 5}},
+        12,
+        id="t-adapter",
     )
-    block = _stamped_result({"current_time": "T"}, 12, id="t-adapter")
 
     attach_active_runtime(agent, [block])
 
-    agent_meta = block.metadata["agent_meta"]["agent_state"]
-    tail = agent_meta["adapter_comment"]
-    assert tail["adapter"] == "fake"
-    assert tail["next_reset_in"] == 5
-    assert "summary" not in tail
-    assert "meta_guidance_ref" not in tail
+    state = block.metadata["agent_meta"]["agent_state"]
+    assert "adapter_comment" not in state
+    assert state["current_time"] == "T"
 
 def test_attach_active_runtime_moves_to_latest_and_retains_prior():
     agent = _runtime_agent(total_calls=1)
@@ -3726,7 +3716,6 @@ def test_attach_active_runtime_moves_to_latest_and_retains_prior():
     assert "agent_meta" in first.metadata
     assert "guidance" in first.metadata["agent_meta"]
     assert second.metadata["agent_meta"]["agent_state"]["current_time"] == "T2"
-    assert second.metadata["agent_meta"]["agent_state"]["active_turn_tool_calls"] == 2
 
 
 def test_attach_active_runtime_uses_final_block_as_carrier():
@@ -3744,7 +3733,6 @@ def test_attach_active_runtime_uses_final_block_as_carrier():
     assert "agent_meta" not in middle.metadata
     state = string_tail.metadata["agent_meta"]["agent_state"]
     assert state["elapsed_ms"] == 3
-    assert state["active_turn_tool_calls"] == 4
     # Earlier blocks get no current agent_meta, and their pending scaffolding is stripped.
     assert "_agent_pending" not in earlier.to_dict()
     assert string_tail.content == "plain text"
@@ -3818,39 +3806,35 @@ def test_attach_active_runtime_material_change_reattaches():
     assert holder2 is second
     assert "agent_meta" in second.metadata
 
-    # Material change: a new adapter_comment scalar appears in the snapshot.
+    # Material change: a new context warning appears in the snapshot.
     agent._executor.guard.total_calls = 3
     third = _stamped_result(
-        {"current_time": "T3", "adapter_comment": {"note": "materially new"}}, 7, id="t3"
+        {"current_time": "T3", "context": {"molt": "materially new"}}, 7, id="t3"
     )
     new_holder = attach_active_runtime(agent, [third], prior_holder=holder2)
 
     assert new_holder is third
     assert "agent_meta" in third.metadata
-    assert third.metadata["agent_meta"]["agent_state"]["adapter_comment"] == {"note": "materially new"}
+    assert third.metadata["agent_meta"]["agent_state"]["context"] == {"molt": "materially new"}
     # The older holder RETAINS its earlier snapshot as a historical update
     # point (no retroactive strip); the newest emission is the current one.
     assert "agent_meta" in first.metadata
-    assert "adapter_comment" not in first.metadata["agent_meta"]["agent_state"]
+    assert "context" not in first.metadata["agent_meta"]["agent_state"]
 
 
-def test_attach_active_runtime_new_large_result_is_material():
-    # A new large tool result appearing in current_tool_result_chars.top_results
-    # is a material change worth re-surfacing agent_meta, even if nothing else
-    # changed.
+def test_attach_active_runtime_large_result_candidates_are_on_demand_only():
+    # A big result does not grow the default tail; its candidate row is visible
+    # through the full on-demand snapshot instead.
     agent = _fake_agent()
     small = _stamped_result(build_meta(agent), 5, id="t1")
     holder = attach_active_runtime(agent, [small], prior_holder=None)
     assert "agent_meta" in small.metadata
 
-    # A big result enters the batch — top_results changes materially.
     big = _stamped_result(build_meta(agent), 6, result={"payload": "B" * 5000}, id="t2", name="bash")
     new_holder = attach_active_runtime(agent, [big], prior_holder=holder)
 
     assert new_holder is big
-    assert "agent_meta" in big.metadata
-    top = big.metadata["agent_meta"]["agent_state"]["current_tool_result_chars"]["top_results"]
-    assert any(entry["id"] == "t2" for entry in top)
+    assert "current_tool_result_chars" not in big.metadata["agent_meta"]["agent_state"]
 
 
 def test_agent_meta_signature_ignores_volatile_bookkeeping():

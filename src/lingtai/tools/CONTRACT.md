@@ -825,7 +825,7 @@ configuration or mutation surface is added (see
 `src/lingtai/tools/notification/CONTRACT.md`).
 
 `system` (`refresh | sleep | lull | interrupt | suspend | cpr | clear |
-nirvana | presets | name_set | name_nickname | settings | manual`) is the
+nirvana | presets | name_set | name_nickname | meta | settings | manual`) is the
 eleventh, and
 the third
 migrated *intrinsic*: its final model-facing root is likewise exactly `action`,

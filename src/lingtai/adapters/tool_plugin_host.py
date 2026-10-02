@@ -933,7 +933,7 @@ class AgentSystemRuntimeAdapter:
     """
 
     __slots__ = (
-        "_admin", "_language", "_log", "_token_usage", "_load_preset",
+        "_admin", "_language", "_log", "_token_usage", "_runtime_meta", "_load_preset",
         "_activate_preset", "_activate_default_preset", "_retry_failed_mcps",
         "_perform_refresh", "_resuscitate", "_sleep_attention_fingerprints",
         "_transition_to_asleep", "_sleep_alarm_lock", "_arm_sleep_alarm",
@@ -946,6 +946,7 @@ class AgentSystemRuntimeAdapter:
         language: Callable[[], str],
         log: Callable[..., None],
         token_usage: Callable[[], Mapping[str, Any]],
+        runtime_meta: Callable[[], Mapping[str, Any]],
         load_preset: Callable[[str], dict],
         activate_preset: Callable[[str], None],
         activate_default_preset: Callable[[], None],
@@ -961,6 +962,7 @@ class AgentSystemRuntimeAdapter:
         self._language = language
         self._log = log
         self._token_usage = token_usage
+        self._runtime_meta = runtime_meta
         self._load_preset = load_preset
         self._activate_preset = activate_preset
         self._activate_default_preset = activate_default_preset
@@ -985,6 +987,9 @@ class AgentSystemRuntimeAdapter:
 
     def token_usage(self) -> Mapping[str, Any]:
         return self._token_usage()
+
+    def runtime_meta(self) -> Mapping[str, Any]:
+        return self._runtime_meta()
 
     def load_preset(self, name: str) -> dict:
         return self._load_preset(name)
@@ -1056,6 +1061,7 @@ def agent_system_runtime(agent: Any) -> AgentSystemRuntimeAdapter:
         _arm_sleep_alarm,
         _sleep_alarm_lock,
     )
+    from lingtai.kernel.meta_block import build_full_runtime_meta
     from lingtai.kernel.notifications import (
         _workdir_key,
         attention_fingerprint,
@@ -1082,6 +1088,7 @@ def agent_system_runtime(agent: Any) -> AgentSystemRuntimeAdapter:
         language=lambda: agent._config.language,
         log=lambda event, **fields: agent._log(event, **fields),
         token_usage=lambda: agent.get_token_usage(),
+        runtime_meta=lambda: build_full_runtime_meta(agent),
         load_preset=lambda name: agent.load_preset(name),
         activate_preset=lambda name: agent._activate_preset(name),
         activate_default_preset=lambda: agent._activate_default_preset(),

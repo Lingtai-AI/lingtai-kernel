@@ -80,7 +80,7 @@ manifest's `how_to_cancel`. If the process keeps publishing after drop, the
 kernel may emit the blocked-channel warning again.
 
 New large tool results are not notification events. They belong to
-`_meta.agent_meta.agent_state.current_tool_result_chars` and
+`current_tool_result_chars` (read via `system(action='meta')`) and
 `context(action='summarize')`; `../../../context-manual/reference/summarize-manual/SKILL.md` owns digest, recovery, and
 summarize-versus-molt procedure. A persisted legacy
 `source='large_tool_result'` event can be cleared by successful summarization of

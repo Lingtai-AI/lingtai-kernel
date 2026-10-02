@@ -1009,6 +1009,10 @@ class TelegramManager:
         self._task_card_event_identity: tuple[str, float | int] | None = None
         # Grouped by provider call; the compatibility row view is derived.
         self._task_card_event_groups: list[dict] = []
+        # Exact per-API usage facts keyed by api/tool call id, carried across
+        # incremental polls so a response read before its rows still reaches
+        # them. In-memory only, bounded, reset with the tail window.
+        self._task_card_call_usages: dict[str, dict] = {}
         # Shared reducer state makes every fresh versioned ``llm_response``
         # authoritative for SESSION telemetry.  Legacy notification carriers are
         # fallback only; generation/order fences remain hidden in this state.
@@ -3194,6 +3198,27 @@ class TelegramManager:
                 return ("btime", ctime)
         return None
 
+    def _remember_call_usages(self, usages: dict[str, dict]) -> None:
+        """Merge exact per-call usage facts into the bounded in-memory cache.
+
+        Caller holds ``_task_card_event_lock``. A later carrier without pricing
+        facts never erases an earlier ``bill`` for the same id. Oldest ids are
+        evicted past a cap proportional to the event window.
+        """
+        cache = self._task_card_call_usages
+        for call_id, usage in usages.items():
+            previous = cache.pop(call_id, None)
+            if (
+                "bill" not in usage
+                and isinstance(previous, dict)
+                and previous.get("bill")
+            ):
+                usage = {**usage, "bill": previous["bill"]}
+            cache[call_id] = usage
+        limit = self._TASK_CARD_EVENT_WINDOW * 4
+        while len(cache) > limit:
+            del cache[next(iter(cache))]
+
     def _init_event_tail(self) -> None:
         """Rehydrate the latest-N window and forward offset from the file tail.
 
@@ -3217,6 +3242,7 @@ class TelegramManager:
                 self._task_card_event_inode = None
                 self._task_card_event_identity = None
                 self._task_card_event_groups = []
+                self._task_card_call_usages = {}
                 self._task_card_session_usage_state = None
                 self._task_card_session_cost_state = None
                 self._task_card_event_metadata = None
@@ -3235,6 +3261,7 @@ class TelegramManager:
                 self._task_card_event_inode = None
                 self._task_card_event_identity = None
                 self._task_card_event_groups = []
+                self._task_card_call_usages = {}
                 self._task_card_session_usage_state = None
                 self._task_card_session_cost_state = None
                 self._task_card_event_metadata = None
@@ -3248,8 +3275,10 @@ class TelegramManager:
             self._task_card_event_identity = self._event_file_identity(stat)
             projected = [({"api_call_id": row.get("group_id")}, dict(row)) for row in rows]
             self._task_card_event_groups = self._group_task_card_events(projected)
+            self._task_card_call_usages = {}
+            self._remember_call_usages(usages)
             TaskCardEventProjection.apply_tool_usages(
-                self._task_card_event_groups, usages,
+                self._task_card_event_groups, self._task_card_call_usages,
             )
             self._task_card_session_usage_state = session_state
             self._task_card_session_cost_state = cost_state
@@ -3548,9 +3577,10 @@ class TelegramManager:
                 self._task_card_event_groups,
                 tool_results,
             )
+            self._remember_call_usages(per_call_usages)
             usage_changed = TaskCardEventProjection.apply_tool_usages(
                 self._task_card_event_groups,
-                per_call_usages,
+                self._task_card_call_usages,
             )
             summary_changed = TaskCardEventProjection.apply_apriori_summary_metrics(
                 self._task_card_event_groups, summary_times, summary_usages,

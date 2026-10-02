@@ -1,7 +1,7 @@
 """System's official declared host-plugin slice.
 
-``system`` remains one LTP family with eleven operational actions plus the
-reserved ``settings`` and ``manual`` actions (thirteen total).  The public
+``system`` remains one LTP family with twelve operational actions plus the
+reserved ``settings`` and ``manual`` actions (fourteen total).  The public
 handler is now a static ``ToolPluginDeclaration`` bound
 only to three narrow ports: its workdir for manual/addressed documents, a
 runtime/lifecycle vocabulary, and durable naming identity.  The legacy
@@ -33,6 +33,7 @@ from .karma import (
     sleep_use_case,
     _suspend,
 )
+from .meta import _meta
 from .name import _name_nickname, _name_set
 from .plugin import SYSTEM_DECLARED_ACTIONS
 from .preset import _check_context_fits, _preset_ref_in, _presets, _refresh
@@ -63,6 +64,7 @@ _ACTION_HANDLERS = {
     "presets": _presets,
     "name_set": _name_set,
     "name_nickname": _name_nickname,
+    "meta": _meta,
 }
 
 
@@ -107,6 +109,9 @@ class _SystemHandlerHost:
 
     def get_token_usage(self):
         return self._runtime.token_usage()
+
+    def runtime_meta(self):
+        return self._runtime.runtime_meta()
 
     def load_preset(self, name: str):
         return self._runtime.load_preset(name)
