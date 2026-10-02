@@ -381,7 +381,7 @@ class TaskCardEventProjection:
                 if last_tool_ts is None:
                     row["api_delay_s"] = 0.0
                 else:
-                    row["api_delay_s"] = max(0.0, round(ts - last_tool_ts, 2))
+                    row["api_delay_s"] = max(0.0, ts - last_tool_ts)
                 last_tool_ts = ts
             if len(events) < limit:
                 events.append(row)
@@ -1265,9 +1265,21 @@ class TaskCardEventProjection:
         if api_delay_s is not None and api_delay_s > 0:
             time_parts.append(f"↻{api_delay_s:.1f}s")
             parts.pop(0)
+        # The same group's observed API wait + generation intervals are
+        # adjacent. Subtract their unrounded sum from the progress gap, not
+        # from true IDLE. Missing timing or a shorter gap has no honest residual.
+        timing = usage.get("stream_timing") if isinstance(usage, dict) else None
+        if isinstance(timing, dict):
+            first = cls._finite_number(timing.get("first_token_s"))
+            generation = cls._finite_number(timing.get("generation_s"))
+            gap = cls._finite_number(api_delay_s)
+            if (gap is not None and gap > 0 and first is not None and first >= 0
+                    and generation is not None and generation >= 0):
+                other = gap - (first + generation)
+                if math.isfinite(other) and other >= 0:
+                    time_parts.append(f"⏱{other:.1f}s")
         if type(idle_s) in (int, float) and math.isfinite(idle_s) and idle_s >= 0:
             time_parts.append(f"☕{idle_s:.1f}s")
-        timing = usage.get("stream_timing") if isinstance(usage, dict) else None
         if isinstance(timing, dict):
             first = timing.get("first_token_s")
             if type(first) in (int, float) and math.isfinite(first) and first >= 0:

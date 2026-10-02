@@ -764,7 +764,7 @@ def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
     # First tool call of the stream has no prior progress: 0.0 baseline.
     assert window[0]["api_delay_s"] == 0.0
     # Second tool call: exact ts delta.
-    assert window[1]["api_delay_s"] == 3.4
+    assert window[1]["api_delay_s"] == pytest.approx(3.4)
     # The raw ts stays private and never leaks into the public window.
     assert all("_ts" not in row for row in window)
 
@@ -2575,7 +2575,7 @@ def test_actual_telegram_tail_stream_time_and_tokens_use_two_lines(tmp_path, mon
     ])
     manager._poll_event_tail()
     text = _last_edit(acct)
-    assert "↻12.4s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
+    assert "↻12.4s · ⏱7.2s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
     assert "TTFT" not in text and "↻" in text
 
 
@@ -2623,6 +2623,6 @@ def test_actual_telegram_idle_time_row(tmp_path, monkeypatch, mode, live):
     text = _last_edit(acct)
     expected = {"known": "2.5", "multiple": "5.0", "zero": "0.0"}.get(mode)
     coffee = f" · ☕{expected}s" if expected is not None else ""
-    assert f"↻12.4s{coffee} · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
+    assert f"↻12.4s · ⏱7.2s{coffee} · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
     if expected is None:
         assert "☕" not in text
