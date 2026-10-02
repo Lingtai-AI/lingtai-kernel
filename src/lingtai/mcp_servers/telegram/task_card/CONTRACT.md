@@ -100,9 +100,9 @@ semantics live here. The public producer contract lives in
    `thinking_tokens` fallback produce the same representation. A missing,
    malformed, or output-less count is omitted without a dangling parenthesis,
    preserving old-event rendering and never exposing reasoning text.
-    Telegram opts into two metrics lines: time first (`↻12.4s · ⚡1.2s`),
-    tokens next (existing output/thinking/cache/context symbols, with optional
-    `45 tok/s`). `⚡` is seconds from actual dispatch to first nonempty text or
+    Telegram opts into two metrics lines: time and speed first
+    (`↻12.4s · ⚡1.2s · 45 tok/s`), tokens next (existing
+    output/thinking/cache/context symbols). `⚡` is seconds from actual dispatch to first nonempty text or
     tool name/argument payload, excluding ids, reasoning, lifecycle, heartbeat,
     usage and empty events. Speed is final provider non-reasoning output tokens
     (including tools) / measured first-output-to-final-usage seconds, only with

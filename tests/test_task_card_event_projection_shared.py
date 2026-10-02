@@ -523,7 +523,7 @@ def test_stream_metrics_formula_two_lines_and_carrier_preservation():
                                "generation_tokens": 180}}
     _, usage = TaskCardEventProjection.project_llm_response_usage(event)
     info = TaskCardEventProjection.format_divider_info(12.4, usage, stream_metrics=True)
-    assert info == "↻12.4s · ⚡1.2s\n↓200 (20) ↑900 ◌ 1.0k | 10.0% 45 tok/s"
+    assert info == "↻12.4s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%"
     # Other consumers opt out, preserving the established single line.
     assert "⚡" not in TaskCardEventProjection.format_divider_info(12.4, usage)
     groups = [{"events": [{"kind": "text", "text": "hello", "api_delay_s": 12.4,
@@ -533,7 +533,7 @@ def test_stream_metrics_formula_two_lines_and_carrier_preservation():
     })
     assert groups[0]["events"][0]["_usage"]["stream_timing"] == usage["stream_timing"]
     frame = TaskCardEventProjection.render_event_groups(groups, normal_rows=10, stream_metrics=True)
-    assert "↻12.4s · ⚡1.2s\n↓200 (20) ↑900 45 tok/s" in frame
+    assert "↻12.4s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900" in frame
 
 
 def test_missing_invalid_estimated_stream_metrics_omit_speed():

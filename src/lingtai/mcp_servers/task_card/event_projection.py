@@ -1234,7 +1234,7 @@ class TaskCardEventProjection:
                     except OverflowError:
                         speed = math.inf
                     if math.isfinite(speed):
-                        parts.append(f"{speed:.0f} tok/s")
+                        time_parts.append(f"{speed:.0f} tok/s")
         return "\n".join(line for line in (" · ".join(time_parts), " ".join(parts)) if line)
 
     @classmethod

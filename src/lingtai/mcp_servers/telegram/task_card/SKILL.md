@@ -54,8 +54,8 @@ The automatic Telegram card shows time and token information on separate
 lines, then adds the plain price line, for example:
 
 ```text
-↻12.4s · ⚡1.2s
-↓200 (20) ↑900 ◌ 1.0k | 10.0% 45 tok/s
+↻12.4s · ⚡1.2s · 45 tok/s
+↓200 (20) ↑900 ◌ 1.0k | 10.0%
 ```
 
 `⚡` measures actual stream dispatch to first nonempty **text or tool
