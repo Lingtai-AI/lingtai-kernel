@@ -26,6 +26,8 @@ related_files:
   - src/lingtai/tools/system/karma.py
   - tests/test_aed_recovery.py
   - tests/test_notification_sync.py
+  - src/lingtai/tools/notification/CONTRACT.md
+  - tests/test_notification_one_shot.py
   - tests/test_cli_worker_poison_recovery.py
   - tests/test_worker_hang_aed_redo.py
   - tests/test_silence_kill.py
@@ -196,6 +198,8 @@ Platform profiles are selector-composed at the composition roots
 ## Contract rules
 
 Clause IDs are stable; each rule composes the linked normative source.
+
+Automatic notification delivery composes the [Notification contract](../../tools/notification/CONTRACT.md): ACTIVE and IDLE share event/message identity from the exact delivered observation. Ordinary same-process molt/rebuild/redacted resync retain that identity; a new Agent/process restart does not persist it. Delivery is not business completion, and earlier delivered messages remain usable subject to newer instructions and producer safeguards.
 
 1. `agent-runtime.paths.v1` — One working directory owns one agent. The
    runtime artifacts are `.agent.json` (manifest), `.agent.heartbeat`

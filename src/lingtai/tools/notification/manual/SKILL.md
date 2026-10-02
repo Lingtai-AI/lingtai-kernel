@@ -3,11 +3,11 @@ name: notification-manual
 description: >
   Entry manual for the standalone `notification` tool and its `.notification`
   mirrors. Routine check uses the schema; read a reference for unfamiliar payload,
-  producer, dismissal, delay, or settings detail. Large-result compaction belongs
-  to `context-manual`, not here.
-version: 0.16.1
-tags: [lingtai, notifications, channels, dismiss, delay, alarm, settings, manual, force, stale, nudge, hooks, whitelist]
-last_changed_at: "2026-09-11T00:00:00Z"
+  producer, one-shot delivery, delay, or settings detail. Large-result compaction
+  belongs to `context-manual`, not here.
+version: 0.17.0
+tags: [lingtai, notifications, channels, one-shot, delay, alarm, settings, manual, nudge, hooks, whitelist]
+last_changed_at: "2026-10-02T00:00:00Z"
 related_files:
 - src/lingtai/prompts/meta_guidance/catalog/notification_handling.md
 - src/lingtai/tools/notification/ANATOMY.md
@@ -31,14 +31,14 @@ Use the schema for routine `action` + `input` + `reasoning` calls; start with:
 notification(action='check', input={}, reasoning='inspect current notifications')
 ```
 
-`check` returns a placeholder; read the live payload under `_meta.agent_meta.notifications.attention` and the hook under `_meta.agent_meta.guidance.transient` on that result, not an older delivered snapshot. Follow the payload's producer-specific read/dismiss instructions first. Generic dismissal affects mirrors only, not mailbox, goal, source-queue or other producer state. Choose the narrowest target; do not delete files or call `check` merely to confirm a clear.
+`check` returns a placeholder; read the live payload under `_meta.agent_meta.notifications.attention` and the hook under `_meta.agent_meta.guidance.transient` on that result for the current mirror. Earlier legitimately delivered messages remain usable for the active task after a later empty tail; only the newest `agent_state` is current runtime state. Do not treat old warnings as current instructions or revive superseded human requests. `check` is a deliberate read of the complete current mirrors, not a replay: automatic delivery attaches each notification event once (new or changed events are attached again), and delivery never clears producer state or notification files. There is no notification dismiss action; follow the payload's producer-specific instructions through the owning producer tool, and do not delete files.
 
 ## Route one owner
 
 | Need | Read |
 |---|---|
 | Payload, delivery, allowlist, hooks, delay mechanics or spill recovery | [Channel model](reference/channel-model/SKILL.md) |
-| Target selection, producer guard, stale refusal, force, protected goal or post-molt | [Dismissal safety](reference/dismissal-safety/SKILL.md); read before forcing |
+| One-shot delivery, producer-state safety, protected goal, post-molt, hooks | [Delivery safety](reference/dismissal-safety/SKILL.md) |
 | Tool-result compaction or recovery by tool_call_id | `../context-manual/reference/summarize-manual/SKILL.md` |
 | Goal cancellation/completion | `../system-manual/reference/goal-manual/SKILL.md` |
 | Runtime/configuration nudges | `../system-manual/reference/runtime-update-checks/SKILL.md` |

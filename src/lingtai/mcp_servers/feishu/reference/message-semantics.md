@@ -176,10 +176,9 @@ an over-cap text field, an unresolved card callback, an unresolved attachment,
 or history genuinely outside the delivered window. A requested history
 search/reconciliation is a separate purpose from rereading the current
 message. Neither lane marks messages read: reply in Feishu (or call
-`read`/`check` only when recovery of genuinely missing content is needed),
-then dismiss the transient hook with
-`notification(action="dismiss_channel", input={"channel": "mcp.feishu",
-"force":null, "reason":null}, reasoning="handled in Feishu")`.
+`read`/`check` only when recovery of genuinely missing content is needed).
+The transient hook is delivered once and is not re-attached automatically; there
+is no notification dismiss action.
 
 The current incoming event can include bounded local paths, attachment status,
 and download/transcription errors. Provider keys and complete raw envelopes

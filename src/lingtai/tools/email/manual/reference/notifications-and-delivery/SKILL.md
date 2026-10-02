@@ -59,7 +59,7 @@ Arrival and every read-state mutation render the current unread set to
 `notification(action="check")`. Its relevant shape is:
 
 ```json
-{"instructions":"handle, then prefer email.dismiss or email.read/reply",
+{"instructions":"delivered once; act with email.read/reply/dismiss",
  "data":{"count":3,"newest_received_at":"<time>",
          "email_ids":["<local-id>"],
          "emails":[{"id":"<local-id>","from":"peer",
@@ -83,7 +83,8 @@ mail remains. Replies currently leave the source unread; see the
 [Contract discrepancy and explicit-dismiss workaround](../addressing-and-replies/SKILL.md#same-channel-reply).
 
 If persistent context has an `overflow` marker, follow its local spill file or use
-the Email producer action; do not assume the body is complete. Generic
-`notification(action="dismiss_channel", input={"channel":"email", ...})` only
-clears the mirror: it does not mark source messages read and cannot replace Email
-`dismiss`, `read`, `archive`, or `delete`.
+the Email producer action; do not assume the body is complete. Notification
+delivery is one-shot (a new or changed unread set is attached again, an unchanged
+one is not) and never marks source messages read or clears the mirror; there is no
+notification dismiss action, and Email `dismiss`, `read`, `archive`, and `delete`
+remain the producer operations.

@@ -50,7 +50,11 @@ from ..meta_block import (
     build_synthetic_meta_envelope,
     build_notification_payload,
     build_notification_persistent_payload,
+    commit_delivered_notification_sources,
+    notification_source_signatures as _notification_source_signatures,
+    pending_notification_payloads,
     record_notification_persistent_delivery,
+    reset_delivered_notification_sources,
     sanitize_email_notification_after_persistent,
     sanitize_feishu_notification_after_persistent,
     sanitize_telegram_notification_after_persistent,
@@ -71,20 +75,6 @@ from .lifecycle import StopResult, StopStatus
 
 logger = get_logger()
 
-
-
-def _notification_source_signatures(payloads: Mapping[str, object]) -> dict[str, str]:
-    """Return bounded deterministic signatures for an observed channel snapshot."""
-    signatures: dict[str, str] = {}
-    for source, payload in payloads.items():
-        try:
-            material = json.dumps(
-                payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")
-        except (TypeError, ValueError):
-            material = repr(payload).encode("utf-8", "replace")
-        signatures[str(source)] = hashlib.sha256(material).hexdigest()
-    return signatures
 
 
 # Typed daemon event kinds and their durable idempotency-key prefixes. A run's
@@ -836,16 +826,26 @@ class BaseAgent:
         # See `meta_block.skeletonize_notification_holder` and
         # `meta_block.attach_active_notifications`.
         #
-        # The current notification payload is merged into the newest final
-        # agent_meta snapshot on every eligible batch. The fingerprint and live
-        # holder remain for delivery bookkeeping and historical ownership, but
-        # they do not suppress the newest whole snapshot.
+        # Not-yet-delivered notification state is merged into the newest final
+        # agent_meta snapshot once (one-shot delivery, see the delivered-identity
+        # fields below). The fingerprint and live holder remain for wake
+        # bookkeeping and historical ownership; they do not re-attach delivered
+        # state.
         self._notification_live_holder: dict | None = None
         # Material signature of the last emitted notification payload; retained
         # for delivery diagnostics and persistent-message bookkeeping. It is
         # not an attachment gate; reset to ``None`` whenever notifications go
         # empty so a later reappearance records a fresh diagnostic baseline.
         self._notification_payload_signature: str | None = None
+        # Shared one-shot delivery identity for the ACTIVE tool-result path and
+        # the IDLE/ASLEEP synthesized pair: versioned generic-hook snapshots plus
+        # material event/message identities inside known aggregates. Written
+        # only after a delivery actually succeeded (never on a failed, blocked,
+        # no-carrier, or degraded attempt); retained across same-process molt,
+        # rebuild and resync, but not persisted across Agent/process restart.
+        self._notification_delivered_source_signatures: dict[str, str] = {}
+        self._notification_delivered_system_events: dict[str, str] = {}
+        self._notification_delivered_events: dict[str, dict[str, str]] = {}
         # Per-IM-channel persistent communication-context lane.  These IDs
         # track which messages have already been emitted in
         # `_meta.agent_meta.notifications.persistent.mcp.<channel>.messages` for the
@@ -1855,10 +1855,35 @@ class BaseAgent:
             # stale notification state.  Synthesized pairs remain in
             # history as placeholders; they are never deleted.
             skeletonize_notification_holder(self)
+            reset_delivered_notification_sources(self)
             self._notification_fp = fp
             self._notification_raw_fp = raw_fp
             self._notification_deferred_log_fp = ()
             return
+
+        # One-shot delivery: the ACTIVE tool-result path and this synthesized
+        # pair share one delivered identity, so only channels/events not yet
+        # delivered are injected or wake the agent. The fingerprint moved, but
+        # when nothing is pending it moved only because a delivered channel or
+        # event disappeared (or was rewritten identically): commit the observed
+        # state without injecting, waking, or touching producer files.
+        pending = pending_notification_payloads(self, notifications)
+        if not pending:
+            if _skip_poisoned_sync(phase="before_delivered_commit"):
+                return
+            previously_delivered = getattr(
+                self, "_notification_delivered_source_signatures", {}
+            )
+            if isinstance(previously_delivered, Mapping) and (
+                set(previously_delivered) - set(source_signatures)
+            ):
+                skeletonize_notification_holder(self)
+            commit_delivered_notification_sources(self, notifications)
+            self._notification_fp = fp
+            self._notification_raw_fp = raw_fp
+            self._notification_deferred_log_fp = ()
+            return
+        notifications = pending
 
         # --- Inject new block based on current state ---
         from ..state import AgentState
@@ -2013,7 +2038,7 @@ class BaseAgent:
             self._notification_deferred_log_fp = ()
             # Provenance compares against the last notification snapshot the
             # model actually received, never against a deferred ACTIVE read.
-            self._notification_delivered_source_signatures = source_signatures
+            commit_delivered_notification_sources(self, observed.payloads)
             self._notification_delivered_daemon_summary = daemon_summary
         elif self._state in (AgentState.STUCK, AgentState.SUSPENDED):
             self._notification_fp = fp
@@ -2096,6 +2121,7 @@ class BaseAgent:
                 self._notification_fp = ()
                 self._notification_raw_fp = ()
                 self._notification_deferred_log_fp = ()
+                # Keep already delivered identities across same-process resync.
                 self._log(
                     "notification_redacted_replay_resync",
                     tool_call_id=tool_call.id,
@@ -2246,7 +2272,7 @@ class BaseAgent:
         # Build the canonical two-axis sidecar. The handler-shaped body remains
         # independent; adapters project this sidecar into model-visible _meta.
         notification_persistent_payload = build_notification_persistent_payload(
-            self, notifications_with_guidance
+            self, notifications_with_guidance, event_records=True
         )
         # Delivery accounting and the model-visible envelope must describe the
         # same persistent lane.  Merge the separately built durable snapshot

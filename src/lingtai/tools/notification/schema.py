@@ -12,23 +12,19 @@ from typing import Any
 
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 
-LARGE_RESULT_DISMISS_ACTION_NOTE = (
+LARGE_RESULT_ACTION_NOTE = (
     "Legacy large_tool_result is an escape hatch: prefer "
-    "context(action='summarize'); dismissal clears only its mirror."
+    "context(action='summarize')."
 )
-
-LARGE_RESULT_FORCE_NOTE = ""
 
 # The canonical action order. This is the single source for the schema's
 # ``action`` enum order, the ``input`` disclosure/``allOf`` branch order, and the
 # child registration order in ``__init__.py`` — one list, not three.
-# Read/clear actions keep the pre-existing prefix stable; hook-registry
-# management (add/drop/edit/list) is administrative and follows.
+# The read action keeps the pre-existing prefix stable; hook-registry
+# management (add/drop/edit/list) is administrative and follows. There is no
+# public dismiss action: delivery is one-shot and producers own their state.
 NOTIFICATION_DECLARED_ACTIONS = (
     "check",
-    "dismiss_channel",
-    "dismiss_event",
-    "dismiss_ref",
     "add",
     "drop",
     "edit",
@@ -40,18 +36,6 @@ NOTIFICATION_DECLARED_ACTIONS = (
 # manual. Keep the full public order available to documentation/import-time
 # consumers while leaving both reserved children to generic composition.
 ACTION_ORDER = (*NOTIFICATION_DECLARED_ACTIONS, "settings", "manual")
-
-_CHANNEL_DESCRIPTION = (
-    "Channel; whole clear requires it, event/ref default to system. Follow the "
-    "producer verb first; generic clear is mirror-only."
-)
-
-_FORCE_DESCRIPTION = (
-    "Optional true only after rereading a confirmed stale mirror; never producer or protected "
-    "state. " + LARGE_RESULT_FORCE_NOTE
-)
-
-_REASON_DESCRIPTION = "Optional reason; post-molt requires continue|defer|obsolete: ... ."
 
 _CHECK_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -140,47 +124,6 @@ _DELAY_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_DISMISS_CHANNEL_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "channel": {"type": "string", "description": _CHANNEL_DESCRIPTION},
-        "force": {"type": ["boolean", "null"], "description": _FORCE_DESCRIPTION},
-        "reason": {"type": ["string", "null"], "description": _REASON_DESCRIPTION},
-    },
-    "required": ["channel", "force", "reason"],
-    "additionalProperties": False,
-}
-
-_DISMISS_EVENT_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "event_id": {
-            "type": "string",
-            "description": "Remove matching event_id; system by default, daemon also supported.",
-        },
-        "channel": {"type": ["string", "null"], "description": _CHANNEL_DESCRIPTION},
-        "force": {"type": ["boolean", "null"], "description": _FORCE_DESCRIPTION},
-        "reason": {"type": ["string", "null"], "description": _REASON_DESCRIPTION},
-    },
-    "required": ["event_id", "channel", "force", "reason"],
-    "additionalProperties": False,
-}
-
-_DISMISS_REF_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "ref_id": {
-            "type": "string",
-            "description": "Remove matching ref_id events; system by default, daemon also supported.",
-        },
-        "channel": {"type": ["string", "null"], "description": _CHANNEL_DESCRIPTION},
-        "force": {"type": ["boolean", "null"], "description": _FORCE_DESCRIPTION},
-        "reason": {"type": ["string", "null"], "description": _REASON_DESCRIPTION},
-    },
-    "required": ["ref_id", "channel", "force", "reason"],
-    "additionalProperties": False,
-}
-
 # Per-action strict schemas for the actions this package itself declares.
 # ``settings`` and ``manual`` are deliberately absent: the kernel declaration
 # injects their canonical shared schemas and the dispatching family composes the
@@ -193,9 +136,6 @@ DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "list": _LIST_INPUT_SCHEMA,
     "delay": _DELAY_INPUT_SCHEMA,
     "check": _CHECK_INPUT_SCHEMA,
-    "dismiss_channel": _DISMISS_CHANNEL_INPUT_SCHEMA,
-    "dismiss_event": _DISMISS_EVENT_INPUT_SCHEMA,
-    "dismiss_ref": _DISMISS_REF_INPUT_SCHEMA,
 }
 
 # Compatibility/readability view of the complete public shape.  The actual
@@ -210,10 +150,8 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 
 ACTION_ENUM_DESCRIPTION = (
     "Choose one strict action; nullable optionals mean absent. "
-    "check: read current mirrors. "
-    "dismiss_channel: clear one mirror. "
-    "dismiss_event: remove an event by event_id; channel defaults to system, daemon also supported. "
-    "dismiss_ref: remove matching events by ref_id; channel defaults to system, daemon also supported. "
+    "check: deliberately read current mirrors (automatic delivery is one-shot; "
+    "check never clears anything). "
     "add: register and allowlist a hook. "
     "drop: unregister it; never stop its process. "
     "edit: update a hook and revalidate its channel. "
@@ -223,7 +161,7 @@ ACTION_ENUM_DESCRIPTION = (
     "settings: read-only setting rows. "
     "manual: call notification(action='manual', input={}) for installed guidance; "
     "read-only."
-) + "\n\n" + LARGE_RESULT_DISMISS_ACTION_NOTE
+) + "\n\n" + LARGE_RESULT_ACTION_NOTE
 
 
 def get_description(lang: str = "en") -> str:
@@ -231,12 +169,11 @@ def get_description(lang: str = "en") -> str:
         "Notification reads channel mirrors, manages hook registrations, and applies "
         "consumer delay. Use the strict action + input + reasoning envelope; start "
         "with notification(action='check', input={}, reasoning='...'). Live payload: "
-        "_meta.agent_meta.notifications.attention (guidance.transient routes handling). Follow "
-        "producer instructions before generic dismissal: generic clear affects the "
-        "mirror only. Reread after a stale refusal; force=true is only for a "
-        "confirmed stale mirror, never producer or protected state. Post-molt needs "
-        "continue|defer|obsolete: ...; drop never stops its process; delay is "
-        "consumer-only (0 cancels), and delay-alarm cannot be targeted. "
+        "_meta.agent_meta.notifications.attention (guidance.transient routes handling). "
+        "Each new notification event is delivered automatically once; check is a "
+        "deliberate reread, not a replay. Act through the producer tool; delivery "
+        "never clears or completes producer state. drop never stops its process; "
+        "delay is consumer-only (0 cancels), and delay-alarm cannot be targeted. "
         "notification(action='settings', input={}, reasoning='...') and "
         "notification(action='manual', input={}, reasoning='...') are read-only; "
         "use context(action='summarize') for compaction."

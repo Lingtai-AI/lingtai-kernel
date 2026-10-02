@@ -309,9 +309,9 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
       `notification_state`; the granted host exposes neither Agent nor Store;
       one official schema and handler remain on construction and refresh under
       both null-capability and `disable` opt-outs; its package owns the canonical
-      installed manual; `check` retains its deliberate placeholder; and a real
-      Core-backed `dismiss_channel` returns the established success shape and
-      clears the live mirror.
+      installed manual; `check` retains its deliberate placeholder; and the
+      removed `dismiss_channel` action is rejected by the closed schema without
+      clearing the live mirror.
 - [ ] Step 7: the shared suite plus Avatar's, Context's, Daemon's, Email's, and
       Notification's focused declared/Core slices pass.
 - [ ] Task Card: its static `DECLARATION` requires exactly `workdir`,

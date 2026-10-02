@@ -276,7 +276,7 @@ correlated-turn rule in `kernel/base_agent/CONTRACT.md`).
 - You are reviewing preset listing/connectivity or the karma/nirvana authz gate.
 
 **Do not use this for:**
-- Notification reads/dismissals: use the `notification` tool
+- Notification reads (delivery is one-shot; there is no notification dismiss action): use the `notification` tool
   (`src/lingtai/tools/notification/CONTRACT.md`). `system` exposes no `notification`/
   `dismiss` alias; those actions are rejected as unknown.
 - Context lifecycle and hygiene: molt, tool-result summarization, and the

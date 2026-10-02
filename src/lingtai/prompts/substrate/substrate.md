@@ -69,7 +69,7 @@ Configured files, installed code, and the live runtime are distinct. Verify the
 runtime actually in use; `refresh` reloads but does not fetch or install code.
 `system` owns lifecycle and preset operations; `context` owns conversation
 summarization, prompt rebuild, and molt; `notification` owns notification
-inspection and mirror dismissal. Prefer producer-specific message handling.
+inspection, hooks, and delay. Prefer producer-specific message handling.
 
 Settings are runtime facts, not numbers to memorize here. Query the owning
 tool's `settings`; `system(action="settings", input={})` covers kernel settings

@@ -27,13 +27,9 @@ the writer below for the chosen future time. Running it now publishes now;
 it does not create a timer. A reminder writes one complete
 notification envelope to `<agent-workdir>/.notification/cron.json`; it is not a
 recurring scheduler, human notification, or guarantee across process death and
-sleep. After acting, dismiss the `cron` channel:
-
-```text
-notification(action="dismiss_channel",
-             input={"channel": "cron", "force": null, "reason": null},
-             reasoning="the cron reminder is handled")
-```
+sleep. The reminder is delivered once and is not re-attached automatically;
+there is no notification dismiss action, so after acting just continue (the
+`cron.json` file is left as it is).
 
 Use a custom writer only when the built-in wake is unsuitable. Do not use it
 for a human-facing message, a delay that must survive reboot (use
@@ -88,6 +84,6 @@ tmp.replace(target)
 Before resting: record the state/check target in pad. For a custom cron wake,
 save the writer as an authorized task script and schedule it once at the chosen
 time using [scheduled work](../scheduled-work/SKILL.md); do not execute it
-immediately and expect a delay. Then end the turn and rely on the event. On wake, handle the reminder, inspect the named job, and dismiss `cron`.
+immediately and expect a delay. Then end the turn and rely on the event. On wake, handle the reminder and inspect the named job.
 A detached `sleep` writer can be lost if the process or machine stops; use the
 scheduled-work reference for longer or recurring delays.

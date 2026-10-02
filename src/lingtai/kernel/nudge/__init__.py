@@ -15,7 +15,7 @@ Channel ``.notification/nudge.json`` carries a list of active nudges:
       "header": "<rendered by _render_header — e.g. '2 nudges'>",
       "icon": "🔔",
       "priority": "low",
-      "instructions": "Call notification(action='dismiss_channel', input={'channel': 'nudge', ...}, reasoning='...') ...",
+      "instructions": "These nudges are delivered once and are not re-attached automatically ...",
       "data": {"nudges": [{"kind": "kernel_version", "nudge_channel": "release_version", ...}, ...]}
     }
 
@@ -23,10 +23,9 @@ Each check identifies its slot by a unique ``kind`` string. Built-in producers
 are classified by fixed Core-owned kind mapping; unrelated legacy/unknown
 entries remain channel-less. ``upsert`` replaces (or appends) one entry;
 ``remove`` deletes one. When the last entry leaves, the channel file is cleared
-so the agent's wire surface drops the notification entirely. The agent
-dismisses everything at once with
-``notification(action='dismiss_channel', input={'channel': 'nudge',
-'force': null, 'reason': null}, reasoning='...')``.
+so the agent's wire surface drops the notification entirely. Delivery is
+one-shot and never clears the channel; there is no public dismiss action, so
+the record persists until the check resolves it or its findings change.
 
 To add a new nudge: drop ``nudge/<name>.py`` exposing ``check(agent)``,
 then add an import + dispatch line to :func:`run_checks` below. No
@@ -784,9 +783,8 @@ def _modify(agent, mutate) -> None:
             "priority": "low",
             "published_at": published_at,
             "instructions": (
-                "Call notification(action='dismiss_channel', input={'channel': "
-                "'nudge', 'force': null, 'reason': null}, reasoning='...') to "
-                "acknowledge and clear ALL nudges at once. Individual nudges "
+                "These nudges are delivered once and are not re-attached "
+                "automatically until the findings change. Individual nudges "
                 "may also describe a specific action to take (e.g. "
                 "system(action='refresh') for a kernel upgrade)."
             ),

@@ -80,7 +80,7 @@ refresh hoping ambiguity will resolve itself.
 | Environment or a System-owned setting | Read only its environment-catalog entry or relevant `system(action="settings", input={}, reasoning="read changed owner value")` row. | Assert that one effective value, respecting its documented read point. |
 | Canonical prompt source only | Route out before selecting a mode: use `context(action="rebuild", input={})`, not refresh. | Follow `context-manual`; no refresh transaction started. |
 | Source, venv, interpreter, version, or selector | Select B and consume the update/build owner's frozen receipt. | Compare the runtime tuple below; mismatch returns to `runtime-update-checks`. |
-| `source_drift`, `kernel_version`, or other nudge | Read that finding through `runtime-update-checks`; it is not universal preflight. | Dismiss only under notification-owner guidance after the matching fact is resolved. |
+| `source_drift`, `kernel_version`, or other nudge | Read that finding through `runtime-update-checks`; it is not universal preflight. | Nothing to dismiss: notification delivery is one-shot; resolve the matching fact. |
 | No changed subsystem (pure reload) | No add-on check. | Fresh-process proof is the receipt; do not manufacture an audit. |
 
 Preset activation is an additive A case. The runtime itself owns preset/revert
