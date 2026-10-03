@@ -377,3 +377,10 @@ and verified citations. Keep implementation, schema, registry wiring, focused
 tests, glossaries, and the manual/reference graph synchronized. Do not duplicate
 manual procedures here or expand this slice into Store, producer, system, or
 summarization changes.
+
+The built-in `memory-length` channel is a host-owned lifecycle advisory: it is
+published only after successful molt/refresh when loaded memory exceeds its
+threshold, replaces the prior current warning, and is cleared by its producer
+at/below threshold on the next successful check. Delivery remains one-shot and
+does not clear it; redacted prior checks remain in the event journal. Its
+[Psyche owner](../psyche/CONTRACT.md#loaded-memory-lifecycle-advisory) teaches scope.

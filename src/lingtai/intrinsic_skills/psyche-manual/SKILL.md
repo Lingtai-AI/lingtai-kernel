@@ -10,6 +10,7 @@ related_files:
 - src/lingtai/tools/psyche/ANATOMY.md
 - src/lingtai/tools/psyche/settings.py
 - src/lingtai/agent.py
+- ENVIRONMENT_VARIABLES.md
 - src/lingtai/intrinsic_skills/pad-manual/SKILL.md
 - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md
 - src/lingtai/tools/knowledge/manual/SKILL.md
@@ -105,3 +106,22 @@ working memory, not a security boundary or broadcast mechanism.
 Neither `.rules` nor `system/rules.md` is read, consumed, or injected on heartbeat,
 boot, rebuild, refresh, or molt. Existing files are left untouched. There is no
 compatibility reader, automatic rewrite, purge, or data migration.
+
+## Loaded memory length reminder
+
+After a successful molt or CLI refresh relaunch/start, `memory-length` reports
+character counts for the **loaded** Pad (including pinned references), Character,
+their total and threshold. It is not a token count, disk-size check or knowledge
+catalog scan. The environment threshold defaults to 50000; discover its effective
+value with `system(action="settings", input={})` under
+`prompt.memory_length_warning_chars`, and read the canonical
+[`environment registry`](../../../../ENVIRONMENT_VARIABLES.md).
+
+A lifecycle boundary produces at most one warning; normal turns, heartbeat,
+initial startup and `context.rebuild` do not produce new warnings. At/below the
+threshold a subsequent successful lifecycle check clears only the current
+notification; prior checks remain in `logs/events.jsonl`. Publication is best-effort
+and never blocks molt/refresh. No Pad, pinned reference, Character, Knowledge or
+history content is automatically removed, cropped or rewritten. Review stale and
+duplicate content and move it to its proper durable owner through ordinary
+scoped edits; a warning is not permission for unrelated cleanup.

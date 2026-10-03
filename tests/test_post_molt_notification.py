@@ -429,3 +429,27 @@ class TestPostMoltChannelIsolation:
         assert (workdir / ".notification" / "post-molt.json").is_file(), (
             "legacy cleanup must not touch the post-molt channel"
         )
+
+
+def test_successful_agent_and_system_molts_publish_loaded_memory_warning(tmp_path, monkeypatch):
+    monkeypatch.setenv("LINGTAI_MEMORY_LENGTH_WARNING_CHARS", "1")
+    agent = _make_agent_with_context(tmp_path)
+    try:
+        system = agent._working_dir / "system"
+        (system / "pad.md").write_text("durable memory")
+        interface = _setup_mock_chat(agent)
+        _build_molt_call_entry(interface, "memory-molt", summary="continue")
+        from lingtai.tools.context._molt import _context_molt, context_forget
+        journal = _write_session_journal(agent)
+        result = _context_molt(agent, {"summary": "continue", "session_journal_path": journal,
+                                       "_tc_id": "memory-molt"})
+        assert result["status"] == "ok"
+        path = agent._working_dir / ".notification" / "memory-length.json"
+        assert json.loads(path.read_text())["data"]["lifecycle_id"] == f"molt-{agent._molt_count}"
+        first = path.read_bytes()
+        result = context_forget(agent, source="test")
+        assert result["status"] == "ok"
+        assert json.loads(path.read_text())["data"]["lifecycle_id"] == f"molt-{agent._molt_count}"
+        assert path.read_bytes() != first
+    finally:
+        agent.stop(timeout=1)

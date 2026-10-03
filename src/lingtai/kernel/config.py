@@ -73,6 +73,19 @@ MOLT_URGENCY_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate s
 # This ratio gates a warning on the rendered system prompt ALONE against the
 # effective context window. It is deliberately read at snapshot-render time so
 # the main agent and daemon share live process-environment behavior.
+MEMORY_LENGTH_WARNING_CHARS_ENV = "LINGTAI_MEMORY_LENGTH_WARNING_CHARS"
+DEFAULT_MEMORY_LENGTH_WARNING_CHARS = 50000
+
+
+def memory_length_warning_chars() -> int:
+    """Positive character threshold, read only at successful lifecycle boundaries."""
+    try:
+        value = int(os.environ.get(MEMORY_LENGTH_WARNING_CHARS_ENV, ""))
+    except (TypeError, ValueError):
+        return DEFAULT_MEMORY_LENGTH_WARNING_CHARS
+    return value if value > 0 else DEFAULT_MEMORY_LENGTH_WARNING_CHARS
+
+
 DEFAULT_SYSTEM_PROMPT_PRESSURE_RATIO = 0.4
 SYSTEM_PROMPT_PRESSURE_RATIO_ENV = "LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO"
 

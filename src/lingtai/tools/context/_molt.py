@@ -111,6 +111,9 @@ def _publish_post_molt(
 
     Best-effort — a publish failure must not block the molt return path.
     """
+    memory_warning = getattr(agent, "_publish_memory_length_warning", None)
+    if callable(memory_warning):
+        memory_warning(f"molt-{molt_count}")
     try:
         import uuid as _uuid
         from datetime import datetime, timezone

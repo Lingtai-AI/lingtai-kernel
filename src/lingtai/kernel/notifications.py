@@ -54,6 +54,7 @@ _NOTIFICATION_CHANNEL_ALLOWLIST: set[str] = {
     "molt",
     "nudge",
     "post-molt",
+    "memory-length",
     "system",
     "tool_loop_guard",
 }

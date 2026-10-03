@@ -319,3 +319,14 @@ current adapter's contribution with that adapter still owning the source.
 these keys and put desired working instructions in Pad through authorized edits.
 Neither `.rules` nor `system/rules.md` is read, consumed or injected; old files
 remain untouched. Pad is writable working memory, not security enforcement.
+
+## Loaded memory lifecycle advisory
+
+The host measures loaded Pad (including pins) plus Character after successful
+molt or CLI refresh relaunch/start. A threshold warning is advisory, at most once
+per lifecycle identity, not a heartbeat/turn producer. At/below the threshold,
+the next successful check clears its current notification and preserves event
+history. Initial startup/rebuild do not warn and no content is automatically
+changed. Effective environment threshold discovery uses System settings, not a
+new Psyche setting. The [Psyche manual](../../intrinsic_skills/psyche-manual/SKILL.md#loaded-memory-length-reminder)
+teaches the counts and safe response.
