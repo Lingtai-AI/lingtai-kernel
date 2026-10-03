@@ -160,6 +160,11 @@ class UsageMetadata:
     first_token_s: float | None = None
     generation_s: float | None = None
     generation_tokens: int | None = None
+    # The wire ``service_tier`` this request REQUESTED (e.g. ``priority``), set
+    # by the dispatching adapter from the kwargs it actually sent. ``None``
+    # means none was requested or the adapter does not say; it is never the
+    # tier the provider applied.
+    requested_service_tier: str | None = None
 
 
 def checked_count(value: object) -> int | None:
@@ -186,6 +191,16 @@ def safe_billing_model(value: object) -> str | None:
     if not _SAFE_BILLING_MODEL_RE.fullmatch(name) or "//" in name or ".." in name:
         return None
     return name
+
+
+_SAFE_BILLING_TIER_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+
+
+def safe_billing_tier(value: object) -> str | None:
+    """A short lowercase wire service-tier token (``priority``) or ``None``."""
+    if not isinstance(value, str):
+        return None
+    return value if _SAFE_BILLING_TIER_RE.fullmatch(value) else None
 
 
 @dataclass

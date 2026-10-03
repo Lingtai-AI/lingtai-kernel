@@ -929,6 +929,19 @@ def _wire_cache_write_tokens(details: object) -> int | None:
     return checked_count(getattr(details, "cache_write_tokens", None))
 
 
+def _stamp_requested_tier(response: LLMResponse, request_kwargs: dict[str, Any]) -> LLMResponse:
+    """Record the ``service_tier`` this round's request REQUESTED on its usage.
+
+    Read from the kwargs the session actually dispatched, so it is a request
+    snapshot for this round (never the tier the provider applied) and an
+    omitted tier stays unknown (``None``), not filled from current config.
+    """
+    tier = request_kwargs.get("service_tier")
+    if isinstance(tier, str) and tier and response.usage is not None:
+        response.usage.requested_service_tier = tier
+    return response
+
+
 def _validate_codex_compact_token_limit(value: int | None) -> int | None:
     """Normalize the Codex standalone-compaction context-token threshold.
 
@@ -2623,8 +2636,13 @@ class OpenAIChatSession(ChatSession):
 
         # 3. Make the API call (with auto-recovery on context overflow);
         #    revert interface on any other error.
+        dispatched: list[dict[str, Any]] = []  # kwargs of the call that succeeded
+
         def _do_call():
-            return self._client.chat.completions.create(**_build_kwargs())
+            kwargs = _build_kwargs()
+            raw = self._client.chat.completions.create(**kwargs)
+            dispatched.append(kwargs)
+            return raw
 
         try:
             raw, total_dropped, rounds = self._run_with_overflow_recovery(_do_call)
@@ -2644,7 +2662,7 @@ class OpenAIChatSession(ChatSession):
         # 4. Record assistant response into interface
         self._record_assistant_response(raw)
 
-        return _parse_response(raw)
+        return _stamp_requested_tier(_parse_response(raw), dispatched[-1] if dispatched else {})
 
     def commit_tool_results(self, tool_results: list) -> None:
         """Append tool results to interface without an API call."""
@@ -2780,6 +2798,7 @@ class OpenAIChatSession(ChatSession):
 
         acc = StreamingAccumulator()
         usage = UsageMetadata()
+        dispatched: list[dict[str, Any]] = []  # kwargs of the stream that opened
 
         # Streaming overflow-recovery: most providers raise the 400 either
         # when ``create()`` returns or on the first iteration of the stream
@@ -2791,6 +2810,7 @@ class OpenAIChatSession(ChatSession):
             kwargs = _build_kwargs()
             acc = StreamingAccumulator(request_started_at=time.monotonic())
             stream = self._client.chat.completions.create(**kwargs)
+            dispatched.append(kwargs)
             it = iter(stream)
             try:
                 first = next(it)
@@ -2907,7 +2927,7 @@ class OpenAIChatSession(ChatSession):
             },
         )
 
-        return result
+        return _stamp_requested_tier(result, dispatched[-1] if dispatched else {})
 
     # -- Context compaction ---------------------------------------------------
 
@@ -3188,6 +3208,7 @@ class OpenAIResponsesSession(ChatSession):
                     "_openai_responses_output_items",
                     _responses_output_items_from_response(raw),
                 )
+            _stamp_requested_tier(response, kwargs)
             if self._stateless_replay:
                 self._record_assistant_response(
                     response,
@@ -3240,6 +3261,7 @@ class OpenAIResponsesSession(ChatSession):
             response, response_id = _consume_responses_stream(
                 stream, on_chunk, request_started_at=request_started_at,
             )
+            _stamp_requested_tier(response, kwargs)
             if self._stateless_replay:
                 self._record_assistant_response(
                     response,
@@ -6373,7 +6395,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             self._codex_reraise_terminalized(exc, escaped)
 
         try:
-            result = acc.finalize(usage=usage)
+            result = _stamp_requested_tier(acc.finalize(usage=usage), kwargs)
             # The provider dispatch actually completed. A rejected attempt
             # deliberately does NOT reach here, so its dispatch-start evidence
             # stays on record with ``completed`` false rather than vanishing

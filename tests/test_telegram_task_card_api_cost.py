@@ -726,6 +726,12 @@ _PARTIAL_ONE = "total ≥$0.0018 · in $0.0010+ · write $0.0003+ · read <$0.00
     ({"billing": {"billable_output_tokens": 50}}, _PARTIAL_ONE),  # model unknown
     ({"model": "unlisted"}, _PARTIAL_ONE),
     ({"estimated": True}, _PARTIAL_ONE),
+    # Requested tier without a usable estimate: SOL has no priority fields, and
+    # flex/auto/invalid tiers are never silently priced as standard.
+    *[({"billing": {"model": "sol", "service_tier": tier, **_SOL_BILLING}}, _PARTIAL_ONE)
+      for tier in ("flex", "auto", "")],
+    ({"billing": {"model": "sol", "service_tier": "priority", **_SOL_BILLING}},
+     _PARTIAL_ONE + " · requested-tier est."),
     # Writes priced but not recorded: only a floor (600 at input rate) is known.
     ({"billing": {"model": "sol", "billable_output_tokens": 50}},
      "total ≥$0.0035 · in $0.0010+ · write $0.0003+ · read <$0.0001 · out $0.0010 · partial"),
@@ -827,3 +833,131 @@ def test_session_cost_rejected_same_index_cannot_poison_known_bill():
     cost, _ = _fold([bad], cost, session)
     assert cost["bills"][1]["model"] == "sol"
     assert "partial" in api_cost.session_cost_text(cost, _ready_catalog({"sol": SOL}))
+
+
+# ---------------------------------------------------------------- requested tier
+
+# LiteLLM-named ``*_priority`` rates (fixture values; input is deliberately not a
+# clean multiple of the standard rate: nothing here is a guessed multiplier).
+PRIORITY = {
+    "input_cost_per_token_priority": 3e-06,
+    "output_cost_per_token_priority": 2e-05,
+    "cache_read_input_token_cost_priority": 2e-07,
+    "cache_creation_input_token_cost_priority": 5e-06,
+    "input_cost_per_token_above_272k_tokens_priority": 7e-06,
+    "output_cost_per_token_above_272k_tokens_priority": 3e-05,
+    "cache_read_input_token_cost_above_272k_tokens_priority": 4e-07,
+    "cache_creation_input_token_cost_above_272k_tokens_priority": 1e-05,
+}
+SOLP = {**SOL, **PRIORITY}
+_SMALL = {"input": 1000, "cached": 400, "cache_write_tokens": 100, "billable_output_tokens": 50}
+_BIG = {"input": 300_000, "cached": 100_000, "cache_write_tokens": 0, "billable_output_tokens": 1000}
+_STANDARD_RESULT = {
+    "small": {"miss": 500 * 2e-06 + 100 * 2.5e-06, "hit": 400 * 1e-07, "output": 50 * 1e-05},
+    "big": {"miss": 200_000 * 4e-06, "hit": 100_000 * 2e-07, "output": 1000 * 1.5e-05},
+}
+_PRIORITY_RESULT = {
+    "small": {"miss": 500 * 3e-06 + 100 * 5e-06, "hit": 400 * 2e-07, "output": 50 * 2e-05},
+    "big": {"miss": 200_000 * 7e-06, "hit": 100_000 * 4e-07, "output": 1000 * 3e-05},
+}
+
+
+@pytest.mark.parametrize("size, bill", [("small", _SMALL), ("big", _BIG)])
+@pytest.mark.parametrize("extra, expected", [
+    ({}, _STANDARD_RESULT),  # legacy / untiered round: standard, as before
+    ({"service_tier": "default"}, _STANDARD_RESULT),
+    ({"service_tier": "priority"}, _PRIORITY_RESULT),
+])
+def test_requested_tier_selects_standard_or_priority_rates(size, bill, extra, expected):
+    # >272k ("big") takes the 272k context tier of the REQUESTED service tier;
+    # cache read/write allocation and output use the same estimator either way.
+    assert api_cost.estimate_costs({**bill, **extra}, SOLP) == pytest.approx(expected[size])
+
+
+def test_parse_catalog_keeps_priority_fields_and_present_invalid_priority_as_none():
+    models = api_cost.parse_catalog(_catalog_bytes({"m": {
+        **SOLP, "output_cost_per_token_priority": "junk", "unrelated_priority": 1}}))
+    assert models["m"] == {**SOLP, "output_cost_per_token_priority": None}
+
+
+@pytest.mark.parametrize("tier", ["auto", "flex", "", "Priority", 3])
+def test_other_requested_tiers_are_unknown_never_standard(tier):
+    bill = {**_SMALL, "service_tier": tier}
+    assert api_cost.estimate_costs(bill, SOLP) == {"miss": None, "hit": None, "output": None}
+    assert api_cost._split_miss(bill, SOLP, 1.0) == (None, None)
+
+
+@pytest.mark.parametrize("entry, bill, unknown", [
+    (SOL, _SMALL, {"miss", "hit", "output"}),  # no priority fields at all
+    ({**SOLP, "input_cost_per_token_priority": None}, _SMALL, {"miss"}),
+    ({k: v for k, v in SOLP.items() if k != "output_cost_per_token_priority"}, _SMALL, {"output"}),
+    ({**SOLP, "input_cost_per_token_above_272k_tokens_priority": None}, _BIG, {"miss"}),
+    ({k: v for k, v in SOLP.items() if k != "cache_read_input_token_cost_above_272k_tokens_priority"},
+     _BIG, {"hit"}),
+    # Standard has the >272k tier but no priority >272k field exists: unknown,
+    # not the cheaper priority base rate.
+    ({k: v for k, v in SOLP.items() if not k.endswith("_above_272k_tokens_priority")},
+     _BIG, {"miss", "hit", "output"}),
+    # Standard prices cache writes but the priority write rate is absent: the
+    # 100 written tokens are unknown, not ordinary priority input.
+    ({k: v for k, v in SOLP.items()
+      if not (k.startswith("cache_creation_input_token_cost") and k.endswith("_priority"))},
+     _SMALL, {"miss"}),
+])
+def test_missing_or_malformed_priority_rate_stays_unknown_without_standard_fallback(entry, bill, unknown):
+    costs = api_cost.estimate_costs({**bill, "service_tier": "priority"}, entry)
+    assert {name for name, value in costs.items() if value is None} == unknown
+    # The known parts are priority prices, never the cheaper standard ones.
+    size = "small" if bill is _SMALL else "big"
+    for name, value in costs.items():
+        if value is not None:
+            assert value == pytest.approx(_PRIORITY_RESULT[size][name])
+
+
+def test_single_line_prices_priority_request_differently_from_standard():
+    catalog = _ready_catalog({"sol": SOLP})
+    bill = {"model": "sol", **_SOL_BILLING, "input": 1000, "cached": 400}
+    standard = api_cost.usage_line(2.0, {"output": 50, "bill": bill}, catalog)
+    priority = api_cost.usage_line(2.0, {"output": 50, "bill": {**bill, "service_tier": "priority"}}, catalog)
+    assert standard == "$0.0018 · ↓$0.0005 ↑$0.0013 | <$0.0001"
+    assert priority == "$0.0031 · ↓$0.0010 ↑$0.0020 | <$0.0001 priority est."
+    # Other tiers (default/none) keep the unlabelled standard form.
+    assert api_cost.usage_line(
+        2.0, {"output": 50, "bill": {**bill, "service_tier": "default"}}, catalog) == standard
+
+
+def test_session_cost_prices_each_round_at_its_own_requested_tier():
+    catalog = _ready_catalog({"sol": SOLP})
+    priority = {"model": "sol", "service_tier": "priority", **_SOL_BILLING}
+    mixed, _ = _fold([_v1_llm(1), _v1_llm(2, billing=priority), _v1_llm(3)])
+    # normal 0.0018 + priority 0.0031 + normal 0.0018: each round keeps its own bill.
+    assert api_cost.session_cost_text(mixed, catalog) == (
+        "total ~$0.0067 · in $0.0034 · write $0.0012 · read $0.0002 · out $0.0020"
+        " · requested-tier est.")
+    # A pure-normal session is unchanged by the priority fields in the catalog.
+    normal, _ = _fold([_v1_llm(1)])
+    assert api_cost.session_cost_text(normal, catalog) == (
+        "total ~$0.0018 · in $0.0010 · write $0.0003 · read <$0.0001 · out $0.0005")
+
+
+@pytest.mark.parametrize("raw, projected", [
+    ("priority", "priority"), ("default", "default"), ("flex", "flex"),
+    ("PRIORITY", ""), ("p r", ""), (5, ""), (None, ""), ("x" * 40, ""),
+])
+def test_projection_keeps_requested_tier_per_round_and_invalid_stays_present(raw, projected):
+    _, usage = TaskCardEventProjection.project_llm_response_usage(
+        _llm_event(usage_billing={"model": "sol", "service_tier": raw}))
+    assert usage["bill"]["service_tier"] == projected
+    # Legacy rounds (no key) gain no tier, so they keep standard semantics.
+    _, legacy = TaskCardEventProjection.project_llm_response_usage(
+        _llm_event(usage_billing={"model": "sol"}))
+    assert "service_tier" not in legacy["bill"]
+
+
+def test_session_billing_event_helper_carries_requested_tier_only_when_safe():
+    assert UsageMetadata().requested_service_tier is None
+    usage = UsageMetadata(requested_service_tier="priority")
+    assert _usage_billing_for_event(usage, "sol") == {"model": "sol", "service_tier": "priority"}
+    assert _usage_billing_for_event(UsageMetadata(), "sol") == {"model": "sol"}
+    for bad in ("", "Fast", "p r", "priority\n", 5, "x" * 40):
+        assert _usage_billing_for_event(UsageMetadata(requested_service_tier=bad), "sol") == {"model": "sol"}

@@ -133,14 +133,18 @@ onto its one tracked resident Task Card target per account+chat.
   (`src/lingtai/mcp_servers/telegram/manager.py:2972-2989`).
 - `api_cost.py` — Telegram-owned pure `usage_line` formatter (passed to
   `render_event_groups(usage_line=...)` by both automatic render sites) and a
-  small process-local `PriceCatalog` of LiteLLM public standard list prices with
+  small process-local `PriceCatalog` of LiteLLM public list prices (standard and
+  `*_priority`; `_requested_tier_entry` picks the round's REQUESTED tier fields
+  for the one estimator, unknown for other tiers or missing priority rates) with
   one bounded background refresh (`_http_fetch`: fixed URL, `read1` chunks under
   an 8 MiB cap and a monotonic total deadline; a failed fetch or thread start
   releases the single in-flight slot and paces the retry). It consumes only
   `usage["bill"]` facts that `TaskCardEventProjection.project_llm_response_usage`
   validated from `llm_response.usage_billing` (kernel `session.py`, adapter-set
-  `UsageMetadata.cache_write_*`/`billable_output_tokens`, checked with the shared
-  `checked_count`/`safe_billing_model` in `kernel/llm/base.py`; absent, negative
+  `UsageMetadata.cache_write_*`/`billable_output_tokens`/`requested_service_tier`
+  (OpenAI chat/Responses/Codex sessions stamp the wire `service_tier` they sent),
+  checked with the shared `checked_count`/`safe_billing_model`/`safe_billing_tier`
+  in `kernel/llm/base.py`; absent, negative
   or bool counts are unknown, never zero) and never blocks rendering on I/O.
   Catalog entries keep a present-but-invalid tier rate as `None` so a bad tier
   price cannot fall back to the cheaper base rate; every charge/average is

@@ -124,14 +124,27 @@ semantics live here. The public producer contract lives in
     prior inclusive residual, without claiming zero idle. Coffee is unchanged.
     Other channels keep their existing layout. Telegram alone also opts into
     one extra plain price line immediately after the token metrics line per API call, compact on one line and mirroring that row's
-    symbols: `$<total>[+] · ↓<$> ↑<$> | <$>[ stale prices]` (no tokens/second figure) where
+    symbols: `$<total>[+] · ↓<$> ↑<$> | <$>[ priority est.][ stale prices]` (no tokens/second figure) where
     `↓` prices the billable output, `↑` the cache-miss input (uncached input
     plus any cache writes: at the catalog's cache-write rate when it prices
     writes separately and the wire reports the write count, else — when the
     catalog has no cache-write price — at the input rate), and `|` the
     cache-hit (cache-read) input (or `cost n/a (<reason>)` / `cost loading` /
-    `cost ?`). The line is a STANDARD public per-token list-price (LiteLLM)
-    estimate. It is a STANDARD public per-token list-price
+    `cost ?`). The line is a public per-token list-price (LiteLLM) estimate at
+    STANDARD rates, or at the catalog's `*_priority` rates when that round
+    REQUESTED the `priority` wire tier (authored `fast`), labelled `priority est.`
+    on the line; the SESSION row prices each round the same way and appends
+    `requested-tier est.` when any counted round requested `priority`
+    (standard-only output is unchanged). The tier is the one the adapter dispatched for that
+    round (`UsageMetadata.requested_service_tier` →
+    `llm_response.usage_billing.service_tier`), a request and not proof the
+    provider applied it. A round with no recorded tier (legacy, or none
+    requested) or `default` stays STANDARD and is never refilled from current
+    config; `auto`/`flex`/invalid tiers and a missing or malformed priority
+    rate (including an absent priority above-threshold or cache-write rate
+    where the standard fields exist) are `?` (no guessed multiplier, no
+    fallback to standard or a cheaper base tier).
+    It is a public per-token list-price
     estimate as of the catalog fetch — not an invoice, not the actual
     subscription/Codex-pool bill, no routed-tier/discount claim, and `total`
     excludes search/grounding/image fixed fees — from that exact round's own

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from lingtai.kernel.llm.base import checked_count, safe_billing_model
+from lingtai.kernel.llm.base import checked_count, safe_billing_model, safe_billing_tier
 from lingtai.kernel.session_stats import ASYNC_WORK_STATUS_KEYS
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.trace_redaction import redact_text
@@ -940,7 +940,8 @@ class TaskCardEventProjection:
     ) -> dict[str, Any]:
         """Validated per-round pricing facts from one ``llm_response``.
 
-        Only the round's own model and adapter-established counts are kept;
+        Only the round's own model, requested service tier and
+        adapter-established counts are kept;
         anything invalid is dropped (unknown), never coerced to zero. Estimated
         rounds keep just the flag so no cost is asserted for them.
         """
@@ -953,6 +954,11 @@ class TaskCardEventProjection:
         model = safe_billing_model(raw.get("model"))
         if model is not None:
             bill["model"] = model
+        if "service_tier" in raw:
+            # REQUESTED wire tier. A present-but-invalid value stays present
+            # (empty) so it is unknown downstream, never standard; an absent
+            # key is a legacy/untiered round and stays absent.
+            bill["service_tier"] = safe_billing_tier(raw["service_tier"]) or ""
         for key in ("cache_write_tokens", "cache_write_1h_tokens", "billable_output_tokens"):
             value = checked_count(raw.get(key))
             if value is not None:

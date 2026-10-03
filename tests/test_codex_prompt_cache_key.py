@@ -169,6 +169,18 @@ def test_codex_pool_usage_carries_known_billable_output_from_responses_wire():
     assert result.usage.cache_write_1h_tokens is None
 
 
+@pytest.mark.parametrize("tier", ["priority", "default", None])
+def test_codex_usage_records_the_requested_service_tier_sent_on_the_wire(tier):
+    """Billing evidence is the tier this request asked for, from the sent kwargs
+    (REST/native Codex); an omitted tier stays unknown, never filled in."""
+    adapter_kw = {} if tier is None else {"codex_service_tier": tier}
+    session = _create_codex_session_cfg([_completed()], **adapter_kw)
+    result = session.send("x")
+
+    assert session._client.responses.kwargs[0].get("service_tier") == tier
+    assert result.usage.requested_service_tier == tier
+
+
 @pytest.mark.parametrize("bad", [None, -1, True])
 def test_codex_usage_absent_or_invalid_output_is_unknown_not_zero(bad):
     usage = SimpleNamespace(

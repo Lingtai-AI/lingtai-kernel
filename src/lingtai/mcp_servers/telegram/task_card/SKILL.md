@@ -90,10 +90,19 @@ $0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004
 
 Reading it:
 
-- **What it is.** The line is a STANDARD public per-token list-price ESTIMATE in
-  USD (LiteLLM prices), not a bill or invoice. It is not the actual subscription/Codex-pool bill, and it
-  does not claim the routed tier, batch/priority pricing or discounts. Search,
+- **What it is.** The line is a public per-token list-price ESTIMATE in USD
+  (LiteLLM prices), not a bill or invoice. It is not the actual subscription/Codex-pool bill, and it
+  does not claim the routed tier, batch pricing or discounts. Search,
   grounding and image fixed fees are not included in `total`.
+- **Requested tier.** Prices are STANDARD unless that round REQUESTED the
+  `priority` tier (authored `service_tier: "fast"`), in which case LiteLLM's
+  `*_priority` rates are used, for the per-call line and the SESSION row alike.
+  Such a line ends `priority est.`, and a SESSION row containing one ends
+  `requested-tier est.`; unlabelled output is standard. This is the
+  tier the request asked for, not proof the provider applied it. Rounds that
+  recorded no tier (older history, or none requested) or `default` stay
+  STANDARD and are not recalculated from current settings; `auto`/`flex` and a
+  missing priority rate show `?` (no guessed multiplier).
 - **Source and basis.** Prices come from LiteLLM's public
   `model_prices_and_context_window.json`, looked up by the EXACT model that
   made that round (no alias or fuzzy match), fetched by this process in the
