@@ -57,8 +57,13 @@ def test_migration_is_a_manual_release_migration_for_legacy_daemon_config():
     assert "already cut" not in body
     assert "This document does not establish a corrected publication." not in body
     assert "`manifest.capabilities.daemon.max_emanations`" in body
-    assert f"`max_emanations` was removed before `{version}`." in body
-    assert "daemon capability setup can be skipped after upgrade" in body
+    assert "`max_emanations` was removed before that release." in body
+    assert (
+        f"`1.0.11` introduced, and `{version}` retains, a refusal of this "
+        "configuration at startup or refresh"
+    ) in body
+    assert "start or refresh the agent and verify the daemon tool is present" in body
+    assert "daemon capability setup can be skipped in `1.0.10`" in body
     assert "`manager_pool_size=100`" in body
     assert "not a 1:1 mapping; no automatic conversion exists." in body
     assert "If this legacy key is absent, leave existing configuration unchanged." in body
@@ -66,13 +71,15 @@ def test_migration_is_a_manual_release_migration_for_legacy_daemon_config():
 
 
 def test_kernel_update_guidance_uses_only_the_installer_route():
-    for path in (_CHANNEL_MODEL, _RUNTIME_UPDATE):
-        text = path.read_text(encoding="utf-8")
-        assert "https://lingtai.ai/install.sh" in text
-        assert "--help" in text
-        assert "update --help" not in text
-        assert "explicit human/config-owner" in text
-        assert "https://lingtai.ai/skill.md" not in text
+    channel_model = _CHANNEL_MODEL.read_text(encoding="utf-8")
+    assert "system-manual/reference/runtime-update-checks/SKILL.md" in channel_model
+    assert "https://lingtai.ai/install.sh" not in channel_model
+    text = _RUNTIME_UPDATE.read_text(encoding="utf-8")
+    assert "https://lingtai.ai/install.sh" in text
+    assert "--help" in text
+    assert "update --help" not in text
+    assert "explicit human/config-owner" in text
+    assert "https://lingtai.ai/skill.md" not in text
     # Resident substrate no longer restates the installer route; it routes to
     # `system-manual`, whose router sends runtime/update questions to
     # `runtime-update-checks` — the actual owner asserted above.
