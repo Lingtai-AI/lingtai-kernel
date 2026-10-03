@@ -67,6 +67,7 @@ related_files:
   - tests/test_apriori_summary_executor.py
   - tests/test_apriori_summary_schema.py
   - tests/test_architecture_documents.py
+  - tests/test_avatar_deep_copy_cleanup.py
   - tests/test_avatar_launcher.py
   - tests/test_avatar_launcher_windows.py
   - tests/test_avatar_preset_inheritance.py
