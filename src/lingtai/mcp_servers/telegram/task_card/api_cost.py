@@ -2,10 +2,14 @@
 
 Pure formatting over already-projected round facts (``usage["bill"]``) plus a
 small process-local snapshot of LiteLLM's public price data. Rendering never performs synchronous network I/O: a missing/stale snapshot starts at most one bounded background
-refresh and the line degrades honestly until it lands. Prices are STANDARD
-public TOKEN list-price ESTIMATES as of the catalog fetch: not an invoice, not
-subscription/pool billing, and not batch/priority/routed-tier or discounted
-prices; search, grounding and image fixed fees are not included. The SESSION
+refresh and the line degrades honestly until it lands. Prices are public TOKEN
+list-price ESTIMATES as of the catalog fetch: STANDARD rates, or the catalog's
+``*_priority`` rates when the round REQUESTED the ``priority`` tier (a request,
+not proof of the tier the provider applied; no multiplier is guessed and a
+missing priority field stays unknown). Not an invoice, not subscription/pool
+billing, and not batch/flex/routed-tier or discounted prices; a round that
+requested any other tier is unknown, and search, grounding and image fixed fees
+are not included. The SESSION
 ``Cost`` row sums the same per-round estimates over the since-molt responses
 this process has observed, and says ``partial`` whenever any is missing.
 """
@@ -47,11 +51,15 @@ _BUCKET_FIELDS = {
 }
 
 
+_PRIORITY = "_priority"
+
+
 def _kept_fields() -> tuple[str, ...]:
     names = list(_BUCKET_FIELDS.values())
     for _, label in _TIER_THRESHOLDS:
         names.extend(f"{name}_above_{label}_tokens" for name in _BUCKET_FIELDS.values())
-    return tuple(names)
+    # LiteLLM's requested-priority rates append ``_priority`` to the same names.
+    return tuple(names + [name + _PRIORITY for name in names])
 
 
 _KEPT_FIELDS = _kept_fields()
@@ -68,7 +76,7 @@ def _rate(value: object) -> float | None:
 
 
 def parse_catalog(payload: bytes) -> dict[str, dict[str, float | None]]:
-    """Reduce LiteLLM's JSON to the standard-rate fields this line uses.
+    """Reduce LiteLLM's JSON to the standard and ``_priority`` rate fields used.
 
     A present-but-invalid rate is kept as ``None`` (rate unknown, field still
     PRESENT) so a tier's presence never silently falls back to the base rate;
@@ -223,6 +231,32 @@ def _finite(value: float | None) -> float | None:
     return value if value is not None and math.isfinite(value) else None
 
 
+def _requested_tier_entry(
+    bill: dict[str, Any], entry: dict[str, float | None]
+) -> dict[str, float | None] | None:
+    """The rate fields for the round's REQUESTED service tier, or ``None``.
+
+    No recorded tier (legacy round or none requested) and ``default`` use the
+    standard fields. ``priority`` takes every VALUE from the ``*_priority``
+    fields, renamed to the standard names so the one estimator prices them
+    unchanged, but keeps the standard fields' STRUCTURAL presence (context
+    tiers, cache-write pricing) with a ``None`` value where the priority rate is
+    missing: a missing or malformed priority field stays unknown and never
+    falls back to the standard rate, a cheaper base tier, or "no write price".
+    Priority-only fields are kept. Any other tier (``auto``/``flex``/invalid)
+    has no estimate. This is the tier REQUESTED, not necessarily the one the
+    provider applied.
+    """
+    tier = bill.get("service_tier")
+    if tier is None or tier == "default":
+        return {k: v for k, v in entry.items() if not k.endswith(_PRIORITY)}
+    if tier != "priority":
+        return None
+    view = {k: entry.get(k + _PRIORITY) for k in entry if not k.endswith(_PRIORITY)}
+    view.update({k[: -len(_PRIORITY)]: v for k, v in entry.items() if k.endswith(_PRIORITY)})
+    return view
+
+
 def estimate_costs(
     bill: dict[str, Any], entry: dict[str, float | None]
 ) -> dict[str, float | None]:
@@ -234,7 +268,10 @@ def estimate_costs(
 def estimate_parts(
     bill: dict[str, Any], entry: dict[str, float | None]
 ) -> tuple[dict[str, float | None], frozenset[str]]:
-    """STANDARD list-price USD per metrics-row bucket; ``None`` = unknown.
+    """Requested-tier list-price USD per metrics-row bucket; ``None`` = unknown.
+
+    Standard rates, or ``*_priority`` rates for a round that requested
+    ``priority`` (see ``_requested_tier_entry``).
 
     Buckets mirror the task-card metrics row: ``miss`` is the ``↑`` cache-miss
     input (total input minus cache read, i.e. uncached input plus any cache
@@ -263,6 +300,10 @@ def estimate_parts(
     output = _count(bill.get("billable_output_tokens"))
     result: dict[str, float | None] = {"miss": None, "hit": None, "output": None}
     floors: set[str] = set()
+    tier_entry = _requested_tier_entry(bill, entry)
+    if tier_entry is None:
+        return result, frozenset(floors)  # requested tier has no estimate
+    entry = tier_entry
     if output is not None:
         # Output does not depend on input counts; tier by total when known.
         suffix = _tier_suffix(entry, total) if total is not None else ""
@@ -349,9 +390,10 @@ def usage_line(
 
     ``$0.0310 · ↓$0.0006 ↑$0.0070 | $0.0234`` mirrors the metrics
     row (``↓`` output, ``↑`` cache-miss input, ``|`` cache hits). The total is
-    a STANDARD list-price estimate; a trailing ``+`` means some parts are
+    a requested-tier list-price estimate; a trailing ``+`` means some parts are
     unknown, so the figure is the known subtotal (every part is non-negative,
-    so it is a lower bound).
+    so it is a lower bound). A round that requested the ``priority`` tier ends
+    with ``priority est.``; other rounds keep the unlabelled standard form.
     """
     if not isinstance(usage, dict) or not usage:
         return ""
@@ -391,6 +433,8 @@ def usage_line(
 
             # Mirrors the metrics row: ↓ output, ↑ cache-miss input, | cache hits.
             text = f"{head} · ↓{cell('output')} ↑{cell('miss')} | {cell('hit')}"
+            if bill.get("service_tier") == "priority":
+                text += " priority est."  # the REQUESTED tier, not an applied one
             if status == "stale":
                 text += " stale prices"
             parts.append(text)
@@ -456,6 +500,10 @@ def _split_miss(
     write = _count(bill.get("cache_write_tokens"))
     raw_one_hour = bill.get("cache_write_1h_tokens")
     one_hour = _count(raw_one_hour)
+    tier_entry = _requested_tier_entry(bill, entry)
+    if tier_entry is None:
+        return None, None
+    entry = tier_entry
     if (
         miss is None
         or total is None
@@ -487,7 +535,8 @@ def session_cost_text(
     known sum with ``+`` when any round's part is unknown or a floor; the total
     shows ``≥`` likewise. An unseen, unaccounted or unpriceable response
     (missing usage/billing/model/price) appends ``partial`` and makes every
-    figure a lower bound. Never blocks on the catalog; ``""`` without state.
+    figure a lower bound. ``requested-tier est.`` is appended when any recorded
+    round requested ``priority``. Never blocks on the catalog; ``""`` without state.
     """
     if not isinstance(cost, dict):
         return ""
@@ -542,6 +591,8 @@ def session_cost_text(
     )
     if partial or "total" in short:
         text += " · partial"
+    if any(isinstance(b, dict) and b.get("service_tier") == "priority" for b in bills.values()):
+        text += " · requested-tier est."  # some round REQUESTED priority; not proof it applied
     if stale:
         text += " · stale prices"
     return text

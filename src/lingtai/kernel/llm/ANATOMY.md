@@ -95,6 +95,7 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
 
 - **Ephemeral:** `ChatInterface._entries`, `_next_id`, current system/tools, and `_pending_system` live in memory for one session (`llm/interface.py:305-318`).
 - **Ephemeral:** `StreamingAccumulator` stores partial text, tool args, and thoughts until `finalize()` (`llm/streaming.py:42-52`, `llm/streaming.py:148-184`).
+- **Optional billing evidence:** `UsageMetadata.requested_service_tier` is the wire `service_tier` the dispatching adapter sent for that round (`None` = none requested or not stated; never a provider-applied tier). `session.py` forwards it as `usage_billing.service_tier` when `safe_billing_tier` accepts it.
 - **Optional stream timing:** `UsageMetadata.first_token_s`, `generation_s`,
   and `generation_tokens` carry observed text/tool output evidence, not inferred
   latency. `StreamingAccumulator(request_started_at=...)` latches the first

@@ -175,6 +175,54 @@ def test_anthropic_factory_never_receives_service_tier(monkeypatch):
     assert "service_tier" not in captured
 
 
+@pytest.mark.parametrize("authored, requested", [
+    ("fast", "priority"), ("default", "default"), (None, None),
+])
+def test_round_usage_carries_the_requested_tier_not_an_applied_one(authored, requested):
+    # Neutral billing evidence: the wire tier each round REQUESTED (None when
+    # none was sent), read from the dispatched kwargs. No provider response
+    # field is consulted.
+    defaults = {} if authored is None else {"service_tier": authored}
+    responses = _factory_adapter("openai", {"wire_api": "responses", **defaults})
+    responses._client = _FakeResponsesClient()
+    session = responses._create_responses_session("gpt-test", "sys")
+    assert session.send_stream("hello").usage.requested_service_tier == requested
+    chat = _factory_adapter("openai", defaults)
+    chat._client = _chat_client()
+    assert chat._create_completions_session("gpt-test", "sys").send("hello").usage.requested_service_tier == requested
+
+
+def test_requested_tier_is_a_per_request_snapshot_never_filled_from_current_config():
+    adapter = _factory_adapter("openai", {"service_tier": "fast"})
+    adapter._client = _chat_client()
+    session = adapter._create_completions_session("gpt-test", "sys")
+    assert session.send("one").usage.requested_service_tier == "priority"
+    session._extra_kwargs.pop("service_tier")  # a later request that sends no tier
+    assert session.send("two").usage.requested_service_tier is None
+    assert "service_tier" not in adapter._client.chat.completions.create.call_args.kwargs
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "send_stream"])
+def test_chat_requested_tier_is_the_dispatched_snapshot_not_a_later_mutation(streaming):
+    adapter = _factory_adapter("openai", {"service_tier": "fast"})
+    client = _chat_client()
+    raw = client.chat.completions.create.return_value
+    adapter._client = client
+    session = adapter._create_completions_session("gpt-test", "sys")
+    sent: list[dict] = []
+
+    def create(**kwargs):
+        sent.append(kwargs)
+        # The session's config changes while the request is in flight.
+        session._extra_kwargs["service_tier"] = "default"
+        return iter([SimpleNamespace(choices=[], usage=raw.usage)]) if streaming else raw
+
+    client.chat.completions.create.side_effect = create
+    response = session.send_stream("x") if streaming else session.send("x")
+    assert sent[0]["service_tier"] == "priority"
+    assert response.usage.requested_service_tier == "priority"
+
+
 def test_direct_adapter_without_tier_sends_no_service_tier():
     adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     assert "service_tier" not in _responses_kwargs(adapter)
