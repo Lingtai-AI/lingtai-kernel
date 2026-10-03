@@ -25,6 +25,8 @@ from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.kernel.meta_block import (
     attach_active_notifications,
     reset_delivered_notification_sources,
+    _notification_records,
+    _pending_record_payload,
 )
 from tests._notification_store_helpers import (
     fingerprint_notifications,
@@ -817,3 +819,96 @@ def test_oversize_legacy_im_seed_does_not_ack_omitted_history(tmp_path):
     check = _block("bounded-check", _notification_placeholder=True)
     attach_active_notifications(agent, [check], prior_holder=first)
     assert [m["id"] for m in check.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["telegram"]["messages"]] == [m["id"] for m in messages]
+
+
+def test_pending_im_reuses_extracted_values_and_keeps_unidentified_previews(monkeypatch):
+    import lingtai.kernel.meta_block as meta_block
+
+    source = "mcp.telegram"
+    delivered = {"latest_incoming": {"id": "delivered", "text": "already sent"}}
+    omission = {"latest_incoming": {"licc_structured_omitted": True, "reason": "size"}}
+    idless = {"recent_messages": [{"text": "no producer identity"}]}
+    payload = {"data": {"count": 3, "previews": [delivered, omission, idless], "cursor": "c1"}}
+    before = copy.deepcopy(payload)
+    records = _notification_records(source, payload)
+    agent = SimpleNamespace(_notification_delivered_events={source: records})
+
+    extract = meta_block._im_persistent_messages_from_notifications
+    calls = 0
+
+    def counted_extract(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return extract(*args, **kwargs)
+
+    monkeypatch.setattr(meta_block, "_im_persistent_messages_from_notifications", counted_extract)
+    projected = _pending_record_payload(agent, source, payload)
+
+    assert projected["data"]["previews"] == [omission, idless]
+    assert projected["data"]["count"] == 2
+    assert projected["data"]["cursor"] == "c1"
+    assert payload == before
+    # _notification_records and the pending projection each extract once per preview.
+    assert calls == 6
+
+
+def test_pending_im_filters_by_event_identity_and_keeps_pending_context_unchanged():
+    source = "mcp.telegram"
+    latest = {"id": "compound-message", "event_id": "event-new", "text": "new callback"}
+    preview = {
+        "platform": "telegram",
+        "conversation_ref": "chat-9",
+        "message_ref": "thread-target",
+        "event_id": "route-event",
+        "recent_messages": [
+            {"id": "compound-message", "event_id": "event-old", "text": "old callback"},
+            latest,
+        ],
+        "latest_incoming": latest,
+        "referenced_messages": [{"id": "reply-target", "text": "target context"}],
+        "custom_metadata": {"keep": True},
+    }
+    payload = {"header": "telegram", "data": {"count": 1, "previews": [preview], "cursor": "c2"}}
+    before = copy.deepcopy(payload)
+    records = _notification_records(source, payload)
+    agent = SimpleNamespace(
+        _notification_delivered_events={source: {"event-old": records["event-old"]}}
+    )
+
+    projected = _pending_record_payload(agent, source, payload)
+    retained = projected["data"]["previews"][0]
+
+    assert [item["event_id"] for item in retained["recent_messages"]] == ["event-new"]
+    assert retained["recent_messages"][0]["id"] == "compound-message"
+    assert retained["latest_incoming"] == latest
+    assert retained["referenced_messages"] == preview["referenced_messages"]
+    assert retained["conversation_ref"] == preview["conversation_ref"]
+    assert retained["platform"] == preview["platform"]
+    assert retained["message_ref"] == preview["message_ref"]
+    assert retained["event_id"] == preview["event_id"]
+    assert retained["custom_metadata"] == preview["custom_metadata"]
+    assert projected["data"]["cursor"] == "c2"
+    assert payload == before
+
+
+@pytest.mark.parametrize("message_ref", ["provider-message", None])
+def test_pending_im_legacy_preview_fallback_preserves_only_real_message_ref(message_ref):
+    source = "mcp.telegram"
+    preview = {"preview": "legacy body", "conversation_ref": "chat-legacy", "event_id": "route-event"}
+    if message_ref is not None:
+        preview["message_ref"] = message_ref
+    payload = {"data": {"count": 1, "previews": [preview]}}
+    before = copy.deepcopy(payload)
+    agent = SimpleNamespace(_notification_delivered_events={source: {}})
+
+    projected = _pending_record_payload(agent, source, payload)
+    retained = projected["data"]["previews"][0]
+    fallback = retained["recent_messages"][0]
+
+    assert fallback["source"] == "notification_preview"
+    assert fallback["text"] == "legacy body"
+    assert fallback["id"] == message_ref if message_ref is not None else fallback["id"].startswith("notification-preview:")
+    assert retained.get("message_ref") == message_ref if message_ref is not None else "message_ref" not in retained
+    assert "event_id" not in retained
+    assert "latest_incoming" not in retained
+    assert payload == before
