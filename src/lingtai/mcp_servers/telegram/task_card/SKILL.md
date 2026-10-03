@@ -58,6 +58,14 @@ lines, then adds the plain price line, for example:
 ↓200 (20) ↑900 ◌ 1.0k | 10.0%
 ```
 
+`☕X.Ys`, when present on the first line, is the sum of real IDLE
+intervals between the progress rows defining `↻`. It comes from the existing
+`agent_state` events: the kernel measures each IDLE exit monotonically. It is
+not gap minus API time. Tools, prompt build, queue/network wait, ASLEEP and
+STUCK do not count. Older events, partial intervals, missing anchors and
+restart-crossing gaps omit coffee; only a witnessed zero-length interval can
+show `☕0.0s`. New complete intervals after a restart can be displayed.
+
 `⚡` measures actual stream dispatch to first nonempty **text or tool
 name/argument payload**. Reasoning, ids, lifecycle, heartbeat, usage and empty
 events do not count. `tok/s` uses final provider output (including tools) minus

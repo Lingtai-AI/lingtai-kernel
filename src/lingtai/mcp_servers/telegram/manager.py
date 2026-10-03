@@ -1017,6 +1017,7 @@ class TelegramManager:
         # authoritative for SESSION telemetry.  Legacy notification carriers are
         # fallback only; generation/order fences remain hidden in this state.
         self._task_card_session_usage_state: dict | None = None
+        self._task_card_idle_state: dict | None = None
         # Since-molt per-response bill facts folded beside that reducer; priced
         # only at render into the SESSION ``Cost`` row (see ``api_cost``).
         self._task_card_session_cost_state: dict | None = None
@@ -3244,6 +3245,7 @@ class TelegramManager:
                 self._task_card_event_groups = []
                 self._task_card_call_usages = {}
                 self._task_card_session_usage_state = None
+                self._task_card_idle_state = None
                 self._task_card_session_cost_state = None
                 self._task_card_event_metadata = None
             return
@@ -3263,6 +3265,7 @@ class TelegramManager:
                 self._task_card_event_groups = []
                 self._task_card_call_usages = {}
                 self._task_card_session_usage_state = None
+                self._task_card_idle_state = None
                 self._task_card_session_cost_state = None
                 self._task_card_event_metadata = None
             return
@@ -3312,6 +3315,7 @@ class TelegramManager:
         """
         window = self._TASK_CARD_EVENT_WINDOW
         projected_events: list[tuple[dict, dict]] = []
+        idle_events: list[dict] = []
         session_events: list[dict] = []
         per_call_usages: dict[str, dict] = {}
         tool_results: dict[str, dict] = {}
@@ -3358,12 +3362,18 @@ class TelegramManager:
                     # are already at the start of the file.
                     carry = lines[0] if start > 0 else b""
                     complete = lines[1:] if start > 0 else lines
+                    round_idle_events: list[dict] = []
                     round_projected: list[tuple[dict, dict]] = []
                     round_session_events: list[dict] = []
                     for raw in complete:
                         event = self._decode_event_line(raw)
                         if event is None:
                             continue
+                        if event.get("type") in {
+                            "agent_state", "heartbeat_start", "heartbeat_stop",
+                            "agent_stop", "tool_call", "diary",
+                        }:
+                            round_idle_events.append(event)
                         if event.get("type") in {
                             "llm_response",
                             "notification_block_injected",
@@ -3396,11 +3406,19 @@ class TelegramManager:
                         round_session_events + session_events
                     )[-window:]
                     projected_events = round_projected + projected_events
+                    idle_events = round_idle_events + idle_events
                     chunk_size *= 2
         except OSError:
             return None
         # Chunks were prepended above, so projected events are already in
         # journal order before grouping; one API call receives one divider.
+        idle_state = None
+        idle_rows = {id(event): row for event, row in projected_events}
+        for event in idle_events:
+            idle_state = TaskCardEventProjection.reduce_idle_event(
+                idle_state, event, idle_rows.get(id(event)),
+            )
+        self._task_card_idle_state = idle_state
         groups = self._group_task_card_events(projected_events)
         TaskCardEventProjection.apply_tool_results(groups, tool_results)
         TaskCardEventProjection.apply_tool_usages(groups, per_call_usages)
@@ -3518,6 +3536,7 @@ class TelegramManager:
         tool_results: dict[str, dict] = {}
         per_call_usages: dict[str, dict] = {}
         summary_times: dict[str, float] = {}
+        idle_state = getattr(self, "_task_card_idle_state", None)
         for raw in complete.split(b"\n"):
             event = self._decode_event_line(raw)
             if event is None:
@@ -3544,11 +3563,13 @@ class TelegramManager:
                 llm_call_id, usage = llm_usage
                 per_call_usages[llm_call_id] = usage
             row = self._project_task_card_event(event)
+            idle_state = TaskCardEventProjection.reduce_idle_event(idle_state, event, row)
             if row is not None:
                 projected_events.append((event, row))
 
         summary_usages = self._read_apriori_summary_usages(set(summary_times))
         with self._task_card_event_lock:
+            self._task_card_idle_state = idle_state
             session_state = self._task_card_session_usage_state
             cost_state = self._task_card_session_cost_state
             for event in session_events:

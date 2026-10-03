@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from lingtai.mcp_servers.task_card import TaskCardEventProjection
 from lingtai.mcp_servers.telegram.manager import TelegramManager, _telegram_task_card_html
 
@@ -327,7 +329,7 @@ def test_group_events_sets_api_delay_s_delta_from_previous_tool_ts() -> None:
     ]
     groups = TaskCardEventProjection.group_events(projected)
     rows = TaskCardEventProjection.flatten_groups(groups)
-    assert [row["api_delay_s"] for row in rows] == [0.0, 3.4]
+    assert [row["api_delay_s"] for row in rows] == pytest.approx([0.0, 3.4])
     assert all("_ts" not in row for row in rows)
     assert all("api_delay_s" in row for row in rows)
 
@@ -523,7 +525,7 @@ def test_stream_metrics_formula_two_lines_and_carrier_preservation():
                                "generation_tokens": 180}}
     _, usage = TaskCardEventProjection.project_llm_response_usage(event)
     info = TaskCardEventProjection.format_divider_info(12.4, usage, stream_metrics=True)
-    assert info == "↻12.4s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%"
+    assert info == "↻12.4s · ⏱7.2s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%"
     # Other consumers opt out, preserving the established single line.
     assert "⚡" not in TaskCardEventProjection.format_divider_info(12.4, usage)
     groups = [{"events": [{"kind": "text", "text": "hello", "api_delay_s": 12.4,
@@ -533,7 +535,7 @@ def test_stream_metrics_formula_two_lines_and_carrier_preservation():
     })
     assert groups[0]["events"][0]["_usage"]["stream_timing"] == usage["stream_timing"]
     frame = TaskCardEventProjection.render_event_groups(groups, normal_rows=10, stream_metrics=True)
-    assert "↻12.4s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900" in frame
+    assert "↻12.4s · ⏱7.2s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900" in frame
 
 
 def test_missing_invalid_estimated_stream_metrics_omit_speed():
@@ -554,3 +556,33 @@ def test_missing_invalid_estimated_stream_metrics_omit_speed():
     })
     text = TaskCardEventProjection.format_divider_info(12.4, usage, stream_metrics=True)
     assert "⚡1.0s" in text and "tok/s" not in text
+
+
+def test_idle_time_is_opt_in_and_does_not_change_other_channel_frames():
+    legacy = TaskCardEventProjection.format_divider_info(12.4, None)
+    assert TaskCardEventProjection.format_divider_info(12.4, None, idle_s=2.5) == legacy
+    assert TaskCardEventProjection.format_divider_info(
+        12.4, None, stream_metrics=True, idle_s=2.5,
+    ) == "↻12.4s · ☕2.5s"
+
+
+def test_other_time_uses_unrounded_gap_and_omits_incomplete_or_negative():
+    timing = {"first_token_s": 1.234, "generation_s": 4.567,
+              "generation_tokens": 100}
+    render = TaskCardEventProjection.format_divider_info
+    text = render(12.345, {"stream_timing": timing}, stream_metrics=True, idle_s=2)
+    assert text.startswith("↻12.3s · ⏱6.5s · ☕2.0s · ⚡1.2s")
+    assert "⏱" not in render(12.345, {"stream_timing": timing})
+    for gap in (None, 0, 5, float("nan"), float("inf")):
+        assert "⏱" not in render(gap, {"stream_timing": timing}, stream_metrics=True)
+    for invalid in ({}, {"first_token_s": 1}, {"generation_s": 2},
+                    {"first_token_s": True, "generation_s": 2},
+                    {"first_token_s": 1, "generation_s": -1},
+                    {"first_token_s": 1, "generation_s": float("inf")}):
+        assert "⏱" not in render(12, {"stream_timing": invalid}, stream_metrics=True)
+    assert "⏱0.0s" in render(3, {"stream_timing": {
+        "first_token_s": 1, "generation_s": 2}}, stream_metrics=True)
+    events = [({"api_call_id": f"api-{i}"}, {"_ts": ts})
+              for i, ts in enumerate((100.0, 112.345))]
+    groups = TaskCardEventProjection.group_events(events)
+    assert groups[1]["events"][0]["api_delay_s"] == 112.345 - 100.0

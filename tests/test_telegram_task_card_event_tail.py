@@ -22,6 +22,8 @@ import re
 import copy
 import json
 import threading
+
+import pytest
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -762,7 +764,7 @@ def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
     # First tool call of the stream has no prior progress: 0.0 baseline.
     assert window[0]["api_delay_s"] == 0.0
     # Second tool call: exact ts delta.
-    assert window[1]["api_delay_s"] == 3.4
+    assert window[1]["api_delay_s"] == pytest.approx(3.4)
     # The raw ts stays private and never leaks into the public window.
     assert all("_ts" not in row for row in window)
 
@@ -2573,5 +2575,54 @@ def test_actual_telegram_tail_stream_time_and_tokens_use_two_lines(tmp_path, mon
     ])
     manager._poll_event_tail()
     text = _last_edit(acct)
-    assert "↻12.4s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
+    assert "↻12.4s · ⏱7.2s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
     assert "TTFT" not in text and "↻" in text
+
+
+@pytest.mark.parametrize("mode", ["known", "multiple", "tool", "missing", "asleep", "restart", "partial", "zero"])
+@pytest.mark.parametrize("live", [False, True])
+def test_actual_telegram_idle_time_row(tmp_path, monkeypatch, mode, live):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    before = _priced_tool_call("api_before", "call_before", 100.0)
+    enter = {"type": "agent_state", "old": "active", "new": "idle", "ts": 101.0}
+    leave = {"type": "agent_state", "old": "idle", "new": "active", "ts": 108.0, "idle_elapsed_s": 2.5}
+    states = [enter, leave]
+    if mode == "multiple":
+        states += [enter, leave]
+    elif mode == "tool":
+        states = [{"type": "tool_result", "tool_call_id": "call_before", "ts": 108.0, "status": "success", "elapsed_ms": 8000}]
+    elif mode == "missing":
+        states = [enter, {k: v for k, v in leave.items() if k != "idle_elapsed_s"}]
+    elif mode == "asleep":
+        states = [{"type": "agent_state", "old": "active", "new": "asleep"}, {"type": "agent_state", "old": "asleep", "new": "active"}]
+    elif mode == "restart":
+        states = [enter, {"type": "heartbeat_start"}, leave]
+    elif mode == "partial":
+        states = [leave]
+    elif mode == "zero":
+        states = [enter, {**leave, "idle_elapsed_s": 0.0}]
+    event = json.loads(_priced_llm("api_timed", 112.3, total=1000, cached=100, out=200))
+    event["thinking_tokens"] = 20
+    event["stream_timing"] = {"first_token_s": 1.2, "generation_s": 4.0, "generation_tokens": 180}
+    lines = [json.dumps(state) for state in states] + [json.dumps(event), _priced_diary("api_timed", 112.4)]
+    if live:
+        _write_lines(path, [before])
+        manager._poll_event_tail()
+        # Exercise interval reduction across separate foreground polls.
+        for line in lines:
+            with path.open("a") as f:
+                f.write(line + "\n")
+            manager._poll_event_tail()
+    else:
+        _write_lines(path, [before] + lines)
+        manager._poll_event_tail()
+    text = _last_edit(acct)
+    expected = {"known": "2.5", "multiple": "5.0", "zero": "0.0"}.get(mode)
+    coffee = f" · ☕{expected}s" if expected is not None else ""
+    assert f"↻12.4s · ⏱7.2s{coffee} · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
+    if expected is None:
+        assert "☕" not in text
