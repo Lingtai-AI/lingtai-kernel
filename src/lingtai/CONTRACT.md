@@ -7,6 +7,10 @@ related_files:
   - src/lingtai/init.jsonc
   - src/lingtai/init_reader.py
   - src/lingtai/init_schema.py
+  - src/lingtai/llm/openai/codex_usage.py
+  - src/lingtai/llm/openai/adapter.py
+  - tests/test_codex_credits.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
   - src/lingtai/kernel/config_resolve.py
   - src/lingtai/cli.py
   - src/lingtai/agent.py
@@ -166,6 +170,15 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
    `flex`, `priority`; any other value fails validation. A non-`auto`
    `manifest.llm.wire_api` is valid only for provider `openai` and must be
    `chat_completions` or `responses`; legacy `auto` is inert.
+   `manifest.llm.codex_allow_credits` is a strict boolean, default false,
+   forwarded through provider defaults to the native Codex adapter. False stops
+   new native Codex requests when ordinary usage is exhausted or cannot be
+   verified; true leaves allowance/credit eligibility to OpenAI. It applies to
+   sticky accounts as well as initial binding, never excludes an account solely
+   for depleted included usage, and does not add a billing field to inference.
+   It is a local request-admission choice, not an atomic guarantee against a
+   debit when usage changes after the check. See the
+   [LLM adapter manual](intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md).
 9. `manifest.cache_miss_budget` is schema-unknown legacy input: it is reported
    and ignored without writeback, never hydrated, and cannot override the
    System-owned effective setting.

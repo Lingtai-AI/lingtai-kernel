@@ -95,6 +95,7 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     "codex_session_anchor",
     "codex_thread_salt",
     "codex_auth_path",
+    "codex_allow_credits",
     # Optional Codex endpoint pool (molt-boundary shuffle). A manifest ``llm``
     # block may carry ``codex_base_urls`` (list/tuple or comma/newline string);
     # the adapter chooses one endpoint at request time without changing

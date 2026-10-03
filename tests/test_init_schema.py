@@ -316,6 +316,7 @@ def test_legacy_manifest_soul_block_is_tolerated_without_warning():
         ("codex_session_anchor", "/agents/alice/init.json"),
         ("codex_thread_salt", "alice"),
         ("codex_auth_path", "/tokens/alice/codex-auth.json"),
+        ("codex_allow_credits", True),
         ("codex_base_urls", ["https://codex-a.example.test/v1"]),
         ("service_tier", "fast"),
     ],
@@ -1056,3 +1057,12 @@ def test_removed_provider_pointer_survives_init_reader_redaction():
     assert "use provider openai (OpenAI-compatible" in excerpt
     assert "or anthropic (Anthropic-compatible: base_url)" in excerpt
     assert "sub2api/subs-pool" in excerpt
+
+
+@pytest.mark.parametrize("value", ["true", "false", 0, 1, None, {}])
+def test_codex_credit_opt_in_requires_a_boolean(value):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "codex"
+    data["manifest"]["llm"]["codex_allow_credits"] = value
+    with pytest.raises(ValueError, match="codex_allow_credits"):
+        validate_init(data)

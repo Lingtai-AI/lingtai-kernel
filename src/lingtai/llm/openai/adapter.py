@@ -6544,11 +6544,15 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         codex_molt_count: int | None = None,
         codex_compact_token_limit: int | None = None,
         codex_service_tier: str | None = None,
+        codex_allow_credits: bool = False,
         codex_account_source: Any = None,
         codex_token_manager_factory: Callable[..., Any] | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        if type(codex_allow_credits) is not bool:
+            raise ValueError("codex_allow_credits must be a boolean")
+        self._codex_allow_credits = codex_allow_credits
         # service_tier: normalized wire value from the common Codex boundary
         # (e.g. user ``fast`` → wire ``priority``).  ``None`` omits the field.
         self._codex_service_tier: str | None = (
@@ -6803,6 +6807,43 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 binding = self._select_codex_account(context)
             else:
                 binding = dict(context.binding)
+            if not self._codex_allow_credits:
+                from .codex_usage import CodexUsageAuthError, read_included_usage_allowed
+                from lingtai.auth.codex_account_source import NoCandidateError
+
+                # A sticky account may have exhausted its allowance since the
+                # last turn. Check every request, including WebSocket sends.
+                headers = _codex_identity_headers()
+                if binding.get("account_id"):
+                    headers["ChatGPT-Account-Id"] = binding["account_id"]
+                try:
+                    allowed = read_included_usage_allowed(client=context.client, headers=headers)
+                except CodexUsageAuthError:
+                    # A sticky binding may outlive its access token. Preserve
+                    # account ownership and bound the usage-only recovery to
+                    # one refresh/read; never dispatch inference on uncertainty.
+                    allowed = None
+                    auth_ref = binding.get("auth_ref")
+                    if auth_ref:
+                        try:
+                            manager = self._new_codex_token_manager(auth_ref)
+                            binding["api_key"] = manager.refresh_access_token(binding["api_key"])
+                            context.client.api_key = binding["api_key"]
+                            binding = self._set_codex_account_binding(context, binding)
+                            allowed = read_included_usage_allowed(client=context.client, headers=headers)
+                        except Exception:
+                            pass
+                if allowed is not True:
+                    message = (
+                        "Codex included usage is exhausted. Enable paid credits in "
+                        "this preset to continue, or wait for the allowance to reset."
+                        if allowed is False else
+                        "Could not verify Codex included usage. Retry when the usage "
+                        "service is available, or enable paid credits in this preset."
+                    )
+                    # Do not exclude this account: the next turn can observe a
+                    # reset. NoCandidateError already stops kernel turn retries.
+                    raise NoCandidateError(message)
             if apply_binding is not None:
                 apply_binding(binding)
             return binding
