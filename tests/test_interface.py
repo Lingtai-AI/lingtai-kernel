@@ -1,6 +1,8 @@
 """Tests for ChatInterface.pop_orphan_tool_call()."""
 from __future__ import annotations
 
+import pytest
+
 from lingtai.kernel.llm.interface import (
     ChatInterface,
     TextBlock,
@@ -173,6 +175,97 @@ def test_remove_pair_by_call_id_only_first_match():
     assert len(iface.entries) == n_before - 2
     # A second matching pair survives — caller can remove it explicitly.
     assert iface.remove_pair_by_call_id("tc_a") is True
+
+
+_STRICT_PAIR_SELECTORS = [
+    (
+        "remove_pair_by_call_id",
+        "tc_match",
+        {"action": "flow"},
+    ),
+    (
+        "remove_pair_by_notif_id",
+        "notif_match",
+        {"action": "notification", "notif_id": "notif_match"},
+    ),
+]
+
+
+@pytest.mark.parametrize(("method", "requested", "args"), _STRICT_PAIR_SELECTORS)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "wrong_role",
+        "nonadjacent",
+        "multiple_calls",
+        "mixed_nontext",
+        "multiple_results",
+        "non_result",
+        "mismatched_ids",
+    ],
+)
+def test_remove_pair_rejects_noncanonical_shapes(method, requested, args, shape):
+    iface = ChatInterface()
+    call = ToolCallBlock(id="tc_match", name="demo", args=args)
+    result_id = "different" if shape == "mismatched_ids" else "tc_match"
+    result = ToolResultBlock(id=result_id, name="demo", content="ok")
+
+    if shape == "multiple_calls":
+        iface.add_assistant_message([
+            call,
+            ToolCallBlock(id="tc_other", name="demo", args=args),
+        ])
+        iface.add_tool_results([result])
+    elif shape == "mixed_nontext":
+        iface.add_assistant_message([
+            call,
+            ToolResultBlock(id="tc_match", name="demo", content="extra"),
+        ])
+        iface.add_tool_results([result])
+    elif shape == "multiple_results":
+        iface.add_assistant_message([call])
+        iface.add_tool_results([
+            result,
+            ToolResultBlock(id="tc_other", name="demo", content="extra"),
+        ])
+    else:
+        iface.add_assistant_message([call])
+        iface.add_tool_results([result])
+        if shape == "wrong_role":
+            iface._entries[1].role = "assistant"
+        elif shape == "nonadjacent":
+            iface.add_user_message("between")
+            iface._entries[1], iface._entries[2] = (
+                iface._entries[2], iface._entries[1]
+            )
+        elif shape == "non_result":
+            iface._entries[1].content = [TextBlock(text="not a tool result")]
+
+    assert getattr(iface, method)(requested) is False
+
+
+@pytest.mark.parametrize(("method", "requested", "args"), _STRICT_PAIR_SELECTORS)
+def test_remove_pair_allows_legacy_text_and_removes_first_match(
+    method, requested, args
+):
+    iface = ChatInterface()
+    for label, call_id in (("first", "tc_match"), ("second", "tc_match")):
+        iface.add_assistant_message([
+            TextBlock(text="legacy prefix"),
+            ToolCallBlock(id=call_id, name=label, args=args),
+            TextBlock(text="legacy suffix"),
+        ])
+        iface.add_tool_results([
+            ToolResultBlock(id=call_id, name=label, content=label),
+        ])
+        if label == "first":
+            iface.add_user_message("between pairs")
+
+    assert getattr(iface, method)(requested) is True
+    entries = iface.conversation_entries()
+    assert entries[1].content[1].name == "second"
+    assert getattr(iface, method)(requested) is True
+    assert getattr(iface, method)(requested) is False
 
 
 def test_remove_pair_by_call_id_empty_interface():
