@@ -27,6 +27,8 @@ receipts and through a recording stub manager, never by starting a run.
 """
 from __future__ import annotations
 
+from lingtai.tools.tool_family import _without_descriptions
+
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -295,7 +297,7 @@ def test_root_allof_correlates_each_action_const_to_its_own_input_schema():
         correlated = condition["then"]["properties"]["input"]
         # Same canonical child schema the ``anyOf`` branch embeds, minus the
         # presentational ``title`` the branch adds.
-        assert correlated == {k: v for k, v in branch.items() if k != "title"}
+        assert correlated == _without_descriptions({k: v for k, v in branch.items() if k != "title"})
 
 
 def test_composed_schema_branches_are_mutation_isolated():

@@ -81,7 +81,9 @@ that generic dispatch route.
   mapping table: (1) schema-level — a root `allOf` with one `if`/`then`
   condition per child, each `if` testing `action` via `const` against that
   child's own registry name, each `then` constraining `input` to that exact
-  child's canonical schema; (2) dispatch-level — `handle()`'s own `input`-key
+  child's canonical validation constraints (duplicate description annotations
+  omitted by `_without_descriptions`, full prose retained in typed disclosure);
+  (2) dispatch-level — `handle()`'s own `input`-key
   check against the selected child's declared properties, which remains
   always-authoritative and fail-closed regardless of whether a given
   provider enforces `allOf`/`if`/`then` schema-side. Root-level `allOf`

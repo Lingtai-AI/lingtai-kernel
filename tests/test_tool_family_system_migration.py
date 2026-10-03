@@ -20,6 +20,8 @@ no live agent is slept, suspended, cleared, or destroyed.
 """
 from __future__ import annotations
 
+from lingtai.tools.tool_family import _without_descriptions
+
 import json
 import threading
 from pathlib import Path
@@ -120,7 +122,7 @@ def test_root_allof_correlates_each_action_with_its_own_input() -> None:
     for action, condition in zip(_PUBLIC_ACTIONS, conditions):
         assert condition["if"]["properties"]["action"]["const"] == action
         assert condition["if"]["required"] == ["action"]
-        assert condition["then"]["properties"]["input"] == public_schemas[action]
+        assert condition["then"]["properties"]["input"] == _without_descriptions(public_schemas[action])
 
 
 def test_children_consume_no_model_tool_slots() -> None:
