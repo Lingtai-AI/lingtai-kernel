@@ -43,6 +43,10 @@ from .config import THINKING_LEVELS
 
 log = logging.getLogger(__name__)
 
+# Providers whose preset ``manifest.llm.model`` may be omitted (the CLI-backed
+# ``claude-code`` then uses Claude Code's own default model).
+_MODEL_OPTIONAL_LLM_PROVIDERS = frozenset({"claude-code"})
+
 
 def default_presets_path() -> Path:
     """The per-machine preset library directory."""
@@ -345,8 +349,19 @@ def load_preset(
     if not isinstance(llm, dict):
         raise ValueError(f"preset {name!r} ({p}): missing or invalid 'manifest.llm' object")
 
-    if not llm.get("provider") or not llm.get("model"):
+    # ``model`` may be omitted for the CLI-backed ``claude-code`` provider (the
+    # CLI's own default model); every other provider requires it. Mirrors
+    # ``lingtai.init_schema.MODEL_OPTIONAL_LLM_PROVIDERS``, which the kernel
+    # must not import.
+    provider = llm.get("provider")
+    model_optional = (
+        isinstance(provider, str)
+        and provider.strip().lower() in _MODEL_OPTIONAL_LLM_PROVIDERS
+    )
+    if not provider or (not llm.get("model") and not model_optional):
         raise ValueError(f"preset {name!r} ({p}): manifest.llm requires non-empty 'provider' and 'model'")
+    if model_optional and llm.get("model") is not None and not isinstance(llm["model"], str):
+        raise ValueError(f"preset {name!r} ({p}): manifest.llm.model must be a string when set")
 
     # context_limit lives inside manifest.llm. The migration layer persists
     # straightforward root-only legacy files; the in-memory compatibility layer

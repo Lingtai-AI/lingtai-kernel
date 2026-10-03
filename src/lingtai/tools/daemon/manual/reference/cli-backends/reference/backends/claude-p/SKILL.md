@@ -9,8 +9,8 @@ description: >
   mechanism. Also owns Claude Code's operational core: the `env -u` auth
   hygiene wrapper, weekly-limit smoke test, stale-token diagnosis, and the
   budget/timeout/print-mode background caveats. It is not a flag catalog.
-version: 0.5.0
-last_changed_at: 2026-08-13T00:00:00Z
+version: 0.6.0
+last_changed_at: 2026-09-30T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 maintenance: |
@@ -86,18 +86,18 @@ authenticates as, via `CLAUDE_CONFIG_DIR`:
 // emits no argv token; the variable is set on the spawn instead
 ```
 
-Applied after the daemon's env stripping, so it wins over the inherited
-environment. The value is used verbatim (`$HOME`/`~` are not expanded — pass an
-absolute path). Verified profiles live under `~/.claude-profiles/`; inspect one
+Applied after the daemon's auth decision (below), so it wins. The value is used
+verbatim (`$HOME`/`~` are not expanded — pass an absolute path). Verified profiles live under `~/.claude-profiles/`; inspect one
 with read-only `claude auth status` or `claude -p '/usage'` only — never logout,
 re-authenticate, or copy credential files between profiles.
 
 ## Subscription & auth
 
-Uses the human's **Claude subscription** (Pro/Max) via `claude login` OAuth
-(`~/.claude/.credentials.json`) — no additional API costs. The daemon spawn
-strips `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN`
-so refreshed OAuth wins over stale inherited tokens.
+Uses the Claude subscription with the `claude-code` provider's auth order (see
+the `llm-adapters` manual): a setup-token (parent's `api_key_env`, else
+`CLAUDE_CODE_OAUTH_TOKEN`) in a private `CLAUDE_CONFIG_DIR`, else the local
+login, else a failed run. `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`ANTHROPIC_BASE_URL`, and `CLAUDE_CODE_USE_*` are always stripped.
 
 ### Manual shell calls: the `env -u` auth-hygiene wrapper
 
@@ -123,10 +123,8 @@ env \
 > `CLAUDE_CODE_OAUTH_TOKEN` can override a refreshed
 > `~/.claude/.credentials.json` and make Claude Code falsely report `You've hit
 > your weekly limit`. Unsetting these variables for the child forces Claude Code
-> onto the current first-party OAuth/subscription credentials. If you've
-> confirmed your environment has no auth overrides you can drop the prefix;
-> when in doubt, keep it. **Never echo the variable values while diagnosing —
-> they are secrets.**
+> onto the current first-party OAuth/subscription credentials. When in doubt,
+> keep the prefix. **Never echo the variable values — they are secrets.**
 
 ### Weekly-limit smoke test
 
@@ -141,7 +139,8 @@ env -u CLAUDE_CODE_OAUTH_TOKEN claude -p 'Reply exactly OK' --allowedTools Read 
 
 If this succeeds while plain `claude -p ...` fails, the problem is a stale env
 override, not an exhausted subscription — keep using the sanitized `env -u ...`
-wrapper (the daemon backend strips the override automatically).
+wrapper. The daemon uses only the resolved setup-token: replace a stale one
+(`claude setup-token`) or remove it to fall back to the local login.
 
 ### Find and remove the stale-token source
 

@@ -169,23 +169,97 @@ def test_check_many_empty_list_returns_empty():
 
 
 # ---------------------------------------------------------------------------
-# Local CLI-login providers (e.g. claude-code)
+# CLI-backed claude-code: setup-token first, then the local CLI login
 # ---------------------------------------------------------------------------
 
+# Bound at import (collection) time, before the suite-wide guard in
+# tests/conftest.py replaces the module attribute: the real implementation,
+# exercised below only against stub CLIs — never the machine's `claude`.
+from lingtai.kernel.preset_connectivity import (  # noqa: E402
+    claude_cli_login_status as _real_claude_cli_login_status,
+)
 
-def test_claude_code_ok_when_module_importable(monkeypatch):
-    """A local CLI-login provider with its backing module importable is `ok` —
-    no base_url, no api_key_env, and crucially no TCP probe."""
+
+@pytest.fixture
+def no_claude_token(monkeypatch):
+    for name in ("CLAUDE_CODE_OAUTH_TOKEN", "MY_CLAUDE_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _pin_login(monkeypatch, verdict):
     from lingtai.kernel import preset_connectivity
-    with patch.object(preset_connectivity, "_probe_host") as probe, \
-         patch.object(preset_connectivity, "_module_available", return_value=True):
+
+    calls = []
+
+    def fake_status(cli_path="claude", **kwargs):
+        calls.append(kwargs)
+        return verdict
+
+    monkeypatch.setattr(preset_connectivity, "claude_cli_login_status", fake_status)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "api_key_env,env_name",
+    [
+        (None, "CLAUDE_CODE_OAUTH_TOKEN"),
+        ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"),
+        ("MY_CLAUDE_TOKEN", "MY_CLAUDE_TOKEN"),
+        # Declared-but-unset custom slot and a legacy empty api_key_env both
+        # still read the default CLAUDE_CODE_OAUTH_TOKEN slot.
+        ("MY_CLAUDE_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"),
+        ("", "CLAUDE_CODE_OAUTH_TOKEN"),
+    ],
+)
+def test_claude_code_ok_when_setup_token_present(
+    monkeypatch, no_claude_token, api_key_env, env_name
+):
+    """A configured setup-token is sufficient: no login probe, no network."""
+    from lingtai.kernel import preset_connectivity
+
+    monkeypatch.setenv(env_name, "sk-ant-oat01-test")
+    probe_calls = _pin_login(monkeypatch, preset_connectivity.CLAUDE_LOGIN_NOT_LOGGED_IN)
+    with patch.object(preset_connectivity, "_probe_host") as probe:
         result = preset_connectivity.check_connectivity(
-            provider="claude-code",
-            base_url=None,
-            api_key_env=None,
+            provider="claude-code", base_url=None, api_key_env=api_key_env
         )
-        assert result["status"] == "ok"
-        probe.assert_not_called()  # local provider — never hits the network
+    assert result["status"] == "ok"
+    assert result["error"] is None
+    probe.assert_not_called()
+    assert probe_calls == []
+
+
+@pytest.mark.parametrize(
+    "verdict,status",
+    [
+        ("logged_in", "ok"),
+        ("unknown", "ok"),
+        ("not_logged_in", "no_credentials"),
+        ("cli_missing", "no_credentials"),
+    ],
+)
+def test_claude_code_without_token_follows_local_login(
+    monkeypatch, no_claude_token, verdict, status
+):
+    from lingtai.kernel import preset_connectivity
+
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK"):
+        monkeypatch.setenv(name, "leak")
+    probe_calls = _pin_login(monkeypatch, verdict)
+    with patch.object(preset_connectivity, "_probe_host") as probe:
+        result = preset_connectivity.check_connectivity(
+            provider="claude-code", base_url=None, api_key_env="MY_CLAUDE_TOKEN"
+        )
+    assert result["status"] == status
+    probe.assert_not_called()  # never a TCP probe, never a model request
+    assert len(probe_calls) == 1
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK"):
+        assert name not in probe_calls[0]["env"]
+    if status == "no_credentials":
+        error = result["error"]
+        assert "claude setup-token" in error
+        assert "CLAUDE_CODE_OAUTH_TOKEN" in error
+        assert "claude auth login" in error
 
 
 def test_claude_code_missing_module_reports_no_credentials(monkeypatch):
@@ -203,18 +277,58 @@ def test_claude_code_missing_module_reports_no_credentials(monkeypatch):
         assert "no base_url" not in (result.get("error") or "")
 
 
-def test_only_claude_code_is_a_local_cli_login_provider():
+def test_only_claude_code_is_a_cli_backed_provider():
     """The removed ``claude_code``/``kimi-code``/``kimi_code`` spellings are no
-    longer local CLI-login providers; the default-URL probe table covers only
+    longer CLI-backed providers; the default-URL probe table covers only
     the three API families."""
     from lingtai.kernel import preset_connectivity
 
-    assert set(preset_connectivity._LOCAL_CLI_LOGIN_PROVIDERS) == {"claude-code"}
+    assert set(preset_connectivity._CLI_BACKED_PROVIDERS) == {"claude-code"}
     assert set(preset_connectivity._PROVIDER_DEFAULT_URLS) == {
         "openai",
         "anthropic",
         "codex",
     }
+
+
+def _stub_cli(tmp_path, stdout, exit_code=0):
+    """A fake `claude` that records its argv and prints *stdout*."""
+    record = tmp_path / "argv.txt"
+    script = tmp_path / "claude"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$@" > "{record}"\n'
+        f"cat <<'JSON'\n{stdout}\nJSON\n"
+        f"exit {exit_code}\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return str(script), record
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell stub CLI")
+@pytest.mark.parametrize(
+    "stdout,exit_code,expected",
+    [
+        ('{"loggedIn": true, "authMethod": "claude.ai"}', 0, "logged_in"),
+        ('{"loggedIn": true, "authMethod": "oauth_token"}', 0, "logged_in"),
+        ('{"loggedIn": false, "authMethod": "none"}', 1, "not_logged_in"),
+        ("error: unknown option '--json'", 1, "unknown"),
+        ('["not", "an", "object"]', 0, "unknown"),
+        ('{"authMethod": "none"}', 0, "unknown"),
+    ],
+)
+def test_claude_cli_login_status_reads_auth_status_json(
+    tmp_path, stdout, exit_code, expected
+):
+    cli, record = _stub_cli(tmp_path, stdout, exit_code)
+    assert _real_claude_cli_login_status(cli, env=dict(os.environ)) == expected
+    assert record.read_text().split() == ["auth", "status", "--json"]
+
+
+def test_claude_cli_login_status_missing_binary(tmp_path):
+    missing = str(tmp_path / "no-such-claude")
+    assert _real_claude_cli_login_status(missing) == "cli_missing"
 
 
 @pytest.mark.parametrize(

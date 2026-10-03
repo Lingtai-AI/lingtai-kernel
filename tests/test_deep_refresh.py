@@ -693,6 +693,36 @@ def test_refresh_logs_env_resolve_warning(mock_llm_service, tmp_path, monkeypatc
     )
 
 
+@patch("lingtai.agent.LLMService")
+def test_refresh_claude_code_unset_token_env_is_not_a_warning(
+    mock_llm_service, tmp_path, monkeypatch
+):
+    """claude-code's setup-token is optional: an unset ``api_key_env`` falls
+    through to the env default / local login, so refresh neither warns nor
+    passes a key."""
+    init = _make_init()
+    init["manifest"]["llm"] = {
+        "provider": "claude-code",
+        "api_key": None,
+        "api_key_env": "CLAUDE_CODE_OAUTH_TOKEN",
+    }
+    agent = _make_agent(tmp_path, init)
+    logged = []
+    monkeypatch.setattr(
+        agent, "_log", lambda *args, **kwargs: logged.append((args, kwargs))
+    )
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    mock_llm_service.reset_mock()
+
+    agent._setup_from_init()
+
+    assert not any(args and args[0] == "env_resolve_warning" for args, _ in logged)
+    kwargs = mock_llm_service.call_args.kwargs
+    assert kwargs["provider"] == "claude-code"
+    assert kwargs["model"] == ""
+    assert kwargs["api_key"] is None
+
+
 def test_live_refresh_rebuilds_service_from_system_context_window(tmp_path, monkeypatch):
     from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
 

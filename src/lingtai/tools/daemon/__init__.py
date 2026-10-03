@@ -594,29 +594,21 @@ def _parent_host_tool_floor() -> frozenset[str]:
     return frozenset({"shell"})
 
 
-# Env vars that override Claude Code's normal first-party OAuth credentials.
-# LingTai loads ``.env`` from ``~/.lingtai-tui/`` early, so auth intended for
-# another LLM adapter can leak into spawned ``claude`` subprocesses.
-# ``ANTHROPIC_*`` keys force API billing (GH #107); a stale
-# ``CLAUDE_CODE_OAUTH_TOKEN`` can also beat a refreshed
-# ``~/.claude/.credentials.json`` and surface as a false weekly-limit error
-# (GH Lingtai-AI/lingtai#189). Strip these for Claude Code subprocesses
-# only: print-mode Claude (claude-p/claude-code) and interactive Claude
-# (claude/claude-interactive). Other backends (codex, lingtai, opencode,
+# Daemon Claude CLI backends — print-mode Claude (claude-p/claude-code) and
+# interactive Claude (claude/claude-interactive) — follow the SAME auth order as
+# the claude-code LLM adapter through the one shared policy in
+# ``lingtai.llm.claude_code.auth`` (never a second copy here): a setup-token
+# (the parent's resolved claude-code ``api_key_env``, else
+# ``CLAUDE_CODE_OAUTH_TOKEN``) in the agent's private ``CLAUDE_CONFIG_DIR`` with
+# ``--setting-sources user``; else the CLI's local login with
+# ``--setting-sources ""``; else a failed run carrying the shared guidance.
+# Every mode strips API-key billing (GH #107), a redirected
+# ``ANTHROPIC_BASE_URL``, the cloud-provider ``CLAUDE_CODE_USE_*`` switches, and
+# any inherited ``CLAUDE_CODE_OAUTH_TOKEN`` (a stale one used to beat a refreshed
+# login, GH Lingtai-AI/lingtai#189). Other backends (codex, lingtai, opencode,
 # mimocode, qwen-code, oh-my-pi, cursor, kimicode) are unaffected.
-_CLAUDE_CODE_STRIP_ENV = (
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-)
-
-
-def _claude_code_env() -> dict[str, str]:
-    """Return os.environ minus auth vars that override Claude Code's OAuth."""
-    env = os.environ.copy()
-    for key in _CLAUDE_CODE_STRIP_ENV:
-        env.pop(key, None)
-    return env
+_CLAUDE_CLI_BACKENDS = frozenset({"claude", "claude-interactive", "claude-p", "claude-code"})
+_CLAUDE_CLI_AUTH_LABEL = "claude daemon backend"
 
 
 def _normalize_claude_usage(usage: dict | None) -> dict | None:
@@ -3057,6 +3049,15 @@ class DaemonManager:
         """
         provider_key = str(provider).lower()
         bucket = dict(base_defaults or {})
+        if provider_key == "claude-code":
+            # Same private per-agent CLAUDE_CONFIG_DIR as the parent agent's
+            # claude-code brain (an implicit parent preset already carries it).
+            workdir = getattr(getattr(self, "_workdir", None), "path", None)
+            if workdir is not None:
+                from lingtai.llm.claude_code.auth import agent_config_anchor
+                bucket.setdefault(
+                    "claude_code_config_anchor", agent_config_anchor(workdir)
+                )
         if provider_key == "codex":
             # Daemon traffic must use the daemon run identity so it gets its own
             # cache slot, not the parent agent's anchor.
@@ -3450,7 +3451,7 @@ class DaemonManager:
             context_window = effective_llm.get("context_window")
         return {
             "provider": effective_llm["provider"],
-            "model": effective_llm["model"],
+            "model": effective_llm.get("model") or "",
             "api_key_env": api_key_env,
             "base_url": effective_llm.get("base_url"),
             "context_window": context_window,
@@ -3545,6 +3546,15 @@ class DaemonManager:
         resolved_key = resolve_env(
             effective_llm.get("api_key"), effective_llm.get("api_key_env")
         )
+        if (
+            not resolved_key
+            and str(effective_llm.get("provider") or "").lower() == "claude-code"
+        ):
+            # claude-code's process-env fallback (CLAUDE_CODE_OAUTH_TOKEN) is
+            # stripped from the detached supervisor's environment, so resolve
+            # it here and carry it like any other resolved key.
+            from lingtai.llm.claude_code.auth import resolve_setup_token
+            resolved_key = resolve_setup_token(None)
         if isinstance(resolved_key, str):
             runtime_llm["api_key"] = resolved_key
         # The durable manifest always exposes the normalized public key
@@ -3721,7 +3731,8 @@ class DaemonManager:
         from lingtai.kernel.config_resolve import resolve_env
 
         provider = effective_preset_llm["provider"]
-        effective_model = effective_preset_llm["model"]
+        # ``model`` may be omitted for ``claude-code`` (the CLI's own default).
+        effective_model = effective_preset_llm.get("model") or ""
         # Primary key: the preset's direct api_key (resolved from its api_key_env
         # only, never a guessed provider-name slot). For the implicit preset this
         # is the parent's already-resolved effective key. Never logged/persisted.
@@ -4422,15 +4433,109 @@ class DaemonManager:
         finally:
             self._close_task_mcp_clients(mcp_clients)
 
-    def _find_claude_session_id(self, em_id: str) -> str | None:
-        """Search ~/.claude/projects/ for the session JSONL whose customTitle matches em_id.
+    def _claude_cli_child(
+        self,
+        backend_env: dict[str, str] | None = None,
+        *,
+        trusted_workspaces: tuple[Path, ...] = (),
+    ):
+        """Resolve one daemon Claude CLI child's auth via the shared policy.
+
+        Runs where the ``claude`` process is spawned (the detached execution or
+        resume owner). A setup-token arrives there through the one-shot
+        capsule's ``credential_env`` (see ``_claude_cli_credential_env``) and is
+        read from the environment; the private config dir is keyed on the
+        parent agent's anchor, so the agent's claude-code brain and its Claude
+        daemons share one LingTai-owned dir. *trusted_workspaces* (the
+        interactive bridge's own managed worktree only) are recorded as trusted
+        in that private dir. Raises ``ClaudeCodeError`` / ``ClaudeCodeAuthError``
+        with the shared guidance.
+        """
+        from lingtai.llm.claude_code.auth import (
+            ClaudeCodeError,
+            agent_config_anchor,
+            choose_private_config_dir,
+            ensure_private_dir,
+            prepare_claude_child,
+        )
+
+        workdir = Path(self._workdir.path)
+        anchor = agent_config_anchor(workdir)
+
+        def _private_config_dir() -> Path:
+            try:
+                path = choose_private_config_dir(anchor, owner=self)
+                ensure_private_dir(path)
+            except OSError as exc:
+                raise ClaudeCodeError(
+                    f"{_CLAUDE_CLI_AUTH_LABEL} could not create its private "
+                    f"config dir: {exc}"
+                ) from exc
+            return path
+
+        return prepare_claude_child(
+            explicit_token=None,
+            private_config_dir=_private_config_dir,
+            cli_path="claude",
+            probe_cwd=str(workdir),
+            overlay=backend_env,
+            login_cache=None,
+            label=_CLAUDE_CLI_AUTH_LABEL,
+            trusted_workspaces=trusted_workspaces,
+        )
+
+    def _claude_interactive_child(self, run_dir, backend_env=None):
+        """Shared auth for the interactive bridge, trusting only its workspace.
+
+        In setup-token mode the fresh private config would otherwise open the
+        first-run theme picker and the workspace trust dialog; the bridge's
+        own LingTai-managed worktree (the one path it already auto-trusts) is
+        recorded as trusted there. Local-login mode writes nothing.
+        """
+        from .claude_interactive import managed_worktree_path
+
+        workspace = managed_worktree_path(
+            run_dir.run_id, {**os.environ, **(backend_env or {})}
+        )
+        return self._claude_cli_child(
+            backend_env, trusted_workspaces=(workspace,),
+        )
+
+    def _claude_cli_credential_env(self, backend: str) -> dict[str, str]:
+        """The setup-token a detached Claude CLI child should receive.
+
+        Resolved in the parent, where the preset and process env live: the
+        parent's own claude-code credential (its resolved ``api_key_env``) wins,
+        else ``CLAUDE_CODE_OAUTH_TOKEN``. It travels only in the capsule's
+        ``credential_env`` (runtime-redacted by the execution child, never on
+        argv or in durable state). Empty for every other backend.
+        """
+        if backend not in _CLAUDE_CLI_BACKENDS:
+            return {}
+        from lingtai.llm.claude_code.auth import resolve_setup_token
+        from lingtai.kernel.preset_connectivity import CLAUDE_CODE_OAUTH_TOKEN_ENV
+
+        explicit = None
+        service = getattr(getattr(self, "_runtime", None), "service", None)
+        if str(getattr(service, "provider", "") or "").lower() == "claude-code":
+            key = getattr(service, "api_key", None)
+            explicit = key if isinstance(key, str) else None
+        token = resolve_setup_token(explicit)
+        return {CLAUDE_CODE_OAUTH_TOKEN_ENV: token} if token else {}
+
+    def _find_claude_session_id(
+        self, em_id: str, config_dir: Path | None = None,
+    ) -> str | None:
+        """Search ``<config_dir>/projects/`` for the session JSONL titled em_id.
 
         Claude Code stores sessions as JSONL files under
-        ``~/.claude/projects/<project-hash>/``. The first line of each session
-        file is a JSON object with ``type: "custom-title"`` containing the
-        ``customTitle`` and ``sessionId``.
+        ``<CLAUDE_CONFIG_DIR>/projects/<project-hash>/`` (``~/.claude`` when
+        unset). The first line of each session file is a JSON object with
+        ``type: "custom-title"`` containing the ``customTitle`` and
+        ``sessionId``.
         """
-        projects_dir = Path.home() / ".claude" / "projects"
+        base = Path(config_dir) if config_dir is not None else Path.home() / ".claude"
+        projects_dir = base / "projects"
         if not projects_dir.is_dir():
             return None
         for jsonl_path in projects_dir.rglob("*.jsonl"):
@@ -4492,6 +4597,16 @@ class DaemonManager:
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
+        # Shared claude-code auth order (setup-token in the agent's private
+        # config dir, else the local login, else the shared guidance). The
+        # caller-supplied ``backend_options.env`` overlay is applied last so a
+        # profile selector such as CLAUDE_CONFIG_DIR wins; it is an explicit
+        # operator choice, so it can also re-introduce a stripped name.
+        try:
+            claude_child = self._claude_cli_child(backend_env)
+        except Exception as e:
+            run_dir.mark_failed(e)
+            raise
         # Required infrastructure flags come first; free-form
         # backend_options sit between them and the task prompt so the
         # task itself stays the trailing positional argument that the
@@ -4503,23 +4618,15 @@ class DaemonManager:
             "--output-format", "stream-json",
             "--verbose",
             "--name", em_id,
+            *claude_child.setting_sources_argv,
         ]
         if backend_argv:
             cmd.extend(backend_argv)
         cmd.append(task)
         self._log("daemon_claude_code_start", em_id=em_id, cmd=" ".join(cmd))
-
-        spawn_env = _claude_code_env()
-        if len(spawn_env) != len(os.environ):
-            self._log("daemon_claude_code_env_stripped", em_id=em_id,
-                      stripped=[k for k in _CLAUDE_CODE_STRIP_ENV if k in os.environ])
-        # The caller-supplied ``backend_options.env`` overlay is applied last so
-        # a profile selector such as CLAUDE_CONFIG_DIR wins over the inherited
-        # environment. It is an explicit operator choice, so it can also
-        # re-introduce a name the strip list removed; the strip list defends
-        # against accidental inheritance, not against a deliberate override.
-        if backend_env:
-            spawn_env.update(backend_env)
+        # Names and the auth mode only — never a value.
+        self._log("daemon_claude_code_auth", em_id=em_id, mode=claude_child.mode)
+        spawn_env = claude_child.env
 
         command = DaemonProcessCommand(
             tuple(cmd), self._workdir.path, tuple(spawn_env.items()),
@@ -4739,7 +4846,7 @@ class DaemonManager:
         # possible if Claude Code changes its stream format), fall back to
         # the legacy JSONL scan so daemon(ask) still works.
         if not session_id_captured:
-            session_id = self._find_claude_session_id(em_id)
+            session_id = self._find_claude_session_id(em_id, claude_child.config_dir)
             if session_id:
                 _store_session_id(session_id)
 
@@ -4793,9 +4900,11 @@ class DaemonManager:
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
-        interactive_env = _claude_code_env()
-        if backend_env:
-            interactive_env.update(backend_env)
+        try:
+            claude_child = self._claude_interactive_child(run_dir, backend_env)
+        except Exception as e:
+            run_dir.mark_failed(e)
+            raise
         try:
             result = run_claude_interactive(
                 em_id=em_id,
@@ -4804,8 +4913,10 @@ class DaemonManager:
                 task=task,
                 cancel_event=cancel_event,
                 timeout_event=timeout_event,
-                backend_argv=backend_argv,
-                env=interactive_env,
+                backend_argv=[
+                    *claude_child.setting_sources_argv, *(backend_argv or []),
+                ],
+                env=claude_child.env,
                 log_callback=self._log,
                 terminal_port=self._interactive_terminal_port,
             )
@@ -5489,7 +5600,7 @@ class DaemonManager:
             effective_llm = (
                 resolved["llm"] if resolved else self._implicit_parent_preset_llm()
             )
-            effective_model = effective_llm["model"]
+            effective_model = effective_llm.get("model") or ""
 
             # Build tool surface and system prompt up front so the run_dir
             # records the prompt verbatim before any LLM call. Validation
@@ -5998,7 +6109,12 @@ class DaemonManager:
                     "task": cli_task,
                     "mcp": list(mcp_regs),
                     "backend_argv": list(backend_argv),
-                    "credential_env": selected_credential_environment(backend),
+                    "credential_env": {
+                        **selected_credential_environment(backend),
+                        # Claude family: the setup-token (if any), resolved
+                        # here where the preset and process env live.
+                        **self._claude_cli_credential_env(backend),
+                    },
                 }
                 # The reserved ``backend_options.env`` overlay travels in the
                 # one-shot capsule only: durable state redacts every ``env``
@@ -6440,7 +6556,10 @@ class DaemonManager:
                 generation=claim["generation"], capsule={
                     "message": message,
                     "claim_nonce": claim["launch_nonce"],
-                    "credential_env": selected_credential_environment(backend),
+                    "credential_env": {
+                        **selected_credential_environment(backend),
+                        **self._claude_cli_credential_env(backend),
+                    },
                 },
             )
         except Exception as exc:
@@ -6550,6 +6669,7 @@ class DaemonManager:
         monitor.start()
         try:
             try:
+                claude_child = self._claude_interactive_child(run_dir)
                 result = run_claude_interactive(
                     em_id=em_id,
                     run_dir=run_dir,
@@ -6558,7 +6678,8 @@ class DaemonManager:
                     cancel_event=ask_cancel,
                     timeout_event=ask_timeout,
                     resume_session_id=session_id,
-                    env=_claude_code_env(),
+                    backend_argv=claude_child.setting_sources_argv,
+                    env=claude_child.env,
                     log_callback=self._log,
                     terminal_port=self._interactive_terminal_port,
                 )
@@ -6621,6 +6742,14 @@ class DaemonManager:
                                    f"daemon(action='check', id='{em_id}')"}
             entry["ask_in_flight"] = True
 
+        # Same auth decision as the initial run (same token source and the
+        # agent's private config dir, where the resumed session lives).
+        try:
+            claude_child = self._claude_cli_child()
+        except Exception as e:
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
+            return {"status": "error", "message": str(e)}
         cmd = [
             "claude",
             "--resume", session_id,
@@ -6628,14 +6757,16 @@ class DaemonManager:
             "--dangerously-skip-permissions",
             "--output-format", "stream-json",
             "--verbose",
+            *claude_child.setting_sources_argv,
             message,
         ]
         self._log("daemon_claude_code_ask", em_id=em_id,
-                  session_id=session_id, message_length=len(message))
+                  session_id=session_id, message_length=len(message),
+                  auth_mode=claude_child.mode)
 
         command = DaemonProcessCommand(
             tuple(cmd), self._workdir.path,
-            tuple(_claude_code_env().items()),
+            tuple(claude_child.env.items()),
         )
         try:
             handle = self._process_port.spawn(command, group_id=None)

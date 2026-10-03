@@ -119,6 +119,12 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
 # (the resolved ``init.json`` path).
 _CODEX_ANCHOR_PROVIDERS = ("codex",)
 
+# ``claude-code`` gets the same per-agent anchor as ``claude_code_config_anchor``:
+# the adapter keys its private setup-token ``CLAUDE_CONFIG_DIR`` on it so the
+# directory is stable for the agent's life. Runtime-derived only — it is not a
+# manifest pass-through key, so a config cannot point the CLI at another dir.
+_CLAUDE_CODE_ANCHOR_PROVIDERS = ("claude-code",)
+
 
 def build_provider_defaults_from_manifest_llm(
     llm: dict,
@@ -145,6 +151,11 @@ def build_provider_defaults_from_manifest_llm(
     and clear (same agent path, same molt_count) never rotate them; a molt advances
     them. An explicit ``codex_session_anchor`` on the manifest ``llm`` block still
     wins (internal override / testing escape hatch).
+
+    For ``claude-code`` the same resolved ``init.json`` path is injected as
+    ``claude_code_config_anchor`` (always runtime-derived, never read from the
+    manifest): the adapter keys its private setup-token ``CLAUDE_CONFIG_DIR``
+    on it so that directory is stable per agent.
     """
     provider_key = llm["provider"].lower()
     per_provider: dict = {}
@@ -169,6 +180,10 @@ def build_provider_defaults_from_manifest_llm(
         per_provider.setdefault(
             "codex_session_anchor",
             str((working_dir / "init.json").resolve()),
+        )
+    if provider_key in _CLAUDE_CODE_ANCHOR_PROVIDERS and working_dir is not None:
+        per_provider["claude_code_config_anchor"] = str(
+            (working_dir / "init.json").resolve()
         )
 
     return {provider_key: per_provider} if per_provider else None

@@ -159,9 +159,10 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
    `none|minimal|low|medium|high|xhigh|max` for every provider family
    (`openai`, `anthropic`, `codex`, `claude-code`); any other value fails
    validation rather than being normalized silently. Omission hydrates the
-   `default` sentinel for `openai` (no reasoning field is sent) and `codex`
-   (the adapter-owned explicit `xhigh`), and the existing `high` runtime
-   default for `anthropic` and `claude-code`. `manifest.llm.service_tier`
+   `default` sentinel for `openai` (no reasoning field is sent), `codex`
+   (the adapter-owned explicit `xhigh`), and `claude-code` (no `--effort`
+   flag, so Claude Code's own default applies), and the existing `high`
+   runtime default for `anthropic`. `manifest.llm.service_tier`
    accepts `fast` (sent as `priority`) or the standard `auto`, `default`,
    `flex`, `priority`; any other value fails validation. A non-`auto`
    `manifest.llm.wire_api` is valid only for provider `openai` and must be
@@ -194,6 +195,22 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
     `inherit`, or `whisper` are never rejected. The lingtai-layer preset loader
     (`agent.load_preset`) applies the same rejection and standard-parameter
     rules to presets.
+13. `manifest.llm.model` is a required string for `openai`, `anthropic`, and
+    `codex`. For the CLI-backed `claude-code` provider
+    (`init_schema.MODEL_OPTIONAL_LLM_PROVIDERS`) it may be omitted, `null`, or
+    empty — the adapter then sends no `--model` flag and Claude Code's own
+    default model applies — and must still be a string when set. The kernel
+    preset loader (`kernel/presets.py`) applies the same rule to presets, and
+    boot/refresh/daemon construction read an absent model as empty rather than
+    failing.
+14. `manifest.llm.api_key_env` names a required credential for `openai`,
+    `anthropic`, and `codex`: validation requires an `env_file` when it is set
+    without an inline `api_key`, and boot hard-fails when it resolves empty. For
+    `claude-code` (`init_schema.OPTIONAL_CREDENTIAL_LLM_PROVIDERS`) it names an
+    optional `claude setup-token` token: no `env_file` is required, a
+    declared-but-unset or empty-named variable neither fails boot nor warns on
+    refresh, and the adapter falls back to the process env
+    `CLAUDE_CODE_OAUTH_TOKEN` and then to the local `claude` CLI login.
 
 ## Contract tests
 
@@ -216,9 +233,11 @@ dismissal/repeat semantics for a capped finding.
 `tests/test_agent_config_hydration.py`, and
 `tests/test_preset_materialization.py` prove removed-provider rejection
 (LLM and capability routes), the standard `thinking`/`service_tier`/`wire_api`
-values and scopes, legacy-ignored keys, `disable` element typing, and the
-distinct `openai`/`codex` omission defaults through real config and session
-materialization.
+values and scopes, legacy-ignored keys, `disable` element typing, the
+distinct `openai`/`codex`/`claude-code` omission defaults through real config
+and session materialization, and the `claude-code`-only optional
+`manifest.llm.model` and optional `api_key_env` credential (including a boot
+with the variable declared but unset, in `tests/test_claude_code_adapter.py`).
 
 ## Maintenance
 

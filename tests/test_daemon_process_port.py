@@ -416,6 +416,7 @@ def test_claude_print_initial_and_resume_use_injected_port(tmp_path, monkeypatch
             return True
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-reach-claude")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     agent = make_daemon_agent(tmp_path)
     manager = agent.get_capability("daemon")
     port = ClaudePort()
@@ -442,15 +443,17 @@ def test_claude_print_initial_and_resume_use_injected_port(tmp_path, monkeypatch
 
     initial_command, initial_group = port.commands[0]
     ask_command, ask_group = port.commands[1]
+    # No setup-token in this env: the shared claude-code auth policy runs the
+    # CLI on its local login without user/project/local settings files.
     assert initial_command.argv == (
         "claude", "--print", "--dangerously-skip-permissions",
         "--output-format", "stream-json", "--verbose", "--name", "em-claude",
-        "--model", "opus", "initial task",
+        "--setting-sources", "", "--model", "opus", "initial task",
     )
     assert ask_command.argv == (
         "claude", "--resume", "claude-session", "--print",
         "--dangerously-skip-permissions", "--output-format", "stream-json",
-        "--verbose", "follow up",
+        "--verbose", "--setting-sources", "", "follow up",
     )
     assert initial_command.cwd == agent._working_dir
     assert ask_command.cwd == agent._working_dir

@@ -502,7 +502,14 @@ complete, not to pair with a governed contract.
 - `conftest.py` — the only shared fixture module. It exposes the
   `make_agent_dir` factory fixture and the autouse hermeticity fixtures that
   stop ambient operator environment (for example
-  `LINGTAI_CACHE_MISS_BUDGET`) from leaking into assertions.
+  `LINGTAI_CACHE_MISS_BUDGET`) from leaking into assertions; its
+  `_isolate_claude_cli_auth_probe` guard answers the one
+  `preset_connectivity.claude_cli_login_status` seam with "unknown" so no test
+  ever asks the developer's real `claude` CLI (`claude auth status`) for its
+  login state, and — when a real `claude` is installed — fails the test
+  loudly if anything would exec it (a recording `claude` PATH shim from the
+  session-scoped `_claude_exec_tripwire_dir`, inherited by child processes,
+  plus a `subprocess.Popen._execute_child` check for absolute paths).
 - `_*.py` helper modules (20) — the suite's own test infrastructure, imported
   rather than collected. Three families:
   - **Builders/fixtures:** `_agent_dir_helpers.py`, `_agent_presence_helpers.py`,

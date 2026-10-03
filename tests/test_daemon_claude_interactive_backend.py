@@ -558,3 +558,178 @@ subprocess.run(
     )
     events = run_dir.events_path.read_text(encoding="utf-8")
     assert "auto-selected workspace trust" in events
+
+
+def test_first_run_theme_picker_counts_as_an_onboarding_prompt():
+    """A fresh private CLAUDE_CONFIG_DIR (setup-token mode) opens Claude Code's
+    first-run theme picker; the bridge reports it rather than waiting silently."""
+    from lingtai.tools.daemon import claude_interactive as bridge
+
+    frame = (
+        b"Welcome to Claude Code\x1b[2CLet's get started.\x1b[1B"
+        b"Choose\x1b[1Cthe\x1b[1Ctext\x1b[1Cstyle that looks best with your terminal"
+    )
+    text, normalized = bridge.ClaudeInteractiveBridge._normalized_prompt_text(None, frame)
+    assert bridge.ClaudeInteractiveBridge._contains_marker(
+        text, normalized, bridge._AUTH_OR_ONBOARDING_PROMPTS
+    )
+
+
+# ---------------------------------------------------------------------------
+# Workspace-trust dialog answer: select "Yes … trust" by label, never a
+# hardcoded key, and press nothing when it cannot be found.
+# ---------------------------------------------------------------------------
+
+# Captured from a real Claude Code 2.1.285 PTY (scratch config, no request):
+# un-numbered options, the "❯" cursor on "No, exit", which is listed FIRST.
+_TRUST_DIALOG_2_1_285 = (
+    b"\x1b[2GQuick\x1b[8Gsafety\x1b[15Gcheck:\x1b[22GIs\x1b[25Gthis\x1b[30Ga"
+    b"\x1b[32Gproject\x1b[40Gyou\x1b[44Gcreated\x1b[52Gor\x1b[55Gone\x1b[59Gyou"
+    b"\x1b[63Gtrust?\x1b[70G(Like\x1b[76Gyour\r\r\n\x1b[2Gown\x1b[6Gcode,\x1b[12Ga"
+    b"\x1b[14Gwell-known\x1b[25Gopen\x1b[30Gsource\x1b[37Gproject,\x1b[46Gor"
+    b"\x1b[49Gwork\x1b[54Gfrom\x1b[59Gyour\x1b[64Gteam).\x1b[71GIf\x1b[74Gnot,\r\r\n"
+    b"\x1b[2Gtake\x1b[7Ga\x1b[9Gmoment\x1b[16Gto\x1b[19Greview\x1b[26Gwhat's\x1b[33Gin"
+    b"\x1b[36Gthis\x1b[41Gfolder\x1b[48Gfirst.\r\r\n\r\r\n\x1b[2GClaude\x1b[9GCode'll"
+    b"\x1b[17Gbe\x1b[20Gable\x1b[25Gto\x1b[28Gread,\x1b[34Gedit,\x1b[40Gand"
+    b"\x1b[44Gexecute\x1b[52Gfiles\x1b[58Ghere.\r\r\n\r\r\n\x1b[2G\x1b[38;5;246m"
+    b"Security\x1b[11Gguide\x1b[39m\r\r\n\r\r\n\x1b[2G\x1b[38;5;153m\xe2\x9d\xaf"
+    b"\x1b[4GNo,\x1b[8Gexit\x1b[39m\r\r\n\x1b[4GYes,\x1b[9GI\x1b[11Gtrust\x1b[17Gthis"
+    b"\x1b[22Gfolder\r\r\n\r\r\n\x1b[2G\x1b[38;5;246mEnter\x1b[8Gto\x1b[11Gconfirm"
+    b"\x1b[19G\xc2\xb7\x1b[21GEsc\x1b[25Gto\x1b[28Gcancel\x1b[39m\r\r\n"
+).decode("utf-8")
+
+
+def test_trust_answer_for_2_1_285_moves_down_to_yes_below_no_exit():
+    from lingtai.tools.daemon.claude_interactive import (
+        parse_trust_dialog_options,
+        trust_dialog_answer,
+        trust_dialog_is_complete,
+    )
+
+    options = parse_trust_dialog_options(_TRUST_DIALOG_2_1_285)
+    assert [(o.label, o.highlighted, o.number) for o in options] == [
+        ("No, exit", True, None),
+        ("Yes, I trust this folder", False, None),
+    ]
+    assert trust_dialog_is_complete(_TRUST_DIALOG_2_1_285)
+    # One Down from the highlighted "No, exit" — never "1", and no Enter yet.
+    assert trust_dialog_answer(_TRUST_DIALOG_2_1_285) == b"\x1b[B"
+    # A repaint re-renders the dialog; only the last render counts.
+    assert trust_dialog_answer(_TRUST_DIALOG_2_1_285 * 2) == b"\x1b[B"
+    # Once a later render shows the cursor on "Yes … trust", confirm.
+    moved = _TRUST_DIALOG_2_1_285.replace(
+        "\u276f\x1b[4GNo,", "\x1b[4GNo,"
+    ).replace("\x1b[4GYes,", "\u276f\x1b[4GYes,")
+    assert moved != _TRUST_DIALOG_2_1_285
+    assert trust_dialog_answer(moved) == b"\r"
+
+
+@pytest.mark.parametrize(
+    "frame, expected",
+    [
+        # Older ordering: highlighted, numbered "Yes" first -> confirm in place.
+        ("Do you trust the files in this folder?\n"
+         "❯ 1. Yes, I trust this folder\n  2. No, exit\n", b"\r"),
+        # Numbered without a rendered cursor -> press Yes's own number.
+        ("Quick safety check: trust?\n1. Yes, I trust this folder\n2. No, exit\n", b"1\r"),
+        ("Quick safety check: trust?\n1. No, exit\n2. Yes, I trust this folder\n", b"2\r"),
+        # Cursor below Yes -> move up (confirmed on a later settled render).
+        ("Quick safety check: trust?\n  Yes, I trust this folder\n❯ No, exit\n", b"\x1b[A"),
+    ],
+    ids=["yes-first-highlighted", "numbered-yes-first", "numbered-yes-second", "cursor-below"],
+)
+def test_trust_answer_old_orderings_select_yes_by_label(frame, expected):
+    from lingtai.tools.daemon.claude_interactive import trust_dialog_answer
+
+    assert trust_dialog_answer(frame) == expected
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        "Quick safety check: trust?\n❯ No, exit\n  Yes, proceed\nEnter to confirm · Esc to cancel\n",
+        "Quick safety check: trust?\n❯ No, exit\nEnter to confirm · Esc to cancel\n",
+        # "Yes … trust" exists but its position cannot be reached unambiguously.
+        "Quick safety check: trust?\nNo, exit\nYes, I trust this folder\nEnter to confirm\n",
+    ],
+    ids=["yes-without-trust", "only-no", "no-cursor-no-number"],
+)
+def test_trust_answer_presses_nothing_without_a_selectable_yes_trust(frame):
+    from lingtai.tools.daemon.claude_interactive import (
+        trust_dialog_answer,
+        trust_dialog_is_complete,
+    )
+
+    assert trust_dialog_answer(frame) is None
+    assert trust_dialog_is_complete(frame)
+
+
+class _RecordingTerminal:
+    def __init__(self):
+        self.writes = []
+
+    def write(self, handle, data):
+        self.writes.append(data)
+
+
+def _managed_bridge(tmp_path):
+    terminal = _RecordingTerminal()
+    bridge = ClaudeInteractiveBridge(
+        em_id="em-1", run_dir=_make_run_dir(tmp_path), working_dir=tmp_path,
+        task="interactive task", cancel_event=threading.Event(),
+        env={"LINGTAI_CLAUDE_MANAGED_ROOT": str(tmp_path / "managed")},
+        terminal_port=terminal,
+    )
+    bridge._auto_trust_workspace = True  # set by _prepare_managed_workspace
+    return bridge, terminal
+
+
+def _settle(bridge):
+    from lingtai.tools.daemon import claude_interactive as bridge_mod
+
+    bridge._trust_output_at -= bridge_mod._TRUST_SETTLE_S + 0.1
+
+
+def test_bridge_waits_for_a_settled_dialog_then_selects_yes_in_the_managed_workspace(tmp_path):
+    bridge, terminal = _managed_bridge(tmp_path)
+    handle = object()
+    question, options = _TRUST_DIALOG_2_1_285.split("\x1b[2G\x1b[38;5;246mSecurity")
+    bridge._handle_auth_or_trust_prompt(handle, question.encode("utf-8"))
+    _settle(bridge)
+    bridge._advance_managed_trust(handle)
+    assert terminal.writes == [] and bridge._prompt_warning is None  # not rendered yet
+    bridge._handle_auth_or_trust_prompt(
+        handle, ("\x1b[2G\x1b[38;5;246mSecurity" + options).encode("utf-8")
+    )
+    bridge._advance_managed_trust(handle)
+    assert terminal.writes == []  # not settled yet: the TUI may still reset
+    _settle(bridge)
+    bridge._advance_managed_trust(handle)
+    assert terminal.writes == [b"\x1b[B"]  # move only
+    # The TUI resets the selection to "No, exit" (seen on 2.1.285): move again.
+    bridge._handle_auth_or_trust_prompt(handle, "❯ No, exit\n  Yes, I trust this folder\n".encode())
+    _settle(bridge)
+    bridge._advance_managed_trust(handle)
+    assert terminal.writes == [b"\x1b[B", b"\x1b[B"]
+    # A settled render with the cursor on "Yes … trust" -> confirm.
+    bridge._handle_auth_or_trust_prompt(handle, "  No, exit\n❯ Yes, I trust this folder\n".encode())
+    _settle(bridge)
+    bridge._advance_managed_trust(handle)
+    assert terminal.writes == [b"\x1b[B", b"\x1b[B", b"\r"]
+    assert bridge._trust_prompt_answered is True
+    # A repainted frame after the answer is ignored.
+    bridge._handle_auth_or_trust_prompt(handle, _TRUST_DIALOG_2_1_285.encode("utf-8"))
+    _settle(bridge)
+    bridge._advance_managed_trust(handle)
+    assert terminal.writes == [b"\x1b[B", b"\x1b[B", b"\r"]
+
+
+def test_bridge_fails_clearly_and_presses_nothing_without_yes_trust(tmp_path):
+    bridge, terminal = _managed_bridge(tmp_path)
+    frame = "Quick safety check: do you trust?\n❯ No, exit\nEnter to confirm · Esc to cancel\n"
+    bridge._handle_auth_or_trust_prompt(object(), frame.encode("utf-8"))
+    _settle(bridge)
+    bridge._advance_managed_trust(object())
+    assert terminal.writes == []
+    assert "No, exit" in bridge._prompt_warning
+    assert bridge._trust_prompt_answered is False

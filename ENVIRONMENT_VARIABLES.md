@@ -3,8 +3,8 @@ name: environment-variable-registry
 description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
-version: 1.11.0
-last_changed_at: "2026-09-29"
+version: 1.12.0
+last_changed_at: "2026-09-30"
 related_files:
 - ANATOMY.md
 - CONTRACT.md
@@ -29,6 +29,7 @@ related_files:
 - src/lingtai/kernel/refresh_watcher/ANATOMY.md
 - src/lingtai/kernel/session_stats/ANATOMY.md
 - src/lingtai/kernel/session_stats/CONTRACT.md
+- src/lingtai/llm/ANATOMY.md
 - src/lingtai/llm/openai/ANATOMY.md
 - src/lingtai/llm/anthropic/ANATOMY.md
 - src/lingtai/mcp_servers/ANATOMY.md
@@ -113,6 +114,7 @@ reports, prompts, or this registry.
 
 | Name | Default | Accepted values | Scope | Read/reload timing | Invalid behavior | Owner | Security |
 |---|---|---|---|---|---|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | unset | The long-lived Claude Code OAuth token printed by `claude setup-token`; blank counts as unset | `claude-code` LLM provider credential: the default and recommended `manifest.llm.api_key_env`, and the process-env fallback when a preset names none. The daemon `claude`/`claude-p`/`claude-code` CLI backends follow the same order (the parent resolves it and hands it to the detached child through the credential capsule) | An `api_key_env` reference resolves at boot/refresh and never fails boot when unset (the credential is optional); the env fallback is read on every request; the presets connectivity check reads it per call | Unset → the local `claude` CLI login when `claude auth status` reports one, else a request-time auth error with guidance that goes ASLEEP without AED retries; a token the CLI rejects takes the same terminal path | `src/lingtai/llm/claude_code/auth.py` (shared by `adapter.py` and `tools/daemon`), `src/lingtai/kernel/preset_connectivity.py` | Subscription bearer secret: keep it in the agent's `.env`. LingTai hands it only to the `claude` child, as this one variable beside a private per-agent `CLAUDE_CONFIG_DIR`, never on argv, and never logs it; every child also loses `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_BASE_URL` and the `CLAUDE_CODE_USE_*` cloud-provider switches |
 | `LINGTAI_CLOUD_MAIL_CONFIG` | unset | JSON path; `~` expands; absolute or relative to `LINGTAI_AGENT_DIR` or cwd | Cloud-mail integration | Eagerly read at MCP startup; read-only SHOW reports the active resolved startup snapshot; fully relaunch after change | Missing/unreadable path, invalid JSON/outer shape, or account-construction failure leaves the manager unavailable; operational calls fail closed, SHOW returns the fixed whole-inventory failure, and `manual` remains available | `src/lingtai/mcp_servers/cloud_mail/server.py`, `src/lingtai/mcp_servers/cloud_mail/settings.py` | SHOW fully redacts both the loaded path and opaque accounts marker and never traverses credentials, identities, endpoints, or allowlists |
 | `LINGTAI_IMAP_CONFIG` | unset | JSON path; `~` expands; absolute or relative to launcher-injected `LINGTAI_AGENT_DIR` or cwd | IMAP MCP authority document and its redacted settings inventory | Resolved and loaded once at manager construction; SHOW reads that applied startup snapshot; relaunch the MCP after an owner edit | Missing/unreadable path, invalid JSON, or invalid outer account shape leaves the manager unavailable; settings returns fixed `SETTINGS_UNAVAILABLE` with no rows | `src/lingtai/mcp_servers/imap/server.py`, `src/lingtai/mcp_servers/imap/settings.py` | Owner-only. Paths, account addresses, credential modes, OAuth metadata, and IMAP/SMTP endpoints are fully redacted; SHOW has no mutation API |
 | `LINGTAI_FEISHU_CONFIG` | unset | JSON path; `~` expands; absolute or relative to `LINGTAI_AGENT_DIR` or cwd | Feishu MCP | Eagerly read and applied at MCP startup; restart MCP after change | Missing/unreadable path or invalid JSON leaves the manager unavailable; the current account loader requires the top-level `accounts` list and required account keys but does not otherwise enforce field types or uniqueness | Startup loader: `src/lingtai/mcp_servers/feishu/server.py`; SHOW provider: `src/lingtai/mcp_servers/feishu/settings.py`; owner manual: `src/lingtai/mcp_servers/feishu/SKILL.md` | Keep configuration paths, app secrets, and sender allowlists out of logs and payloads; SHOW redacts all three |
@@ -162,6 +164,12 @@ surface is explicit; do not set test hooks in a production agent environment.
   an inherited process value, so blank/`0` explicitly falls through. Changing
   the threshold or refreshing does not reset since-last-molt counters; only a
   successful molt does.
+- `CLAUDE_CONFIG_DIR` is never an operator setting for the `claude-code` LLM
+  provider: with a setup-token the adapter replaces it for the `claude` child
+  with a private per-agent directory under the system temp dir; without one
+  (local-login mode) an inherited value — the user's Claude profile — passes
+  through unchanged. Daemon Claude backends take it only via
+  `backend_options.env`.
 - Environment values are process input, not authorization grants. Human or
   configuration-owner approval remains required for writes, refreshes, downloads,
   sends, and other consequential actions.

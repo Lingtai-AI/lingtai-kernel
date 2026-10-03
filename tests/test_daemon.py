@@ -4844,43 +4844,102 @@ def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
     assert data.get("preset_name") is None
 
 
-def test_claude_code_env_strips_auth_overrides(monkeypatch):
-    """Spawned claude-code processes must not inherit auth overrides.
+def test_claude_cli_credential_env_follows_the_claude_code_token_order(
+    tmp_path, monkeypatch,
+):
+    """The parent resolves the setup-token for a detached Claude CLI child:
+    its own claude-code credential first, else CLAUDE_CODE_OAUTH_TOKEN; other
+    backends never receive it."""
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
 
-    ANTHROPIC_* force the CLI off the user's Claude Code subscription onto
-    API billing (GH #107); a stale CLAUDE_CODE_OAUTH_TOKEN can override a
-    refreshed credentials.json and look like a false weekly limit (GH #189).
-    """
-    from lingtai.tools.daemon import _claude_code_env, _CLAUDE_CODE_STRIP_ENV
+    assert mgr._claude_cli_credential_env("claude-p") == {}
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-env")
+    for backend in ("claude", "claude-interactive", "claude-p", "claude-code"):
+        assert mgr._claude_cli_credential_env(backend) == {
+            "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-env"
+        }
+    for backend in ("codex", "opencode", "lingtai"):
+        assert mgr._claude_cli_credential_env(backend) == {}
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-leaked")
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "oauth-leaked")
-    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "stale-claude-code-oauth")
-    # A detached execution child may have restored selected parent credentials;
-    # that transport fact must not override the runner's established policy.
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")  # sentinel non-stripped var
-    monkeypatch.setenv("HOME", "/tmp/home")
+    # A claude-code parent's resolved api_key_env (the preset token) wins.
+    agent.service.provider = "claude-code"
+    agent.service.api_key = "sk-ant-oat01-preset"
+    assert mgr._claude_cli_credential_env("claude-p") == {
+        "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-preset"
+    }
+    # A declared-but-unset preset token falls back to the env slot.
+    agent.service.api_key = None
+    assert mgr._claude_cli_credential_env("claude-p") == {
+        "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-env"
+    }
+    # A non-claude-code parent's API key is never mistaken for a Claude token.
+    agent.service.provider = "openai"
+    agent.service.api_key = "sk-openai"
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN")
+    assert mgr._claude_cli_credential_env("claude-p") == {}
 
-    env = _claude_code_env()
 
-    for key in _CLAUDE_CODE_STRIP_ENV:
-        assert key not in env, f"{key} should be stripped from claude-code env"
-    # Non-auth vars must pass through unchanged so claude can still find HOME,
-    # PATH, CLAUDE_CONFIG_DIR, etc.
-    assert env.get("PATH") == "/usr/bin:/bin"
-    assert env.get("HOME") == "/tmp/home"
+def test_detached_claude_code_lingtai_daemon_carries_env_token_fallback(
+    tmp_path, monkeypatch,
+):
+    """The detached supervisor strips token-shaped env, so the claude-code
+    CLAUDE_CODE_OAUTH_TOKEN fallback rides the capsule as the resolved key."""
+    from lingtai.adapters.posix.daemon_supervisor import PosixDaemonSupervisorAdapter
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    run_dir = _make_run_dir(agent, em_id="em-claude-lingtai")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-env-fallback")
+    captured = []
+    monkeypatch.setattr(
+        PosixDaemonSupervisorAdapter,
+        "spawn_detached",
+        lambda _self, request, *, capsule=None, **_kw: captured.append(
+            (request, capsule)
+        ),
+    )
+    monkeypatch.setattr(mgr, "_await_supervisor_startup", lambda _run_dir: None)
+
+    mgr._spawn_detached_lingtai_run(
+        run_dir,
+        task="claude-code lingtai daemon",
+        tools=[],
+        max_turns=1,
+        timeout_s=30,
+        group_id=None,
+        effective_llm={
+            "provider": "claude-code",
+            "model": "",
+            "api_key_env": "CLAUDE_CODE_OAUTH_TOKEN_UNSET_SLOT",
+        },
+        context_token_limit=None,
+        prompt="",
+    )
+
+    request, capsule = captured[0]
+    assert capsule["llm"]["api_key"] == "sk-ant-oat01-env-fallback"
+    manifest_text = Path(request.manifest_path).read_text(encoding="utf-8")
+    assert "sk-ant-oat01-env-fallback" not in manifest_text
 
 
-def test_claude_code_env_noop_when_unset(monkeypatch):
-    """When no Claude auth override vars are set, sanitized env equals os.environ."""
-    import os
-    from lingtai.tools.daemon import _claude_code_env, _CLAUDE_CODE_STRIP_ENV
+def test_claude_code_lingtai_daemon_shares_the_agent_config_anchor(tmp_path):
+    """A claude-code lingtai daemon (explicit preset or implicit parent) keys
+    its private CLAUDE_CONFIG_DIR on the parent agent, like its CLI backends."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    run_dir = _make_run_dir(agent, em_id="em-anchor")
+    anchor = str((agent._working_dir / "init.json").resolve())
 
-    for key in _CLAUDE_CODE_STRIP_ENV:
-        monkeypatch.delenv(key, raising=False)
-
-    env = _claude_code_env()
-    assert env == os.environ
+    assert mgr._daemon_provider_defaults("claude-code", {}, run_dir) == {
+        "claude-code": {"claude_code_config_anchor": anchor}
+    }
+    # An implicit parent bucket's own anchor is kept, not overwritten.
+    assert mgr._daemon_provider_defaults(
+        "claude-code", {"claude_code_config_anchor": "/parent/init.json"}, run_dir
+    ) == {"claude-code": {"claude_code_config_anchor": "/parent/init.json"}}
+    assert mgr._daemon_provider_defaults("openai", {}, run_dir) is None
 
 
 # ---------------------------------------------------------------------------

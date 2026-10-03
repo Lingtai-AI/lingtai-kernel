@@ -548,8 +548,11 @@ def test_claude_code_spawn_env_carries_backend_env_overlay(tmp_path):
     assert group_id == run_dir.group_id
 
 
-def test_claude_code_spawn_env_unchanged_without_overlay(tmp_path):
+def test_claude_code_spawn_env_unchanged_without_overlay(tmp_path, monkeypatch):
     """No `env` overlay leaves the sanitized Claude spawn env untouched."""
+    # No setup-token: the shared policy's local-login mode keeps the inherited
+    # config dir (token mode is covered by the auth-policy tests below).
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")
     port = _OneShotRecordingPort(lines=(
@@ -569,9 +572,9 @@ def test_claude_code_spawn_env_unchanged_without_overlay(tmp_path):
     # Whatever the parent inherited is passed through untouched — the runner
     # adds nothing of its own when no overlay is supplied.
     assert env.get("CLAUDE_CONFIG_DIR") == os.environ.get("CLAUDE_CONFIG_DIR")
-    # The pre-existing credential strip list is unaffected by the env plumbing.
+    # The shared credential strip list is unaffected by the env plumbing.
     for stripped in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-                     "CLAUDE_CODE_OAUTH_TOKEN"):
+                     "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"):
         assert stripped not in env
 
 
@@ -1793,3 +1796,258 @@ def test_deepseek_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
         "deepseek daemon backend does not support daemon(action='ask') yet; "
         "start a new deepseek emanation instead."
     )
+
+
+# ---------------------------------------------------------------------------
+# Daemon Claude backends share the claude-code auth policy
+# (lingtai.llm.claude_code.auth): setup-token in the agent's private
+# CLAUDE_CONFIG_DIR > local login > failed run with the shared guidance.
+# ---------------------------------------------------------------------------
+
+_CLAUDE_REDIRECT_AND_BILLING_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_GATEWAY",
+)
+
+
+@pytest.fixture
+def claude_auth_env(monkeypatch, tmp_path):
+    """Hermetic Claude auth env: every redirect/billing var set, no token, a
+    private temp root under tmp_path, and a pinnable login-probe verdict."""
+    import tempfile
+
+    from lingtai.kernel import preset_connectivity
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/profiles/inherited")
+    for name in _CLAUDE_REDIRECT_AND_BILLING_ENV:
+        monkeypatch.setenv(name, "1" if name.startswith("CLAUDE_CODE_USE_") else "leak")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    probe_calls: list[dict] = []
+    verdict = {"value": preset_connectivity.CLAUDE_LOGIN_LOGGED_IN}
+
+    def fake_status(cli_path="claude", **kwargs):
+        probe_calls.append({"cli_path": cli_path, **kwargs})
+        return verdict["value"]
+
+    monkeypatch.setattr(preset_connectivity, "claude_cli_login_status", fake_status)
+    return {"probe_calls": probe_calls, "verdict": verdict}
+
+
+def _claude_port():
+    return _OneShotRecordingPort(lines=(
+        '{"type":"system","subtype":"init","session_id":"sess-auth"}\n',
+        '{"type":"result","subtype":"success","is_error":false,"result":"done"}\n',
+    ))
+
+
+def _assert_isolated_env(env):
+    for name in _CLAUDE_REDIRECT_AND_BILLING_ENV:
+        assert name not in env, name
+    assert env["HTTPS_PROXY"] == "http://proxy.invalid:3128"
+
+
+def _private_dir_for(agent):
+    import hashlib
+    import tempfile
+
+    anchor = str((agent._working_dir / "init.json").resolve())
+    return str(
+        Path(tempfile.gettempdir()) / "lingtai-claude-code"
+        / hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:16]
+    )
+
+
+def _run_claude_p(mgr, run_dir, **kwargs):
+    return mgr._run_claude_code_emanation(
+        run_dir.handle, run_dir, "Refactor auth.",
+        threading.Event(), threading.Event(), **kwargs,
+    )
+
+
+def test_daemon_claude_setup_token_mode_isolates_env_and_config(
+    tmp_path, monkeypatch, claude_auth_env,
+):
+    """Token mode: exactly the token, the agent's private config dir (shared
+    with the ask/resume), --setting-sources user, nothing on argv or in logs."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-daemon-token")
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    mgr = agent.get_capability("daemon")
+    logged = []
+    monkeypatch.setattr(mgr, "_log", lambda event, **fields: logged.append((event, fields)))
+    mgr._process_port = port = _claude_port()
+    run_dir = make_daemon_run_dir(agent, handle="em-token", backend="claude-p")
+
+    assert _run_claude_p(mgr, run_dir) == "done"
+    entry = {
+        "run_dir": run_dir, "followup_lock": threading.Lock(), "ask_in_flight": False,
+    }
+    mgr._process_port = ask_port = _claude_port()
+    assert mgr._handle_ask_cli("em-token", entry, "follow up")["status"] == "sent"
+    entry["ask_future"].result(timeout=2)
+
+    private_dir = _private_dir_for(agent)
+    for command, _group in (port.commands[0], ask_port.commands[0]):
+        env = dict(command.environment)
+        assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-daemon-token"
+        assert env["CLAUDE_CONFIG_DIR"] == private_dir
+        _assert_isolated_env(env)
+        argv = list(command.argv)
+        assert argv[argv.index("--setting-sources") + 1] == "user"
+        assert "sk-ant-oat01-daemon-token" not in " ".join(argv)
+    assert "sk-ant-oat01-daemon-token" not in json.dumps(logged, default=str)
+    assert ("daemon_claude_code_auth", {"em_id": "em-token", "mode": "setup_token"}) in logged
+    assert claude_auth_env["probe_calls"] == []
+
+
+def test_daemon_claude_local_login_mode_keeps_cli_config(
+    tmp_path, monkeypatch, claude_auth_env,
+):
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    mgr = agent.get_capability("daemon")
+    mgr._process_port = port = _claude_port()
+    run_dir = make_daemon_run_dir(agent, handle="em-login", backend="claude-code")
+
+    assert _run_claude_p(mgr, run_dir) == "done"
+    command, _group = port.commands[0]
+    env = dict(command.environment)
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+    assert env["CLAUDE_CONFIG_DIR"] == "/profiles/inherited"
+    _assert_isolated_env(env)
+    argv = list(command.argv)
+    assert argv[argv.index("--setting-sources") + 1] == ""
+    assert len(claude_auth_env["probe_calls"]) == 1
+    assert "ANTHROPIC_API_KEY" not in claude_auth_env["probe_calls"][0]["env"]
+
+
+def test_daemon_claude_without_token_or_login_fails_with_guidance(
+    tmp_path, monkeypatch, claude_auth_env,
+):
+    from lingtai.kernel import preset_connectivity
+    from lingtai.llm.claude_code.auth import ClaudeCodeAuthError
+
+    claude_auth_env["verdict"]["value"] = preset_connectivity.CLAUDE_LOGIN_NOT_LOGGED_IN
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    mgr = agent.get_capability("daemon")
+    mgr._process_port = port = _claude_port()
+    run_dir = make_daemon_run_dir(agent, handle="em-none", backend="claude-p")
+
+    with pytest.raises(ClaudeCodeAuthError) as excinfo:
+        _run_claude_p(mgr, run_dir)
+    message = str(excinfo.value)
+    for fragment in ("claude setup-token", "CLAUDE_CODE_OAUTH_TOKEN", "claude auth login"):
+        assert fragment in message
+    assert port.commands == []  # the CLI never runs without a credential
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    assert state["state"] == "failed"
+
+    entry = {"run_dir": run_dir, "followup_lock": threading.Lock(), "ask_in_flight": False}
+    run_dir.set_session_id("claude_session_id", "sess-old", overwrite=True)
+    result = mgr._handle_ask_cli("em-none", entry, "follow up")
+    assert result["status"] == "error"
+    assert "claude setup-token" in result["message"]
+    assert entry["ask_in_flight"] is False
+    assert port.commands == []
+
+
+def test_daemon_claude_env_overlay_is_applied_last(tmp_path, monkeypatch, claude_auth_env):
+    """An explicit backend_options.env profile still wins (operator choice)."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-daemon-token")
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    mgr = agent.get_capability("daemon")
+    mgr._process_port = port = _claude_port()
+    run_dir = make_daemon_run_dir(agent, handle="em-overlay", backend="claude-p")
+
+    _run_claude_p(mgr, run_dir, backend_env={"CLAUDE_CONFIG_DIR": "/profiles/chosen"})
+    env = dict(port.commands[0][0].environment)
+    assert env["CLAUDE_CONFIG_DIR"] == "/profiles/chosen"
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-daemon-token"
+
+
+@pytest.mark.parametrize("token", [None, "sk-ant-oat01-daemon-token"], ids=["login", "token"])
+def test_daemon_interactive_claude_shares_the_policy(
+    tmp_path, monkeypatch, claude_auth_env, token,
+):
+    if token:
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", token)
+    monkeypatch.setenv("LINGTAI_CLAUDE_MANAGED_ROOT", str(tmp_path / "managed-claude"))
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    mgr = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(agent, handle="em-interactive", backend="claude")
+    seen = []
+
+    def fake_run_claude_interactive(**kwargs):
+        seen.append(kwargs)
+        from lingtai.tools.daemon.claude_interactive import ClaudeInteractiveResult
+        return ClaudeInteractiveResult(final_text="interactive done")
+
+    monkeypatch.setattr(
+        "lingtai.tools.daemon.run_claude_interactive", fake_run_claude_interactive,
+    )
+    mgr._run_claude_interactive_emanation(
+        "em-interactive", run_dir, "task", threading.Event(), threading.Event(),
+        backend_argv=["--model", "opus"],
+    )
+    env, argv = seen[0]["env"], seen[0]["backend_argv"]
+    _assert_isolated_env(env)
+    workspace = os.path.realpath(
+        tmp_path / "managed-claude" / "runs" / run_dir.run_id / "worktree"
+    )
+    if token:
+        assert env["CLAUDE_CODE_OAUTH_TOKEN"] == token
+        assert env["CLAUDE_CONFIG_DIR"] == _private_dir_for(agent)
+        assert argv[:2] == ["--setting-sources", "user"]
+        # The fresh private config is pre-seeded so the interactive CLI skips
+        # its first-run theme picker, and trusts only the bridge's own
+        # LingTai-managed worktree (0600, private dir only).
+        seeded_path = Path(_private_dir_for(agent)) / ".claude.json"
+        seeded = json.loads(seeded_path.read_text())
+        assert seeded["hasCompletedOnboarding"] is True
+        assert seeded["projects"] == {workspace: {"hasTrustDialogAccepted": True}}
+        assert os.stat(seeded_path).st_mode & 0o777 == 0o600
+    else:
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+        assert argv[:2] == ["--setting-sources", ""]
+        import tempfile
+        assert not (Path(tempfile.gettempdir()) / "lingtai-claude-code").exists()
+    assert argv[2:] == ["--model", "opus"]
+    from lingtai.tools.daemon.claude_interactive import ClaudeInteractiveBridge
+    bridge = ClaudeInteractiveBridge(
+        em_id="em-interactive", run_dir=run_dir, working_dir=agent._working_dir,
+        task="t", cancel_event=threading.Event(), env=env,
+    )
+    assert os.path.realpath(bridge.managed_worktree_path) == workspace
+
+
+def test_emanate_claude_hands_the_setup_token_to_the_credential_capsule(
+    tmp_path, monkeypatch,
+):
+    """The parent resolves the token and it reaches the detached child only
+    through the capsule's credential_env — never the manifest or argv."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-capsule")
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    mgr = agent.get_capability("daemon")
+    records = install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": "claude-p",
+        "tasks": [{"task": "token handoff", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
+
+    record = records[0]
+    assert record["capsule"]["credential_env"] == {
+        "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-capsule",
+    }
+    assert "sk-ant-oat01-capsule" not in json.dumps(record["manifest"])
+    assert "sk-ant-oat01-capsule" not in " ".join(record["capsule"]["backend_argv"])

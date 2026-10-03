@@ -7,8 +7,8 @@ description: >
   thinking, service_tier), how other vendors are reached through the
   OpenAI/Anthropic-compatible families, and which removed provider names now
   fail validation.
-version: 0.2.0
-last_changed_at: "2026-09-29T00:00:00Z"
+version: 0.3.0
+last_changed_at: "2026-09-30T00:00:00Z"
 related_files:
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/service.py
@@ -16,6 +16,8 @@ related_files:
 - src/lingtai/llm/openai/codex_ws.py
 - src/lingtai/llm/anthropic/adapter.py
 - src/lingtai/llm/claude_code/adapter.py
+- src/lingtai/llm/claude_code/auth.py
+- src/lingtai/kernel/preset_connectivity.py
 - src/lingtai/init_schema.py
 - src/lingtai/intrinsic_skills/system-manual/reference/subs-pool/SKILL.md
 - ENVIRONMENT_VARIABLES.md
@@ -45,7 +47,7 @@ LingTai ships exactly four LLM provider families (source of truth:
 | `openai` | `OpenAIAdapter` (`openai/adapter.py`) | REST: Chat Completions (default) or Responses | Any OpenAI-compatible endpoint. `base_url` optional (default official `https://api.openai.com/v1`). `wire_api`: `chat_completions` (default; legacy `auto` means the same) or `responses` (always stateless full-history replay) |
 | `anthropic` | `AnthropicAdapter` (`anthropic/adapter.py`) | REST (Messages API) | Any Anthropic-compatible endpoint. `base_url` optional (default official `https://api.anthropic.com`) |
 | `codex` | `CodexOpenAIAdapter` (`openai/adapter.py`) | REST (default), WebSocket (opt-in) | Official ChatGPT Codex backend; one OAuth account (`codex_auth_path` or default) with token refresh; `store=false` forced; streaming forced. No built-in account pool — see [subs-pool](../subs-pool/SKILL.md) |
-| `claude-code` | `ClaudeCodeAdapter` (`claude_code/adapter.py`) | n/a (local `claude` CLI) | Local Claude Code CLI login used as a main-agent/preset provider |
+| `claude-code` | `ClaudeCodeAdapter` (`claude_code/adapter.py`) | n/a (local `claude` CLI) | Claude subscription via the local `claude` CLI as a main-agent/preset provider: a `claude setup-token` token (`api_key_env`, default `CLAUDE_CODE_OAUTH_TOKEN`), else the CLI's own login. `model` optional (CLI default) |
 
 Each adapter is lazy-imported on first use, so an unconfigured provider's SDK
 is never loaded. The CLI-backed `claude-code` provider is distinct from the
@@ -83,7 +85,8 @@ are recognized and ignored.
   Completions `reasoning_effort`. Omitted (`default`) sends no field on
   `openai`; `codex` sends its own explicit `xhigh`; `anthropic` maps the level
   to a Messages thinking budget (omitted hydrates the legacy `high`);
-  `claude-code` maps it to `--effort`.
+  `claude-code` maps it to `--effort` (omitted sends no `--effort`, so
+  Claude Code's own default applies).
 - **`service_tier`** (`openai` and `codex`, one normalizer
   `_normalize_service_tier`): `fast` → wire `priority`; `auto`, `default`,
   `flex`, `priority` pass through verbatim; any other value fails init
@@ -194,8 +197,47 @@ adapter. It has no transport env-var selectors.
 `claude-code` is a registered LLM provider whose adapter wraps the local
 `claude` CLI (`ClaudeCodeAdapter`) rather than speaking a wire protocol
 directly — a valid main-agent/preset provider, lazy-imported like every other
-adapter. Auth is owned by the CLI login. (Not the daemon backend axis; see
-above.)
+adapter. (Not the daemon backend axis; see above.) Each turn runs
+`claude -p --output-format json` with Claude Code's native system prompt
+replaced by LingTai's (`--system-prompt-file`), all built-in tools off
+(`--tools ""`), and no ambient MCP (`--strict-mcp-config`).
+
+**Auth, in order** (checked per request; nothing is billed to find out):
+
+1. **Setup-token (recommended).** Run `claude setup-token` once and put the
+   long-lived token in the env var named by the preset's `api_key_env`
+   (default and recommended: `CLAUDE_CODE_OAUTH_TOKEN`, e.g. in the agent's
+   `.env`). The token is optional: when `api_key_env` is absent, empty, or
+   names an unset variable, the process env var `CLAUDE_CODE_OAUTH_TOKEN` is
+   used, else step 2 — boot never fails on it. The CLI then runs with exactly that
+   token and a private, LingTai-owned `CLAUDE_CONFIG_DIR` (per agent, under
+   the system temp dir), so this machine's `~/.claude` settings, CLAUDE.md,
+   hooks, plugins, credentials, and history are never loaded. That dir's
+   `.claude.json` is pre-seeded so an interactive CLI (the daemon `claude`
+   backend) skips its first-run screens.
+2. **Local login.** With no token, the installed CLI's own login is used when
+   `claude auth status` reports one (e.g. after `claude auth login`). The CLI
+   keeps its normal config dir — that is where the login lives — but runs
+   with `--setting-sources ""`, so user/project/local settings files (hooks,
+   `settings.json`, CLAUDE.md memory) are not loaded. Still shared with your
+   interactive Claude Code: the credential store, `~/.claude.json` state,
+   admin-managed policy settings, and session transcripts.
+3. **Neither** fails the request with guidance naming both fixes; the agent
+   goes to sleep instead of spending AED retries. A rejected token or login
+   reported by the CLI takes the same path.
+
+Every mode strips `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (API-key
+billing), `ANTHROPIC_BASE_URL` (would send the token to another host), and the
+cloud-provider switches `CLAUDE_CODE_USE_BEDROCK` / `_VERTEX` / `_FOUNDRY` /
+`_ANTHROPIC_AWS` / `_ANTHROPIC_GOOGLE_CLOUD` / `_MANTLE` / `_GATEWAY`, so the
+token only reaches Anthropic and nothing bills a cloud account; proxy variables
+(`HTTPS_PROXY` etc.) pass through. The same policy (one module,
+`claude_code/auth.py`) drives the daemon `claude` / `claude-p` / `claude-code`
+CLI backends, which share the agent's private config dir and receive the token
+through the detached run's credential capsule. `model` and `thinking` are optional: when
+omitted, no `--model` / `--effort` flag is sent and Claude Code's own defaults
+apply. The `system(action='presets')` connectivity check follows the same
+order (token present, else `claude auth status`) without a network probe.
 
 ### External CLI harnesses (daemon backends)
 

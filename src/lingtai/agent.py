@@ -127,10 +127,11 @@ def _validate_preset_llm_routes(preset: dict, name: str) -> None:
 
 #: Providers whose OMITTED ``manifest.llm.thinking`` keeps the ``"default"``
 #: sentinel so the adapter applies its own omitted default: ``codex`` sends an
-#: explicit ``reasoning.effort = "xhigh"``, and ``openai`` sends no reasoning
-#: field at all (the endpoint's own default). ``anthropic`` and ``claude-code``
-#: keep the historical cross-provider ``"high"`` main-session default.
-_OMITTED_THINKING_DEFAULT_SENTINEL_PROVIDERS = ("codex", "openai")
+#: explicit ``reasoning.effort = "xhigh"``, ``openai`` sends no reasoning
+#: field at all (the endpoint's own default), and ``claude-code`` sends no
+#: ``--effort`` flag (Claude Code's own default). ``anthropic`` keeps the
+#: historical cross-provider ``"high"`` main-session default.
+_OMITTED_THINKING_DEFAULT_SENTINEL_PROVIDERS = ("codex", "openai", "claude-code")
 
 
 def build_agent_config(
@@ -163,9 +164,10 @@ def build_agent_config(
         # Providers that own their omitted-thinking default keep the "default"
         # sentinel instead of being promoted to the legacy cross-provider
         # "high" main-session default: ``codex`` (omitted -> reasoning.effort
-        # "xhigh") and ``openai`` (omitted -> no reasoning field at all, so the
-        # endpoint's own default applies). ``anthropic``/``claude-code``
-        # hydrate exactly as before.
+        # "xhigh"), ``openai`` (omitted -> no reasoning field at all, so the
+        # endpoint's own default applies), and ``claude-code`` (omitted -> no
+        # ``--effort`` flag, Claude Code's own default). ``anthropic``
+        # hydrates exactly as before.
         thinking=llm.get(
             "thinking",
             "default"
@@ -2220,14 +2222,23 @@ class Agent(BaseAgent):
         # hot-edited env_file that transiently loses the api_key variable. The
         # diagnostic lands in the agent log so the cause is findable instead of
         # surfacing as an opaque provider auth error on the next turn.
+        from lingtai.init_schema import llm_credential_required
+
         api_key = resolve_env_checked(
             llm.get("api_key"),
             llm.get("api_key_env"),
             context="manifest.llm.api_key_env",
-            warn=lambda m: self._log("env_resolve_warning", message=m),
+            # claude-code's setup-token is optional (env fallback, then the
+            # local CLI login), so an unset variable is not worth a warning.
+            warn=(
+                (lambda m: self._log("env_resolve_warning", message=m))
+                if llm_credential_required(llm.get("provider"))
+                else (lambda _m: None)
+            ),
         )
         new_provider = llm["provider"]
-        new_model = llm["model"]
+        # ``model`` may be omitted for ``claude-code`` (the CLI's own default).
+        new_model = llm.get("model") or ""
         new_base_url = llm.get("base_url")
         # One System-resolved policy (env > settings/system.json v2 > fixed
         # default) feeds the service, AgentConfig, and the session

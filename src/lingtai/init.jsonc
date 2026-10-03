@@ -7,6 +7,7 @@
 // Secrets go in a .env file (see env_file below).
 // Example .env:
 //   OPENAI_API_KEY=your-api-key
+//   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...   (claude-code; from `claude setup-token`)
 //   TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
 //   IMAP_PASSWORD=your-email-password
 // =============================================================
@@ -36,7 +37,9 @@
       //   "anthropic"   any Anthropic-compatible (Messages API) endpoint
       //                 (official Anthropic when base_url is omitted)
       //   "codex"       Codex / ChatGPT OAuth (one account)
-      //   "claude-code" the local Claude Code CLI login
+      //   "claude-code" a Claude subscription through the local `claude` CLI:
+      //                 a `claude setup-token` token (api_key_env, default
+      //                 CLAUDE_CODE_OAUTH_TOKEN), else the CLI's own login
       // Other vendors and subscriptions: point "openai"/"anthropic" at that
       // vendor's compatible base_url, or at an external pool (sub2api /
       // subs-pool). Removed provider names (deepseek, zhipu/glm, mimo,
@@ -44,7 +47,9 @@
       // claude_code, codex-pool) fail validation with that pointer.
       "provider": "openai",
 
-      // Model name as recognized by the provider's API.
+      // Model name as recognized by the provider's API. Required, except for
+      // "claude-code", where it may be omitted (or null/"") to use Claude
+      // Code's own default model (no --model flag is sent).
       "model": "gpt-5.5",
 
       // API key — set to null and use api_key_env to read from environment (recommended).
@@ -53,6 +58,15 @@
 
       // Environment variable name that holds the API key.
       // Resolved at startup from .env or system environment.
+      // "claude-code": the variable holding the long-lived OAuth token printed
+      // by `claude setup-token` — recommended "CLAUDE_CODE_OAUTH_TOKEN". The
+      // CLI then runs with only that token in a private, LingTai-owned config
+      // dir (never ~/.claude). The token is optional: declared-but-unset, "",
+      // or omitted falls back to the process env CLAUDE_CODE_OAUTH_TOKEN, else
+      // the local `claude` CLI login (`claude auth login`), else a clear
+      // request-time error — boot never fails on it and no env_file is
+      // required. ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL and
+      // the CLAUDE_CODE_USE_* cloud-provider switches never reach the CLI.
       "api_key_env": "OPENAI_API_KEY",
 
       // Base URL for the provider's API. Set to null (or omit) to use the
@@ -68,7 +82,8 @@
       //     provider. openai sends it as reasoning.effort (Responses) /
       //     reasoning_effort (Chat Completions) and omits it when unset;
       //     codex defaults to xhigh; anthropic maps it to a thinking budget;
-      //     claude-code maps it to --effort.
+      //     claude-code maps it to --effort and omits it when unset (Claude
+      //     Code's own default).
       //   "service_tier": "fast" (sent as priority) or auto/default/flex/
       //     priority — openai and codex only; any other value fails
       //     validation.

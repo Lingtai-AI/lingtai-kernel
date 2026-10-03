@@ -4,6 +4,11 @@ Two-tier check:
 1. Credential check (free): is the api_key_env set in the environment?
 2. Endpoint reachability (network): TCP connect to the LLM's base_url host.
 
+The CLI-backed ``claude-code`` provider has no base_url: its credential check
+is the provider's own auth order — a ``claude setup-token`` OAuth token in the
+environment, else the local ``claude`` CLI login as reported by
+``claude auth status --json`` (a local status read, never a model request).
+
 NO CACHING. Every call probes fresh. Caching connectivity status would
 let an agent confidently swap into a preset that went down between
 the cache write and the swap — exactly the failure mode this check
@@ -15,8 +20,11 @@ Concurrency: check_many() runs all checks in parallel via ThreadPoolExecutor.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import socket
+import subprocess
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -24,13 +32,120 @@ from urllib.parse import urlparse
 
 _PROBE_TIMEOUT_S = 2.0
 
-# Local CLI-login providers authenticate through a locally installed CLI/login
-# session (no per-request API key, no base_url) — so a TCP probe would be a
-# false negative. Health for these is "is the backing provider module importable?".
+# CLI-backed providers drive a locally installed CLI (no base_url), so a TCP
+# probe would be a false negative. Their health is "is the backing provider
+# module importable, and does the provider's own credential source resolve?".
 # Maps the provider name to the module that backs it.
-_LOCAL_CLI_LOGIN_PROVIDERS = {
+_CLI_BACKED_PROVIDERS = {
     "claude-code": "lingtai.llm.claude_code.adapter",
 }
+
+#: The env var that carries a long-lived Claude Code OAuth token (the output of
+#: ``claude setup-token``). It is the default ``api_key_env`` of a
+#: ``claude-code`` preset and the process-env fallback when a preset names none.
+CLAUDE_CODE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+
+#: Env vars never passed to a LingTai-launched ``claude`` CLI child (the
+#: claude-code LLM adapter, the daemon Claude backends, and the login probe).
+#: Each one moves the CLI off the Claude subscription: the API-key pair
+#: switches to API-key billing, ``ANTHROPIC_BASE_URL`` would send the OAuth
+#: token to another host, and the ``CLAUDE_CODE_USE_*`` switches route the CLI
+#: to a cloud provider account (Claude Code 2.1.285 selects Bedrock, Foundry,
+#: Claude Platform on AWS / Google Cloud, Bedrock Mantle, or Vertex from them,
+#: and a gateway from ``CLAUDE_CODE_USE_GATEWAY``). Proxy variables
+#: (``HTTPS_PROXY`` etc.) are deliberately kept.
+CLAUDE_CODE_STRIPPED_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_GATEWAY",
+)
+
+#: ``claude_cli_login_status`` outcomes.
+CLAUDE_LOGIN_LOGGED_IN = "logged_in"
+CLAUDE_LOGIN_NOT_LOGGED_IN = "not_logged_in"
+CLAUDE_LOGIN_CLI_MISSING = "cli_missing"
+CLAUDE_LOGIN_UNKNOWN = "unknown"
+
+_CLAUDE_AUTH_STATUS_TIMEOUT_S = 15.0
+
+#: The one actionable instruction shared by the adapter's request-time auth
+#: error and this module's ``no_credentials`` report.
+CLAUDE_CODE_AUTH_GUIDANCE = (
+    "To authenticate, run `claude setup-token` and put the printed token in the "
+    "env var named by the preset's `api_key_env` (default "
+    "CLAUDE_CODE_OAUTH_TOKEN, e.g. in the agent's .env file), or log the local "
+    "`claude` CLI in once with `claude auth login`"
+)
+
+
+def claude_code_token_from_env(api_key_env: str | None = None) -> str | None:
+    """Return the configured Claude Code setup-token from the environment.
+
+    Looks up the preset's ``api_key_env`` first, then the default
+    ``CLAUDE_CODE_OAUTH_TOKEN``. Blank values count as absent. The value is
+    returned only so the caller can pass it on; it is never logged.
+    """
+    names = [api_key_env] if api_key_env else []
+    if CLAUDE_CODE_OAUTH_TOKEN_ENV not in names:
+        names.append(CLAUDE_CODE_OAUTH_TOKEN_ENV)
+    for name in names:
+        value = os.environ.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def claude_cli_login_status(
+    cli_path: str = "claude",
+    *,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    timeout: float = _CLAUDE_AUTH_STATUS_TIMEOUT_S,
+) -> str:
+    """Ask the installed ``claude`` CLI whether it is logged in.
+
+    Runs ``claude auth status --json`` — a local status read that makes no
+    model request — and returns one of ``CLAUDE_LOGIN_*``. ``loggedIn: true``
+    in the JSON (whatever the auth method) is ``logged_in``; ``false`` is
+    ``not_logged_in``; a missing binary is ``cli_missing``; a timeout, an
+    unparseable reply, or a CLI too old to know the subcommand is ``unknown``
+    so callers can fall back to the CLI's own request-time error instead of
+    blocking a working login.
+    """
+    try:
+        proc = subprocess.run(
+            [cli_path, "auth", "status", "--json"],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=cwd,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        return CLAUDE_LOGIN_CLI_MISSING
+    except (OSError, subprocess.SubprocessError):
+        return CLAUDE_LOGIN_UNKNOWN
+    try:
+        payload = json.loads((proc.stdout or "").strip())
+    except (json.JSONDecodeError, ValueError):
+        return CLAUDE_LOGIN_UNKNOWN
+    if not isinstance(payload, dict):
+        return CLAUDE_LOGIN_UNKNOWN
+    logged_in = payload.get("loggedIn")
+    if logged_in is True:
+        return CLAUDE_LOGIN_LOGGED_IN
+    if logged_in is False:
+        return CLAUDE_LOGIN_NOT_LOGGED_IN
+    return CLAUDE_LOGIN_UNKNOWN
+
 
 # Default base_url per provider for presets that omit base_url. The ``openai``
 # and ``anthropic`` families reach any compatible vendor through an explicit
@@ -102,6 +217,58 @@ def _parse_probe_target(url: str) -> tuple[str, int] | None:
     return parsed.hostname, port or (443 if parsed.scheme == "https" else 80)
 
 
+def _check_claude_code(
+    provider: str | None, module_name: str, api_key_env: str | None
+) -> dict:
+    """Credential check for ``claude-code``: token first, then local login."""
+    checked_at = datetime.now(timezone.utc).isoformat()
+
+    def _result(status: str, error: str | None) -> dict:
+        return {
+            "status": status,
+            "checked_at": checked_at,
+            "latency_ms": None,
+            "error": error,
+        }
+
+    if not _module_available(module_name):
+        return _result(
+            "no_credentials",
+            f"{provider} is a CLI-backed provider but its backing module "
+            f"{module_name!r} is not importable — ensure the kernel is installed",
+        )
+    # 1. A configured setup-token is sufficient on its own (the adapter runs
+    #    the CLI against a private config dir with just that token).
+    if claude_code_token_from_env(api_key_env):
+        return _result("ok", None)
+    # 2. Otherwise the local CLI login, checked the same way the adapter
+    #    checks it: redirect/billing env stripped, local status read only.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in CLAUDE_CODE_STRIPPED_ENV and k != CLAUDE_CODE_OAUTH_TOKEN_ENV
+    }
+    # A neutral cwd, like the adapter's: no project settings from wherever
+    # the agent process happens to run.
+    status = claude_cli_login_status(env=env, cwd=tempfile.gettempdir())
+    if status == CLAUDE_LOGIN_CLI_MISSING:
+        return _result(
+            "no_credentials",
+            f"no {CLAUDE_CODE_OAUTH_TOKEN_ENV} token is set and the `claude` "
+            f"CLI is not on PATH; install Claude Code. "
+            f"{CLAUDE_CODE_AUTH_GUIDANCE}",
+        )
+    if status == CLAUDE_LOGIN_NOT_LOGGED_IN:
+        return _result(
+            "no_credentials",
+            f"no {CLAUDE_CODE_OAUTH_TOKEN_ENV} token is set and the local "
+            f"`claude` CLI is not logged in. {CLAUDE_CODE_AUTH_GUIDANCE}",
+        )
+    # logged_in, or unknown (the adapter then lets the CLI report its own
+    # auth error at request time rather than blocking a working login).
+    return _result("ok", None)
+
+
 def check_connectivity(
     provider: str | None,
     base_url: str | None,
@@ -122,30 +289,13 @@ def check_connectivity(
     ``"unreachable"`` with an ``invalid base_url`` error rather than a
     silent localhost probe.
     """
-    # Local CLI-login providers (e.g. claude-code) have no network
-    # endpoint and no API key — they authenticate through a local CLI/login
-    # session. Probing a base_url would be a false negative, so gauge health
-    # by whether the backing provider module is importable. Never reach the
-    # base_url resolution below for these.
-    module_name = _LOCAL_CLI_LOGIN_PROVIDERS.get((provider or "").lower())
+    # CLI-backed providers (claude-code) have no network endpoint to probe:
+    # a base_url probe would be a false negative. Gauge health by the backing
+    # module plus the provider's own auth order — never reach the base_url
+    # resolution below for these, and never make a model request.
+    module_name = _CLI_BACKED_PROVIDERS.get((provider or "").lower())
     if module_name is not None:
-        if _module_available(module_name):
-            return {
-                "status": "ok",
-                "checked_at": datetime.now(timezone.utc).isoformat(),
-                "latency_ms": None,
-                "error": None,
-            }
-        return {
-            "status": "no_credentials",
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "latency_ms": None,
-            "error": (
-                f"{provider} is a local CLI-login provider but its backing "
-                f"module {module_name!r} is not importable — ensure the kernel "
-                f"is installed and run `claude` (or `claude setup-token`) to log in"
-            ),
-        }
+        return _check_claude_code(provider, module_name, api_key_env)
 
     # Credential check (free) — never makes a network call.
     if api_key_env and not os.environ.get(api_key_env):

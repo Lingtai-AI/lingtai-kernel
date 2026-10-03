@@ -985,3 +985,30 @@ def test_materialize_preserves_init_skills_paths_carveout(tmp_path):
         "~/preset-skills",
         "~/agent-skills",
     ]
+
+
+def test_load_preset_allows_claude_code_without_model(tmp_path):
+    """Claude Code's own default model applies when a preset omits ``model``."""
+    for index, llm in enumerate(
+        ({"provider": "claude-code"}, {"provider": "claude-code", "model": ""})
+    ):
+        f = tmp_path / f"cc{index}.json"
+        f.write_text(json.dumps({
+            "name": "cc",
+            "description": _DESC,
+            "manifest": {"llm": llm, "capabilities": {}},
+        }))
+        loaded = load_preset(str(f))
+        assert loaded["manifest"]["llm"]["provider"] == "claude-code"
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "codex"])
+def test_load_preset_still_requires_model_for_api_families(tmp_path, provider):
+    f = tmp_path / "p.json"
+    f.write_text(json.dumps({
+        "name": "p",
+        "description": _DESC,
+        "manifest": {"llm": {"provider": provider}, "capabilities": {}},
+    }))
+    with pytest.raises(ValueError, match="requires non-empty 'provider' and 'model'"):
+        load_preset(str(f))
