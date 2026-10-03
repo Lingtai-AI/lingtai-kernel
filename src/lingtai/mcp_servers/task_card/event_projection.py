@@ -1266,8 +1266,9 @@ class TaskCardEventProjection:
             time_parts.append(f"↻{api_delay_s:.1f}s")
             parts.pop(0)
         # The same group's observed API wait + generation intervals are
-        # adjacent. Subtract their unrounded sum from the progress gap, not
-        # from true IDLE. Missing timing or a shorter gap has no honest residual.
+        # adjacent. Subtract their unrounded sum and any measured same-gap
+        # IDLE. Unobserved IDLE retains the prior inclusive residual; missing
+        # timing or a negative result has no honest residual.
         timing = usage.get("stream_timing") if isinstance(usage, dict) else None
         if isinstance(timing, dict):
             first = cls._finite_number(timing.get("first_token_s"))
@@ -1276,6 +1277,8 @@ class TaskCardEventProjection:
             if (gap is not None and gap > 0 and first is not None and first >= 0
                     and generation is not None and generation >= 0):
                 other = gap - (first + generation)
+                if type(idle_s) in (int, float) and math.isfinite(idle_s) and idle_s >= 0:
+                    other -= idle_s
                 if math.isfinite(other) and other >= 0:
                     time_parts.append(f"⏱{other:.1f}s")
         if type(idle_s) in (int, float) and math.isfinite(idle_s) and idle_s >= 0:
