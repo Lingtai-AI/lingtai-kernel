@@ -30,6 +30,7 @@ related_files:
   - src/lingtai/tools/email/CONTRACT.md
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/context/CONTRACT.md
+  - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md
   - tests/test_tool_family_generic.py
@@ -268,24 +269,8 @@ independence", the fix belongs in the consumer; this package's canonical
 `ACTION_REQUIRED` shape is never widened to accommodate one family's legacy
 envelope.
 
-`knowledge/__init__.py` is the third production Adapter/consumer:
-one `_build_family(agent | None)` registers `info` and `manual` children from a
-single `_CHILD_SPECS` source, both with the canonical strict-empty
-`input_schema`; passing `None` yields the module-level schema-only family
-behind `get_schema()`. It does **not** use
-`manual.build_manual_child`, because knowledge's public manual result has
-always been keyed `knowledge_manual` rather than the generic
-`content`/`structuredContent` shape; registering its own `manual` child means
-`ToolFamily.handle()` returns that family's canonical result verbatim with no
-double wrap and no round-trip through a shape it never exposes — the same
-no-double-wrap rule, satisfied without a Host adapter. Its outer `handle()`
-normalizes only the generic `ACTION_REQUIRED` envelope failure back to
-knowledge's exact pre-migration unknown-action result.
-
-`avatar/__init__.py` is the fourth production Adapter/consumer to touch this
-contract (after `vision`, which adopts this package per `../CONTRACT.md`
-without a dedicated Adapter paragraph here, and the since-removed `file`
-family):
+`avatar/__init__.py` is a current production Adapter/consumer to touch this
+contract (after `vision`, which adopts this package per `../CONTRACT.md`):
 `AvatarManager.__init__` builds a per-instance `ToolFamily` with a `spawn`
 handler bound to that instance (the former `rules` handler was removed, not
 relocated — avatar CONTRACT.md contract_version 9), the generic `settings`
@@ -315,23 +300,8 @@ feeding both the schema-only and bound families, and `_tc_id` dropped at the
 Host boundary — is now carried by `notification`, `system`, `email`, and
 `context` below.
 
-`skills/__init__.py` (`../skills/CONTRACT.md`) is the sixth production
-Adapter/consumer. One `_build_family(agent, paths)` builder is its single
-canonical child registry, registering an `info` child and
-`manual.build_manual_child(agent, "skills")` directly — unwrapped; both
-`get_schema()` (through an import-time `agent=None` instance whose handlers are
-unreachable) and `setup()` obtain their `ToolFamily` from that one builder, so
-the composed schema advertises exactly the child `input_schema`s dispatch
-registers. Its `handle_skills` wrapper adapts only a successfully
-dispatched manual result (`"content" in result`) to that capability's public
-`skills_manual`/`library_manual`/`manual_path` shape, post-dispatch. Unlike
-`web`, it returns this package's canonical envelope-failure result verbatim,
-having no family-specific diagnostic block to stamp on; both of its children
-declare the canonical strict-empty `input_schema`, so `handle()`'s
-allowed-key check rejects every `input` key on either action.
-
-`system/__init__.py` (`../system/CONTRACT.md`) is the seventh production
-Adapter/consumer named here, and the third that is an intrinsic. It follows
+`system/__init__.py` (`../system/CONTRACT.md`) is a current production
+Adapter/consumer and an intrinsic. It follows
 the intrinsic module-level composition shape exactly — a module-level schema-only
 `ToolFamily` behind `get_schema()` whose import-time construction is the
 registry's duplicate/reserved-name collision check, an agent-bound family built
@@ -346,8 +316,8 @@ per action, so rejecting an `input` key outside the selected child's own schema
 is what stops a smuggled `address` on a non-karma action from reaching a
 lifecycle handler at all.
 
-`daemon/_tool_family.py` (`../daemon/CONTRACT.md`) is the eighth production
-Adapter/consumer named here, and the largest-engine one: it repeats the
+`daemon/_tool_family.py` (`../daemon/CONTRACT.md`) is a current production
+Adapter/consumer and the largest-engine one: it repeats the
 `shell` division — a dedicated `_tool_family.py` module owning the package's
 single public `get_schema`/`get_description` pair and a
 `DaemonFamilyDispatcher` that translates one envelope call into
@@ -372,8 +342,8 @@ replaces a pre-migration flat `summary` boolean with the canonical root
 `_LTP_V2_MIGRATED_FAMILIES` in the same change — the allowlist step this
 contract notes is part of a migration, not something this package does on a
 family's behalf.
-`email/__init__.py` (`../email/CONTRACT.md`) is the ninth production
-Adapter/consumer, and the largest child registry this package composes: one
+`email/__init__.py` (`../email/CONTRACT.md`) is a current production
+Adapter/consumer and the largest child registry this package composes: one
 `_build_family(agent)` registers fourteen children — thirteen action children
 whose handlers re-enter the unchanged `EmailManager.handle`, plus
 `manual.build_manual_child(agent, "email")` directly and unwrapped — while an

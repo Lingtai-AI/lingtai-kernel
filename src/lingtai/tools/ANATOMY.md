@@ -126,13 +126,11 @@ capability names and lazy adapters.
   (`src/lingtai/tools/browser/ANATOMY.md`).
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
   and dispatch infrastructure implementing the LTP v2 envelope, and the
-  reusable ManualTool builder; `web` is its first real consumer, `mcp` its
-  second, `knowledge` its third, `vision` its fifth,
-  `avatar` its sixth, `shell` its eighth, `skills` its
-  ninth, `notification` its tenth, `system` its eleventh, `daemon` its
-  twelfth, `context` its thirteenth, and `plugin` its fourteenth (the
-  fourth consumer, `file`, and the seventh, `soul`, were removed with
-  those families)
+  reusable ManualTool builder. Current source consumers are `web`, `mcp`,
+  `vision`, `avatar`, `shell` (the retained `bash` implementation),
+  `notification`, `system`, `daemon`, `context`, `plugin`, `psyche`, `email`,
+  and `task_card`; the private `knowledge` and `skills` capabilities do not
+  build a ToolFamily and route read-only guidance through `psyche`.
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `psyche/` — mandatory public durable-self family: its static fifteenth
   declaration preserves the six-action signpost/settings surface, binds only
@@ -166,9 +164,10 @@ capability names and lazy adapters.
   `context` drives. It composes its schema from a module-level schema-only
   family, retains one port-bridge family per mount, and builds a direct
   dispatching one per compatibility `handle(agent, args)` call.
-- `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
-  family envelope with the unchanged public actions `info`/`manual`
-  (`src/lingtai/tools/knowledge/ANATOMY.md`).
+- `knowledge/` — private durable knowledge catalog and lifecycle owner. It
+  registers no model-facing tool; read-only guidance routes through
+  `psyche(action="knowledge")`, while setup/refresh owns catalog composition
+  and the one-time legacy migration (`src/lingtai/tools/knowledge/ANATOMY.md`).
 - `bash/` — public `shell` composition owner for run/poll/cancel/settings/manual
   (`src/lingtai/tools/bash/ANATOMY.md`); the public model-facing schema is
   the ToolFamily-composed LTP v2 envelope (`bash/_tool_family.py`) and is the
