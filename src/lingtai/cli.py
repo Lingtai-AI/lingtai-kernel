@@ -51,6 +51,24 @@ def load_init(working_dir: Path) -> dict:
     )
     if outcome.status is InitReadStatus.READ_FAILED:
         print(f"error: {json.dumps(outcome.to_payload(), ensure_ascii=False, default=str)}", file=sys.stderr)
+        # Older Puffo ACP drivers show only the last `error:` line and clip it
+        # to 300 characters. Keep this one static and short: the structured
+        # JSON above may put its safe repair fields after a long config/path
+        # prefix, leaving users with an unhelpful truncated startup error.
+        if (
+            outcome.stage == "VALIDATE"
+            and (outcome.safe_excerpt or "").startswith(
+                "manifest.capabilities.daemon.max_emanations was retired"
+            )
+        ):
+            print(
+                "error: LingTai cannot start: "
+                "manifest.capabilities.daemon.max_emanations is retired. "
+                "Remove it from init.json or the active preset; choose "
+                "default manager_pool_size=100 or set daemon.manager_pool_size. "
+                "See migration/migration.md.",
+                file=sys.stderr,
+            )
         sys.exit(1)
 
     from lingtai.kernel.workdir import write_resolved_manifest
