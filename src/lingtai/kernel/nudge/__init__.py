@@ -749,10 +749,19 @@ def _safe_log(agent, event: str, **fields: Any) -> None:
 
 
 def _replace_kind(entries: list, kind: str, body: dict) -> list:
-    out = [e for e in entries if e.get("kind") != kind]
     entry = dict(body)
     entry["kind"] = kind
-    out.append(entry)
+    out = []
+    replaced = False
+    for existing in entries:
+        if existing.get("kind") == kind:
+            if not replaced:
+                out.append(entry)
+                replaced = True
+        else:
+            out.append(existing)
+    if not replaced:
+        out.append(entry)
     return out
 
 

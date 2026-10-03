@@ -133,6 +133,9 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
    `LINGTAI_NUDGE_ENABLED` / `LINGTAI_NUDGE_REPEAT_INTERVAL` policy. The goal
    reminder is explicitly a separate protected-goal system notification, not a
    declared Nudge kind, and is therefore not part of Nudge dispatch/docs.
+   Updating an existing kind preserves its first position; only new kinds
+   append. Identical findings leave the transport payload and publication time
+   unchanged (guarded by `tests/test_nudge_policy.py`).
 7. Every declared Nudge kind is additionally bound by the shared
    `nudge.upsert` hard inline cap: the fully assembled entry (producer body
    plus `kind` and the policy fields from rule 6) may be at most
