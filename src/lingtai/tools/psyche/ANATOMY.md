@@ -40,7 +40,8 @@ maintenance: |
 
 Mandatory LTP v2 family that is the one public root for the four durable
 domains (`pad + lingtai + knowledge + skills = psyche`). Five actions are
-read-only manual loaders; the reserved `settings` child returns eight fully
+read-only manual loaders; `covenant` discloses the current loaded constitution
+body through the existing narrow host Port; the reserved `settings` child returns eight fully
 redacted Psyche-owned rows: Pad plus the three configurable prompt pairs. The
 package owns the closed `settings/psyche.json` v1 parser and a pure immutable
 prompt-plan composer for only those six inputs plus the three static resident
@@ -53,18 +54,18 @@ registrar.
 ## Components
 
 - `DOMAIN_MANUALS` — the one fixed registry mapping each domain action to the
-  installed manual it loads (`src/lingtai/tools/psyche/__init__.py:58-64`).
+  installed manual it loads (`src/lingtai/tools/psyche/__init__.py:37-42`).
 - `ACTION_ORDER` — the exact public inventory `pad | lingtai | knowledge |
-  skills | settings | manual`, derived from the composed family so injected
-  settings cannot drift (`src/lingtai/tools/psyche/__init__.py:195-211`).
+  skills | covenant | settings | manual`, derived from the composed family so injected
+  settings cannot drift (`src/lingtai/tools/psyche/__init__.py:172-187`).
 - `_ROUTER_MANUAL` — the routing-table manual name loaded by the reserved
-  `manual` child (`src/lingtai/tools/psyche/__init__.py:66-72`).
-- `_build_children` — builds all five manual children from the shared
+  `manual` child (`src/lingtai/tools/psyche/__init__.py:45-50`).
+- `_build_children` — builds the Covenant loaded-body child and all five manual children from the shared
   `build_manual_child` loader with one strict-empty input schema
-  (`src/lingtai/tools/psyche/__init__.py:95-106`).
+  (`src/lingtai/tools/psyche/__init__.py:66-89`).
 - `_FAMILY`, `_ACTION_ENUM_DESCRIPTION`, `get_description`, `get_schema` —
   settings-opted schema-only family plus the model-facing routing prose
-  (`src/lingtai/tools/psyche/__init__.py:109-149`).
+  (`src/lingtai/tools/psyche/__init__.py:92-125`).
 - `settings.py::{serialize_prompt_owner_document,read_resolved_prompt_inputs,build_settings_provider}`
   — owns the one v1 writer, reads the bounded stable closed owner document once
   per reconstruction, resolves its three pairs with the existing helper, and
@@ -78,16 +79,16 @@ registrar.
   the Agent applies its candidate transactionally.
 - `_adapt_manual_result` — the one post-dispatch Host adapter producing the flat
   `{status, manual, manual_path}` shape
-  (`src/lingtai/tools/psyche/__init__.py:152-161`).
-- `_bind` / `DECLARATION` — statically declare the four operational actions plus
+  (`src/lingtai/tools/psyche/__init__.py:128-137`).
+- `_bind` / `DECLARATION` — statically declare the four domain routes and Covenant disclosure plus
   reserved settings/manual children, bind only `workdir`/`psyche_settings`, drop
   intrinsic `_tc_id`, dispatch through the generic family, and preserve
   Psyche-shaped unknown-action errors
-  (`src/lingtai/tools/psyche/__init__.py:164-211`).
+  (`src/lingtai/tools/psyche/__init__.py:140-183`).
 - `boot` — lifecycle only: runs the Pad and LingTai domains' private composers
   once at construction, since those packages are no longer registered intrinsics
   and the kernel boot loop no longer reaches them
-  (`src/lingtai/tools/psyche/__init__.py:214-227`).
+  (`src/lingtai/tools/psyche/__init__.py:190-203`).
 
 ## Connections
 
@@ -137,7 +138,11 @@ their manuals and reads only Pad configuration plus its six prompt-owner inputs.
 The package writes no persistent state. `Agent` owns one narrow ephemeral
 `_psyche_prompt_plan` candidate and one `_psyche_settings_snapshot`, initialized
 to empty/default values and replaced only by successful canonical reconstruction;
-SHOW binds to the snapshot and does not inspect ambient sources. The
+SHOW binds to the snapshot and does not inspect ambient sources. The Agent also
+retains `_effective_covenant`: complete loaded body, including mirror fallback,
+rolled back with the applied generation. The public `covenant` action reads only
+that body via `PsycheSettingsPort.read_covenant`; the resident section is a brief
+route plus unique pre-action gates, not the fulltext. The
 independently user-authored
 `settings/psyche.json` is a strict owner source, not package state. Prompt
 sections, catalogs, `system/pad.md`,

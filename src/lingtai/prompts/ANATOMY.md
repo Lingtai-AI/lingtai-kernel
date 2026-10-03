@@ -116,8 +116,10 @@ Each section has a `<section>/<section>.yaml` definition. Bodies split three way
   (runtime facts). No packaged body; content is built each turn.
 - **Injected sections** — `covenant` and `comment` are supplied by Psyche's
   closed `settings/psyche.json` owner document. Covenant keeps
-  `system/covenant.md` as a durable mirror/fallback; comment has no mirror or
-  fallback. `rules`, `character`, and `pad` come from their existing
+  `system/covenant.md` as a complete durable mirror/fallback. The loaded Covenant
+  body is retained outside the resident prompt; its protected slot renders
+  `kernel/prompt.py::COVENANT_ROUTE`, and `psyche.covenant` reads the effective
+  body without source I/O. Comment has no mirror or fallback. `rules`, `character`, and `pad` come from their existing
   persistent/configured sources. None has a packaged prompt body.
 
 For the generated `tools` section, `src/lingtai/kernel/base_agent/tools.py`

@@ -1,8 +1,9 @@
 """Psyche's declared official host-plugin slice.
 
 ``psyche`` is the mandatory model-visible LTP v2 root for the four durable
-self-domains: ``pad + lingtai + knowledge + skills = psyche``. Its six actions
-are four manual routes, redacted ``settings``, and the ``manual`` router; every
+self-domains: ``pad + lingtai + knowledge + skills = psyche``. Its seven actions
+are four domain manuals, the effective ``covenant`` body, redacted ``settings``,
+and the ``manual`` router; every
 child uses the canonical strict-empty input and is read-only. The declaration
 binds only ``workdir`` and the applied Psyche settings snapshot.
 
@@ -43,7 +44,7 @@ DOMAIN_MANUALS: tuple[tuple[str, str], ...] = (
 #: The psyche routing-table manual: its own installed skill bundle.
 _ROUTER_MANUAL = "psyche-manual"
 _DROPPED_ENVELOPE_KEYS = ("_tc_id",)
-_DECLARED_ACTIONS = tuple(action for action, _manual in DOMAIN_MANUALS)
+_DECLARED_ACTIONS = tuple(action for action, _manual in DOMAIN_MANUALS) + ("covenant",)
 _DECLARED_INPUT_SCHEMAS = {
     action: dict(MANUAL_INPUT_SCHEMA) for action in _DECLARED_ACTIONS
 }
@@ -56,12 +57,13 @@ _ACTION_ENUM_DESCRIPTION = (
     "lingtai: identity manual for system/lingtai.md (灵台 / character).\n"
     "knowledge: private KNOWLEDGE.md memory manual.\n"
     "skills: .library catalog and configured-roots manual.\n"
+    "covenant: current effective Covenant body (not a manual or source reread).\n"
     "settings: fully redacted applied-settings SHOW.\n"
     "manual: Psyche routing table and shared mutation/rebuild model."
 )
 
 
-def _build_children(workdir: Any) -> list[ChildTool]:
+def _build_children(workdir: Any, covenant_reader: Any = None) -> list[ChildTool]:
     """Build the fixed manual-child registry for schema or bound dispatch."""
     children = [
         ChildTool(
@@ -72,7 +74,19 @@ def _build_children(workdir: Any) -> list[ChildTool]:
         )
         for action, manual_name in DOMAIN_MANUALS
     ]
-    return children + [build_manual_child(workdir, _ROUTER_MANUAL)]
+    def read_covenant(_args: dict[str, Any]) -> dict[str, Any]:
+        body = covenant_reader()
+        if not isinstance(body, str):
+            raise TypeError("Covenant body must be text")
+        return {"status": "ok", "covenant": body}
+
+    return children + [
+        ChildTool(
+            name="covenant", input_schema=dict(MANUAL_INPUT_SCHEMA),
+            handler=read_covenant, title="covenant input",
+        ),
+        build_manual_child(workdir, _ROUTER_MANUAL),
+    ]
 
 
 def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
@@ -81,7 +95,7 @@ def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
         return ToolFamily("psyche", _build_children(None), settings_provider=tuple)
     return ToolFamily(
         "psyche",
-        _build_children(host.workdir),
+        _build_children(host.workdir, host.psyche_settings.read_covenant),
         settings_provider=build_settings_provider(host.psyche_settings),
     )
 
@@ -92,9 +106,10 @@ _FAMILY = _build_family(None)
 
 def get_description(lang: str = "en") -> str:
     return (
-        "SIGNPOST ONLY: routes pad, lingtai (灵台), knowledge, and skills, with redacted settings "
+        "Read-only: routes pad, lingtai (灵台), knowledge, and skills manuals, "
+        "returns the current effective Covenant body, with redacted settings "
         "and manual guidance. Every action is read-only with strict input={}; it "
-        "never authors, edits, pins, installs, rescans, or loads anything. "
+        "never authors, edits, pins, installs, rescans, or reloads prompt state. "
         "routine schema-sufficient calls need no manual reload, while unfamiliar "
         "or consequential domain work should call the matching manual first. "
         "Change durable sources with shell (verified exact edits), then one "

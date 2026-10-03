@@ -266,3 +266,13 @@ def build_system_prompt_batches(
 
     batches[0] = "\n\n---\n\n".join(blocks)
     return batches
+
+
+# The body remains operator-owned; this is only its resident discovery route.
+COVENANT_ROUTE = (
+    'Read the current effective Covenant with psyche(action="covenant", input={}). '
+    'Load it on first orientation and before discussing duties, collaboration, '
+    'learning, or memory; do not reload it on every tool call. '
+    'Before acting, assess your available instruments. Before filling a capability '
+    'gap, check contacts and delegates/ledger.jsonl for existing help.'
+)

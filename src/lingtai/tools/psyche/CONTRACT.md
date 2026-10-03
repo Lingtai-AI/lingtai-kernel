@@ -1,6 +1,6 @@
 ---
 name: psyche-tool-contract
-contract_version: 4
+contract_version: 5
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/psyche/ANATOMY.md
@@ -51,7 +51,8 @@ contract exactly:
 
 > pad + lingtai + knowledge + skills = psyche
 
-It is a read-only manual router plus owner settings SHOW. Its five manual
+It is a read-only manual router plus current effective Covenant disclosure and
+owner settings SHOW. Its five manual
 actions teach the durable domains and routing model; its reserved `settings`
 action exposes exactly eight fully redacted Psyche-owned inputs: the existing
 Pad pair plus the three configurable system-prompt pairs. Psyche owns the
@@ -119,6 +120,17 @@ Agents MUST treat every `psyche` action as read-only. No action authors,
 edits, pins, installs, migrates, rescans a catalog, writes a prompt or source
 file, or reloads prompt state.
 
+`covenant` returns the current effective loaded body verbatim (including custom
+owner-file resolution or durable mirror fallback), or an empty string when none
+is loaded. It MUST NOT reread ambient sources, return an installed default, or
+trigger reconstruction. BaseAgent initial loading and Agent reconstruction retain
+the complete body outside the resident prompt and render only the protected
+Covenant route. Load it on first orientation and for duties, collaboration,
+learning, or memory discussions, not on every call. Failed reconstruction restores
+the previous loaded body along with the rest of the applied generation. The
+configured source, durable fulltext mirror, override precedence, and Avatar
+inheritance remain intact; daemon's separate surface still excludes Psyche.
+
 The static prompt plan is an internal composition boundary, not a new action.
 Its section tuple is ordered and immutable, and a reconstruction MUST apply the
 same candidate that was resolved before the seam began. A failed final flush
@@ -174,12 +186,13 @@ and `reasoning` are required. The public action inventory is exactly:
 | `lingtai` | strict empty `{}` | same shape — `lingtai-manual` |
 | `knowledge` | strict empty `{}` | same shape — the installed knowledge manual |
 | `skills` | strict empty `{}` | same shape — the installed skills manual |
+| `covenant` | strict empty `{}` | `{status: "ok", covenant: <current loaded body>}`; not a generic manual |
 | `settings` | strict empty `{}` | exact `{settings: [...]}` inventory with eight fully redacted five-field rows |
 | `manual` | strict empty `{}` | same shape — `psyche-manual`, the routing table |
 
 Every call carries required root `action`, `input`, and `reasoning`; a public
 call is spelled `psyche(action="<domain>", input={}, reasoning="...")`. All
-six children share one strict-empty `input` schema, so every `input` key is an
+seven children share one strict-empty `input` schema, so every `input` key is an
 unknown key. Unknown or missing actions, any `input` key, non-object `input`,
 unknown root fields, and a non-boolean root `summarize` fail with the LTP v2
 envelope errors before any file is read. Root `summarize`, `reasoning`, and the
@@ -199,7 +212,8 @@ child is injected immediately before `manual`. The static `DECLARATION` binds
 only `workdir` and `PsycheSettingsPort`; the provider reads the Agent-owned
 applied eight-value snapshot through that one read-only operation, copies and
 validates its eight structural scalar fields, and performs no file I/O or Agent
-access. Agent reconstruction consumes one immutable Psyche prompt plan, uses the
+access. The same narrow Port additionally reads only the current loaded Covenant
+body; it exposes no general prompt/configuration access. Agent reconstruction consumes one immutable Psyche prompt plan, uses the
 existing prompt file-over-inline helper, then publishes the replacement plan and
 snapshot only after the successful final prompt flush.
 
@@ -218,8 +232,8 @@ Neither the binder nor settings provider receives an Agent.
 
 - Schema and dispatch derive from the same fixed child registry; the advertised
   action enum cannot drift from the dispatch keys.
-- The exact action order is `pad | lingtai | knowledge | skills | settings |
-  manual`; the reserved settings action is immediately before `manual`.
+- The exact action order is `pad | lingtai | knowledge | skills | covenant |
+  settings | manual`; the reserved settings action is immediately before `manual`.
 - Every child is mutation-free. A future mutating action does not belong in this
   family; durable mutation happens through `shell`, never through Psyche.
 - The four domain actions load the domains' existing manuals as progressively
@@ -266,7 +280,7 @@ Neither the binder nor settings provider receives an Agent.
 python -m pytest -q tests/test_psyche_family.py tests/test_psyche_prompt_settings.py
 ```
 
-These pin the exact six-action inventory and order; strict-empty input on every
+These pin the exact seven-action inventory and order; strict-empty input on every
 child; strict bounded owner parsing and file-over-inline resolution; ambient
 edit isolation; last-good preservation after failed reconstruction; exact
 five-field projection, eight-row order, defaults, anchors, and full redaction;

@@ -417,6 +417,29 @@ def test_avatar_spawn_carries_only_psyche_prompt_owner_for_both_modes(
     )
     assert not (child / "settings" / "system.json").exists()
 
+    from lingtai.agent import Agent
+    from lingtai.kernel.prompt import COVENANT_ROUTE
+    from tests._service_helpers import make_mock_llm_service
+
+    child_agent = Agent(
+        service=make_mock_llm_service(), agent_name=f"{avatar_type}-child",
+        working_dir=child, capabilities=[],
+    )
+    try:
+        # The launch stub's minimal parent manifest is not a full CLI init;
+        # supply explicit reconstruction inputs, retaining the emitted owner file.
+        child_agent._reconstruct_context({})
+        assert child_agent._intrinsics["psyche"]({
+            "action": "covenant", "input": {}, "reasoning": "child orientation",
+        }) == {"status": "ok", "covenant": "PARENT COVENANT"}
+        prompt = child_agent._build_system_prompt()
+        assert "PARENT COVENANT" not in prompt
+        assert COVENANT_ROUTE in prompt
+        assert "CHILD COMMENT" in prompt
+        assert (child / "system/covenant.md").read_text() == "PARENT COVENANT"
+    finally:
+        child_agent.stop(timeout=1.0)
+
 
 def test_avatar_manual_states_the_real_spawn_comment_prompt_position() -> None:
     from lingtai.kernel.prompt import SystemPromptManager

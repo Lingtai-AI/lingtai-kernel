@@ -88,17 +88,25 @@ class AgentWorkdirAdapter:
 class AgentPsycheSettingsAdapter:
     """``PsycheSettingsPort`` over the last applied reconstruction snapshot."""
 
-    __slots__ = ("_read",)
+    __slots__ = ("_read", "_read_covenant")
 
     def __init__(
         self,
         read: Callable[[], "PsycheSettingsSnapshotPort"],
+        read_covenant: Callable[[], str] | None = None,
     ) -> None:
         self._read = read
+        self._read_covenant = read_covenant
 
     def read_snapshot(self) -> "PsycheSettingsSnapshotPort":
         """Return the current immutable Psyche owner-input snapshot."""
         return self._read()
+
+    def read_covenant(self) -> str:
+        """Read the loaded body, never the ambient source or configured input."""
+        if self._read_covenant is None:
+            raise RuntimeError("Covenant reader is unavailable")
+        return self._read_covenant()
 
 
 class AgentActiveProviderAdapter:
@@ -1327,7 +1335,8 @@ def agent_host_ports(
         )
     elif plugin_name == "psyche":
         ports["psyche_settings"] = AgentPsycheSettingsAdapter(
-            lambda: getattr(agent, "_psyche_settings_snapshot", None)
+            lambda: getattr(agent, "_psyche_settings_snapshot", None),
+            lambda: agent._effective_covenant,
         )
     elif plugin_name == "notification":
         # Import Notification Core lazily at the composition-root boundary. The

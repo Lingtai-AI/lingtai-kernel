@@ -47,7 +47,11 @@ Pinned pytest commands must run from the repo root with the project's Python.
    applied snapshot. Call settings with any input key and record the rejection.
    Hash all prompt/source files around each SHOW call.
 4. Make a durable change with `shell` (a verified exact replacement on the domain's own source, read back afterwards) and confirm the prompt section does not change until one explicit `context(action="rebuild", input={}, reasoning="...")` (or passive refresh/molt) is applied.
-5. Inspect the focused prompt-plan tests and confirm the three static sections are
+5. Call `covenant` with strict empty input. Confirm the complete current loaded
+   body matches configured custom text or mirror fallback, is absent from the
+   resident prompt, and remains unchanged on ambient edits and failed publication.
+   Confirm no source writes or lifecycle calls occur; invalid input is rejected.
+6. Inspect the focused prompt-plan tests and confirm the three static sections are
    composed in order as one immutable candidate, startup passes the exact same
    object through reconstruction, and a failed final flush restores that plan
    with the prior generation's existing rollback state.
@@ -65,7 +69,8 @@ Pinned pytest commands must run from the repo root with the project's Python.
       without rows. No `psyche` action authors, edits, pins, installs, migrates,
       rescans, writes, or reloads — hashes are unchanged.
 - [ ] Step 4: file mutation never hot-loads the prompt; the prompt section updates only after an explicit rebuild or passive reconstruction.
-- [ ] Step 5: the static plan is read/applied once per reconstruction, cannot be
+- [ ] Step 5: Covenant body is exact, current, read-only, and separately disclosed.
+- [ ] Step 6: the static plan is read/applied once per reconstruction, cannot be
       mutated through its dataclass/tuple fields, and a failed final flush
       restores the prior plan and the existing rollback state.
 
