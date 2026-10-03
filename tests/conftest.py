@@ -7,6 +7,18 @@ import pytest
 from ._agent_dir_helpers import make_agent_dir as _make_agent_dir
 
 
+@pytest.fixture(autouse=True)
+def _isolate_codex_usage_service(monkeypatch):
+    """Unrelated adapter tests use available included usage, never a live account.
+
+    Credit-policy tests override this response; the HTTP reader itself is tested
+    separately with a mock transport.
+    """
+    from lingtai.llm.openai import codex_usage
+
+    monkeypatch.setattr(codex_usage, "read_included_usage_allowed", lambda **kw: True)
+
+
 @pytest.fixture
 def make_agent_dir():
     """Factory fixture: create a minimal agent working dir.
