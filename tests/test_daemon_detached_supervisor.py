@@ -31,7 +31,10 @@ import sys
 import time
 from pathlib import Path
 
-from lingtai.tools.daemon.run_dir import DaemonRunDir
+from lingtai.tools.daemon.run_dir import (
+    DaemonRunDir,
+    NATIVE_PARENT_MESSAGE_PROTOCOL,
+)
 from lingtai.kernel.daemon_supervisor.manifest import (
     build_manifest,
     write_manifest,
@@ -841,17 +844,31 @@ def test_real_manager_handle_emanate_capsule_and_fresh_active_control(tmp_path, 
     em_id = result["ids"][0]
     run_dir = mgr._emanations[em_id]["run_dir"]
     _poll_until(lambda: _disk_state(run_dir).get("supervisor_pid"), timeout=10)
+    assert (
+        _disk_state(run_dir).get("native_parent_message_protocol")
+        == NATIVE_PARENT_MESSAGE_PROTOCOL
+    )
 
     # A fresh manager resolves the exact run directory, checks supervisor
     # identity, and submits control without adopting the process.
     fresh = DaemonManager(agent)
     ask = fresh.handle({"action": "ask", "id": em_id, "message": "keep going"})
-    assert ask == {"status": "sent", "id": em_id}
+    assert ask == {
+        "status": "queued",
+        "id": em_id,
+        "delivery": "checkpoint_or_text_boundary",
+        "message_id": ask.get("message_id"),
+    }
+    assert isinstance(ask["message_id"], str) and ask["message_id"].startswith("msg-")
     stop = fresh.shutdown_for_agent_stop(reason="agent_stop", wait_timeout=0.0)
     assert stop["cancelled"] == 0
     _poll_until(lambda: _disk_state(run_dir).get("state") == "done", timeout=20)
     check = fresh.handle({"action": "check", "id": em_id})
     assert check["state"] == "done"
+    assert ask["message_id"] in (
+        check["delivered_message_ids"] + check["pending_message_ids"]
+    )
+    assert check["delivered_messages_total"] == len(check["delivered_message_ids"])
     listing = fresh.handle({"action": "list", "include_done": True})
     assert em_id in json.dumps(listing)
 
@@ -2756,14 +2773,20 @@ def test_repeated_watcher_polls_claim_one_ask_request_exactly_once(tmp_path):
         supervisor_runtime._CONTROL_POLL_INTERVAL_S = original_poll_interval
 
     state = DaemonRunDir.read_state_from_disk(run_dir.path)
-    pending = state.get("pending_followups")
-    assert pending == ["REPRO_TOKEN"], (
-        f"expected exactly one queued follow-up, got {pending!r}"
-    )
+    pending = state.get("pending_checkpoint_messages")
+    assert isinstance(pending, list) and len(pending) == 1
+    assert pending[0]["message"] == "REPRO_TOKEN"
+    assert isinstance(pending[0]["id"], str) and pending[0]["id"].startswith("msg-")
+    assert state.get("pending_followups") == []
 
     done_marker = control.done_path(req_path)
     assert done_marker.exists()
-    assert json.loads(done_marker.read_text()).get("status") == "queued"
+    receipt = json.loads(done_marker.read_text())
+    assert receipt["status"] == "queued"
+    assert receipt["delivery"] == "checkpoint_or_text_boundary"
+    assert receipt["message_id"] == pending[0]["id"]
+    assert isinstance(receipt["request_id"], str) and receipt["request_id"]
+    assert receipt["message_id"] == f"msg-control-{receipt['request_id']}"
 
 
 def test_drain_followups_delivers_single_ask_exactly_once(tmp_path):
@@ -2777,15 +2800,61 @@ def test_drain_followups_delivers_single_ask_exactly_once(tmp_path):
     run_dir = _make_run_dir(tmp_path, task="stay-running", timeout_s=120.0)
     run_dir.update_state(state="running")
 
-    assert run_dir.enqueue_followup("REPRO_TOKEN") is True
+    message_id = run_dir.enqueue_checkpoint_message("REPRO_TOKEN")
+    assert isinstance(message_id, str) and message_id.startswith("msg-")
 
     delivered = run_dir.drain_followups()
     assert delivered == "REPRO_TOKEN"
 
-    # A drained queue must be empty and must not silently regrow.
+    # A drained queue must be empty, leave ID-bound evidence, and never regrow.
     state = DaemonRunDir.read_state_from_disk(run_dir.path)
     assert state.get("pending_followups") == []
+    assert state.get("pending_checkpoint_messages") == []
+    assert state.get("delivered_message_ids") == [message_id]
+    assert state.get("last_message_delivery") == {
+        "at": state["last_message_delivery"]["at"],
+        "via": "native_text_boundary",
+        "message_ids": [message_id],
+    }
     assert run_dir.drain_followups() is None
+
+
+def test_legacy_control_watcher_rejects_blank_ask_without_false_terminal_claim(tmp_path):
+    """A legacy-spool whitespace ask reports invalid input while run stays live."""
+    from lingtai.kernel.daemon_supervisor import control
+    from lingtai.tools.daemon import supervisor_runtime
+
+    run_dir = _make_run_dir(tmp_path, task="stay-running", timeout_s=120.0)
+    run_dir.update_state(state="running")
+    req_path = control.submit_request(run_dir.path, "ask", {"message": "  \n\t"})
+
+    cancel_event = threading.Event()
+    timeout_event = threading.Event()
+    watcher = threading.Thread(
+        target=supervisor_runtime._control_and_deadline_watcher,
+        args=(run_dir, cancel_event, timeout_event, time.monotonic() + 120.0, ()),
+        daemon=True,
+    )
+    original_poll_interval = supervisor_runtime._CONTROL_POLL_INTERVAL_S
+    supervisor_runtime._CONTROL_POLL_INTERVAL_S = 0.01
+    try:
+        watcher.start()
+        _poll_until(lambda: control.done_path(req_path).exists(), timeout=5.0)
+    finally:
+        cancel_event.set()
+        watcher.join(timeout=5.0)
+        supervisor_runtime._CONTROL_POLL_INTERVAL_S = original_poll_interval
+
+    receipt = json.loads(control.done_path(req_path).read_text(encoding="utf-8"))
+    assert receipt == {
+        "request_id": receipt["request_id"],
+        "status": "error",
+        "error": "ask message must be a non-blank string",
+    }
+    state = _disk_state(run_dir)
+    assert state["state"] == "running"
+    assert state["pending_followups"] == []
+    assert state["pending_checkpoint_messages"] == []
 
 
 def test_control_receipt_stays_coherent_when_terminal_state_races_ask(tmp_path):

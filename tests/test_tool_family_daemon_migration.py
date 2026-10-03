@@ -392,6 +392,14 @@ def test_ask_forwards_exactly_id_and_message(tmp_path):
     assert mgr.calls[0] == {"action": "ask", "id": "em-7", "message": "status?"}
 
 
+def test_ask_message_schema_declares_runtime_bounds():
+    message = ASK_INPUT_SCHEMA["properties"]["message"]
+    assert message["type"] == "string"
+    assert message["minLength"] == 1
+    assert message["maxLength"] == 50_000
+    assert message["pattern"] == r"\S"
+
+
 def test_check_forwards_id_last_and_truncate(tmp_path):
     dispatcher, mgr = _dispatcher(tmp_path)
 
