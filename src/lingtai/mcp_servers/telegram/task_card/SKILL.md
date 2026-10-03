@@ -66,6 +66,12 @@ STUCK do not count. Older events, partial intervals, missing anchors and
 restart-crossing gaps omit coffee; only a witnessed zero-length interval can
 show `☕0.0s`. New complete intervals after a restart can be displayed.
 
+`⏱` is the unrounded `↻` gap minus the same API wait and generation time,
+and minus measured same-gap `☕` when present. Thus `⏱104.3s · ☕102.8s`
+becomes `⏱1.5s · ☕102.8s`, with `↻` unchanged. Missing coffee keeps the
+previous inclusive residual (not a claim of zero idle); negative residuals
+are omitted, not clamped.
+
 `⚡` measures actual stream dispatch to first nonempty **text or tool
 name/argument payload**. Reasoning, ids, lifecycle, heartbeat, usage and empty
 events do not count. `tok/s` uses final provider output (including tools) minus

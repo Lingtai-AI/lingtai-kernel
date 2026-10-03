@@ -571,7 +571,7 @@ def test_other_time_uses_unrounded_gap_and_omits_incomplete_or_negative():
               "generation_tokens": 100}
     render = TaskCardEventProjection.format_divider_info
     text = render(12.345, {"stream_timing": timing}, stream_metrics=True, idle_s=2)
-    assert text.startswith("↻12.3s · ⏱6.5s · ☕2.0s · ⚡1.2s")
+    assert text.startswith("↻12.3s · ⏱4.5s · ☕2.0s · ⚡1.2s")
     assert "⏱" not in render(12.345, {"stream_timing": timing})
     for gap in (None, 0, 5, float("nan"), float("inf")):
         assert "⏱" not in render(gap, {"stream_timing": timing}, stream_metrics=True)
@@ -586,3 +586,18 @@ def test_other_time_uses_unrounded_gap_and_omits_incomplete_or_negative():
               for i, ts in enumerate((100.0, 112.345))]
     groups = TaskCardEventProjection.group_events(events)
     assert groups[1]["events"][0]["api_delay_s"] == 112.345 - 100.0
+
+
+def test_residual_subtracts_measured_idle_without_changing_gap_or_speed():
+    render = TaskCardEventProjection.format_divider_info
+    usage = {"stream_timing": {"first_token_s": 9.4, "generation_s": 7.3,
+                               "generation_tokens": 190}}
+    assert render(121.0, usage, stream_metrics=True, idle_s=102.8) == (
+        "↻121.0s · ⏱1.5s · ☕102.8s · ⚡9.4s · 26 tok/s")
+    # Missing/invalid idle is not a measured zero: retain the prior inclusive
+    # residual, without claiming coffee, rather than inventing an idle value.
+    for idle in (None, True, -1, float("nan"), float("inf")):
+        assert render(121, usage, stream_metrics=True, idle_s=idle) == (
+            "↻121.0s · ⏱104.3s · ⚡9.4s · 26 tok/s")
+    assert "⏱" not in render(121, usage, stream_metrics=True, idle_s=105)
+    assert "☕105.0s" in render(121, usage, stream_metrics=True, idle_s=105)

@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 14
+contract_version: 15
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -118,6 +118,10 @@ semantics live here. The public producer contract lives in
     witnessed zero-length interval. Tools, prompt build, queue/network wait,
     ASLEEP and STUCK are not counted. Existing gap, stream timing and speed
     numerator remain unchanged (guarded by [TT002](BEHAVIORS.md#behavior-tt002)).
+    `⏱` subtracts the same API first-output wait, generation duration and
+    any measured same-gap `☕` IDLE from the unrounded progress gap. Negative
+    or incomplete timing omits the residual; unobserved IDLE retains the
+    prior inclusive residual, without claiming zero idle. Coffee is unchanged.
     Other channels keep their existing layout. Telegram alone also opts into
     one extra plain price line immediately after the token metrics line per API call, compact on one line and mirroring that row's
     symbols: `$<total>[+] · ↓<$> ↑<$> | <$>[ stale prices]` (no tokens/second figure) where
