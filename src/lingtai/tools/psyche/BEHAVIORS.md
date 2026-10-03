@@ -40,7 +40,7 @@ Pinned pytest commands must run from the repo root with the project's Python.
 1. From `<repo>`, run `python -m pytest -q tests/test_psyche_family.py tests/test_psyche_prompt_settings.py` and capture the outcome.
 2. Call `pad | lingtai | knowledge | skills | manual` with strict empty input;
    confirm each returns its intended manual.
-3. Call `settings` with strict empty input and record the eight rows. Edit the
+3. Call `settings` with strict empty input and record the six rows. Edit the
    Psyche owner document without reconstructing, then make it malformed;
    confirm SHOW remains available and unchanged. Restore a valid owner document,
    reconstruct, and confirm the focused provider assertion sees the newly
@@ -61,8 +61,7 @@ Pinned pytest commands must run from the repo root with the project's Python.
       settings discovery, strict owner parsing, and read-only behavior.
 - [ ] Step 2: the five manual bodies are nonempty and distinct.
 - [ ] Step 3: success is exactly `pad`, `pad_file`, `base_prompt`,
-      `base_prompt_file`, `covenant`, `covenant_file`, `comment`, then
-      `comment_file`; each row has exactly `key,current,default,configurable,comment`,
+      `base_prompt_file`, `covenant`, then `covenant_file`; each row has exactly `key,current,default,configurable,comment`,
       both values are `<redacted>`, an ambient source edit or malformed owner
       document cannot change/make SHOW
       unavailable before successful reconstruction, and invalid input fails

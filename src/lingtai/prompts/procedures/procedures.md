@@ -59,7 +59,7 @@ reliable completion notifications; do not poll just to stay active.
 
 ### Keep context and learning useful
 
-Avoid unnecessary raw bulk; follow `meta_guidance` for result compression and
+Avoid unnecessary raw bulk; read `psyche.instructions` and its `meta_guidance` for result compression and
 current context-pressure guidance. Before molt, read `context-manual` and tend
 the durable stores; do not reset merely because a task ended. Preserve private
 facts as knowledge and reusable procedures as skills. At meaningful real-use

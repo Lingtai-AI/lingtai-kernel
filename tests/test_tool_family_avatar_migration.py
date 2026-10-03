@@ -18,7 +18,6 @@ from lingtai.tools.avatar.settings import (
     BOOT_WAIT_SECONDS,
     MISSION_MIN_CHARACTERS,
     MISSION_PLACEHOLDER_PREFIXES,
-    SPAWN_COMMENT_DEFAULT,
     SPAWN_CONFIRM_DEFAULT,
     SPAWN_DRY_RUN_DEFAULT,
     SPAWN_TYPE_DEFAULT,
@@ -130,12 +129,6 @@ def test_avatar_settings_inventory_is_exact_fresh_and_excludes_private_state(
             call_defaults,
         ),
         row("spawn.type.allowed", list(SPAWN_TYPES), list(SPAWN_TYPES), validation),
-        row(
-            "spawn.comment.default",
-            SPAWN_COMMENT_DEFAULT,
-            SPAWN_COMMENT_DEFAULT,
-            call_defaults,
-        ),
         row(
             "spawn.dry_run.default",
             SPAWN_DRY_RUN_DEFAULT,
@@ -374,8 +367,6 @@ def test_avatar_spawn_carries_only_psyche_prompt_owner_for_both_modes(
         "base_prompt": "base fallback",
         "base_prompt_file": base_source.name,
         "covenant": "PARENT COVENANT",
-        "comment": "PARENT COMMENT",
-        "comment_file": "parent-comment.md",
     }), encoding="utf-8")
     system_policy = parent_dir / "settings" / "system.json"
     system_policy.write_text(json.dumps({"schema_version": 2, "max_rpm": 3}), encoding="utf-8")
@@ -393,7 +384,6 @@ def test_avatar_spawn_carries_only_psyche_prompt_owner_for_both_modes(
         "input": {
             "name": f"{avatar_type}-child",
             "type": avatar_type,
-            "comment": "CHILD COMMENT",
             "confirm": True,
         },
         "_reasoning": "Inspect the owner-document inheritance behavior carefully.",
@@ -405,14 +395,12 @@ def test_avatar_spawn_carries_only_psyche_prompt_owner_for_both_modes(
         "base_prompt": "base fallback",
         "base_prompt_file": str(base_source),
         "covenant": "PARENT COVENANT",
-        "comment": "CHILD COMMENT",
     }
     assert (child / "settings" / "psyche.json").read_text(encoding="utf-8") == (
         psyche_settings.serialize_prompt_owner_document(
             base_prompt="base fallback",
             base_prompt_file=str(base_source),
             covenant="PARENT COVENANT",
-            comment="CHILD COMMENT",
         )
     )
     assert not (child / "settings" / "system.json").exists()
@@ -434,28 +422,17 @@ def test_avatar_spawn_carries_only_psyche_prompt_owner_for_both_modes(
         }) == {"status": "ok", "covenant": "PARENT COVENANT"}
         prompt = child_agent._build_system_prompt()
         assert "PARENT COVENANT" not in prompt
-        assert COVENANT_ROUTE in prompt
-        assert "CHILD COMMENT" in prompt
+        assert 'psyche(action="covenant", input={})' in prompt
         assert (child / "system/covenant.md").read_text() == "PARENT COVENANT"
     finally:
         child_agent.stop(timeout=1.0)
 
 
-def test_avatar_manual_states_the_real_spawn_comment_prompt_position() -> None:
-    from lingtai.kernel.prompt import SystemPromptManager
-
-    manual = (Path(avatar.__file__).parent / "manual" / "SKILL.md").read_text(
-        encoding="utf-8"
-    )
-    order = SystemPromptManager._DEFAULT_ORDER
-
-    assert "reference/spawn.md" in manual
-    spawn = (Path(avatar.__file__).parent / "manual/reference/spawn.md").read_text(
-        encoding="utf-8"
-    )
-    assert "rendered last, after memory" not in manual + spawn
-    assert "after `meta_guidance` and before `rules`" in " ".join(spawn.split())
-    assert order.index("meta_guidance") < order.index("comment") < order.index("rules")
+def test_avatar_manual_teaches_authorized_pad_instead_of_spawn_comment():
+    spawn = (Path(avatar.__file__).parent / "manual/reference/spawn.md").read_text()
+    assert "authorized Pad" not in spawn or "authorization" in spawn
+    assert "No spawn comment" in spawn or "No spawn comment" in " ".join(spawn.split())
+    assert "not a spawn comment" in (Path(avatar.__file__).parent / "manual/SKILL.md").read_text()
 
 
 def test_agent_mounts_avatar_only_through_the_official_registrar(tmp_path):

@@ -228,10 +228,7 @@ def test_avatar_prompt_owner_document_inherits_only_base_and_covenant(tmp_path):
             "base_prompt_file": str(tmp_path / "parent-base.md"),
             "covenant": "parent covenant",
             "covenant_file": str(tmp_path / "parent-covenant.md"),
-            "comment": "parent comment",
-            "comment_file": str(tmp_path / "parent-comment.md"),
         },
-        comment="child spawn comment",
     )
     from lingtai.tools.psyche.settings import serialize_prompt_owner_document
 
@@ -240,5 +237,4 @@ def test_avatar_prompt_owner_document_inherits_only_base_and_covenant(tmp_path):
         base_prompt_file=str(tmp_path / "parent-base.md"),
         covenant="parent covenant",
         covenant_file=str(tmp_path / "parent-covenant.md"),
-        comment="child spawn comment",
     )

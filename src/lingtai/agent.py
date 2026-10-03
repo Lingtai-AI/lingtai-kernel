@@ -2560,7 +2560,7 @@ class Agent(BaseAgent):
             # Directly constructed/testing agents may legitimately have no
             # init.json, but an existing unreadable/invalid file is a failed
             # configured source and must fail loud. Treating both as `{}` would
-            # silently delete config-only sections (for example comment) even
+            # silently delete config-only sections even
             # though the init reader promised KEEP_PREVIOUS_EFFECTIVE.
             if data is None:
                 if (self._working_dir / "init.json").is_file():
@@ -2585,7 +2585,7 @@ class Agent(BaseAgent):
                 if file_key in data:
                     data[key] = resolve_file(data.get(key), data.pop(file_key))
 
-        # Psyche owns the three configurable prompt pairs. The complete
+        # Psyche owns the two configurable prompt pairs. The complete
         # immutable plan was resolved before this composition transaction, then
         # its inputs are overlaid only into this local composition input. `data`
         # remains the effective init mapping and is never mutated with owner
@@ -2595,7 +2595,6 @@ class Agent(BaseAgent):
         data.update({
             "base_prompt": psyche_prompt_inputs.base_prompt,
             "covenant": psyche_prompt_inputs.covenant,
-            "comment": psyche_prompt_inputs.comment,
         })
 
         system_dir = self._working_dir / "system"
@@ -2627,8 +2626,8 @@ class Agent(BaseAgent):
 
         # --- Base prompt (third-party prompt injection point) ---
         # `base_prompt` is the Psyche-owned third-party (application / recipe /
-        # preset) system-prompt injection point — one of the three configurable
-        # prompt surfaces (with `covenant` and `comment`).
+        # preset) system-prompt injection point — one of the two configurable
+        # prompt surfaces (with `covenant`).
         # It is NOT a prompt-manager section: the kernel builder renders it right
         # after the raw kernel-owned `principle` section and before the rest of
         # Batch 1 (see lingtai.kernel.prompt.build_system_prompt_batches), so it
@@ -2686,20 +2685,6 @@ class Agent(BaseAgent):
         # post-molt hook ordering.
         from lingtai.tools.lingtai import _lingtai_load
         _lingtai_load(self, {}, publish=False)
-
-        # --- Rules (from system/rules.md, not init.json) ---
-        rules_md = system_dir / "rules.md"
-        if rules_md.is_file():
-            try:
-                rules_content = rules_md.read_text(encoding="utf-8").strip()
-                if rules_content:
-                    self._prompt_manager.write_section("rules", rules_content, protected=True)
-                else:
-                    self._prompt_manager.delete_section("rules")
-            except OSError:
-                pass
-        else:
-            self._prompt_manager.delete_section("rules")
 
         # --- Pad (pad.md + pinned pad_append.json references) ---
         # Configured Pad content is an initial seed, not an authoritative
@@ -2772,13 +2757,6 @@ class Agent(BaseAgent):
         except Exception:
             if not guidance_file.is_file():
                 guidance_file.write_text("{}\n", encoding="utf-8")
-        # --- Comment ---
-        comment = data.get("comment", "")
-        if comment:
-            self._prompt_manager.write_section("comment", comment)
-        else:
-            self._prompt_manager.delete_section("comment")
-
         # Return discovery state to the full reconstruction seam. It publishes
         # this immutable snapshot only after the final prompt flush succeeds.
         from lingtai.tools.psyche.settings import PsycheSettingsSnapshot
@@ -2790,8 +2768,6 @@ class Agent(BaseAgent):
             base_prompt_file=psyche_prompt_inputs.base_prompt_file,
             covenant=psyche_prompt_inputs.covenant,
             covenant_file=psyche_prompt_inputs.covenant_file,
-            comment=psyche_prompt_inputs.comment,
-            comment_file=psyche_prompt_inputs.comment_file,
         )
 
     def _build_launch_cmd(self) -> list[str] | None:

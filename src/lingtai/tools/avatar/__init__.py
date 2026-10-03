@@ -7,7 +7,7 @@ an append-only spawn ledger, and outlive the parent's context.
 The single public ``avatar`` tool exposes strict ``spawn``, read-only ``settings``,
 and package-local ``manual`` actions. Spawn's mission is root ``reasoning``
 (normalized to ``_reasoning``), never nested input. Avatar has no rules action or
-automatic rules fan-out; the shared ``.rules`` protocol remains kernel/Psyche
+automatic rules fan-out; the kernel ``.rules`` consumer and protected injection are retired
 state. The declared plugin receives only its workdir and Avatar-parent ports.
 """
 from __future__ import annotations
@@ -43,7 +43,6 @@ from .settings import (
     BOOT_WAIT_SECONDS,
     MISSION_MIN_CHARACTERS,
     MISSION_PLACEHOLDER_PREFIXES,
-    SPAWN_COMMENT_DEFAULT,
     SPAWN_CONFIRM_DEFAULT,
     SPAWN_DRY_RUN_DEFAULT,
     SPAWN_TYPE_DEFAULT,
@@ -119,10 +118,6 @@ _SPAWN_INPUT_SCHEMA: dict[str, Any] = {
             "enum": [*SPAWN_TYPES, None],
             "description": "'shallow' (default) copies init plus narrow Psyche inputs; 'deep' adds identity/knowledge. Null uses shallow.",
         },
-        "comment": {
-            "type": ["string", "null"],
-            "description": "Persistent child-prompt note; not inherited. Null or empty means none.",
-        },
         "dry_run": {
             "type": ["boolean", "null"],
             "description": "Preview without writes/process, not launch admission; null is false.",
@@ -132,7 +127,7 @@ _SPAWN_INPUT_SCHEMA: dict[str, Any] = {
             "description": "Acknowledge reviewed empty/short/placeholder reasoning; null is false.",
         },
     },
-    "required": ["name", "type", "comment", "dry_run", "confirm"],
+    "required": ["name", "type", "dry_run", "confirm"],
     "additionalProperties": False,
 }
 
@@ -480,7 +475,6 @@ class AvatarManager:
                     "mission_chars": len(preview_mission),
                     "mission_unsafe": unsafe,
                     "mission_reason": reason if unsafe else "",
-                    "comment": args.get("comment", SPAWN_COMMENT_DEFAULT),
                 },
                 "message": "Dry run — no process spawned, no files written.",
             }
@@ -555,9 +549,8 @@ class AvatarManager:
                 first_prompt = f"{parent_prompt}\n\n{reasoning.strip()}"
 
         # Write avatar's init.json (modified copy of parent's).
-            avatar_comment = args.get("comment", SPAWN_COMMENT_DEFAULT)
             avatar_init = self._make_avatar_init(
-                parent_init, peer_name, comment=avatar_comment,
+                parent_init, peer_name,
                 parent_working_dir=parent_working_dir,
             )
             (avatar_working_dir / "init.json").write_text(
@@ -566,7 +559,6 @@ class AvatarManager:
             )
             avatar_psyche = self._make_avatar_psyche_settings(
                 parent_psyche,
-                comment=avatar_comment,
             )
             (avatar_working_dir / "settings").mkdir(exist_ok=True)
             (avatar_working_dir / "settings" / "psyche.json").write_text(
@@ -700,7 +692,6 @@ class AvatarManager:
     @staticmethod
     def _make_avatar_init(
         parent_init: dict, name: str, *,
-        comment: str = "",
         parent_working_dir: "Path | None" = None,
     ) -> dict:
         """Build avatar's init.json from parent's, setting name.
@@ -784,15 +775,15 @@ class AvatarManager:
 
     @staticmethod
     def _make_avatar_psyche_settings(
-        parent_values: Mapping[str, str], *, comment: str,
+        parent_values: Mapping[str, str],
     ) -> str:
         """Build the narrow child prompt-owner document.
 
         Only Psyche's base-prompt and covenant pairs carry forward. A parent
         relative pointer has already been anchored by the owner reader, so this
         preserves its source meaning without copying any System runtime policy
-        or another owner's settings document. The child always gets its spawn
-        comment and never inherits a parent comment pointer.
+        or another owner's settings document. Durable child instructions use
+        ordinary authorized Pad edits; no spawn comment is persisted.
         """
         from lingtai.tools.psyche.settings import serialize_prompt_owner_document
 
@@ -801,7 +792,6 @@ class AvatarManager:
             base_prompt_file=parent_values.get("base_prompt_file"),
             covenant=parent_values.get("covenant"),
             covenant_file=parent_values.get("covenant_file"),
-            comment=comment,
         )
 
     # ------------------------------------------------------------------

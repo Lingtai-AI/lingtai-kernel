@@ -98,10 +98,11 @@ sources, catalog INDEX ↔ catalog sections).
 
 ## Render ownership and definition vs injection
 
-Rendered system-prompt order (owned by `src/lingtai/kernel/prompt.py`, mapped in
-the kernel-root anatomy):
-`principle → covenant → tools → substrate → procedures → meta_guidance →
-comment → rules → mcp → skills → knowledge → identity → character → pad`.
+Rendered system-prompt order is owned by `src/lingtai/kernel/prompt.py`:
+one short fixed `INSTRUCTIONS_ENTRY`, resident user base prompt and optional
+opt-in tool prose; then dynamic skills/plugin/MCP/knowledge catalogs,
+mechanical identity, character and Pad in the second cache batch. Full loaded
+fixed owners are read through `psyche.instructions`, not separate headers.
 
 Each section has a `<section>/<section>.yaml` definition. Bodies split three ways:
 
@@ -114,13 +115,11 @@ Each section has a `<section>/<section>.yaml` definition. Bodies split three way
 - **Generated sections** — `meta_guidance` (from `meta_guidance/catalog/`), `tools`
   (tool registry), `mcp` (MCP state), `skills`/`knowledge` (registries), `identity`
   (runtime facts). No packaged body; content is built each turn.
-- **Injected sections** — `covenant` and `comment` are supplied by Psyche's
-  closed `settings/psyche.json` owner document. Covenant keeps
-  `system/covenant.md` as a complete durable mirror/fallback. The loaded Covenant
-  body is retained outside the resident prompt; its protected slot renders
-  `kernel/prompt.py::COVENANT_ROUTE`, and `psyche.covenant` reads the effective
-  body without source I/O. Comment has no mirror or fallback. `rules`, `character`, and `pad` come from their existing
-  persistent/configured sources. None has a packaged prompt body.
+- **Injected sections** — Covenant is supplied by Psyche's closed owner document,
+  with its complete durable mirror/fallback and effective body disclosed by
+  `psyche.covenant`; the short route merges into the unified entry. Character and
+  Pad keep their persistent/configured sources. Comment and rules definitions are
+  retirement records, with no active inputs, readers or injection.
 
 For the generated `tools` section, `src/lingtai/kernel/base_agent/tools.py`
 collects canonical-English descriptions and parameter schemas, then appends the
@@ -165,7 +164,7 @@ and `override_policy`.
   separate because it nests one level deeper than `prompts/*/*.md`; all carried into
   sdists by `MANIFEST.in`'s recursive prompt includes).
 - Disk mirrors written per-workdir on boot/refresh: `system/{principle,substrate,
-  procedures,covenant,rules,pad,lingtai}.md` and the derived `system/guidance.json`.
+  procedures,covenant,pad,lingtai}.md` and the derived `system/guidance.json`.
 
 ## Notes
 
@@ -190,3 +189,16 @@ and `override_policy`.
   reached by crawling `related_files`, not inlined. The core five (principle/covenant/
   substrate/procedures/meta_guidance) are reciprocally linked among their peer YAMLs;
   peripheral sections link to the hub sections (procedures/substrate) one-directionally.
+
+## Current resident projection and retirement
+
+The one resident fixed prefix is `kernel/prompt.py::INSTRUCTIONS_ENTRY`.
+Principle/substrate/procedures retain their full packaged loaded bodies and
+mirrors, disclosed by `psyche.instructions`; assembled meta guidance and adapter
+static rules use the same route. Covenant fulltext uses `psyche.covenant`; its
+brief pre-action route is merged into the entry. Earlier segmented-render
+positions above describe source ownership, not the current resident projection.
+Comment/rules YAMLs are retirement records only: no configured comment input,
+spawn note, rules file reader, heartbeat consume or protected injection remains.
+Existing runtime files are untouched. Base prompt and dynamic memories retain
+resident injection and their existing ownership.

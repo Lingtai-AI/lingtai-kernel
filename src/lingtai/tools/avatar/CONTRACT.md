@@ -1,7 +1,7 @@
 ---
 name: avatar-contract
 tool: avatar
-contract_version: 9
+contract_version: 10
 related_files:
   - src/lingtai/tools/avatar/BEHAVIORS.md
   - src/lingtai/tools/avatar/__init__.py
@@ -54,14 +54,9 @@ also gone, so that Port method was removed too —
 `src/lingtai/kernel/tool_plugin/CONTRACT.md` contract_version 4). This is
 **not** a relocation: nothing else in the kernel or another tool now performs
 an authorization-gated rules broadcast. The underlying `.rules` heartbeat
-signal, `system/rules.md` persistence, and protected prompt-section injection
-in `src/lingtai/kernel/base_agent/lifecycle.py` are **unchanged** — any agent
-may still write a `.rules` file to an explicitly targeted path itself (e.g.
-via `shell`), and ordinary deep-copy spawn behavior (`_prepare_deep` copying
-the whole `system/` tree, including any `system/rules.md` it contains) is also
-unchanged. See `psyche-manual` for the `.rules` protocol and `avatar-manual`
-§9 for the signpost. Avatar's manual now points to Psyche's manual instead of
-teaching this protocol itself.
+consumer, `system/rules.md` reader and protected injection are now also retired.
+Existing files are untouched and inert; ordinary deep-copy of `system/` may
+carry those inert files, but never restores their interpretation.
 
 **contract_version 2** (breaking): the former two-tool surface (`avatar_spawn`,
 `avatar_rules`) was merged into the single `avatar` tool below. `avatar_spawn`
@@ -87,7 +82,7 @@ per-action `input` object, and the model-facing root is exactly `action`,
 - Public tool name and action values were **unchanged** at contract_version 4:
   `avatar` with `spawn | rules | manual` (`rules` was later removed at
   contract_version 9 — see above).
-- `spawn` owns `name`, `type`, `comment`, `dry_run`, `confirm`. `manual` has
+- `spawn` owns `name`, `type`, `dry_run`, `confirm`. `manual` has
   strict empty input. A key belonging to another action's branch, an unknown
   root field, a non-boolean `summarize`, or a missing/non-object `input` is
   rejected **before any handler I/O** with the generic typed failure
@@ -141,8 +136,8 @@ Guarded by: [AV001](BEHAVIORS.md#behavior-av001),
   init.json plus narrow Psyche owner-document rewrite for a newborn avatar, or
   the `.prompt` signal file.
 - You are looking for `.rules`/rules distribution: that mechanism is no longer
-  Avatar's — see `src/lingtai/kernel/base_agent/lifecycle.py` and
-  `psyche-manual`.
+  supported at all — the consumer and protected injection are retired;
+  `psyche-manual` documents ordinary authorized Pad edits.
 
 **Do not use this for:**
 - Ephemeral in-process subagents/emanations: use `daemon` (see
@@ -233,13 +228,13 @@ another action's branch (`{"status": "failed", "error_code":
 
 ### `avatar` — `action="spawn"`
 
-`input` owns exactly `name`, `type`, `comment`, `dry_run`, `confirm`. The
+`input` owns exactly `name`, `type`, `dry_run`, `confirm`. The
 mission/task brief is root `reasoning` (injected as `_reasoning`), not an
 `input` property, and is scoped to the single call that carried it.
 
 | Input | Optional input | Success output | Error / gate shapes |
 |---|---|---|---|
-| `name` (required) | `type` (`shallow`\|`deep`, default `shallow`), `comment`, `dry_run`, `confirm` — nullable; null means absent | `{status: "ok", address, agent_name, type, pid, warning?}` (`warning` when boot is `slow`) | `{error: ...}` — missing/invalid name, bad type, missing parent `init.json`, path escapes network root, dir exists, or boot `failed` (with stderr tail); `{status: "confirmation_needed", warning, reason, preview}` on the mission-quality gate; `{status: "already_active", working_dir, message}` if a live peer of that name exists; `{status: "dry_run", preview, message}` when `dry_run=true` |
+| `name` (required) | `type` (`shallow`\|`deep`, default `shallow`), `dry_run`, `confirm` — nullable; null means absent | `{status: "ok", address, agent_name, type, pid, warning?}` (`warning` when boot is `slow`) | `{error: ...}` — missing/invalid name, bad type, missing parent `init.json`, path escapes network root, dir exists, or boot `failed` (with stderr tail); `{status: "confirmation_needed", warning, reason, preview}` on the mission-quality gate; `{status: "already_active", working_dir, message}` if a live peer of that name exists; `{status: "dry_run", preview, message}` when `dry_run=true` |
 
 The mission-quality gate refuses empty / very short (<20 chars) / debug-placeholder
 missions unless `confirm=true`; `dry_run` is exempt. Avatar names must match
@@ -309,7 +304,7 @@ the network root (`<parent>/..`):
 
 <network-root>/<avatar-name>/     # sibling of the parent
   init.json                       # rewritten copy of parent's init.json
-  settings/psyche.json            # base/covenant inheritance + spawn comment
+  settings/psyche.json            # base/covenant inheritance
   .prompt                         # first-turn brief (parent identity + reasoning), consumed once
   logs/spawn.stderr               # captured child stderr for boot diagnosis
   logs/agent.log                  # rotating stdlib logging (boot + runtime warnings)
@@ -319,22 +314,18 @@ the network root (`<parent>/..`):
                                    # ordinary deep copy, not an Avatar-owned write)
 ```
 
-`<parent>/system/rules.md` and `<parent>/.rules` / `<avatar>/.rules` are real,
-unchanged kernel state (`src/lingtai/kernel/base_agent/lifecycle.py`) that
-Avatar simply no longer writes to at spawn or through a dedicated action — see
-contract_version 9 and `psyche-manual`.
+Old `system/rules.md` and `.rules` files are inert and left untouched. No
+heartbeat consumer or protected rules injection remains.
 
 The avatar's `init.json` is a deep copy of the parent's with: `agent_name` set,
-`lingtai` seed blanked, `admin` cleared, all six inert legacy prompt fields and
+`lingtai` seed blanked, `admin` cleared, inert legacy and retired prompt fields and
 kernel/secretary prompt-override fields plus `addons` stripped, relative preset
 paths re-rooted, and the avatar pinned to the parent's **default** preset. Its
-separate Psyche document retains only parent base/covenant inputs, anchors their
-relative pointers to the parent workdir, replaces comment with the spawn comment,
-and omits `comment_file`. Avatar delegates the document bytes to Psyche's public
-v1 serializer rather than naming that schema itself. The spawn comment renders
-in the `comment` section after `meta_guidance` and before `rules`; this states
-position, not precedence over later sections. The spawn brief is delivered
-out-of-band via the `.prompt` signal file, not the `lingtai` seed.
+separate Psyche document retains only parent base/covenant inputs and anchors
+relative pointers to the parent workdir. The public spawn `comment` argument,
+settings row and Psyche persistence are retired. Root `reasoning` remains the
+one-time purpose brief via `.prompt`; durable instructions are ordinary
+user/agent-authorized Pad edits, not a new spawn field or broadcast.
 
 Each spawn appends a ledger record (`event: "avatar"`, `name`, `working_dir`,
 `mission`, `type`, `pid`, `boot_status`, optional `boot_error`).

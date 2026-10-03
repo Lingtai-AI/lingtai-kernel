@@ -53,7 +53,6 @@ DEPRECATED_TOP_FIELDS: set[str] = {
 LEGACY_MIGRATED_TOP_FIELDS: set[str] = {
     "base_prompt", "base_prompt_file",
     "covenant", "covenant_file",
-    "comment", "comment_file",
     "principle", "principle_file",
     "procedures", "procedures_file",
     "substrate", "substrate_file",
@@ -337,7 +336,12 @@ def validate_init(data: dict) -> list[str]:
     # Warn about unknown top-level keys
     for key in data:
         if key not in TOP_KNOWN:
-            warnings.append(f"unknown top-level field: {key}")
+            guidance = (
+                "; retired: remove this field and put desired instructions in "
+                "system/pad.md through an authorized edit"
+                if key in {"comment", "comment_file"} else ""
+            )
+            warnings.append(f"unknown top-level field: {key}{guidance}")
 
     manifest = data["manifest"]
     _require_keys(manifest, MANIFEST_REQUIRED, prefix="manifest")

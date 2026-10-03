@@ -756,7 +756,7 @@ def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
             "output": 636,
             "thinking": 40,
         },
-        "ref": "See meta_guidance.token_efficiency for details.",
+        "ref": 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.',
     }
     # The unified token_usage block is the sole token diagnostics carrier; the
     # separate token_efficiency block must be gone.
@@ -860,7 +860,7 @@ def test_build_tool_meta_token_usage_compacts_full_snapshot_to_exact_keys():
             "output": 636,
             "thinking": 40,
         },
-        "ref": "See meta_guidance.token_efficiency for details.",
+        "ref": 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.',
     }
     # current_call carries none of the context-state keys anymore.
     assert not (_SESSION_CONTEXT_STATE_KEYS & set(compact[_TOKEN_USAGE_CURRENT_CALL_KEY]))
@@ -921,7 +921,7 @@ def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
             # ctx_total_tokens, so context_tokens/context_usage are unresolvable.
         },
         # short guidance hook, shared across both halves
-        "ref": "See meta_guidance.token_efficiency for details.",
+        "ref": 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.',
     }
     # No dropped/noisy keys leak into either half — and the hook is the short
     # `ref`, never the long `guidance_ref`. context_usage/window no longer sit
@@ -987,7 +987,7 @@ def test_build_tool_meta_token_usage_preserves_zero_and_sentinel_values():
             "output": 0,
             "thinking": 0,
         },
-        "ref": "See meta_guidance.token_efficiency for details.",
+        "ref": 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.',
     }
 
 
@@ -1003,7 +1003,7 @@ def test_build_tool_meta_token_usage_robust_to_missing_fields():
 
     assert compact == {
         "current_call": {"input": 100, "cache_rate": 0.5},
-        "ref": "See meta_guidance.token_efficiency for details.",
+        "ref": 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.',
     }
 
 
@@ -1346,7 +1346,7 @@ def test_token_usage_block_carries_short_guidance_ref():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert compact["ref"] == "See meta_guidance.token_efficiency for details."
+    assert compact["ref"] == 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.'
     assert "guidance_ref" not in json.dumps(compact)
     # The ref is not duplicated inside the halves.
     assert "ref" not in _current_call_half(compact)
@@ -1944,7 +1944,7 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
     assert "digest" not in persistent_email
     assert persistent_email["emails"][0]["message"] == "Full email body"
     assert first.metadata["agent_meta"]["guidance"]["transient"] == {
-        "ref": "meta_guidance.notification_handling",
+        "ref": 'psyche(action="instructions", input={}): meta_guidance.notification_handling',
         "sources": ["email"],
     }
     assert "notification_guidance" not in first.metadata["agent_meta"]["notifications"]["attention"]["email"]
@@ -3323,7 +3323,7 @@ def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):
     ]
     assert "notification_guidance" not in payload
     assert meta["guidance"]["transient"] == {
-        "ref": "meta_guidance.notification_handling",
+        "ref": 'psyche(action="instructions", input={}): meta_guidance.notification_handling',
         "sources": ["mcp.telegram"],
     }
 
