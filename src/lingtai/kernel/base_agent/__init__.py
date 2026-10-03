@@ -640,8 +640,11 @@ class BaseAgent:
         self._prompt_manager = SystemPromptManager()
         if principle:
             self._prompt_manager.write_section("principle", principle, protected=True)
+        self._effective_covenant = covenant
         if covenant:
-            self._prompt_manager.write_section("covenant", covenant, protected=True)
+            from ..prompt import COVENANT_ROUTE
+
+            self._prompt_manager.write_section("covenant", COVENANT_ROUTE, protected=True)
         if substrate:
             self._prompt_manager.write_section("substrate", substrate, protected=True)
         if procedures:

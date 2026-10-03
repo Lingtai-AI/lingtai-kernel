@@ -199,6 +199,13 @@ Platform profiles are selector-composed at the composition roots
 
 ## Contract rules
 
+Covenant construction retains the complete effective constructor/mirror body
+outside resident prompt state. Its protected slot carries only the discovery
+route and immediate pre-action gates; the existing read-only Psyche host Port
+returns the loaded body. Agent reconstruction preserves source precedence and
+rolls the body back with the applied generation. The detailed disclosure promise
+is owned by [Psyche](../../tools/psyche/CONTRACT.md).
+
 `agent_state.idle_elapsed_s` is optional finite nonnegative monotonic seconds
 from true IDLE entry to exit, emitted only when leaving IDLE with an anchor.
 ACTIVE/tools, prompt build, queue/network wait, ASLEEP and STUCK are not IDLE.

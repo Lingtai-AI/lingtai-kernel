@@ -43,12 +43,18 @@ only if the domain is unclear. There is no required router-then-domain double re
 | `psyche(action="lingtai", input={}, reasoning="load identity guidance")` | LingTai manual: `system/lingtai.md` |
 | `psyche(action="knowledge", input={}, reasoning="load knowledge guidance")` | Knowledge manual: `knowledge/<name>/KNOWLEDGE.md` |
 | `psyche(action="skills", input={}, reasoning="load skills guidance")` | Skills manual: `.library/{intrinsic,custom}/` and configured paths |
+| `psyche(action="covenant", input={}, reasoning="load the effective Covenant")` | current loaded Covenant body, not a tool manual; custom source/mirror preserved |
 | `psyche(action="settings", input={}, reasoning="inspect Psyche settings")` | redacted settings SHOW |
 | `psyche(action="manual", input={}, reasoning="load the routing table")` | this router |
 
-All six actions require strict empty `input` and are read-only: no authoring,
+All seven actions require strict empty `input` and are read-only: no authoring,
 editing, pinning, installing, migration, catalog rescan, or prompt reload. Keep
 root `summarize=false` when exact guidance matters.
+
+Read `covenant` on first orientation and before discussing duties, collaboration,
+learning, or memory, not on every call. It returns the current effective body;
+ambient edits do not change it until successful reconstruction. No installed
+manual/default substitutes for a configured Covenant. Empty means none is loaded.
 
 ## One mutation model
 

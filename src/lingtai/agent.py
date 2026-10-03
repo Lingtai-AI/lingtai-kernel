@@ -2491,6 +2491,7 @@ class Agent(BaseAgent):
         prior_base_prompt = getattr(self, "_base_prompt", missing_base_prompt)
         prior_snapshot = self._psyche_settings_snapshot
         prior_prompt_plan = self._psyche_prompt_plan
+        prior_covenant = self._effective_covenant
         prior_token_decomp_dirty = self._token_decomp_dirty
         system_dir = self._working_dir / "system"
         generation_mirrors = (
@@ -2526,6 +2527,7 @@ class Agent(BaseAgent):
                 self._base_prompt = prior_base_prompt
             self._psyche_settings_snapshot = prior_snapshot
             self._psyche_prompt_plan = prior_prompt_plan
+            self._effective_covenant = prior_covenant
             self._token_decomp_dirty = prior_token_decomp_dirty
 
             from lingtai.kernel._fsutil import atomic_write_text
@@ -2654,9 +2656,14 @@ class Agent(BaseAgent):
         if covenant:
             covenant_file.write_text(covenant, encoding="utf-8")
         elif covenant_file.is_file():
-            covenant = covenant_file.read_text(encoding="utf-8")
+            from lingtai.kernel._frontmatter import strip_frontmatter
+
+            covenant = strip_frontmatter(covenant_file.read_text(encoding="utf-8"))
+        self._effective_covenant = covenant
         if covenant:
-            self._prompt_manager.write_section("covenant", covenant, protected=True)
+            from lingtai.kernel.prompt import COVENANT_ROUTE
+
+            self._prompt_manager.write_section("covenant", COVENANT_ROUTE, protected=True)
         else:
             self._prompt_manager.delete_section("covenant")
 

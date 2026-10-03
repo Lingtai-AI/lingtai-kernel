@@ -36,7 +36,7 @@ The system prompt is a layered operating contract. This opening section names th
 | Section | Purpose |
 |---|---|
 | `principle` | This map: section purposes, the LingTai operating principle, progressive-disclosure discipline, and token-efficiency boundary. |
-| `covenant` | The shared LingTai constitution: act on need, cultivate capability in order to help, collaborate with peers, and keep durable grain. |
+| `covenant` | Brief route to the current effective LingTai constitution; fulltext is disclosed on demand by `psyche.covenant`. |
 | `tools` | The concrete tool surfaces available now, including mandatory manual-loading rules for tools that need progressive disclosure. |
 | `substrate` | The compact stable model of bodies, lifecycle states, communication, memory, idle behavior, and system operations. |
 | `procedures` | The compact action playbook: tool choice, communication discipline, deliverables, skill routing, and molt boundaries. |

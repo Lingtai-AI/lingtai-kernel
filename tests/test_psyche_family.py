@@ -19,7 +19,7 @@ from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 MANUAL_ACTIONS = ["pad", "lingtai", "knowledge", "skills", "manual"]
-EXPECTED_ACTIONS = ["pad", "lingtai", "knowledge", "skills", "settings", "manual"]
+EXPECTED_ACTIONS = ["pad", "lingtai", "knowledge", "skills", "covenant", "settings", "manual"]
 
 #: Which installed manual each action must return, by its `.library` directory.
 EXPECTED_MANUAL_DIR = {
@@ -87,6 +87,7 @@ def test_every_child_input_is_the_canonical_strict_empty_object():
         "lingtai input",
         "knowledge input",
         "skills input",
+        "covenant input",
         "settings inventory input",
         "manual input",
     ]
@@ -635,7 +636,7 @@ def test_unknown_or_retired_action_is_rejected(tmp_path, action):
     try:
         result = _call(agent, action)
         assert "Unknown psyche action" in result["error"]
-        assert "pad, lingtai, knowledge, skills, settings, manual" in result["error"]
+        assert ", ".join(EXPECTED_ACTIONS) in result["error"]
     finally:
         agent.stop(timeout=1.0)
 

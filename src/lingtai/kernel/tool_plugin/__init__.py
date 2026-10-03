@@ -253,6 +253,12 @@ class PsycheSettingsPort(Protocol):
     def read_snapshot(self) -> PsycheSettingsSnapshotPort:
         """Return the current applied Psyche owner-input snapshot."""
 
+    def read_covenant(self) -> str:
+        """Return the current loaded Covenant body, including mirror fallback.
+
+        This grants no source/configuration I/O, mutation, or reconstruction.
+        """
+
 
 class PromptSectionPort(Protocol):
     """Write this plugin's own protected system-prompt section.

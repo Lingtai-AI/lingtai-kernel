@@ -150,6 +150,12 @@ Generic agent kernel. Single class `BaseAgent` with methods distributed across 6
 
 ## State
 
+- `_effective_covenant` retains the complete loaded constructor/mirror body;
+  only `COVENANT_ROUTE` enters the protected resident slot. Agent reconstruction
+  replaces/restores the body with its applied generation; Psyche reads it through
+  the narrow read-only host adapter, never through generic Agent access.
+
+
 - `_set_state` (`src/lingtai/kernel/base_agent/__init__.py:1246-1303`) records
   `idle_elapsed_s` on the existing `agent_state` event only on IDLE exit,
   subtracting the process-local `_idle_since_monotonic` before clearing it.

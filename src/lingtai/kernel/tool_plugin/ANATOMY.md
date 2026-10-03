@@ -123,7 +123,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     `PromptSectionPort`, `AvatarParentPort`, `ContextRuntimePort`,
     `DaemonRuntimePort` (including host-selected explicit-preset requirement and authorization operations), read-only `PluginCatalogPort` (with detached
     `PluginCatalogState`), read-only `PsycheSettingsPort` (returning the
-    structural `PsycheSettingsSnapshotPort`),
+    structural `PsycheSettingsSnapshotPort` and current loaded Covenant body),
     `NotificationStatePort`, Shell's narrow durable `NotificationPort` and
     setup-only `ConfigurationPort`,
     System's bounded lifecycle `SystemRuntimePort` and durable naming

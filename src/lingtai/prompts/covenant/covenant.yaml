@@ -39,7 +39,8 @@ related_files:
     why: >
       Owns the concrete composition rule: _reload_prompt_sections() consumes Psyche's
       resolved covenant input, maintains system/covenant.md as mirror/fallback, and
-      writes the protected `covenant` section.
+      retains the complete effective body and writes only the protected Covenant
+      discovery route; psyche(action='covenant', input={}) discloses the loaded body.
   - path: src/lingtai/tools/psyche/settings.py
     why: >
       Owns the strict settings/psyche.json schema and resolves the
