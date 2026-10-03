@@ -686,3 +686,37 @@ def test_runtime_policy_ownership_model_is_documented_across_normative_sources()
 
     # 4. The old "open implementation question" framing must not regress.
     assert "root-vs-LLM `context_limit` semantics" not in substrate
+
+
+def test_repeated_findings_preserve_mirror(tmp_path, monkeypatch):
+    monkeypatch.setenv("LINGTAI_NUDGE_ENABLED", "on")
+    agent = _Agent(tmp_path)
+    bodies = {
+        "init_config_shape": {"title": "Configuration", "detail": "unchanged"},
+        "event_journal_line_count": {"title": "Journal", "detail": "unchanged"},
+    }
+    for kind, body in bodies.items():
+        upsert(agent, kind, body)
+    mirror = tmp_path / ".notification" / "nudge.json"
+    before = mirror.read_bytes()
+    before_stat = mirror.stat()
+    for _ in range(5):
+        for kind, body in bodies.items():
+            upsert(agent, kind, dict(body))
+            assert mirror.read_bytes() == before
+            assert mirror.stat().st_mtime_ns == before_stat.st_mtime_ns
+            assert mirror.stat().st_ino == before_stat.st_ino
+    assert [e["kind"] for e in _entries(tmp_path)] == list(bodies)
+
+
+def test_changed_finding_keeps_position_and_new_finding_appends(tmp_path):
+    agent = _Agent(tmp_path)
+    upsert(agent, "first", {"title": "old"})
+    upsert(agent, "second", {"title": "other"})
+    upsert(agent, "first", {"title": "changed"})
+    entries = _entries(tmp_path)
+    assert [e["kind"] for e in entries] == ["first", "second"]
+    assert entries[0]["title"] == "changed"
+    assert entries[1]["title"] == "other"
+    upsert(agent, "third", {"title": "new"})
+    assert [e["kind"] for e in _entries(tmp_path)] == ["first", "second", "third"]
