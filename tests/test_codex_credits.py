@@ -84,20 +84,26 @@ def test_usage_authentication_failure_is_sanitized():
     assert "secret-token" not in str(caught.value)
 
 
-def test_usage_auth_refresh_keeps_the_same_account(monkeypatch):
+@pytest.mark.parametrize("refreshed_account_id", ["acct-account-a", "acct-refreshed", None])
+def test_usage_auth_refresh_keeps_the_same_auth_binding(monkeypatch, refreshed_account_id):
     reads = []
     def read(*, client, headers):
-        reads.append(client.api_key)
+        reads.append((client.api_key, headers.get("ChatGPT-Account-Id")))
         if len(reads) == 1:
             raise CodexUsageAuthError()
         return True
     monkeypatch.setattr("lingtai.llm.openai.codex_usage.read_included_usage_allowed", read)
     adapter, source, manager, responses = credit_adapter()
+    monkeypatch.setattr(manager, "get_account_id", lambda:
+        refreshed_account_id if manager.refresh_calls else "acct-account-a")
     session = adapter.create_chat(model="gpt-6-sol", system_prompt="sys", interface=ChatInterface())
     session.send_stream("hello")
-    assert reads == ["secret-account-a", "recovered-account-a"]
+    assert reads == [("secret-account-a", "acct-account-a"),
+                     ("recovered-account-a", refreshed_account_id)]
     assert len(source.calls) == 1
+    assert manager.refresh_calls == ["secret-account-a"]
     assert responses.client_api_keys == ["recovered-account-a"]
+    assert responses.calls[0]["extra_headers"].get("ChatGPT-Account-ID") == refreshed_account_id
 
 
 def credit_adapter(allow=False):

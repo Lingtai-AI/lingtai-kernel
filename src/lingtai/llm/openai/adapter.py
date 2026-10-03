@@ -6828,8 +6828,12 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                         try:
                             manager = self._new_codex_token_manager(auth_ref)
                             binding["api_key"] = manager.refresh_access_token(binding["api_key"])
+                            binding["account_id"] = manager.get_account_id()
                             context.client.api_key = binding["api_key"]
                             binding = self._set_codex_account_binding(context, binding)
+                            headers = _codex_identity_headers()
+                            if binding.get("account_id"):
+                                headers["ChatGPT-Account-Id"] = binding["account_id"]
                             allowed = read_included_usage_allowed(client=context.client, headers=headers)
                         except Exception:
                             pass
