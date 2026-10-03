@@ -705,6 +705,14 @@ observe/identity-check/`starting`-reservation/spawn sequence under one exclusive
 `manager.pid` instead of acting on the same absent or stale observation. A fresh
 `starting` reservation is reused under the existing grace; stale-start recovery
 remains unchanged.
+The resident manager stays alive while idle and outlives its agent process; it
+never consults agent-process liveness. It exits on its own only when it is idle
+(no active worker, no queued job, and no pending capsule) and its
+`daemon/manager/manager.pid` registration has been definitively absent (not
+found, not merely unreadable) for a short grace, as when the agent working
+directory is deleted. Such a manager is unreachable: the parent-side liveness
+check already treats a missing record as no live manager, and the next
+submission spawns a fresh one.
 When the manager's direct Unix-socket path is too long, its capsule transport
 uses `/tmp/lingtai-dm-<uid>-<digest>/capsule.sock`, independent of ambient temp
 variables. Before stale-socket unlink or bind, the fallback parent MUST be a
@@ -1133,6 +1141,7 @@ Re-check this contract when touching:
 | the parent dispatches seven actions; unknown actions error | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/_tool_family.py` | `tests/test_tool_family_daemon_migration.py`, `tests/test_daemon_check.py::test_check_unknown_id_returns_error` |
 | Default `manager_pool_size` is 100 and the config reaches the manager/list output | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_daemon_default_manager_pool_size_is_100`, `::test_daemon_manager_pool_size_config_reaches_manager` |
 | Concurrent submitters for one agent directory serialize manager observe/reserve/spawn under `manager.lock`; later callers re-read the persisted reservation instead of acting on the same absent state | `src/lingtai/adapters/posix/daemon_manager.py` | `tests/test_daemon_central_manager.py::test_concurrent_ensure_manager_callers_reserve_and_spawn_one_manager` |
+| The resident manager stays alive while registered and idle, and exits only when idle with no pending capsule after its `manager.pid` has been definitively absent for the grace (for example its agent directory was deleted); an unreadable record never counts as absent | `src/lingtai/adapters/posix/daemon_manager.py` | `tests/test_daemon_central_manager.py::test_idle_resident_manager_exits_once_registration_is_withdrawn`, `::test_resident_manager_with_pending_capsule_ignores_withdrawn_registration`, `::test_registration_withdrawal_requires_definite_absence`, `::test_real_idle_manager_exits_after_agent_directory_is_deleted` |
 | `max_turns` precedence is valid `LINGTAI_DAEMON_MAX_TURNS`, explicit capability/setup, valid owner file, then 5000; invalid environment input retains the lower valid result | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_daemon_max_turns_env_beats_explicit_and_config`, `::test_daemon_invalid_max_turns_env_keeps_explicit_value` |
 | Per-agent `system_prompt_budget_chars` defaults to 20,000, accepts a positive `daemon/daemon.json` override, and safely falls back for malformed/non-positive values while retaining fail-loud/no-truncation rendering | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/system_prompt.py` | `tests/test_daemon.py::test_daemon_default_system_prompt_budget_is_20000_without_config`, `::test_daemon_config_system_prompt_budget_allows_larger_complete_prompt`, `::test_daemon_invalid_system_prompt_budget_falls_back_to_default` |
 | `settings` returns exactly the four owner rows and five public fields, has no mutation route, and fails as one fixed response when current manager truth is unavailable | `src/lingtai/tools/daemon/settings.py`, `src/lingtai/tools/daemon/_tool_family.py` | `tests/test_daemon_settings.py` |

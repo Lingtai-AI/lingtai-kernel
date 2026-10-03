@@ -41,6 +41,7 @@ _MANAGER_RUNTIME_IDENTITY_SCHEMA = "lingtai.daemon_manager_runtime.v1"
 _DAEMON_NOTIFICATION_PROTOCOL = "per-run-mini-channel.v1"
 _POLL_INTERVAL_S = 0.05
 _PID_STALE_AFTER_S = 2.0
+_REGISTRATION_GONE_GRACE_S = 2.0
 _CAPSULE_SOCKET_NAME = "capsule.sock"
 _CAPSULE_SEND_TIMEOUT_S = 5.0
 _MAX_CAPSULE_BYTES = 4 * 1024 * 1024
@@ -338,7 +339,13 @@ def _enqueue_manager_run_owned(
 
 
 def run_manager(agent_working_dir: Path, *, pool_size: int) -> None:
-    """Run the resident queue manager until idle for a short grace period."""
+    """Run the resident queue manager for one agent working directory.
+
+    The manager stays resident while idle and deliberately outlives the agent
+    process. It exits only once it is idle and its ``manager.pid``
+    registration has been withdrawn (for example the agent directory was
+    deleted); see ``_DaemonManagerProcess._registration_withdrawn``.
+    """
     if pool_size <= 0:
         raise ValueError("pool_size must be positive")
     root = _manager_dir(Path(agent_working_dir))
@@ -358,22 +365,36 @@ def run_manager(agent_working_dir: Path, *, pool_size: int) -> None:
             "manager_runtime_identity": _manager_runtime_identity(),
         },
     )
-    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=pool_size)
+    manager = _DaemonManagerProcess(
+        queue_dir,
+        journal_dir,
+        pool_size=pool_size,
+        registration_path=root / "manager.pid",
+    )
     manager.start_capsule_server(_capsule_socket_path(root))
     manager.recover_interrupted_active_runs()
     manager.run(idle_exit_s=None)
 
 
 class _DaemonManagerProcess:
-    def __init__(self, queue_dir: Path, journal_dir: Path, *, pool_size: int) -> None:
+    def __init__(
+        self,
+        queue_dir: Path,
+        journal_dir: Path,
+        *,
+        pool_size: int,
+        registration_path: Path | None = None,
+    ) -> None:
         self.queue_dir = queue_dir
         self.journal_dir = journal_dir
         self.pool_size = pool_size
+        self.registration_path = registration_path
         self.active: dict[str, threading.Thread] = {}
         self.capsules: dict[str, ReceivedDaemonCapsule] = {}
         self.lock = threading.Lock()
         self.last_activity = time.monotonic()
         self.started_at = time.time()
+        self._registration_missing_since: float | None = None
         self._capsule_socket: socket.socket | None = None
         self._capsule_server_thread: threading.Thread | None = None
 
@@ -494,8 +515,11 @@ class _DaemonManagerProcess:
                 self._start_queued_jobs()
                 if self.active or list(self.queue_dir.glob("*.json")):
                     idle_since = None
+                    self._registration_missing_since = None
                     self.last_activity = time.monotonic()
                 else:
+                    if self._registration_withdrawn():
+                        return
                     if idle_exit_s is None:
                         time.sleep(_POLL_INTERVAL_S)
                         continue
@@ -510,6 +534,43 @@ class _DaemonManagerProcess:
                 self.capsules.clear()
             for pending in pending_capsules:
                 pending.close()
+
+    def _registration_withdrawn(self) -> bool:
+        """Return whether this idle manager's registration stayed absent.
+
+        ``manager.pid`` is the only record through which a submitter finds and
+        reuses this manager, and the parent-side liveness check already treats
+        a missing record as "no live manager". Once it is gone (typically the
+        agent working directory was deleted), no future submission can reach
+        this process and the next one spawns a fresh manager, so an idle
+        manager would only poll a vanished queue forever. The caller invokes
+        this only with no active worker and no queued job; a pending capsule
+        also keeps the manager resident. Only definite absence counts, and only
+        once it has persisted for ``_REGISTRATION_GONE_GRACE_S``, so any other
+        filesystem error or a brief gap never ends the manager. Liveness of the
+        agent process is deliberately not consulted: the manager is meant to
+        outlive it.
+        """
+        path = self.registration_path
+        if path is None:
+            return False
+        with self.lock:
+            has_pending_capsule = bool(self.capsules)
+        missing = False
+        if not has_pending_capsule:
+            try:
+                path.stat()
+            except (FileNotFoundError, NotADirectoryError):
+                missing = True
+            except OSError:
+                pass  # unreadable is not proof of absence
+        if not missing:
+            self._registration_missing_since = None
+            return False
+        now = time.monotonic()
+        if self._registration_missing_since is None:
+            self._registration_missing_since = now
+        return now - self._registration_missing_since >= _REGISTRATION_GONE_GRACE_S
 
     def _reap_finished_threads(self) -> None:
         with self.lock:
