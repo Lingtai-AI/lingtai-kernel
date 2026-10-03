@@ -50,6 +50,7 @@ related_files:
   - tests/test_daemon_dispatch_ledger.py
   - tests/test_daemon_attention_delay.py
   - tests/test_daemon_central_manager.py
+  - tests/test_daemon_manager_simplification.py
   - tests/test_tool_family_daemon_migration.py
   - tests/test_daemon_settings.py
   - tests/test_daemon_empty_parity.py

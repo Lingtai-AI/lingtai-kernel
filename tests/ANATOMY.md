@@ -112,6 +112,7 @@ related_files:
   - tests/test_context_pressure_reminder.py
   - tests/test_context_pressure_streak.py
   - tests/test_daemon.py
+  - tests/test_daemon_manager_simplification.py
   - tests/test_daemon_llm_defaults_forwarding.py
   - tests/test_daemon_attention_delay.py
   - tests/test_daemon_backend_options.py
