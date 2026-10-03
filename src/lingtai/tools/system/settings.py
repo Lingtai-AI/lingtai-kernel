@@ -315,6 +315,12 @@ SYSTEM_ENVIRONMENT_SETTING_SPECS: tuple[_EnvironmentSettingSpec, ...] = (
         "tool_prose",
     ),
     _EnvironmentSettingSpec(
+        "prompt.memory_length_warning_chars",
+        ("LINGTAI_MEMORY_LENGTH_WARNING_CHARS",),
+        50000,
+        "memory_length",
+    ),
+    _EnvironmentSettingSpec(
         "prompt.system_prompt_pressure_ratio",
         ("LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO",),
         0.4,
@@ -1089,6 +1095,10 @@ def _environment_current(resolver: str, root: Path) -> Any:
         from lingtai.kernel.config import tool_prose_section_enabled
 
         return tool_prose_section_enabled()
+    if resolver == "memory_length":
+        from lingtai.kernel.config import memory_length_warning_chars
+
+        return memory_length_warning_chars()
     if resolver == "prompt_pressure":
         from lingtai.kernel.config import system_prompt_pressure_ratio
 

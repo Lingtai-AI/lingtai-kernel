@@ -436,6 +436,10 @@ def run(working_dir: Path, *, acp_socket: bool = False) -> None:
     resident_acp = None
     try:
         agent.start()
+        if is_refresh:
+            import uuid
+
+            agent._publish_memory_length_warning(f"refresh-{uuid.uuid4().hex}")
         if resident_socket_enabled:
             from lingtai.adapters.acp.resident_socket import ResidentAcpSocket
 

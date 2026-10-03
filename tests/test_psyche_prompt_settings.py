@@ -823,3 +823,57 @@ def test_daemon_variant_does_not_claim_parent_covenant_inheritance():
     assert COVENANT_ROUTE not in prompt
     assert "Covenant" not in prompt
     assert "parent-provided one-run context" in prompt
+
+
+@pytest.mark.parametrize("raw,expected", [(None, 50000), ("", 50000), ("no", 50000),
+                                         ("0", 50000), ("-1", 50000), ("9.5", 50000),
+                                         (" 123 ", 123)])
+def test_memory_length_threshold_environment(raw, expected, monkeypatch):
+    from lingtai.kernel.config import memory_length_warning_chars
+    if raw is None:
+        monkeypatch.delenv("LINGTAI_MEMORY_LENGTH_WARNING_CHARS", raising=False)
+    else:
+        monkeypatch.setenv("LINGTAI_MEMORY_LENGTH_WARNING_CHARS", raw)
+    assert memory_length_warning_chars() == expected
+
+
+def test_loaded_memory_warning_counts_pins_and_dedups_lifecycle(tmp_path, monkeypatch):
+    _write_init(tmp_path)
+    _write_owner(tmp_path)
+    agent = _agent(tmp_path)
+    try:
+        system = tmp_path / "system"
+        (system / "pad.md").write_text("live pad")
+        (system / "lingtai.md").write_text("live character")
+        pinned = tmp_path / "pinned.md"
+        pinned.write_text("PINNED" * 20)
+        (system / "pad_append.json").write_text(json.dumps([str(pinned)]))
+        agent._reconstruct_context()
+        agent._build_system_prompt()
+        pad = agent._prompt_manager.read_section("pad")
+        character = agent._prompt_manager.read_section("character")
+        assert "PINNED" in pad
+        monkeypatch.setenv("LINGTAI_MEMORY_LENGTH_WARNING_CHARS", "20")
+        from lingtai.tools.system.settings import _environment_current
+        assert _environment_current("memory_length", tmp_path) == 20
+        path = tmp_path / ".notification" / "memory-length.json"
+        assert not path.exists()  # boot and reconstruction alone do not warn
+        agent._publish_memory_length_warning("refresh-test")
+        data = json.loads(path.read_text())["data"]
+        assert data == {"lifecycle_id": "refresh-test", "pad_chars": len(pad),
+                        "character_chars": len(character), "total_chars": len(pad)+len(character),
+                        "limit_chars": 20}
+        prior = path.read_bytes()
+        # Ambient edits are not the loaded prompt; no content mutation/reload.
+        (system / "pad.md").write_text("ambient disk edit")
+        agent._publish_memory_length_warning("refresh-test")
+        assert path.read_bytes() == prior
+        agent._publish_memory_length_warning("molt-2")
+        assert json.loads(path.read_text())["data"]["pad_chars"] == len(pad)
+        assert (system / "pad.md").read_text() == "ambient disk edit"
+        monkeypatch.setenv("LINGTAI_MEMORY_LENGTH_WARNING_CHARS", str(len(pad)+len(character)))
+        agent._publish_memory_length_warning("molt-3")
+        assert not path.exists()  # equality is below-warning, clear current only
+        assert agent._prompt_manager.read_section("pad") == pad
+    finally:
+        agent.stop(timeout=1)

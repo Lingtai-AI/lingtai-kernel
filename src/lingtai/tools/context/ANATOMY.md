@@ -115,3 +115,7 @@ and current tool/meta sections.
 `summarize` never reconstructs. `rebuild` always composes before history
 mutation and provider request. `molt` retains refusal-before-shed and its distinct
 archive/count/replay effects. No retired root or action is an alias.
+
+`_molt.py:_publish_post_molt` also requests
+`Agent._publish_memory_length_warning` after successful agent/system molt
+reconstruction; the host owns counts, threshold, notification and dedup.

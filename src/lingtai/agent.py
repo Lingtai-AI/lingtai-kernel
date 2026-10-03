@@ -2463,6 +2463,42 @@ class Agent(BaseAgent):
             tools=list(self._tool_handlers.keys()),
         )
 
+    def _publish_memory_length_warning(self, lifecycle_id: str) -> None:
+        """One advisory per successful molt/refresh; measure loaded memory, not disk."""
+        if getattr(self, "_memory_length_lifecycle_id", None) == lifecycle_id:
+            return
+        try:
+            from lingtai.kernel.config import memory_length_warning_chars
+            from lingtai.kernel.notifications import clear, submit
+
+            pad_chars = len(self._prompt_manager.read_section("pad") or "")
+            character_chars = len(self._prompt_manager.read_section("character") or "")
+            total = pad_chars + character_chars
+            limit = memory_length_warning_chars()
+            if total > limit:
+                submit(
+                    self, "memory-length", header="Loaded memory exceeds character threshold",
+                    icon="🧠", priority="high",
+                    data={"lifecycle_id": lifecycle_id, "pad_chars": pad_chars,
+                          "character_chars": character_chars, "total_chars": total,
+                          "limit_chars": limit},
+                    instructions=(
+                        f"Loaded Pad (including pinned references): {pad_chars} characters; "
+                        f"Character: {character_chars}; total {total} exceeds {limit}. "
+                        "Review and archive stale/duplicate memory in its proper durable owner. "
+                        "This is advisory only: no content was erased or truncated. "
+                        "One notification per successful molt/refresh, not per turn."
+                    ),
+                )
+            else:
+                clear(self, "memory-length")
+            self._memory_length_lifecycle_id = lifecycle_id
+            self._log("memory_length_checked", lifecycle_id=lifecycle_id,
+                      pad_chars=pad_chars, character_chars=character_chars,
+                      total_chars=total, limit_chars=limit, over_limit=total > limit)
+        except Exception as error:
+            self._log("memory_length_warning_failed", error=str(error))
+
     def _reconstruct_context(
         self,
         data: dict | None = None,

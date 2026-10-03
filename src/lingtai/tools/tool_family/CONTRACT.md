@@ -83,7 +83,10 @@ both built from the same deep-copied canonical child schemas:
 1. **Schema-level (`allOf`):** one `if`/`then` condition per child — each
    `if` tests root `action` via `const` against that child's own registry
    name (guarded by `required: ["action"]`); each `then` constrains root
-   `input` to that exact child's canonical `input_schema`. Adopted after a
+   `input` to that child's canonical validation constraints. Duplicate
+   `description` annotations are omitted only at recognized schema nodes;
+   field names and literal enum/default/example data are preserved. Full prose
+   remains in typed input disclosure. Adopted after a
    live non-strict Codex Responses probe on 2026-07-27 accepted a raw root
    `allOf`/`if`/`then` schema without error on the current route (see
    `_scrub_responses_schema` in `../../llm/openai/adapter.py` for the
@@ -557,8 +560,8 @@ key rejection, no double result wrapping, and two dedicated proofs that
 `reasoning`/`summarize` never reach a child handler and never appear in any
 child's own canonical `input_schema`. It also proves the root `allOf`
 correlation directly: every condition's `action` const matches the child
-registry name, `then.input` exactly matches that child's own canonical
-schema, a minimal local `if`/`then` structural evaluator (no JSON Schema
+registry name, `then.input` matches that child's canonical validation constraints,
+with description annotations deduplicated and literal data preserved, a minimal local `if`/`then` structural evaluator (no JSON Schema
 dependency added) shows the schema itself rejects a mismatched
 `action`/`input` pairing, `handle()` remains authoritative and fail-closed
 regardless, and both the `allOf` conditions and the `oneOf` branches are

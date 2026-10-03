@@ -242,3 +242,13 @@ the resident user base prompt. `psyche.instructions` binds this narrow read via
 selector, mutation or reconstruction is available. Runtime metadata refs route
 there for catalog/readme/adapter detail. The old comment and rules loaders and
 heartbeat consumer are removed; existing runtime files are never purged.
+
+## Loaded memory advisory lifecycle seam
+
+`Agent._publish_memory_length_warning` in `agent.py` owns loaded `pad` plus
+`character` character counts, lifecycle dedup, current `memory-length` notification
+publication/clear and redacted event history. `cli.py:run` calls it only after a
+marked refresh's successful `agent.start`; the shared successful post-molt
+publisher calls it for agent/system molts. The threshold is resolved by
+`kernel/config.py:memory_length_warning_chars`; System settings provides SHOW.
+There is no heartbeat or prompt reconstruction producer.

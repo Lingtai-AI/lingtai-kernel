@@ -96,6 +96,40 @@ _UNSAFE_FIELD_LABEL_SUBSTRINGS = (
 )
 
 
+def _without_descriptions(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy validation schemas without duplicate prose; never walk instance data."""
+    result = copy.deepcopy(dict(schema))
+
+    def strip(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        node.pop("description", None)
+        # Map keys are field/definition names, not schema annotations.
+        for keyword in ("properties", "patternProperties", "$defs", "definitions",
+                        "dependentSchemas", "dependencies"):
+            children = node.get(keyword)
+            if isinstance(children, dict):
+                for child in children.values():
+                    strip(child)
+        for keyword in ("items", "additionalItems", "additionalProperties",
+                        "unevaluatedItems", "unevaluatedProperties", "contains",
+                        "propertyNames", "not", "if", "then", "else"):
+            child = node.get(keyword)
+            if isinstance(child, list):  # legacy tuple-form items
+                for item in child:
+                    strip(item)
+            else:
+                strip(child)
+        for keyword in ("allOf", "anyOf", "oneOf", "prefixItems"):
+            children = node.get(keyword)
+            if isinstance(children, list):
+                for child in children:
+                    strip(child)
+
+    strip(result)
+    return result
+
+
 def _is_safe_field_label(label: str) -> bool:
     if not isinstance(label, str) or not _SAFE_FIELD_LABEL_PATTERN.match(label):
         return False
@@ -260,6 +294,8 @@ class ToolFamily:
            current backend route.
         2. **Typed ``input`` disclosure:** the same per-action branches retained
            for discoverability (``oneOf`` normally, ``anyOf`` with settings).
+           Descriptions stay here verbatim; the conditional validation copy
+           omits only description annotations at known schema nodes.
 
         The root carries ``action``, ``input``, required ``reasoning``, and
         optional ``summarize`` — exactly the four LTP v2 envelope fields
@@ -301,7 +337,7 @@ class ToolFamily:
                         "required": ["action"],
                     },
                     "then": {
-                        "properties": {"input": copy.deepcopy(canonical_input_schema)},
+                        "properties": {"input": _without_descriptions(canonical_input_schema)},
                     },
                 }
             )
