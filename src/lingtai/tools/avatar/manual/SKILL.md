@@ -38,7 +38,7 @@ Use all five strict spawn-input keys and put the mission in root `reasoning`:
 
 ```text
 avatar(action="spawn",
-       input={"name": "researcher", "type": null, "comment": null,
+       input={"name": "researcher", "type": null,
               "dry_run": false, "confirm": false},
        reasoning="Inspect the heartbeat regression; report evidence by mail and change no code.")
 ```
@@ -51,14 +51,15 @@ launch admissibility; `confirm=true` acknowledges only mission review.
 
 | Need | Read |
 |---|---|
-| Payload choice, exact mission/name gates, preview limits, comment/preset inheritance | [Spawn and identity](reference/spawn.md) |
+| Payload choice, exact mission/name gates, preview limits, purpose/preset inheritance | [Spawn and identity](reference/spawn.md) |
 | Boot result, detached life, authority, platform, failed launch, retirement | [Lifecycle and authority](reference/lifecycle.md) |
 
 `avatar(action="manual", input={}, reasoning="load Avatar guidance")` returns
 this **package-local** body and `manual_path`; resolve its links from that path,
 not from an Agent's installed skill copy. Avatar has no rules action or fan-out:
-use `psyche(action="manual", input={}, reasoning="locate rules guidance")` for
-the kernel/Psyche `.rules` protocol.
+the `.rules` heartbeat consumer and protected rules injection are also retired.
+Existing files remain untouched. Durable purpose instructions are ordinary
+authorized Pad edits, not a spawn comment or broadcast.
 
 ## Read-only settings
 
@@ -74,7 +75,7 @@ fails the whole action as bounded `SETTINGS_UNAVAILABLE`, without partial rows.
 
 ### Spawn call defaults
 
-`type` is `shallow`, `comment` is empty, `dry_run` and `confirm` are false when
+`type` is `shallow`, `dry_run` and `confirm` are false when
 nullable inputs are omitted/null. These four rows describe call defaults only.
 Shallow copies rewritten init plus narrow Psyche inputs; deep adds durable
 identity/knowledge state. See the payload reference before assuming isolation.

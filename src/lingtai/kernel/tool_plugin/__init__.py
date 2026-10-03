@@ -238,20 +238,21 @@ class PsycheSettingsSnapshotPort(Protocol):
     base_prompt_file: str | None
     covenant: str
     covenant_file: str | None
-    comment: str
-    comment_file: str | None
 
 
 class PsycheSettingsPort(Protocol):
     """Read Psyche's last completely applied prompt-owner configuration.
 
-    The immutable structural snapshot contains Pad plus the three configurable
+    The immutable structural snapshot contains Pad plus the two configurable
     prompt pairs. It grants no prompt mutation, reconstruction, settings write,
     owner-source read, or Agent access.
     """
 
     def read_snapshot(self) -> PsycheSettingsSnapshotPort:
         """Return the current applied Psyche owner-input snapshot."""
+
+    def read_instructions(self) -> str:
+        """Return current loaded fixed instructions; no source I/O or mutation."""
 
     def read_covenant(self) -> str:
         """Return the current loaded Covenant body, including mirror fallback.

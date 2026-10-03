@@ -44,7 +44,7 @@ DOMAIN_MANUALS: tuple[tuple[str, str], ...] = (
 #: The psyche routing-table manual: its own installed skill bundle.
 _ROUTER_MANUAL = "psyche-manual"
 _DROPPED_ENVELOPE_KEYS = ("_tc_id",)
-_DECLARED_ACTIONS = tuple(action for action, _manual in DOMAIN_MANUALS) + ("covenant",)
+_DECLARED_ACTIONS = tuple(action for action, _manual in DOMAIN_MANUALS) + ("instructions", "covenant",)
 _DECLARED_INPUT_SCHEMAS = {
     action: dict(MANUAL_INPUT_SCHEMA) for action in _DECLARED_ACTIONS
 }
@@ -57,13 +57,14 @@ _ACTION_ENUM_DESCRIPTION = (
     "lingtai: identity manual for system/lingtai.md (灵台 / character).\n"
     "knowledge: private KNOWLEDGE.md memory manual.\n"
     "skills: .library catalog and configured-roots manual.\n"
+    "instructions: current loaded fixed instructions, including runtime and adapter rules; read on first orientation and before unfamiliar/consequential work, not routinely.\n"
     "covenant: current effective Covenant body (not a manual or source reread).\n"
     "settings: fully redacted applied-settings SHOW.\n"
     "manual: Psyche routing table and shared mutation/rebuild model."
 )
 
 
-def _build_children(workdir: Any, covenant_reader: Any = None) -> list[ChildTool]:
+def _build_children(workdir: Any, covenant_reader: Any = None, instructions_reader: Any = None) -> list[ChildTool]:
     """Build the fixed manual-child registry for schema or bound dispatch."""
     children = [
         ChildTool(
@@ -80,7 +81,17 @@ def _build_children(workdir: Any, covenant_reader: Any = None) -> list[ChildTool
             raise TypeError("Covenant body must be text")
         return {"status": "ok", "covenant": body}
 
+    def read_instructions(_args: dict[str, Any]) -> dict[str, Any]:
+        body = instructions_reader()
+        if not isinstance(body, str):
+            raise TypeError("Instructions body must be text")
+        return {"status": "ok", "instructions": body}
+
     return children + [
+        ChildTool(
+            name="instructions", input_schema=dict(MANUAL_INPUT_SCHEMA),
+            handler=read_instructions, title="instructions input",
+        ),
         ChildTool(
             name="covenant", input_schema=dict(MANUAL_INPUT_SCHEMA),
             handler=read_covenant, title="covenant input",
@@ -95,7 +106,7 @@ def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
         return ToolFamily("psyche", _build_children(None), settings_provider=tuple)
     return ToolFamily(
         "psyche",
-        _build_children(host.workdir, host.psyche_settings.read_covenant),
+        _build_children(host.workdir, host.psyche_settings.read_covenant, host.psyche_settings.read_instructions),
         settings_provider=build_settings_provider(host.psyche_settings),
     )
 

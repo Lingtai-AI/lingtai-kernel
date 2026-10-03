@@ -222,7 +222,7 @@ Automatic notification delivery composes the [Notification contract](../../tools
    runtime artifacts are `.agent.json` (manifest), `.agent.heartbeat`
    (liveness), `.agent.lock` (lease), the signal files
    (`.suspend`/`.sleep`/`.interrupt`/`.refresh`/`.refresh.taken`/`.prompt`/
-   `.clear`/`.rules`), `.alarm` (the one self-sleep absolute
+   `.clear`), `.alarm` (the one self-sleep absolute
    deadline), `.notification/`, `logs/`, and `history/`. Artifact names and
    meanings are frozen; observers may read,
    only the owning agent/watcher mutates.

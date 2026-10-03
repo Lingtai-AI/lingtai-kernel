@@ -74,7 +74,6 @@ def test_missing_llm_field():
     [
         "base_prompt", "base_prompt_file",
         "covenant", "covenant_file",
-        "comment", "comment_file",
     ],
 )
 def test_legacy_psyche_prompt_inputs_are_known_but_inert(key):
@@ -1056,3 +1055,11 @@ def test_removed_provider_pointer_survives_init_reader_redaction():
     assert "use provider openai (OpenAI-compatible" in excerpt
     assert "or anthropic (Anthropic-compatible: base_url)" in excerpt
     assert "sub2api/subs-pool" in excerpt
+
+
+@pytest.mark.parametrize("key", ["comment", "comment_file"])
+def test_retired_comments_receive_unknown_diagnostic_and_pad_guidance(key):
+    data = _valid_init()
+    data[key] = "old instructions"
+    warnings = validate_init(data)
+    assert any(f"unknown top-level field: {key}" in w and "system/pad.md" in w for w in warnings)

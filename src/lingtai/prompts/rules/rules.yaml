@@ -1,53 +1,37 @@
 kind: prompt-section-definition
 section: rules
-name_definition: >
-  "rules" is the optional network/avatar rules section. It is named for the network or
-  avatar rules it carries: constraints that bind descendants when present. It is
-  injected from network/avatar rules, not a kernel body, and renders only when present.
-purpose: >
-  Exists so a network or avatar can impose additional constraints on its descendants
-  through a fixed, kernel-defined slot in render order, without editing kernel-owned or
-  operator-owned sections.
+name_definition: '"rules" is retired and has no active reader or resident injection.
+
+  '
+purpose: 'Preserve the retirement decision without purging old runtime files.
+
+  '
 scope:
   owns:
-    - Optional network/avatar rule constraints on descendant behavior.
+  - Retirement notice and ordinary authorized migrate-to-Pad guidance.
   does_not_own:
-    - The operator/recipe constitution (owned by covenant).
-    - The general action playbook and its triggers (owned by procedures).
+  - A source reader, heartbeat consumer, injection or compatibility fallback.
 injection_contract:
-  defined_by: kernel_section_contract
-  injected_by: network_or_avatar_rules_surface
-  content_source: network_avatar_rules_if_present
-  mirror_path: system/rules.md
-  override_policy: operator_recipe_may_supply_content
-  notes: >
-    Injected from system/rules.md (network/avatar rules) when present; absent otherwise.
-    Not a kernel-packaged body. Rules constrain behavior and may create operational
-    triggers handled by procedures.
+  defined_by: literal_retirement
+  injected_by: no_consumer
+  content_source: no_active_source
+  override_policy: retired_inputs_are_unknown
+  notes: 'No comment/comment_file inputs, spawn comment, .rules consumer or system/rules.md
+    injection remains. Old files stay untouched. Remove retired config keys and put desired
+    instructions in Pad through authorized edits, not security enforcement.
+
+    '
 related_files:
-  - path: src/lingtai/prompts/ANATOMY.md
-    why: >
-      The owning prompt-source anatomy: it records rules as an optional, injected
-      section. Read it before treating rules as always-present or kernel-owned.
-  - path: src/lingtai/agent.py
-    why: >
-      Owns the concrete boot/refresh injection rule: _reload_prompt_sections() sources
-      rules solely from system/rules.md (deleting the section when absent/empty). Crawl
-      here for where the injected content actually comes from.
-  - path: src/lingtai/kernel/base_agent/lifecycle.py
-    why: >
-      Owns the live rules-update rule: on a rules signal it persists system/rules.md,
-      rewrites the `rules` section, and flushes the prompt. Crawl here for how a
-      mid-life network/avatar rule change takes effect without a full reload.
-  - path: src/lingtai/prompts/covenant/covenant.yaml
-    why: >
-      both covenant and rules constrain behavior; edit together so a network/avatar
-      rule does not silently override or duplicate a covenant constitution value.
-  - path: src/lingtai/prompts/procedures/procedures.yaml
-    why: >
-      rules may create operational triggers that procedures must handle; keep them
-      together so a rule and its procedural enforcement stay consistent.
+- path: src/lingtai/prompts/ANATOMY.md
+  why: 'Retirement reference: this owner no longer consumes or injects the retired mechanism.'
+- path: src/lingtai/agent.py
+  why: 'Retirement reference: this owner no longer consumes or injects the retired mechanism.'
+- path: src/lingtai/kernel/base_agent/lifecycle.py
+  why: 'Retirement reference: this owner no longer consumes or injects the retired mechanism.'
+- path: src/lingtai/prompts/covenant/covenant.yaml
+  why: 'Retirement reference: this owner no longer consumes or injects the retired mechanism.'
+- path: src/lingtai/prompts/procedures/procedures.yaml
+  why: 'Retirement reference: this owner no longer consumes or injects the retired mechanism.'
 maintenance:
-  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical injection files that own the concrete construction rules (here the boot loader agent.py and the live-signal path lifecycle.py). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
-  - rules is injected, optional, and has no kernel body; do not add one. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
-  - Keep the covenant vs rules boundary explicit so constitution values and network constraints do not merge.
+- Do not restore a retired reader, compatibility fallback or broadcast. Keep migrate-to-Pad
+  guidance authorization-bound and leave user runtime files untouched.

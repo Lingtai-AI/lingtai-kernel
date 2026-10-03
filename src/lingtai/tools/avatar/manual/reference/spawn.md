@@ -42,7 +42,7 @@ or live ledger peer. Confirmation does not bypass these or launch authority.
   exports, or conversation history.
 - **Deep:** also copies `system/`, `knowledge/`, `exports/`, and `combo.json`
   when present. This includes durable character, Pad, summaries and existing
-  `system/rules.md`; a fresh conversation does not mean empty durable memory.
+  old inert `system/rules.md`; a fresh conversation does not mean empty durable memory.
 
 Both set `manifest.agent_name`, clear `manifest.admin`, blank the `lingtai`
 seed, remove `lingtai_file`, old top-level prompt pairs/brief and top-level
@@ -75,16 +75,10 @@ It may therefore preview a target that a real spawn would refuse. It skips the
 mission gate and creates no directory, ledger record, marker, `.prompt`, or
 process. Neither preview nor `confirm=true` grants authority.
 
-## Child prompt and comment
-
-`settings/psyche.json` uses Psyche's v1 owner serializer for only base/covenant
-pairs plus the new spawn comment. Parent relative pointers are anchored to the
-parent workdir. The parent's comment and comment-file pointer are not
-inherited; null/empty new comment means none. This persistent note survives
-refresh/molt/wake and renders after `meta_guidance` and before `rules`—position,
-not precedence. Deep copying does not copy the parent's `settings/` directory.
-
 Parent identity and mission travel in a separate one-time `.prompt` signal,
 consumed by the child watcher. The blank `lingtai` seed is not that channel.
-Avatar writes no `.rules` signal and distributes no rules. For that protocol,
-use `psyche(action="manual", input={}, reasoning="locate rules guidance")`.
+Avatar writes no `.rules` signal and distributes no rules. Both the heartbeat
+consumer and protected rules injection are retired; existing files remain inert.
+For durable working instructions, edit the child's Pad only with ordinary
+authorization and use its normal reconstruction lifecycle. No spawn comment
+argument or persistence remains; the mission is root `reasoning`.

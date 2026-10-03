@@ -207,8 +207,6 @@ SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
         "/base_prompt_file",
         "/covenant",
         "/covenant_file",
-        "/comment",
-        "/comment_file",
         "/soul",
         "/soul_file",
         "/principle",

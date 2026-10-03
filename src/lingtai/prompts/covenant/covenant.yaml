@@ -24,6 +24,9 @@ injection_contract:
   mirror_path: system/covenant.md
   override_policy: psyche_owner_pair_may_supply_content
   notes: >
+    This is a loaded source owner, not a separate resident fulltext section.
+    The kernel renders one short entry; psyche.instructions reads current loaded
+    fixed detail without disk I/O. Covenant fulltext remains psyche.covenant.
     Psyche resolves covenant/covenant_file from settings/psyche.json. A nonempty
     resolved owner value is mirrored to system/covenant.md; when the owner value is
     empty, the existing durable mirror is the fallback. No packaged

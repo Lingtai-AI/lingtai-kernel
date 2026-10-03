@@ -21,6 +21,8 @@ related_files:
   - src/lingtai/tools/psyche/glossary-zh.md
   - src/lingtai/tools/psyche/glossary-wen.md
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/psyche-manual/reference/settings/SKILL.md
+  - src/lingtai/intrinsic_skills/psyche-manual/reference/network-rules/SKILL.md
   - tests/test_psyche_family.py
   - tests/test_psyche_prompt_settings.py
   - tests/test_deep_refresh.py
@@ -41,10 +43,10 @@ maintenance: |
 Mandatory LTP v2 family that is the one public root for the four durable
 domains (`pad + lingtai + knowledge + skills = psyche`). Five actions are
 read-only manual loaders; `covenant` discloses the current loaded constitution
-body through the existing narrow host Port; the reserved `settings` child returns eight fully
-redacted Psyche-owned rows: Pad plus the three configurable prompt pairs. The
+body through the existing narrow host Port; the reserved `settings` child returns six fully
+redacted Psyche-owned rows: Pad plus the two configurable prompt pairs. The
 package owns the closed `settings/psyche.json` v1 parser and a pure immutable
-prompt-plan composer for only those six inputs plus the three static resident
+prompt-plan composer for only those four inputs plus the three static resident
 sections; it owns no domain catalog composer. Its static official declaration
 binds only `workdir` and the read-only `psyche_settings` snapshot Port. Its
 `boot` keeps the mandatory intrinsic lifecycle shim, invokes the domain-owned
@@ -56,7 +58,7 @@ registrar.
 - `DOMAIN_MANUALS` — the one fixed registry mapping each domain action to the
   installed manual it loads (`src/lingtai/tools/psyche/__init__.py:37-42`).
 - `ACTION_ORDER` — the exact public inventory `pad | lingtai | knowledge |
-  skills | covenant | settings | manual`, derived from the composed family so injected
+  skills | instructions | covenant | settings | manual`, derived from the composed family so injected
   settings cannot drift (`src/lingtai/tools/psyche/__init__.py:172-187`).
 - `_ROUTER_MANUAL` — the routing-table manual name loaded by the reserved
   `manual` child (`src/lingtai/tools/psyche/__init__.py:45-50`).
@@ -68,9 +70,9 @@ registrar.
   (`src/lingtai/tools/psyche/__init__.py:92-125`).
 - `settings.py::{serialize_prompt_owner_document,read_resolved_prompt_inputs,build_settings_provider}`
   — owns the one v1 writer, reads the bounded stable closed owner document once
-  per reconstruction, resolves its three pairs with the existing helper, and
+  per reconstruction, resolves its two pairs with the existing helper, and
   structurally copies and validates the Agent's last successfully applied
-  eight-value snapshot through `PsycheSettingsPort` into the full-redaction
+  six-value snapshot through `PsycheSettingsPort` into the full-redaction
   provider. SHOW performs no source I/O and receives no Agent.
 - `prompt.py::{PromptSectionDefinition,PromptSection,PromptPlan,compose_prompt_plan}`
   — the closed three-entry static section registry and pure composition boundary
@@ -114,9 +116,9 @@ registrar.
 - Live refresh resolves one immutable Psyche prompt plan immediately after its
   successful init read and before teardown; active rebuild and molt resolve one
   plan before `Agent._reload_prompt_sections`. Reconstruction applies the plan's
-  three static sections and overlays only its six configurable values, preserves
-  the existing base/covenant mirrors and comment non-mirroring, and commits the
-  applied plan plus eight-value snapshot only after the successful final prompt
+  three static sections and overlays only its four configurable values, preserves
+  the existing base/covenant mirrors, and commits the
+  applied plan plus six-value snapshot only after the successful final prompt
   flush. A failed candidate restores the prior prompt-manager sections, wrapper
   base prompt, existing derived mirrors, and SHOW as one generation.
   `PsycheSettingsPort` exposes only that immutable snapshot to SHOW; no Psyche
@@ -131,7 +133,7 @@ Parent: [`tools/ANATOMY.md`](../ANATOMY.md). Paired interface promise:
 owners — [`pad`](../pad/ANATOMY.md), [`lingtai`](../lingtai/ANATOMY.md),
 [`knowledge`](../knowledge/ANATOMY.md), [`skills`](../skills/ANATOMY.md) — which
 retain their private composers, catalogs, and lifecycle; this package routes to
-their manuals and reads only Pad configuration plus its six prompt-owner inputs.
+their manuals and reads only Pad configuration plus its four prompt-owner inputs.
 
 ## State
 
@@ -141,7 +143,7 @@ to empty/default values and replaced only by successful canonical reconstruction
 SHOW binds to the snapshot and does not inspect ambient sources. The Agent also
 retains `_effective_covenant`: complete loaded body, including mirror fallback,
 rolled back with the applied generation. The public `covenant` action reads only
-that body via `PsycheSettingsPort.read_covenant`; the resident section is a brief
+that body via `PsycheSettingsPort.read_covenant`; the single resident entry contains the brief
 route plus unique pre-action gates, not the fulltext. The
 independently user-authored
 `settings/psyche.json` is a strict owner source, not package state. Prompt
@@ -160,3 +162,24 @@ reachable here. Both points are owned by the paired Contract. The five manual
 children share one loader and settings is the generic SHOW-only child; every
 child has strict-empty input. The read-only promise is structural, not
 conventional.
+
+## Unified fixed entry and retirement
+
+The kernel renderer projects the loaded `principle`, Covenant route, `substrate`,
+`procedures`, and assembled `meta_guidance` into one short resident entry.
+Internal source owners, protected stored bodies, packaged mirrors/fallback,
+transactional rollback, and two cache batches remain intact. `base_prompt` stays
+resident immediately after that entry; catalogs, identity, character and Pad
+remain separate dynamic owners. No generic section selector or opt-out exists.
+
+`instructions` takes strict empty input and returns `{status: "ok", instructions:
+<current loaded fixed bodies>}` through `PsycheSettingsPort.read_instructions`.
+It performs no disk I/O, reconstruction, or mutation. Read it on first orientation
+and before unfamiliar/consequential work. Its runtime guidance includes the
+current adapter's contribution with that adapter still owning the source.
+`covenant` continues to return the full effective body independently.
+
+`comment` and `comment_file` are unknown owner fields. Old configs must remove
+these keys and put desired working instructions in Pad through authorized edits.
+Neither `.rules` nor `system/rules.md` is read, consumed or injected; old files
+remain untouched. Pad is writable working memory, not security enforcement.

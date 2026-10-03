@@ -75,10 +75,10 @@ v2 System settings, or fixed defaults.
 
 Compatibility exists to keep older local files readable while agents/humans
 repair them. Retired prompt fields and ignored runtime knobs are never new-write
-shapes. The six former init prompt fields (`base_prompt`, `base_prompt_file`,
-`covenant`, `covenant_file`, `comment`, `comment_file`) are compatibility-known
+shapes. The four former init prompt fields (`base_prompt`, `base_prompt_file`,
+`covenant`, `covenant_file`) are compatibility-known
 but inert: this reader does not type-check, path-resolve, or consume them.
-Psyche owns the active six-field surface through its independent strict
+Psyche owns the active four-field surface through its independent strict
 `settings/psyche.json` v1 reader at Agent reconstruction. Live refresh resolves
 one immutable Psyche prompt plan exactly once immediately after a successful init
 read and before any destructive teardown, then passes that same candidate through
@@ -231,3 +231,14 @@ both composition roots, focused tests, and the environment/manual route in one
 candidate. Files that are only legacy migration machinery are not a runtime
 registry for this Contract; if later retirement requires deletion, report the
 exact path and obtain path-scoped authorization first.
+
+## Unified instructions and retired inputs
+
+The resident kernel prefix is one short entry. Current loaded full fixed owners
+are disclosed read-only by `psyche.instructions`, including assembled catalog,
+_meta readme and adapter static rules. Base prompt remains resident after the
+entry; dynamic memories and full effective `psyche.covenant` remain separate.
+Comment/comment_file now receive the existing unknown-field diagnostic with
+migrate-to-Pad guidance (strict rejection in the Psyche owner, warning in init).
+Old configs must remove those fields and use authorized Pad edits. No `.rules`
+consumer or `system/rules.md` injection exists; old files are left untouched.

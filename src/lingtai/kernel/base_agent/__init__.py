@@ -480,7 +480,6 @@ class BaseAgent:
         substrate: str = "",
         procedures: str = "",
         pad: str = "",
-        comment: str = "",
     ):
         self.agent_name = agent_name  # true name (真名) — immutable once set
         self.nickname: str | None = None  # mutable alias (别名)
@@ -649,19 +648,8 @@ class BaseAgent:
             self._prompt_manager.write_section("substrate", substrate, protected=True)
         if procedures:
             self._prompt_manager.write_section("procedures", procedures, protected=True)
-        # Load existing rules from system/rules.md (survives molts, refreshes, and resumes)
-        rules_md = system_dir / "rules.md"
-        if rules_md.is_file():
-            try:
-                rules_content = rules_md.read_text(encoding="utf-8").strip()
-                if rules_content:
-                    self._prompt_manager.write_section("rules", rules_content, protected=True)
-            except OSError:
-                pass
         if loaded_pad.strip():
             self._prompt_manager.write_section("pad", loaded_pad)
-        if comment:
-            self._prompt_manager.write_section("comment", comment)
 
         # Agent ID, created_at, and molt_count — persistent state restored
         from datetime import datetime, timezone
@@ -2752,10 +2740,6 @@ class BaseAgent:
     ) -> None:
         from .prompt import _update_system_prompt
         _update_system_prompt(self, section, content, protected=protected)
-
-    def _check_rules_file(self) -> None:
-        from .lifecycle import _check_rules_file
-        _check_rules_file(self)
 
     # ------------------------------------------------------------------
     # Identity / status (pass-throughs to identity.py)

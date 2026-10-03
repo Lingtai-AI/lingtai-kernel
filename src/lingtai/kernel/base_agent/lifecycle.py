@@ -1,7 +1,7 @@
 """Lifecycle — start, stop, heartbeat, signal-file detection, refresh, preset fallback.
 
 The agent's life support: starting, stopping, breathing, detecting signal
-files (.sleep, .suspend, .refresh, .prompt, .clear, .rules,
+files (.sleep, .suspend, .refresh, .prompt, .clear,
 .interrupt), tracking uptime, managing AED timeout, and running periodic
 snapshots.
 """
@@ -783,9 +783,6 @@ def _heartbeat_loop(agent) -> None:
                         f"[{agent.agent_name}] .clear signal failed: {clear_err}",
                     )
 
-            # .rules = network rules signal
-            _check_rules_file(agent)
-
             # --- Nudges ---
             # Per-agent periodic checks that publish to `.notification/nudge.json`
             # when something needs the agent's attention (e.g. a newer lingtai
@@ -1199,41 +1196,3 @@ def _can_fallback_preset(agent) -> bool:
         return bool(active and default and active != default)
     except Exception:
         return False
-
-
-def _check_rules_file(agent) -> None:
-    """Consume .rules signal file, diff against system/rules.md, update if changed."""
-    rules_file = agent._working_dir / ".rules"
-    if not rules_file.is_file():
-        return
-    try:
-        content = rules_file.read_text(encoding="utf-8").strip()
-    except OSError:
-        return
-    # Always consume the signal file
-    try:
-        rules_file.unlink()
-    except OSError:
-        return
-    if not content:
-        return
-    # Diff against canonical system/rules.md
-    canonical = agent._working_dir / "system" / "rules.md"
-    existing = ""
-    if canonical.is_file():
-        try:
-            existing = canonical.read_text(encoding="utf-8").strip()
-        except OSError:
-            pass
-    if content == existing:
-        return
-    # Content changed — persist and refresh
-    try:
-        canonical.parent.mkdir(parents=True, exist_ok=True)
-        canonical.write_text(content, encoding="utf-8")
-    except OSError:
-        agent._log("rules_write_error", source="signal")
-        return
-    agent._prompt_manager.write_section("rules", content, protected=True)
-    agent._flush_system_prompt()
-    agent._log("rules_loaded", source="signal")
