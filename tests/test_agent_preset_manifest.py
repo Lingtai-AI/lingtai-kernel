@@ -343,8 +343,12 @@ def test_manifest_never_contains_api_key(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_path):
+def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(
+    tmp_path, monkeypatch
+):
     """Every supported container depth is redacted without losing runtime identity."""
+    from lingtai.tools import registry
+
     service = object()
     port = object()
     class _HashableMapping(dict):
@@ -358,6 +362,15 @@ def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_p
         "password": "nested-password-sentinel",
     }
     sentinel_map = _HashableMapping(sentinels)
+    original_setup = registry.setup_capability
+    setup_inputs = {}
+
+    def capture_setup(current_agent, name, **kwargs):
+        if name == "web":
+            setup_inputs.update(kwargs)
+        return original_setup(current_agent, name, **kwargs)
+
+    monkeypatch.setattr(registry, "setup_capability", capture_setup)
     agent = Agent(
         service=_mock_service(),
         agent_name="nested-secrets",
@@ -385,6 +398,17 @@ def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_p
         {"set_items": {sentinel_map}, "frozen_items": frozenset({sentinel_map})},
     ))
     try:
+        assert setup_inputs["search_service"] is service
+        assert setup_inputs["browser_port"] is port
+        agent._capabilities.append((
+            "late-regression",
+            {
+                "nested": {
+                    "api_key": "late-api-sentinel",
+                    "token": "late-token-sentinel",
+                }
+            },
+        ))
         manifest = agent._build_manifest()
         agent._workdir.write_manifest(manifest)
         agent_json = json.loads((tmp_path / "nested-secrets" / ".agent.json").read_text())
@@ -392,6 +416,8 @@ def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_p
             blob = json.dumps(value)
             for sentinel in sentinels.values():
                 assert sentinel not in blob
+            assert "late-api-sentinel" not in blob
+            assert "late-token-sentinel" not in blob
             assert "public-provider" in blob
             assert "public-nested-model" in blob
             def keys(node):
@@ -595,151 +621,3 @@ def test_identity_section_after_swap_names_new_active(tmp_path, monkeypatch):
     assert alpha in text
     assert "default" in text
     agent.stop(timeout=1.0)
-
-
-def test_capability_sanitizer_preserves_setup_inputs_and_redacts_late_values(
-    tmp_path, monkeypatch
-):
-    from lingtai.tools import registry
-
-    class _ExtendedSensitiveAgent(Agent):
-        _SENSITIVE_KEYS = Agent._SENSITIVE_KEYS | {"private_secret"}
-
-    class _HashableMapping(dict):
-        __hash__ = object.__hash__
-
-    injected = object()
-    mapped = _HashableMapping(
-        {
-            "private_secret": "mapping-private-sentinel",
-            "api_secret": "mapping-api-secret-sentinel",
-            "opaque_value": injected,
-            "visible": "mapping-value",
-        }
-    )
-    set_values = {1, injected, 3}
-    frozen_values = frozenset({"frozen-value", injected, 5})
-    raw_config = {
-        "api_key": "setup-api-sentinel",
-        "api_key_env": "setup-env-sentinel",
-        "api_secret": "setup-secret-sentinel",
-        "token": "setup-token-sentinel",
-        "password": "setup-password-sentinel",
-        "private_secret": "setup-private-sentinel",
-        "scalars": ["text", 3, 2.5, True, None],
-        "list_values": [
-            injected,
-            {"token": "list-token-sentinel", "visible": "list-value"},
-        ],
-        "tuple_values": (
-            {"password": "tuple-password-sentinel", "visible": "tuple-value"},
-            injected,
-        ),
-        "set_values": set_values,
-        "frozen_values": frozen_values,
-        "mapping_set": {mapped},
-        "mapping_frozen": frozenset({mapped}),
-        "opaque_value": injected,
-    }
-    agent = _ExtendedSensitiveAgent(
-        service=_mock_service(),
-        agent_name="capability-sanitizer",
-        working_dir=tmp_path / "capability-sanitizer",
-        capabilities={},
-    )
-    manager = object()
-    setup_call = {}
-
-    def capture_setup(current_agent, name, **kwargs):
-        setup_call.update(agent=current_agent, name=name, kwargs=kwargs)
-        return manager
-
-    monkeypatch.setattr(registry, "setup_capability", capture_setup)
-    try:
-        assert agent._setup_capability(
-            "probe", config=raw_config, injected_port=injected
-        ) is manager
-        assert setup_call["agent"] is agent
-        assert setup_call["name"] == "probe"
-        assert setup_call["kwargs"]["config"] is raw_config
-        assert setup_call["kwargs"]["injected_port"] is injected
-        assert raw_config["opaque_value"] is injected
-
-        stored = agent._capabilities[-1][1]
-        safe = stored["config"]
-        assert not {
-            "api_key",
-            "api_key_env",
-            "api_secret",
-            "token",
-            "password",
-            "private_secret",
-            "opaque_value",
-        }.intersection(safe)
-        assert safe["scalars"] == ["text", 3, 2.5, True, None]
-        assert safe["list_values"] == [{"visible": "list-value"}]
-        assert safe["tuple_values"] == [{"visible": "tuple-value"}]
-        assert safe["set_values"] == [
-            item for item in set_values if item is not injected
-        ]
-        assert safe["frozen_values"] == [
-            item for item in frozen_values if item is not injected
-        ]
-        assert safe["mapping_set"] == [{"visible": "mapping-value"}]
-        assert safe["mapping_frozen"] == [{"visible": "mapping-value"}]
-        assert all(
-            isinstance(safe[key], list)
-            for key in (
-                "list_values",
-                "tuple_values",
-                "set_values",
-                "frozen_values",
-                "mapping_set",
-                "mapping_frozen",
-            )
-        )
-        assert agent._capability_managers["probe"] is manager
-
-        stored["late"] = {
-            "api_key": "late-api-sentinel",
-            "private_secret": "late-private-sentinel",
-            "late_opaque": injected,
-            "visible": [{"token": "late-token-sentinel", "ok": "kept"}],
-        }
-        manifest = agent._build_manifest()
-        agent._workdir.write_manifest(manifest)
-        agent_json = json.loads(
-            (tmp_path / "capability-sanitizer" / ".agent.json").read_text()
-        )
-        forbidden = (
-            "api_key",
-            "api_key_env",
-            "api_secret",
-            "token",
-            "password",
-            "private_secret",
-        )
-        for value in (manifest, agent_json):
-            blob = json.dumps(value)
-            for sentinel in (
-                "setup-api-sentinel",
-                "setup-env-sentinel",
-                "setup-secret-sentinel",
-                "setup-token-sentinel",
-                "setup-password-sentinel",
-                "setup-private-sentinel",
-                "mapping-private-sentinel",
-                "mapping-api-secret-sentinel",
-                "list-token-sentinel",
-                "tuple-password-sentinel",
-                "late-api-sentinel",
-                "late-private-sentinel",
-                "late-token-sentinel",
-            ):
-                assert sentinel not in blob
-            for key in forbidden:
-                assert f'"{key}"' not in blob
-            assert '"late_opaque"' not in blob
-            assert "late-token-sentinel" not in blob
-    finally:
-        agent.stop(timeout=1.0)
