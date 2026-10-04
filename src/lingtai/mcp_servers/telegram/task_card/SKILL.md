@@ -167,8 +167,10 @@ row: recorded jobs counted are running/queued plus those finished in the last
 10 minutes (daemon and Shell alike), within the kernel's bounded record-tail
 selection; this is not a whole-ledger census. The Daemon stats row is the sum of those daemon runs'
 *reported lifetime* usage, not tokens from the last 10 minutes; runs that
-report no positive values show `usage n/a (no positive usage reported)`. It ends `cost n/a (not
-reported)`: daemon cost is not priced, never `$0`, and never part of the Session
+report no positive values show `usage n/a (no positive usage reported)`. For
+readability the visible row uses the compact `Daemon stats` label and omits
+the unavailable-cost suffix. That omission does not mean zero cost: daemon
+cost is not reported or priced, never `$0`, and never part of the Session
 Cost row. An empty or stale snapshot shows no Async rows. Only when the whole
 message would exceed its overall limit (after reasoning excerpts shrink) does the
 tail of a long Daemons or Backends list become `+N omitted`.

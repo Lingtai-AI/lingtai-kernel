@@ -62,9 +62,8 @@ class TaskCardEventProjection:
             "shell": "Shell",
             "scope": "Scope",
             "scope_text": "recorded running/queued + finished in last {minutes}m",
-            "daemon_stats": "Daemon stats (selected runs' reported lifetime usage)",
+            "daemon_stats": "Daemon stats",
             "daemon_usage_na": "usage n/a (no positive usage reported)",
-            "daemon_cost": "cost n/a (not reported)",
             "omitted": "+{n} omitted",
         },
         "zh": {
@@ -90,16 +89,15 @@ class TaskCardEventProjection:
             "shell": "Shell",
             "scope": "范围",
             "scope_text": "已记录的运行中/排队 + 最近 {minutes} 分钟内结束",
-            "daemon_stats": "守护进程统计（所选运行已上报的累计用量）",
+            "daemon_stats": "守护进程统计",
             "daemon_usage_na": "用量 不可用（未上报正值）",
-            "daemon_cost": "费用 不可用（未上报）",
             "omitted": "另有 {n} 项省略",
         },
     }
 
     @classmethod
     def daemon_stats_label(cls, locale: str = "en") -> str:
-        """Row label naming the selected-run, reported-lifetime usage."""
+        """Compact row label; accounting scope is documented in the manual."""
         return cls._locale_text("daemon_stats", locale)
 
     @classmethod
@@ -1648,11 +1646,6 @@ class TaskCardEventProjection:
                 # not zero; all-zero lanes get no stats row at all.
                 if not stats_parts and status_parts(daemon):
                     stats_parts.append(label("daemon_usage_na"))
-                # The kernel snapshot carries no subagent cost and the card
-                # never prices or folds it into Session cost; say so instead of
-                # implying $0.
-                if stats_parts:
-                    stats_parts.append(label("daemon_cost"))
 
             # All rows belong to one Async Work section; none is dropped.
             if totals:
