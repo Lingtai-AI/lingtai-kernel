@@ -2907,3 +2907,45 @@ def test_baseline_fails_toward_waking_on_unstable_or_failed_read(tmp_path: Path,
     skipped = [f for evt, f in agent._logs if evt == "worker_hang_notification_baseline_skipped"]
     assert [f["reason"] for f in skipped] == ["unstable_read", "read_failed"]
     assert "simulated store failure" in skipped[1]["error"]
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"data": {"count": 3}}, "3 system"),
+        ({"data": {"events": [1, 2]}}, "2 system"),
+    ],
+)
+def test_injection_log_summary_counts_notifications(
+    tmp_path: Path, payload: object, expected: str
+) -> None:
+    publish_test_payload(tmp_path, "system", payload)
+    agent = _make_stub_agent_for_block_log(tmp_path)
+
+    agent._inject_notification_pair(snapshot_notifications(tmp_path))
+    logs = [
+        fields for event, fields in agent._logs
+        if event == "notification_pair_injected"
+    ]
+    assert any(f"Notification received: {expected}." in log["summary"] for log in logs)
+
+
+def test_email_summary_falls_back_to_persistent_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import lingtai.kernel.base_agent as base_agent
+
+    monkeypatch.setattr(
+        base_agent, "build_notification_persistent_payload",
+        lambda *_a, **_kw: {"notification_persistent": {"email": {"count": 5}}},
+    )
+    publish_test_payload(tmp_path, "email", {"data": {}})
+    agent = _make_stub_agent_for_block_log(tmp_path)
+
+    agent._inject_notification_pair(snapshot_notifications(tmp_path))
+    logs = [
+        fields for event, fields in agent._logs
+        if event == "notification_pair_injected"
+    ]
+    assert any("Notification received: 5 email." in log["summary"] for log in logs)
