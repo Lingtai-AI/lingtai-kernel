@@ -816,29 +816,13 @@ class AvatarManager:
             )
         dst.mkdir(parents=True, exist_ok=True)
 
-        # system/ (character, pad, covenant, etc.)
-        src_system = src / "system"
-        if src_system.is_dir():
-            dst_system = dst / "system"
-            if dst_system.exists():
-                shutil.rmtree(dst_system)
-            shutil.copytree(src_system, dst_system)
-
-        # knowledge/
-        src_knowledge = src / "knowledge"
-        if src_knowledge.is_dir():
-            dst_knowledge = dst / "knowledge"
-            if dst_knowledge.exists():
-                shutil.rmtree(dst_knowledge)
-            shutil.copytree(src_knowledge, dst_knowledge)
-
-        # exports/
-        src_exports = src / "exports"
-        if src_exports.is_dir():
-            dst_exports = dst / "exports"
-            if dst_exports.exists():
-                shutil.rmtree(dst_exports)
-            shutil.copytree(src_exports, dst_exports)
+        for directory in ("system", "knowledge", "exports"):
+            src_directory = src / directory
+            if src_directory.is_dir():
+                dst_directory = dst / directory
+                if dst_directory.exists():
+                    shutil.rmtree(dst_directory)
+                shutil.copytree(src_directory, dst_directory)
 
         # combo.json
         src_combo = src / "combo.json"
