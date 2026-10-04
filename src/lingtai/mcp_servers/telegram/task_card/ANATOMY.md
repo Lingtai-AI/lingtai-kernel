@@ -120,9 +120,10 @@ onto its one tracked resident Task Card target per account+chat.
   shrink, and `format_metadata` then shortens only the Daemons/Backends lists
   tails with a `+N omitted` indicator. Any non-empty Async Work block gains a
   localized `Scope` row (running/queued + finished in last 10m from
-  `ASYNC_WORK_WINDOW_SECONDS`); `daemon_stats_label` names the Daemon stats
-  row's reported-lifetime usage, which shows `usage n/a (no positive usage reported)` when
-  selected runs report no positive values and always ends `cost n/a (not reported)`. In
+  `ASYNC_WORK_WINDOW_SECONDS`); `daemon_stats_label` supplies the compact
+  Daemon stats label. The row shows `usage n/a (no positive usage reported)`
+  when selected runs report no positive values, but omits the lifetime
+  parenthetical and unavailable-cost suffix; their caveats live in the manual. In
   Telegram HTML, `_telegram_task_card_html`
   (`src/lingtai/mcp_servers/telegram/manager.py:291-421`) gives Session the
   cumulative compact `out` value and a bold `Cost` row, puts Async Work in a

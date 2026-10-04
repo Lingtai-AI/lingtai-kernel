@@ -721,7 +721,7 @@ def test_metadata_renders_absolute_path_not_shortened():
 _SCOPE = "Scope · recorded running/queued + finished in last 10m"
 _NO_USAGE = (
     f"{TaskCardEventProjection.daemon_stats_label()} · "
-    "usage n/a (no positive usage reported) · cost n/a (not reported)"
+    "usage n/a (no positive usage reported)"
 )
 
 
@@ -741,7 +741,7 @@ def test_metadata_renders_daemon_status_and_stats():
         "Daemons · running 3 · done 2 · failed 1",
         "Backends · claude-p 1 · lingtai 2",
         f"{TaskCardEventProjection.daemon_stats_label()} · in 1.2M · out 340.0k"
-        " · cache 85.0% · api 12 · cost n/a (not reported)",
+        " · cache 85.0% · api 12",
     ]
 
 

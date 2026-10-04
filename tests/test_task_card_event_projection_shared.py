@@ -352,31 +352,32 @@ def test_metadata_has_no_500_char_budget_and_keeps_every_row(locale: str) -> Non
     assert not any("omitted" in line or "省略" in line for line in lines)
 
 
-def test_daemon_stats_states_selection_scope_and_cost_unavailable() -> None:
+def test_daemon_stats_is_compact_with_accounting_scope_separate() -> None:
     label = TaskCardEventProjection.daemon_stats_label("en")
-    assert label == "Daemon stats (selected runs' reported lifetime usage)"
+    assert label == "Daemon stats"
     zh = TaskCardEventProjection.daemon_stats_label("zh")
-    assert "累计" in zh
+    assert zh == "守护进程统计"
     lines = TaskCardEventProjection.format_metadata(_owner_metadata())
     # The shared Scope row carries the selection window for every async lane.
     assert "Scope · recorded running/queued + finished in last 10m" in lines
     stats = next(line for line in lines if line.startswith(label))
-    assert stats.endswith("cost n/a (not reported)")
+    assert stats == "Daemon stats · in 1.2k · out 300 · cache 50.0% · api 4"
+    assert "cost" not in stats and "lifetime" not in stats
     # The Session cost row is the parent's own cost; no daemon price or $0 enters.
     assert [line for line in lines if "$" in line] == [f"Cost · {_ROW}"]
     zh_lines = TaskCardEventProjection.format_metadata(_owner_metadata(), "zh")
     assert "范围 · 已记录的运行中/排队 + 最近 10 分钟内结束" in zh_lines
     zh_stats = next(line for line in zh_lines if line.startswith(zh))
-    assert zh_stats.endswith("费用 不可用（未上报）")
+    assert "费用" not in zh_stats and "所选运行" not in zh_stats
     # Daemon runs without reported usage are unavailable, never zero or priced.
     bare = TaskCardEventProjection.format_metadata(
         {"async_work": {"daemon": {"running": 1}}}
     )
-    assert bare[-1] == f"{label} · usage n/a (no positive usage reported) · cost n/a (not reported)"
+    assert bare[-1] == f"{label} · usage n/a (no positive usage reported)"
     zh_bare = TaskCardEventProjection.format_metadata(
         {"async_work": {"daemon": {"running": 1}}}, "zh"
     )
-    assert zh_bare[-1] == f"{zh} · 用量 不可用（未上报正值） · 费用 不可用（未上报）"
+    assert zh_bare[-1] == f"{zh} · 用量 不可用（未上报正值）"
     # Shell-only and all-zero snapshots: scope only when work exists, no stats row.
     shell = TaskCardEventProjection.format_metadata(
         {"async_work": {"shell": {"running": 1}}}

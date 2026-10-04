@@ -195,13 +195,14 @@ semantics live here. The public producer contract lives in
     kernel selection is bounded by its record-tail limits, not a whole-ledger
     census; a truly empty,
     all-zero, or stale snapshot renders no Async rows and no Scope. The Daemon
-    stats row (`Daemon stats (selected runs' reported lifetime usage)`) sums
+    compact stats row (`Daemon stats`) sums
     those daemon runs' reported lifetime `in`/`out`/`cache`/`api` — not tokens
     from the last window and not the whole batch. Selected daemon runs with no
-    positive reported usage show `usage n/a (no positive usage reported)` instead of zeros. Every stats
-    row ends with `cost n/a (not reported)` because the snapshot carries no
-    daemon cost: none is priced, shown as `$0`, or folded into Session's Cost
-    row. Shell rows make no usage or billing claim.
+    positive reported usage show `usage n/a (no positive usage reported)` instead
+    of zeros. The card omits the explanatory lifetime parenthetical and the
+    unavailable-cost suffix; this manual retains their meaning. The snapshot
+    carries no daemon cost: none is priced, shown as `$0`, or folded into
+    Session's Cost row. Shell rows make no usage or billing claim.
 12. A pending canonical `shell.run` automatic row reads only the literal safe
     `input.async` boolean. Sync/default mode renders `foreground`; literal
     `async=true` renders `dispatching async job`. The row retains redacted
