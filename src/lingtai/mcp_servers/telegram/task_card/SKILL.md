@@ -158,3 +158,17 @@ priceable it shows `total ? · in ? · write ? · read ? · out ? · partial`. I
 unknown history, and it is still a list-price estimate, not a bill.
 
 The SESSION line splits ordinary input, cache writes, cache reads and output without double charging. Unknown write counts keep input/write allocation unknown even when the combined total is known.
+
+## Async Work Daemon stats row
+
+The card keeps every Session, Cost, Identity and Async Work row; there is no
+500-character metadata budget. Any non-empty Async Work block carries a `Scope`
+row: recorded jobs counted are running/queued plus those finished in the last
+10 minutes (daemon and Shell alike), within the kernel's bounded record-tail
+selection; this is not a whole-ledger census. The Daemon stats row is the sum of those daemon runs'
+*reported lifetime* usage, not tokens from the last 10 minutes; runs that
+report no positive values show `usage n/a (no positive usage reported)`. It ends `cost n/a (not
+reported)`: daemon cost is not priced, never `$0`, and never part of the Session
+Cost row. An empty or stale snapshot shows no Async rows. Only when the whole
+message would exceed its overall limit (after reasoning excerpts shrink) does the
+tail of a long Daemons or Backends list become `+N omitted`.

@@ -146,6 +146,7 @@ def test_shared_render_stays_unchanged_while_telegram_relayouts_metadata() -> No
         "Identity · device · dev-1 | path · /tmp/taskcard\n"
         "────────\n"
         "Async Work · running 1\n"
+        "Scope · recorded running/queued + finished in last 10m\n"
         "Last Updated: 02:30:00 U+8\n"
         "Ask agent for \"Task Card\""
     )
@@ -169,6 +170,7 @@ def test_shared_render_stays_unchanged_while_telegram_relayouts_metadata() -> No
         "\n"
         "⚙️ <b>ASYNC WORK</b>\n"
         "<b>Status</b> · running 1\n"
+        "<b>Scope</b> · recorded running/queued + finished in last 10m\n"
         "🕒 Last Updated: 02:30:00 U+8\n"
         "💬 <i>Ask agent for \"Task Card\"</i>\n"
         "⚙️ <i>Settings: /taskcard on|off · /taskcard N (1-10)</i>"
@@ -302,6 +304,129 @@ def test_metadata_renders_service_tier_when_supplied() -> None:
         {"model": "gpt-5.6-terra", "service_tier": "fast"}
     )
     assert lines == ["Session · gpt-5.6-terra · tier fast"]
+
+
+_ROW = "total ~$0.0054 · in $0.0029 · write $0.0009 · read $0.0001 · out $0.0015"
+
+
+def _owner_metadata() -> dict:
+    """Deterministic owner-shaped fields whose rendered block exceeds 500 chars."""
+    return {
+        "model": "m" * 60,
+        "thinking": "high",
+        "service_tier": "fast",
+        "endpoint": "e" * 40,
+        "context_tokens": 100_000,
+        "context_window": 272_000,
+        "context_usage": 0.37,
+        "input_tokens": 5_000_000,
+        "output_tokens": 200_000,
+        "api_calls": 12,
+        "device_short_name": "d" * 40,
+        "working_dir": "/w/.lingtai/" + "p" * 180,
+        "session_cost": _ROW,
+        "async_work": {
+            "daemon": {
+                "running": 2, "done": 1,
+                "backend_counts": {"lingtai": 2, "claude-p": 1},
+                "usage": {"input_tokens": 1_200, "output_tokens": 300,
+                          "cached_tokens": 600, "api_calls": 4},
+            },
+            "shell": {"running": 1},
+        },
+    }
+
+
+@pytest.mark.parametrize("locale", ["en", "zh"])
+def test_metadata_has_no_500_char_budget_and_keeps_every_row(locale: str) -> None:
+    lines = TaskCardEventProjection.format_metadata(_owner_metadata(), locale)
+    assert len("\n".join(lines)) > 500
+    divider = TaskCardEventProjection.METADATA_DIVIDER
+    assert lines.count(divider) == 2  # Session | Identity | Async Work
+    assert any(line.startswith("Cost · ") for line in lines)
+    identity = next(line for line in lines if "path · " in line)
+    assert "…" not in identity and identity.endswith("p" * 180)
+    stats_label = TaskCardEventProjection.daemon_stats_label(locale)
+    stats = next(line for line in lines if line.startswith(f"{stats_label} · "))
+    assert "in 1.2k" in stats and "api 4" in stats
+    assert not any("omitted" in line or "省略" in line for line in lines)
+
+
+def test_daemon_stats_states_selection_scope_and_cost_unavailable() -> None:
+    label = TaskCardEventProjection.daemon_stats_label("en")
+    assert label == "Daemon stats (selected runs' reported lifetime usage)"
+    zh = TaskCardEventProjection.daemon_stats_label("zh")
+    assert "累计" in zh
+    lines = TaskCardEventProjection.format_metadata(_owner_metadata())
+    # The shared Scope row carries the selection window for every async lane.
+    assert "Scope · recorded running/queued + finished in last 10m" in lines
+    stats = next(line for line in lines if line.startswith(label))
+    assert stats.endswith("cost n/a (not reported)")
+    # The Session cost row is the parent's own cost; no daemon price or $0 enters.
+    assert [line for line in lines if "$" in line] == [f"Cost · {_ROW}"]
+    zh_lines = TaskCardEventProjection.format_metadata(_owner_metadata(), "zh")
+    assert "范围 · 已记录的运行中/排队 + 最近 10 分钟内结束" in zh_lines
+    zh_stats = next(line for line in zh_lines if line.startswith(zh))
+    assert zh_stats.endswith("费用 不可用（未上报）")
+    # Daemon runs without reported usage are unavailable, never zero or priced.
+    bare = TaskCardEventProjection.format_metadata(
+        {"async_work": {"daemon": {"running": 1}}}
+    )
+    assert bare[-1] == f"{label} · usage n/a (no positive usage reported) · cost n/a (not reported)"
+    zh_bare = TaskCardEventProjection.format_metadata(
+        {"async_work": {"daemon": {"running": 1}}}, "zh"
+    )
+    assert zh_bare[-1] == f"{zh} · 用量 不可用（未上报正值） · 费用 不可用（未上报）"
+    # Shell-only and all-zero snapshots: scope only when work exists, no stats row.
+    shell = TaskCardEventProjection.format_metadata(
+        {"async_work": {"shell": {"running": 1}}}
+    )
+    assert shell[1] == "Scope · recorded running/queued + finished in last 10m"
+    assert not any(line.startswith("Daemon stats") for line in shell)
+    zero = TaskCardEventProjection.format_metadata(
+        {"async_work": {"daemon": {"running": 0}, "shell": {"done": 0}}}
+    )
+    assert zero == []
+
+
+def test_telegram_html_renders_scoped_daemon_stats_row() -> None:
+    text = TaskCardEventProjection.format_rows_task_card_text(
+        [{"tool": "bash", "tool_action": "run", "reasoning": "x"}],
+        metadata=_owner_metadata(),
+    )
+    html = _telegram_task_card_html(text)
+    label = TaskCardEventProjection.daemon_stats_label("en")
+    assert f"<b>{label}</b> · in 1.2k" in html
+    assert "<b>Cost</b> · total ~$0.0054" in html
+
+
+def test_extreme_metadata_fits_overall_limit_with_explicit_omitted_indicator() -> None:
+    metadata = _owner_metadata()
+    metadata["async_work"]["daemon"]["backend_counts"] = {
+        f"backend-{index:03d}": 1 for index in range(400)
+    }
+    metadata["async_work"]["daemon"]["model_counts"] = {
+        f"model-{index:03d}": 1 for index in range(300)
+    }
+    rows = [
+        {"tool": "bash", "tool_action": "run", "reasoning": "r" * 400, "status": "success"}
+        for _ in range(3)
+    ]
+    for kwargs in ({"rows": rows}, {"rows": []}):
+        text = TaskCardEventProjection.format_rows_task_card_text(
+            kwargs["rows"], metadata=metadata
+        )
+        assert len(text) <= TaskCardEventProjection.TEXT_LIMIT
+        assert "omitted" in text
+        stats_label = TaskCardEventProjection.daemon_stats_label("en")
+        assert any(line.startswith(f"{stats_label} · ") for line in text.splitlines())
+        assert "Cost · " in text and "Identity · " in text
+        assert text.splitlines()[-1] == 'Ask agent for "Task Card"'
+    # Within the limit nothing is omitted, so the unbounded form is unchanged.
+    small = TaskCardEventProjection.format_rows_task_card_text(
+        rows[:1], metadata=_owner_metadata()
+    )
+    assert "omitted" not in small
 
 
 def test_metadata_omits_device_line_when_only_bad_values() -> None:

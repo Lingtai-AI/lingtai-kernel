@@ -766,15 +766,16 @@ def test_session_cost_row_is_opt_in_shared_metadata_and_default_is_unchanged():
     identity = {"working_dir": "/w/.lingtai/a"}
     assert TaskCardEventProjection.format_metadata({**identity, "session_cost": row}) == (
         TaskCardEventProjection.format_metadata(identity))
-    # The row is a Session row inside the 500-char metadata budget: a long
-    # Identity is shortened first and the Cost row survives.
+    # There is no whole-block metadata budget: the Cost row and a full-length
+    # Identity both survive unshortened even when the block exceeds 500 chars.
     crowded = {"model": "m" * 128, "thinking": "t" * 48, "service_tier": "s" * 48,
                "endpoint": "e" * 96, "device_short_name": "d" * 64,
                "working_dir": "/" + "p" * 219, "session_cost": row}
     lines = TaskCardEventProjection.format_metadata(crowded)
     assert lines[1] == f"Cost · {row}"
-    assert len("\n".join(lines)) <= TaskCardEventProjection.METADATA_MAX_CHARS
-    assert lines[-1].startswith("Identity · ") and lines[-1].endswith("…")
+    assert len("\n".join(lines)) > 500
+    assert lines[-1].startswith("Identity · ") and "…" not in lines[-1]
+    assert lines[-1].endswith("p" * 219)
 
 
 @pytest.mark.parametrize("null_rate", [None, "junk", -1])
