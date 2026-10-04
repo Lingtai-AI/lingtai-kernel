@@ -689,26 +689,11 @@ class ChatInterface:
             return self._append("user", leftover)
         return last_touched_entry  # type: ignore[return-value]
 
-    def remove_pair_by_call_id(self, call_id: str) -> bool:
-        """Remove a strict ``(assistant{tool_call}, user{tool_result})`` pair.
-
-        Scans for an assistant entry with exactly one ``ToolCallBlock``
-        with the given ``call_id`` (plus optional legacy ``TextBlock``s),
-        immediately followed by a user entry whose content is exactly one
-        ``ToolResultBlock`` with the same id. Removes both entries and
-        returns True. Returns False if no such removable pair exists.
-
-        The removable-shape requirement is intentional: this helper exists
-        to maintain the single-slot invariant for synthesized appendix
-        pairs, which always have exactly that shape. Refusing
-        to operate on mixed-content entries protects regular tool-call
-        history from being corrupted by accidental id collisions.
-
-        The assistant entry may contain one ``ToolCallBlock`` plus any
-        number of ``TextBlock``s for backward compatibility with older
-        synthesized pairs.  New notification-sync pairs are tool-only.
-        The user entry must still be exactly one ``ToolResultBlock``.
-        """
+    def _remove_strict_pair(
+        self,
+        selector: Callable[[ToolCallBlock, ToolResultBlock], bool],
+    ) -> bool:
+        """Remove the first adjacent pair with the strict synthetic shape."""
         for i in range(len(self._entries) - 1):
             a = self._entries[i]
             u = self._entries[i + 1]
@@ -732,11 +717,37 @@ class ChatInterface:
             rblock = u.content[0]
             if not isinstance(rblock, ToolResultBlock):
                 continue
-            if cblock.id != call_id or rblock.id != call_id:
+            if not selector(cblock, rblock):
                 continue
             del self._entries[i:i + 2]
             return True
         return False
+
+    def remove_pair_by_call_id(self, call_id: str) -> bool:
+        """Remove a strict ``(assistant{tool_call}, user{tool_result})`` pair.
+
+        Scans for an assistant entry with exactly one ``ToolCallBlock``
+        with the given ``call_id`` (plus optional legacy ``TextBlock``s),
+        immediately followed by a user entry whose content is exactly one
+        ``ToolResultBlock`` with the same id. Removes both entries and
+        returns True. Returns False if no such removable pair exists.
+
+        The removable-shape requirement is intentional: this helper exists
+        to maintain the single-slot invariant for synthesized appendix
+        pairs, which always have exactly that shape. Refusing
+        to operate on mixed-content entries protects regular tool-call
+        history from being corrupted by accidental id collisions.
+
+        The assistant entry may contain one ``ToolCallBlock`` plus any
+        number of ``TextBlock``s for backward compatibility with older
+        synthesized pairs.  New notification-sync pairs are tool-only.
+        The user entry must still be exactly one ``ToolResultBlock``.
+        """
+        return self._remove_strict_pair(
+            lambda cblock, rblock: (
+                cblock.id == call_id and rblock.id == call_id
+            )
+        )
 
     def remove_pair_by_notif_id(self, notif_id: str) -> bool:
         """Remove a synthetic notification pair matched by ``args.notif_id``.
@@ -760,38 +771,13 @@ class ChatInterface:
         synthesized pairs.  New notification-sync pairs are tool-only.
         The user entry must still be exactly one ``ToolResultBlock``.
         """
-        for i in range(len(self._entries) - 1):
-            a = self._entries[i]
-            u = self._entries[i + 1]
-            if a.role != "assistant" or u.role != "user":
-                continue
-            if len(u.content) != 1:
-                continue
-            # Assistant entry: exactly one ToolCallBlock, rest must be TextBlocks
-            cblock = None
-            for blk in a.content:
-                if isinstance(blk, ToolCallBlock):
-                    if cblock is not None:
-                        cblock = None  # multiple tool calls — skip
-                        break
-                    cblock = blk
-                elif not isinstance(blk, TextBlock):
-                    cblock = None
-                    break
-            if cblock is None:
-                continue
-            rblock = u.content[0]
-            if not isinstance(rblock, ToolResultBlock):
-                continue
-            if cblock.args.get("action") != "notification":
-                continue
-            if cblock.args.get("notif_id") != notif_id:
-                continue
-            if cblock.id != rblock.id:
-                continue
-            del self._entries[i:i + 2]
-            return True
-        return False
+        return self._remove_strict_pair(
+            lambda cblock, rblock: (
+                cblock.args.get("action") == "notification"
+                and cblock.args.get("notif_id") == notif_id
+                and cblock.id == rblock.id
+            )
+        )
 
     # -- Query methods --------------------------------------------------------
 
