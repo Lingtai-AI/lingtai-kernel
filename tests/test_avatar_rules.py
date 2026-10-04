@@ -181,6 +181,14 @@ class TestSpawnNoAutoRulesDistribution:
     def test_deep_spawn_still_copies_rules_md_but_writes_no_signal(self, tmp_path):
         """Deep copy of system/ (unchanged) supplies rules.md; no .rules signal is added."""
         parent, parent_dir = self._setup_spawnable_parent(tmp_path, with_rules=True)
+        for relative_path, content in (
+            ("knowledge/facts.txt", "parent knowledge"),
+            ("exports/summary.txt", "parent export"),
+            ("logs/parent-only.log", "parent runtime"),
+        ):
+            source_file = parent_dir / relative_path
+            source_file.parent.mkdir(exist_ok=True)
+            source_file.write_text(content)
 
         mgr = parent.get_capability("avatar")
         with _patch_avatar_launch():
@@ -192,6 +200,9 @@ class TestSpawnNoAutoRulesDistribution:
         assert (clone_dir / "system" / "rules.md").read_text() == "Always be concise."
         # No dedicated .rules signal is written anymore.
         assert not (clone_dir / ".rules").exists()
+        assert (clone_dir / "knowledge" / "facts.txt").read_text() == "parent knowledge"
+        assert (clone_dir / "exports" / "summary.txt").read_text() == "parent export"
+        assert not (clone_dir / "logs" / "parent-only.log").exists()
 
 
 class TestSpawnNameValidation:
