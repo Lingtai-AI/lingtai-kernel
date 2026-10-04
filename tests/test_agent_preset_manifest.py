@@ -343,8 +343,12 @@ def test_manifest_never_contains_api_key(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_path):
+def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(
+    tmp_path, monkeypatch
+):
     """Every supported container depth is redacted without losing runtime identity."""
+    from lingtai.tools import registry
+
     service = object()
     port = object()
     class _HashableMapping(dict):
@@ -358,6 +362,15 @@ def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_p
         "password": "nested-password-sentinel",
     }
     sentinel_map = _HashableMapping(sentinels)
+    original_setup = registry.setup_capability
+    setup_inputs = {}
+
+    def capture_setup(current_agent, name, **kwargs):
+        if name == "web":
+            setup_inputs.update(kwargs)
+        return original_setup(current_agent, name, **kwargs)
+
+    monkeypatch.setattr(registry, "setup_capability", capture_setup)
     agent = Agent(
         service=_mock_service(),
         agent_name="nested-secrets",
@@ -385,6 +398,17 @@ def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_p
         {"set_items": {sentinel_map}, "frozen_items": frozenset({sentinel_map})},
     ))
     try:
+        assert setup_inputs["search_service"] is service
+        assert setup_inputs["browser_port"] is port
+        agent._capabilities.append((
+            "late-regression",
+            {
+                "nested": {
+                    "api_key": "late-api-sentinel",
+                    "token": "late-token-sentinel",
+                }
+            },
+        ))
         manifest = agent._build_manifest()
         agent._workdir.write_manifest(manifest)
         agent_json = json.loads((tmp_path / "nested-secrets" / ".agent.json").read_text())
@@ -392,6 +416,8 @@ def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_p
             blob = json.dumps(value)
             for sentinel in sentinels.values():
                 assert sentinel not in blob
+            assert "late-api-sentinel" not in blob
+            assert "late-token-sentinel" not in blob
             assert "public-provider" in blob
             assert "public-nested-model" in blob
             def keys(node):

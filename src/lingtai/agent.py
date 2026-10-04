@@ -532,6 +532,35 @@ class Agent(BaseAgent):
         except (TypeError, AttributeError, OSError):
             pass  # LLM config not available (e.g., mock service in tests)
 
+    def _sanitize_capability_kwargs(self, value: Any) -> Any:
+        """Copy JSON-like capability config, omitting secrets and opaque values."""
+        from collections.abc import Mapping as ABCMapping
+
+        omitted = object()
+
+        def sanitize(item: Any) -> Any:
+            if isinstance(item, ABCMapping):
+                clean: dict[Any, Any] = {}
+                for key, child in item.items():
+                    if key in self._SENSITIVE_KEYS:
+                        continue
+                    safe_child = sanitize(child)
+                    if safe_child is not omitted:
+                        clean[key] = safe_child
+                return clean
+            if isinstance(item, (list, tuple, set, frozenset)):
+                clean_items = []
+                for child in item:
+                    safe_child = sanitize(child)
+                    if safe_child is not omitted:
+                        clean_items.append(safe_child)
+                return clean_items
+            if isinstance(item, (str, int, float, bool, type(None))):
+                return item
+            return omitted
+
+        return sanitize(value)
+
     def _setup_capability(self, name: str, **kwargs: Any) -> Any:
         """Load a named capability.
 
@@ -545,36 +574,8 @@ class Agent(BaseAgent):
         """
         from lingtai.tools.registry import CAPABILITY_UNAVAILABLE, setup_capability
 
-        def _manifest_safe(value: Any) -> Any:
-            # Keep configuration containers visible while omitting opaque,
-            # identity-bearing injected ports/services from the JSON manifest.
-            # Sensitive names are removed at every nesting level and through
-            # every container shape accepted here; runtime setup still receives
-            # the original kwargs unchanged.
-            from collections.abc import Mapping as ABCMapping
-
-            if isinstance(value, ABCMapping):
-                clean: dict[Any, Any] = {}
-                for key, item in value.items():
-                    if key in self._SENSITIVE_KEYS:
-                        continue
-                    safe_value = _manifest_safe(item)
-                    if safe_value is not _UNSERIALIZABLE:
-                        clean[key] = safe_value
-                return clean
-            if isinstance(value, (list, tuple, set, frozenset)):
-                clean_items = []
-                for item in value:
-                    safe_value = _manifest_safe(item)
-                    if safe_value is not _UNSERIALIZABLE:
-                        clean_items.append(safe_value)
-                return clean_items
-            if isinstance(value, (str, int, float, bool, type(None))):
-                return value
-            return _UNSERIALIZABLE
-
-        _UNSERIALIZABLE = object()
-        serializable_kw = _manifest_safe(kwargs)
+        # Store a safe copy; setup below still receives the original values.
+        serializable_kw = self._sanitize_capability_kwargs(kwargs)
         self._capabilities.append((name, serializable_kw))
         try:
             mgr = setup_capability(self, name, **kwargs)
@@ -844,27 +845,8 @@ class Agent(BaseAgent):
             # _capabilities is normally already sanitized, but keeping this
             # boundary defensive prevents a nested credential from leaking if a
             # caller or future setup path stores a raw mapping.
-            from collections.abc import Mapping as ABCMapping
-            omitted = object()
-
-            def _safe(value: Any) -> Any:
-                if isinstance(value, ABCMapping):
-                    clean = {}
-                    for key, item in value.items():
-                        if key in self._SENSITIVE_KEYS:
-                            continue
-                        safe_item = _safe(item)
-                        if safe_item is not omitted:
-                            clean[key] = safe_item
-                    return clean
-                if isinstance(value, (list, tuple, set, frozenset)):
-                    return [safe_item for item in value if (safe_item := _safe(item)) is not omitted]
-                if isinstance(value, (str, int, float, bool, type(None))):
-                    return value
-                return omitted
-
             data["capabilities"] = [
-                (name, _safe(kw)) for name, kw in caps
+                (name, self._sanitize_capability_kwargs(kw)) for name, kw in caps
             ]
         if self._combo_name:
             data["combo"] = self._combo_name
