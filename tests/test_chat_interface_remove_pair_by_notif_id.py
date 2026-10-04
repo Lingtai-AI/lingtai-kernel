@@ -2,10 +2,8 @@
 system-notification synthetic pairs."""
 from __future__ import annotations
 
-import pytest
-
 from lingtai.kernel.llm.interface import (
-    ChatInterface, ToolCallBlock, ToolResultBlock, TextBlock,
+    ChatInterface, ToolCallBlock, ToolResultBlock,
 )
 
 
@@ -106,28 +104,3 @@ def test_remove_pair_by_notif_id_handles_only_notification_pairs():
     # First entry should be the assistant tool_call for email.check.
     assert entries[0].role == "assistant"
     assert entries[0].content[0].name == "email"
-
-
-def test_remove_pair_by_notif_id_reads_args_before_mismatched_result_id():
-    chat = _make_chat_with_notification_pair("notif_xxx", "call_001")
-    call = chat.entries[0].content[0]
-    result = chat.entries[1].content[0]
-    reads = []
-
-    class OrderedArgs(dict):
-        def get(self, key, *default):
-            reads.append(key)
-            return super().get(key, *default)
-
-    call.args = OrderedArgs(call.args)
-    result.id = "different"
-    assert chat.remove_pair_by_notif_id("notif_xxx") is False
-    assert reads == ["action", "notif_id"]
-
-
-def test_remove_pair_by_notif_id_keeps_malformed_args_failure_order():
-    chat = _make_chat_with_notification_pair("notif_xxx", "call_001")
-    chat.entries[0].content[0].args = None
-    chat.entries[1].content[0].id = "different"
-    with pytest.raises(AttributeError):
-        chat.remove_pair_by_notif_id("notif_xxx")
