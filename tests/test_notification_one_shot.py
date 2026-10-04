@@ -25,6 +25,8 @@ from lingtai.kernel.llm.interface import ToolResultBlock
 from lingtai.kernel.meta_block import (
     attach_active_notifications,
     reset_delivered_notification_sources,
+    _notification_records,
+    _pending_record_payload,
 )
 from tests._notification_store_helpers import (
     fingerprint_notifications,
@@ -817,3 +819,80 @@ def test_oversize_legacy_im_seed_does_not_ack_omitted_history(tmp_path):
     check = _block("bounded-check", _notification_placeholder=True)
     attach_active_notifications(agent, [check], prior_holder=first)
     assert [m["id"] for m in check.metadata["agent_meta"]["notifications"]["persistent"]["mcp"]["telegram"]["messages"]] == [m["id"] for m in messages]
+
+
+def test_pending_im_preserves_route_context_and_unidentified_legacy_previews():
+    source = "mcp.telegram"
+    latest = {"id": "compound-message", "event_id": "event-new", "text": "new callback"}
+    route_preview = {
+        "platform": "telegram",
+        "conversation_ref": "chat-9",
+        "message_ref": "thread-target",
+        "event_id": "route-event",
+        "recent_messages": [
+            {"id": "compound-message", "event_id": "event-old", "text": "old callback"},
+            latest,
+        ],
+        "latest_incoming": latest,
+        "referenced_messages": [{"id": "reply-target", "text": "target context"}],
+    }
+    omission = {"latest_incoming": {"licc_structured_omitted": True, "reason": "size"}}
+    idless = {"recent_messages": [{"text": "no producer identity"}]}
+    legacy_with_ref = {
+        "preview": "legacy body",
+        "conversation_ref": "chat-legacy",
+        "event_id": "route-event",
+        "message_ref": "provider-message",
+    }
+    legacy_without_ref = {
+        "preview": "legacy body",
+        "conversation_ref": "chat-legacy",
+        "event_id": "route-event",
+    }
+    delivered = {"latest_incoming": {"id": "already-sent", "text": "delivered"}}
+    payload = {
+        "header": "telegram",
+        "data": {
+            "count": 6,
+            "previews": [route_preview, omission, idless, legacy_with_ref, legacy_without_ref, delivered],
+            "cursor": "c2",
+        },
+    }
+    before = copy.deepcopy(payload)
+    records = _notification_records(source, payload)
+    agent = SimpleNamespace(
+        _notification_delivered_events={
+            source: {
+                "event-old": records["event-old"],
+                "already-sent": records["already-sent"],
+            }
+        }
+    )
+    projected = _pending_record_payload(agent, source, payload)
+    previews = projected["data"]["previews"]
+
+    retained = previews[0]
+    assert [item["event_id"] for item in retained["recent_messages"]] == ["event-new"]
+    assert retained["latest_incoming"] == latest
+    assert retained["platform"] == route_preview["platform"]
+    assert retained["conversation_ref"] == route_preview["conversation_ref"]
+    assert retained["message_ref"] == route_preview["message_ref"]
+    assert retained["event_id"] == route_preview["event_id"]
+    assert retained["referenced_messages"] == route_preview["referenced_messages"]
+    assert previews[1:3] == [omission, idless]
+
+    with_reference, without_reference = previews[3:]
+    for preview in (with_reference, without_reference):
+        fallback = preview["recent_messages"][0]
+        assert fallback["source"] == "notification_preview"
+        assert fallback["text"] == "legacy body"
+        assert "event_id" not in preview
+        assert "latest_incoming" not in preview
+    assert with_reference["recent_messages"][0]["id"] == "provider-message"
+    assert with_reference["message_ref"] == "provider-message"
+    assert without_reference["recent_messages"][0]["id"].startswith("notification-preview:")
+    assert "message_ref" not in without_reference
+    assert projected["data"]["count"] == 5
+    assert len(previews) == 5
+    assert projected["data"]["cursor"] == "c2"
+    assert payload == before
