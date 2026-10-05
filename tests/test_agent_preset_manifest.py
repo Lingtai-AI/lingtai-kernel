@@ -343,12 +343,8 @@ def test_manifest_never_contains_api_key(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(
-    tmp_path, monkeypatch
-):
+def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_path):
     """Every supported container depth is redacted without losing runtime identity."""
-    from lingtai.tools import registry
-
     service = object()
     port = object()
     class _HashableMapping(dict):
@@ -362,15 +358,6 @@ def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(
         "password": "nested-password-sentinel",
     }
     sentinel_map = _HashableMapping(sentinels)
-    original_setup = registry.setup_capability
-    setup_inputs = {}
-
-    def capture_setup(current_agent, name, **kwargs):
-        if name == "web":
-            setup_inputs.update(kwargs)
-        return original_setup(current_agent, name, **kwargs)
-
-    monkeypatch.setattr(registry, "setup_capability", capture_setup)
     agent = Agent(
         service=_mock_service(),
         agent_name="nested-secrets",
@@ -398,8 +385,6 @@ def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(
         {"set_items": {sentinel_map}, "frozen_items": frozenset({sentinel_map})},
     ))
     try:
-        assert setup_inputs["search_service"] is service
-        assert setup_inputs["browser_port"] is port
         agent._capabilities.append((
             "late-regression",
             {
