@@ -47,8 +47,8 @@ There is no bare-name fallback. A bare `from` (for example `human` or a peer
 name) is never resolved against your own directory or a sibling, so a reply
 cannot self-deliver or reach another network by accident.
 
-`reply_all` also copies the original `to` and `cc` entries, except yourself and
-the primary target. Those entries must be absolute paths too, so a bare name
+`reply_all` also copies the original `to` and `cc` entries, except your own absolute address,
+the primary target, and the original `from` value. Those entries must be absolute paths too, so a bare name
 there is refused by `send`. For mail addressed by bare name, use `reply`, or
 send to verified absolute addresses instead.
 
