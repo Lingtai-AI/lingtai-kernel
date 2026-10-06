@@ -42,8 +42,9 @@ serves: the `avatar` spawn/settings/manual envelope (and the absence of the reti
 `rules` action), the reserved `manual` child's
 canonical result contract (no double wrap), the `psyche` five-manual router
 plus redacted Pad settings (pad + lingtai + knowledge + skills = psyche), `mcp` identity
-discovery with secret-safe projection, and `email` abs-mode reply routing with
-the #145 ambiguity guard. Low-level mechanics stay in pytest; each LABT below
+discovery with secret-safe projection, and `email` reply routing through absolute
+return routes, refusing route-less and bare-name replies (the #145 short-name case).
+Low-level mechanics stay in pytest; each LABT below
 is executable verbatim by an agent with the tools it names. T001-T003 guarded
 the former `file` family and were deleted with it; the ids are retired, not
 reused.
@@ -359,14 +360,14 @@ unregistered server appears, or a malformed identity file crashes `info`.
 Forbidden side effect: `mcp` must never write or modify
 `mcp_registry.jsonl` or any identity file (it is signpost-only).
 
-## Behavior T009 — email abs reply routing and the ambiguity guard
+## Behavior T009 — email reply routing through absolute return routes
 
 - **id**: T009
-- **title**: `email` abs-mode sends embed a `_return_route` so replies cross
-  `.lingtai/` networks to the original sender's absolute path, and an
-  ambiguous self-route is refused loudly instead of self-delivering
-- **guards**: `email-contract` § Anchored claims — abs-mode replies / §
-  Cross-platform invariants (`mode='abs'` return route)
+- **title**: `email` sends embed a `_return_route` so replies cross `.lingtai/`
+  networks to the original sender's absolute path; a route-less or bare-name
+  reply is refused loudly, with no dispatch
+- **guards**: `email-contract` § Anchored claims — reply resolution / §
+  Cross-platform invariants (`_return_route` on every send)
   ([CONTRACT.md](../email/CONTRACT.md#anchored-claims))
 - **supersedes**: `tests/test_email_abs_reply_route.py`
 - **runner**: any LingTai agent with the `email` and `shell` tools
@@ -378,11 +379,11 @@ Forbidden side effect: `mcp` must never write or modify
 
 ### Steps
 1. Call `email(action="send", input={"address": "peer-2", "subject":
-   "hi", "message": "ping"}, reasoning="...")` (default peer mode), then
-   call `email(action="send", input={"address": "<abs-sender>", "mode":
-   "abs", "subject": "hi", "message": "ping"}, reasoning="...")` (abs
-   mode). For each call, find the newest record under `<wd>/mailbox/sent/` and
-   read its `message.json`.
+   "hi", "message": "ping"}, reasoning="...")` (a bare name, which must be
+   refused and must add no record under `<wd>/mailbox/sent/`), then call
+   `email(action="send", input={"address": "<abs-sender>", "subject": "hi",
+   "message": "ping"}, reasoning="...")`. For the accepted call, find the newest
+   record under `<wd>/mailbox/sent/` and read its `message.json`.
 2. Craft an inbound message: with `shell`, `mkdir -p
    <wd>/mailbox/inbox/<uuid>` and write `message.json` there via a quoted
    heredoc (read it back to verify), where `<uuid>` is a fresh id and the JSON is `{
@@ -394,29 +395,31 @@ Forbidden side effect: `mcp` must never write or modify
    input={"email_id": ["<uuid>"], "message": "should be refused"},
    reasoning="...")` and list `<wd>/mailbox/sent/` before/after.
 3. Craft a second inbound message with the same fields PLUS `"_return_route":
-   {"mode": "abs", "address": "<abs-sender>", "sender_agent_id":
+   {"address": "<abs-sender>", "sender_agent_id":
    "AGENT-DEV-1"}` (new `<uuid2>`), then call `email(action="reply",
    input={"email_id": ["<uuid2>"], "message": "reply body"},
    reasoning="...")` and read the newest `<wd>/mailbox/sent/` record.
 
 ### Expected evidence
-- [ ] Step 1: the peer-mode sent record has no `_return_route` key; the abs
-      sent record carries `from` = your absolute working dir and
-      `_return_route` = `{"mode": "abs", "address": "<your working dir>",
-      "sender_agent_id": "<your agent id>"}`.
-- [ ] Step 2: the reply returns an `error` starting `Reply target is
-      ambiguous:` that contains `email(action='send', input={'mode': 'abs',`
+- [ ] Step 1: the bare-name send returns an `error` naming absolute paths and
+      adds no record under `<wd>/mailbox/sent/`; the accepted send's record
+      carries `from` = your absolute working dir and `_return_route` =
+      `{"address": "<your working dir>", "sender_agent_id": "<your agent id>"}`
+      with no `mode` key.
+- [ ] Step 2: the reply returns an `error` starting `Reply target is not an
+      absolute address:` that contains `email(action='send', input={'address': `
       and `reasoning=`, and no new record appears under `<wd>/mailbox/sent/`
-      (no outbound dispatch; the bare alias could have self-delivered).
+      (no outbound dispatch; a bare `from` is never resolved to a peer).
 - [ ] Step 3: the reply returns `{"status": "sent", ...}` and the newest
-      sent record's `to` contains `<abs-sender>` with `mode: "abs"` (the
-      `_return_route` address won over the bare `from` alias).
+      sent record's `to` contains `<abs-sender>` (the `_return_route` address
+      won over the bare `from` alias).
 
 ### Pass / Fail
-Pass when every evidence item holds. Fail if an abs send omits
-`_return_route`, a reply self-delivers to the responder's own inbox, or the
-ambiguity guard silently sends instead of refusing. Forbidden side effect: an
-ambiguous reply must create no sent record and dispatch no mail.
+Pass when every evidence item holds. Fail if an accepted send omits
+`_return_route`, a bare-name send is accepted, a route-less or bare-`from` reply
+dispatches anything, or a reply with an absolute `_return_route` goes anywhere
+other than its address. Forbidden side effect: a refused reply must create no
+sent record and dispatch no mail.
 
 ## Behavior T010 — molt's unsupported-input-field diagnostic is additive and local
 

@@ -43,7 +43,7 @@ body characters for send/reply; oversize bodies are refused before scheduling.
 
 `send.duplicate_free_passes`: current/default 2, configurable false. Two consecutive
 same-body calls per recipient are allowed; the next is blocked. Only recipient
-and body are compared: subject, attachment paths, and mode are not compared.
+and body are compared: subject and attachment paths are not compared.
 The counter advances after sender persistence/scheduling, not recipient acceptance;
 a later bounce does not undo it. A different body or new EmailManager resets the
 relevant history. `blocked` is not a delivery receipt; do not vary text to bypass it.

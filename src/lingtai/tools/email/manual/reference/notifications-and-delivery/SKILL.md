@@ -41,7 +41,7 @@ bypasses this transport handshake. Refresh/relaunch windows can produce
 A process may appear in `ps` before a fresh heartbeat. If a CPR attempt exits
 because the duplicate-process guard sees the existing same-workdir process, do not
 stack CPR attempts: wait for a heartbeat. Any lifecycle intervention needs its
-own authorization and diagnosis, not just a bounce. An authorized non-self `abs`
+own authorization and diagnosis, not just a bounce. A non-self absolute-path
 target has the same handshake.
 
 For a known POSIX pre-publication refusal (unknown/dead recipient or rejected
@@ -62,7 +62,7 @@ Arrival and every read-state mutation render the current unread set to
 {"instructions":"delivered once; act with email.read/reply/dismiss",
  "data":{"count":3,"newest_received_at":"<time>",
          "email_ids":["<local-id>"],
-         "emails":[{"id":"<local-id>","from":"peer",
+         "emails":[{"id":"<local-id>","from":"/abs/path/to/peer",
                     "subject":"...","message":"full body",
                     "message_chars":10,"message_truncated":false}]}}
 ```

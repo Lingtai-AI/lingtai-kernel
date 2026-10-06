@@ -56,8 +56,7 @@ Guarded by: [EM001](BEHAVIORS.md#behavior-em001), [EM002](BEHAVIORS.md#behavior-
   archive/delete or the contact book.
 - You are reviewing mailbox on-disk layout, unread digest republishing, the
   duplicate-send loop guard, or Email's read-only settings inventory.
-- You need the ambiguous-reply (`#145`) return-route handling or the abs/peer
-  send modes.
+- You need return-route reply resolution (`#145`) or the send address rules.
 
 **Do not use this for:**
 - Notification surface reads/dismissals: use the `notification` tool
@@ -68,7 +67,7 @@ Guarded by: [EM001](BEHAVIORS.md#behavior-em001), [EM002](BEHAVIORS.md#behavior-
 - Code navigation only: read `src/lingtai/tools/email/ANATOMY.md`.
 
 **Fast paths:** action list -> §Tool surface; mailbox layout -> §State &
-storage; abs/peer reply routing -> §Anchored claims.
+storage; reply return routes -> §Anchored claims.
 
 ## Scope
 
@@ -125,7 +124,7 @@ action's `input` properties — e.g. `email(action='read', input={'email_id':
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `send` | `address` (str or list) | `subject`, `message`, `cc`, `bcc`, `attachments`, `delay`, `mode` (`peer`/`abs`), `type` | `{status: "sent", to, cc, bcc, delay}` | `{error: "address is required"}`; `{error: "invalid mode: ..."}`; `{error, limit_chars, actual_chars}` on body > 50k chars; `{status: "blocked", warning}` on duplicate loop |
+| `send` | `address` (str or list; every entry an absolute agent-workdir path) | `subject`, `message`, `cc`, `bcc`, `attachments`, `delay`, `type` | `{status: "sent", to, cc, bcc, delay}` | `{error: "address is required"}`; `{error: "all addresses must be absolute agent-workdir paths: ..."}` for any bare or relative `address`, `cc`, or `bcc` entry; `{error, limit_chars, actual_chars}` on body > 50k chars; `{status: "blocked", warning}` on duplicate loop |
 | `check` | — | `folder` (`inbox`/`sent`/`archive`), `n`, `filter{sort,from,subject,contains,after,before,unread_only,has_attachments,truncate}` | `{status: "ok", total, showing, emails: [...]}`, plus `truncated_by_budget` when a 10k-token cap trims | (returns ok with empty list) |
 | `read` | `email_id` (str or list) | `folder` | `{status: "ok", emails: [...]}`, plus `not_found` + `hint` for stale ids | `{error: "email_id is required"}` |
 | `dismiss` | `email_id` (str or list) | — | `{status: "ok", dismissed: [...]}`, plus `already_handled`, `not_found`, `hint` | `{error: "email_id is required"}` |
@@ -295,9 +294,10 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 - Delivery runs on daemon `threading.Thread` workers (`_mailman`); no
   subprocess/PTY. DOCUMENT (do not change).
 - All message JSON is read/written with `encoding="utf-8"`. DOCUMENT.
-- `mode='abs'` uses the absolute `str(working_dir)` as the return address and
-  embeds a `_return_route` so cross-network replies resolve unambiguously.
-  DOCUMENT — this is a path-as-address assumption, not a platform behavior.
+- Every `send` embeds `_return_route` = `{address: absolute str(working_dir),
+  sender_agent_id}` in the dispatched payload and the local `sent/` record, so
+  cross-network replies resolve unambiguously. DOCUMENT — this is a
+  path-as-address assumption, not a platform behavior.
 
 ## Anchored claims
 
@@ -315,7 +315,7 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 | `search` compiles the query as a regex and rejects bad patterns | `src/lingtai/tools/email/manager.py:_search` | `tests/test_layers_email.py::test_email_search_invalid_regex` |
 | Scheduled/recurring sends are removed from the schema and not routed | `src/lingtai/tools/email/schema.py` | `tests/test_layers_email.py::test_email_schedule_removed_from_schema`, `tests/test_layers_email.py::test_email_schedule_payload_is_not_routed` |
 | Sender identity is carried on inbound mail and surfaced on read | `src/lingtai/tools/email/manager.py:_inject_identity` | `tests/test_email_identity.py` |
-| Abs-mode replies resolve via `_return_route`, guarding the `#145` ambiguous self-route | `src/lingtai/tools/email/manager.py:_resolve_reply_target` | `tests/test_email_abs_reply_route.py` |
+| Replies resolve to the absolute `_return_route.address`, then an absolute `from`, and are otherwise refused with no bare-name fallback (`#145` short-name collision) | `src/lingtai/tools/email/manager.py:_resolve_reply_target` | `tests/test_email_abs_reply_route.py` |
 | The model-facing root is the closed LTP v2 envelope and nothing else | `src/lingtai/tools/email/__init__.py:get_schema` | `tests/test_tool_family_email_migration.py::test_root_is_the_closed_ltp_v2_envelope_and_nothing_else` |
 | Thirteen operational action values remain pinned and generic `settings` is immediately before `manual` | `src/lingtai/tools/email/__init__.py:DECLARATION` | `tests/test_tool_family_email_migration.py::test_settings_is_the_only_added_public_action_and_order_is_pinned`, `tests/test_email_settings.py::test_declaration_opts_in_immediately_before_manual` |
 | Settings shares operational constants, projects five ordered fields, fully redacts subscriptions, and has no writer | `src/lingtai/tools/email/settings.py` | `tests/test_email_settings.py` |

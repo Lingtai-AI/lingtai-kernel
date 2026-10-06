@@ -29,14 +29,14 @@ boundary.
 
 ```python
 email(action="send", input={
-    "address": "peer", "subject": "status", "message": "ready",
-    "cc": ["human"], "bcc": [], "attachments": [], "delay": 0,
-    "mode": "peer", "type": "normal",
+    "address": "/abs/path/to/peer", "subject": "status", "message": "ready",
+    "cc": ["/abs/path/to/human"], "bcc": [], "attachments": [], "delay": 0,
+    "type": "normal",
 }, reasoning="report status")
 ```
 
-`address` is a bare peer name, or an explicitly authorized absolute path with
-`mode="abs"`. CC is visible to recipients; BCC is stored only in the sender's
+Every `address`, `cc`, and `bcc` entry must be an absolute agent-workdir path; bare
+names are refused. CC is visible to recipients; BCC is stored only in the sender's
 copy. `attachments` are source paths: for non-self POSIX delivery the adapter
 validates every path before publishing that recipient's inbox entry, copies files
 into recipient-local `attachments/`, and suffixes duplicate basenames. Source

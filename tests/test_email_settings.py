@@ -207,5 +207,5 @@ def test_manual_preserves_observed_delivery_limits_and_explicit_dismiss():
     assert 'before that call\'s unified sent record' in delivery
     assert 'self-send bypasses this adapter' in actions
     assert 'does not validate or copy attachments' in actions
-    assert 'subject, attachment paths, and mode are not compared' in settings
+    assert 'subject and attachment paths are not compared' in settings
     assert 'in-process `_setup_from_init()`' in settings
