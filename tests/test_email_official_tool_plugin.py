@@ -351,3 +351,39 @@ def test_email_opt_out_forms_keep_one_official_surface_on_construction_and_refre
             assert agent._tool_handlers["email"] is not agent._intrinsics["email"]
     finally:
         agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize("action", ["send", "reply"])
+def test_identical_authorized_mail_is_not_blocked(email_agent, tmp_path, monkeypatch, action):
+    """Four identical sends/replies deliver to disposable local mailboxes."""
+    import threading
+    from lingtai.tools.email import manager as email_manager
+    from lingtai.tools.email.manager import EmailManager
+
+    peer = tmp_path / "recipient"
+    peer.mkdir()
+    deliveries = []
+    complete = threading.Event()
+
+    def deliver(agent, msg_id, payload, deliver_at, **kwargs):
+        (peer / f"{msg_id}.json").write_text(json.dumps(payload))
+        deliveries.append(payload)
+        if len(deliveries) == 4:
+            complete.set()
+
+    monkeypatch.setattr(email_manager, "_mailman", deliver)
+    manager = EmailManager(email_agent)
+    if action == "send":
+        request = {"action": "send", "address": str(peer), "subject": "keepalive", "message": "authorized identical body"}
+    else:
+        inbox = email_agent.working_dir / "mailbox" / "inbox" / "seed"
+        inbox.mkdir(parents=True)
+        (inbox / "message.json").write_text(json.dumps({"from": str(peer), "subject": "keepalive", "message": "seed"}))
+        request = {"action": "reply", "email_id": "seed", "message": "authorized identical body"}
+    for _ in range(4):
+        assert manager.handle(request)["status"] == "sent"
+    assert complete.wait(2), "four local delivery threads did not complete"
+    assert len(deliveries) == 4
+    assert len(list(peer.glob("*.json"))) == 4
+    assert len(list((email_agent.working_dir / "mailbox" / "sent").glob("*/message.json"))) == 4
+    assert all(payload["message"] == "authorized identical body" for payload in deliveries)

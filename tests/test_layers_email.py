@@ -361,63 +361,6 @@ def test_email_send_rejects_body_over_hard_limit(tmp_path):
     assert not sent_dir.exists() or not any(sent_dir.iterdir())
 
 
-def test_email_blocks_identical_consecutive_send(tmp_path):
-    """Sending the exact same message twice to the same recipient is blocked."""
-    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    mail_svc = MagicMock()
-    mail_svc.address = "127.0.0.1:9999"
-    mail_svc.send.return_value = None
-    agent._mail_service = mail_svc
-    mgr = agent._email_manager
-    mgr._dup_free_passes = 1
-
-    # First send — should work
-    result = mgr.handle({
-        "action": "send", "address": "127.0.0.1:8888",
-        "subject": "hi", "message": "thumbs up",
-    })
-    assert result["status"] == "sent"
-
-    # Identical send — should be blocked
-    result = mgr.handle({
-        "action": "send", "address": "127.0.0.1:8888",
-        "subject": "hi", "message": "thumbs up",
-    })
-    assert result["status"] == "blocked"
-    assert "warning" in result
-
-    # Different message — should work
-    result = mgr.handle({
-        "action": "send", "address": "127.0.0.1:8888",
-        "subject": "hi", "message": "Got it, thanks!",
-    })
-    assert result["status"] == "sent"
-
-
-def test_email_blocks_identical_reply(tmp_path):
-    """Replying with the same message twice is blocked."""
-    agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    mail_svc = MagicMock()
-    mail_svc.address = "127.0.0.1:9999"
-    mail_svc.send.return_value = None
-    agent._mail_service = mail_svc
-    mgr = agent._email_manager
-    mgr._dup_free_passes = 1
-
-    # Create an inbox email to reply to
-    _make_inbox_email(agent.working_dir, sender="127.0.0.1:8888", subject="hello", message="hi there")
-    check = mgr.handle({"action": "check"})
-    email_id = check["emails"][0]["id"]
-
-    # First reply
-    result = mgr.handle({"action": "reply", "email_id": email_id, "message": "thumbs up"})
-    assert result["status"] == "sent"
-
-    # Identical reply — blocked
-    result = mgr.handle({"action": "reply", "email_id": email_id, "message": "thumbs up"})
-    assert result["status"] == "blocked"
-
-
 def test_email_send_with_attachments(tmp_path):
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     mail_svc = MagicMock()
