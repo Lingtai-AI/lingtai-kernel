@@ -52,8 +52,9 @@ record follows all thread starts. `status="sent"` is scheduling, not acceptance.
 Use a non-negative integer `delay` for one future attempt, not tool execution;
 the schema does not enforce a non-negative bound. For partial failures and restart
 limits read [Notifications and delivery](../notifications-and-delivery/SKILL.md).
-The duplicate guard compares recipient/body, not the whole message; see
-[Settings reference](../settings-reference/SKILL.md#duplicate-send-loop-guard).
+Identical authorized sends and replies are not blocked by a recipient/body
+heuristic; each call remains a separate scheduling request. See
+[Settings reference](../settings-reference/SKILL.md#repeated-authorized-mail).
 
 ## Check and search
 
