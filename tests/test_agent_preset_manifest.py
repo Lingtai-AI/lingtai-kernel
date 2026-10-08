@@ -385,6 +385,15 @@ def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_p
         {"set_items": {sentinel_map}, "frozen_items": frozenset({sentinel_map})},
     ))
     try:
+        agent._capabilities.append((
+            "late-regression",
+            {
+                "nested": {
+                    "api_key": "late-api-sentinel",
+                    "token": "late-token-sentinel",
+                }
+            },
+        ))
         manifest = agent._build_manifest()
         agent._workdir.write_manifest(manifest)
         agent_json = json.loads((tmp_path / "nested-secrets" / ".agent.json").read_text())
@@ -392,6 +401,8 @@ def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_p
             blob = json.dumps(value)
             for sentinel in sentinels.values():
                 assert sentinel not in blob
+            assert "late-api-sentinel" not in blob
+            assert "late-token-sentinel" not in blob
             assert "public-provider" in blob
             assert "public-nested-model" in blob
             def keys(node):
