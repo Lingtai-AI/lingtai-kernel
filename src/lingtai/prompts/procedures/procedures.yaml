@@ -30,6 +30,9 @@ injection_contract:
   mirror_path: system/procedures.md
   override_policy: not_user_overridable
   notes: >
+    This is a loaded source owner, not a separate resident fulltext section.
+    The kernel renders one short entry; psyche.instructions reads current loaded
+    fixed detail without disk I/O. Covenant fulltext remains psyche.covenant.
     Psyche's static plan owns the packaged source contribution; the Agent keeps
     injection mechanics. Legacy init.json `procedures`/`procedures_file` are
     legacy-migrated and ignored; the packaged body wins on every boot/refresh. The

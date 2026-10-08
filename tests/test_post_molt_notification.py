@@ -36,8 +36,8 @@ def _make_agent_with_context(tmp_path):
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     return Agent(
         service=svc, agent_name="test", working_dir=tmp_path / "test",
         capabilities=["context"],
@@ -130,9 +130,10 @@ class TestPostMoltNotificationAgentMolt:
             assert payload.get("instructions"), (
                 "post-molt notification must carry agent-facing instructions"
             )
-            assert "post-molt" in payload["instructions"], (
-                "instructions should reference the dismiss channel"
+            assert "delivered once" in payload["instructions"], (
+                "instructions should teach one-shot delivery"
             )
+            assert "dismiss_channel" not in payload["instructions"]
 
             data = payload["data"]
             assert data.get("initiator") == "agent"
@@ -265,8 +266,8 @@ class TestPostMoltNotificationSystemForget:
 
 class TestPostMoltContinuationSignal:
     """Issue #184 — the post-molt notification is an actionable continuation
-    signal carrying molt_id / molt_at / source_agent and an ack taxonomy
-    (continue / defer / obsolete), durable until dismissed with a reason.
+    signal carrying molt_id / molt_at / source_agent, delivered once and never
+    auto-cleared (there is no public dismiss/ack action).
 
     Per PR #190 feedback there is intentionally **no** heuristic next-action
     extraction: the agent reconstructs context itself from pad / summary /
@@ -295,8 +296,8 @@ class TestPostMoltContinuationSignal:
 
             payload = _read_post_molt(agent)
             data = payload["data"]
-            # Continuation identity fields are present.
-            assert data.get("ack_options") == ["continue", "defer", "obsolete"]
+            # Continuation identity fields are present; no ack taxonomy remains.
+            assert "ack_options" not in data
             assert data.get("molt_id"), "continuation must carry a molt_id"
             assert data["molt_id"].startswith(f"molt-{result['molt_count']}-")
             assert data.get("molt_at"), "continuation must carry a timestamp"
@@ -335,20 +336,12 @@ class TestPostMoltContinuationSignal:
             assert "continue" in instr
             assert "defer" in instr
             assert "obsolete" in instr
-            # Concrete dismiss mechanism + reason-required ack. Since the LTP
-            # v2 migration the taught call carries the reason inside the
-            # action's own ``input`` object (``'reason': 'continue: ...'``),
-            # so match the reason values rather than the old flat
-            # ``reason='continue`` spelling. The exact taught call is
-            # separately proven dispatchable by
-            # ``test_notification_tool.py::test_post_molt_instruction_template_round_trips_through_dispatcher``.
-            assert "post-molt" in instr
-            assert "'continue: " in instr
-            assert "'defer: " in instr
-            assert "'obsolete: " in instr
-            # The dismissal is taught in the closed envelope shape.
-            assert "input={'channel': 'post-molt'" in instr
-            assert "reasoning=" in instr
+            # One-shot delivery: no dismiss/ack call is taught, the journal/pad
+            # recovery knowledge is preserved, and delivery is not completion.
+            assert "dismiss" not in instr
+            assert "delivered once" in instr
+            assert "journal" in instr
+            assert "does not mean the task is complete" in instr
             # No-auto-execution must be explicit (non-goal guard).
             assert "not auto-executed" in instr or "not auto" in instr
 
@@ -393,7 +386,7 @@ class TestPostMoltContinuationSignal:
             assert data.get("molt_id", "").startswith(f"molt-{result['molt_count']}-")
             assert data.get("molt_at")
             assert data.get("source_agent") == "test"
-            assert data.get("ack_options") == ["continue", "defer", "obsolete"]
+            assert "ack_options" not in data
             assert "next_action" not in data
 
         finally:
@@ -436,3 +429,27 @@ class TestPostMoltChannelIsolation:
         assert (workdir / ".notification" / "post-molt.json").is_file(), (
             "legacy cleanup must not touch the post-molt channel"
         )
+
+
+def test_successful_agent_and_system_molts_publish_loaded_memory_warning(tmp_path, monkeypatch):
+    monkeypatch.setenv("LINGTAI_MEMORY_LENGTH_WARNING_CHARS", "1")
+    agent = _make_agent_with_context(tmp_path)
+    try:
+        system = agent._working_dir / "system"
+        (system / "pad.md").write_text("durable memory")
+        interface = _setup_mock_chat(agent)
+        _build_molt_call_entry(interface, "memory-molt", summary="continue")
+        from lingtai.tools.context._molt import _context_molt, context_forget
+        journal = _write_session_journal(agent)
+        result = _context_molt(agent, {"summary": "continue", "session_journal_path": journal,
+                                       "_tc_id": "memory-molt"})
+        assert result["status"] == "ok"
+        path = agent._working_dir / ".notification" / "memory-length.json"
+        assert json.loads(path.read_text())["data"]["lifecycle_id"] == f"molt-{agent._molt_count}"
+        first = path.read_bytes()
+        result = context_forget(agent, source="test")
+        assert result["status"] == "ok"
+        assert json.loads(path.read_text())["data"]["lifecycle_id"] == f"molt-{agent._molt_count}"
+        assert path.read_bytes() != first
+    finally:
+        agent.stop(timeout=1)

@@ -1,10 +1,9 @@
 ---
 name: task_card-manual
 description: >
-  Read before managing the declarative Task Card / progress-watch artifact;
-  routes renderer lifecycle, settings, and projection detail while preserving
-  the one-card-per-agent contract and stop/remove distinction.
-last_changed_at: 2026-09-06T00:00:00Z
+  Read when a Task Card needs a truthful renderer, lifecycle recovery, settings,
+  or projection boundary; routine schema-sufficient calls can use the action directly.
+last_changed_at: 2026-09-09T00:00:00Z
 related_files:
 - src/lingtai/tools/task_card/__init__.py
 - src/lingtai/tools/task_card/ANATOMY.md
@@ -14,57 +13,50 @@ related_files:
 - src/lingtai/tools/task_card/manual/reference/notifications.md
 - src/lingtai/kernel/tool_plugin/CONTRACT.md
 maintenance: |
-  Keep this router aligned with the intrinsic task_card action/settings surface,
-  exact taskcard/status and taskcard/taskcard.md paths, one-card lifecycle, and
+  Keep this entry aligned with the intrinsic task_card action/settings surface,
+  exact taskcard/status and taskcard/taskcard.md paths, one-watch lifecycle, and
   the focused references it routes to. Update it with the paired Anatomy/Contract
   whenever those contracts or the renderer boundary change.
 ---
 
 # task_card manual
 
-Use `task_card` to maintain one agent-local, channel-neutral Task Card artifact.
-The capability is producer-first: it runs your renderer and writes the body and
-status; Telegram, Feishu, and other consumers decide how to read or project that
-producer state.
+`task_card` is one channel-neutral producer per agent: it writes the full body to
+`taskcard/taskcard.md` and exact `active`/`inactive` to `taskcard/status`.
 
-## First call
+## First action
 
-`task_card` is a strict LTP-v2 family. Pass `action`, that action's strict
-`input` object, and root `reasoning`; optional `summarize` is root-only. The
-public actions are `start`, `inspect`, `retry`, `stop`, `remove`, `settings`, and
-`manual`; `manual` takes `{}` and is directly callable.
+Routine schema-sufficient calls do not need this manual. For meaningful
+long-running, multi-step, or parallel work, start a truthful watch:
 
-For `start`, provide an existing Python `renderer_path` inside the working
-directory. The renderer must exit successfully and print a nonempty full body to
-stdout. The producer writes that body atomically to `taskcard/taskcard.md`, then
-writes exact `active` to `taskcard/status`. It permits one active watch per
-agent. Keep its output truthful and current: start a watch for meaningful
-long-running, multi-step, or parallel work, not ritual noise.
+```python
+task_card(action="start", input={"renderer_path": "renderer.py"},
+          reasoning="publish truthful progress for the long-running work")
+```
 
-Read [lifecycle and truthful producer use](reference/lifecycle.md) for renderer
-path gates, action ordering, restart resume, and the complete stop/remove
-lifecycle. Read [settings and cadence](reference/settings.md) for owner policy,
-ceilings, and body limits. Read [notifications and projection](reference/notifications.md)
-for typed producer events, reminders, and consumer boundaries.
+Use `action`, strict action `input`, and root `reasoning`; root `summarize` is
+optional presentation control (leave it false for exact manual text or paths).
+`renderer_path` must resolve after symlink resolution to an existing regular
+Python file inside the working directory. It must exit successfully with
+nonempty stdout, which is the full body. Over-limit output is refused, not
+truncated; the producer atomically writes the body before exact `active`. Only
+one watch is allowed. Skip quick single-step or ritual work and any renderer
+that cannot stay truthful.
 
-## When to use it
+## Lifecycle decisions
 
-Start proactively when a durable progress view materially helps a human follow
-ongoing work. Skip quick single-step work or any watch whose renderer cannot
-remain truthful. If a watch expires while work continues, restart a new watch;
-use `stop` to pause while preserving the last body, and `remove` after work is
-completed, cancelled, or abandoned. Never delete the body with Shell or File.
+Use the schema for action fields; `inspect` reports current watch/body/error.
+`stop` pauses and preserves the body; `remove`
+retires then deletes it after completion, cancellation or abandonment. Retry a
+failed stop/remove once quiescent; never bypass it with Shell/File deletion.
+Start a new watch when expired work continues. Read [lifecycle](reference/lifecycle.md)
+for shutdown/resume and stale-state caveats.
 
-## Settings
+## Settings anchors
 
-Call `settings` with exact `input={}` to SHOW the five numeric policies owned by
-`taskcard/taskcard.json`. SHOW is read-only: it never writes or migrates that
-file, and it has no set/reset form. Every row contains only `key`, `current`,
-`default`, `configurable`, and `comment`; after an authorized owner edit, call
-SHOW again. Effective truth is whole-action or failure, never partial.
-
-The stable row comments retain these anchors; their detail is in the focused
-settings reference:
+`settings` is read-only: five numeric policies in `taskcard/taskcard.json`, not a
+writer or migration trigger. Edit that document only through its authorized
+owner procedure, preserving siblings, then SHOW again. See the anchors below.
 
 ### interval-s
 See [interval-s](reference/settings.md#interval-s).
@@ -81,11 +73,18 @@ See [reminder-turns](reference/settings.md#reminder-turns).
 ### max-body-chars
 See [max-body-chars](reference/settings.md#max-body-chars).
 
-## Boundary reminder
+## Focused routes
 
-The producer owns its artifact and typed Task Card notifications only. It does
-not own transport-specific IDs, retries, layout, or a promise that an external
-channel will display every state. Consumers read `taskcard/status` and
-`taskcard/taskcard.md` independently. Keep the card a concise progressive-
-disclosure summary and put complex evidence in referenced files; see the
-[projection reference](reference/notifications.md).
+- [lifecycle and recovery](reference/lifecycle.md) — ordering, retry/error,
+  stop/remove, restart resume, expiry, and truthful renderer use.
+- [settings and cadence](reference/settings.md) — SHOW, five policies,
+  validation floors/ceilings, and one-way legacy bootstrap.
+- [notifications and projection](reference/notifications.md) — typed events,
+  reminders, resident projection, and consumer limits.
+
+## Truth boundary
+
+Report only evidence the renderer can read; never fabricate progress or claim a
+consumer sent, edited, retried, or delivered the card. Task Card owns artifacts
+and typed notifications, not transport IDs, layouts, transport retries, or
+another channel's display guarantee.

@@ -60,7 +60,7 @@ Common states:
 
 - **ACTIVE**: currently in a turn. Notifications may be mirrored but not yet
   acted on; some producers defer active-turn injection until the turn ends.
-- **IDLE**: awake and waiting. Listeners remain live; soul flow may fire.
+- **IDLE**: awake and waiting. Listeners remain live.
 - **STUCK**: runtime believes the agent may be blocked or unresponsive.
 - **ASLEEP**: quiet but wakeable by mailbox/listener events.
 - **SUSPENDED**: process-dead; requires CPR or external restart.
@@ -124,23 +124,22 @@ runtime model — raw versus resolved `init.json`, path identity, the two catalo
 main-agent swap/revert, and the daemon task/CLI distinction — is §11 below; the
 pre-swap checklist is `reference/refresh-precheck/SKILL.md`.
 
-### Notifications and dismiss → the `notification` tool
+### Notifications → the `notification` tool
 
-Reading and clearing notification channels is **not** a `system` operation (the
-verbs are on the `notification` tool; its own schema and `notification-manual`
-are the source of truth for them, not resident substrate). The rule
-worth holding here: **prefer producer-specific verbs first** for guarded
-producers (`email.read`, `email.dismiss`, Telegram `read`, other MCP read
-actions); a generic channel dismiss is for channels that do not own their own
-read state, or for stale mirrors when the producer-owned state is already
-handled. Never treat a notification preview as the full source of truth — §4
+Reading notification channels is **not** a `system` operation (the verbs are on
+the `notification` tool; its own schema and `notification-manual` are the source
+of truth for them, not resident substrate). Automatic delivery is one-shot (each
+event attached once; new or changed events again) and never clears anything;
+there is no notification dismiss action. The rule worth holding here: **act
+through producer-specific verbs** (`email.read`, `email.dismiss`, Telegram
+`read`, other MCP read actions), which own their state. Never treat a notification preview as the full source of truth — §4
 lists when to read the producer channel instead. Read the matching producer
 channel manual for its exact message/read/reply contract, alongside
 `notification-manual` for the notification layer.
 
 Everything else — allowlist, envelope shape, protected channels,
-stale-version/force, large-result ranking and the legacy `large_tool_result`
-dismiss — is owned by the first-level `notification-manual` skill.
+one-shot delivery, large-result ranking and the legacy `large_tool_result`
+reminder — is owned by the first-level `notification-manual` skill.
 
 ### Context compression, and where `summarize` lives
 
@@ -280,17 +279,12 @@ layer — read it rather than guessing field names. If you are an avatar without
 admin ownership of an MCP, do not reconfigure the orchestrator-owned
 integration; escalate or ask the orchestrator.
 
-## 9. Idle and soul
-
-Soul flow is advice, not command; verify external-event claims through the
-relevant channel.
+## 9. Idle
 
 With no concrete task, go idle/asleep rather than spinning, polling, or using
 timed sleeps — idle keeps listeners available (resident substrate's Life and
-communication section). `soul-manual` owns
-soul-flow mechanics in full: the `LINGTAI_SOUL_FLOW_ENABLED` gate, disabled-flow
-behavior, `delay_seconds` as cadence-not-off-switch, and the privacy/cost
-rationale.
+communication section). Nothing fires on an idle cadence by itself; wake
+comes from notifications, mail, or the operator.
 
 ## 10. Resident substrate maintenance
 
@@ -357,11 +351,9 @@ raw operator-owned init.json
   above — it is not a repository-wide inventory of every raw-`init.json`
   writer.** Other owner-local features persist their own settings to raw
   `init.json` outside this lifecycle; document those under their owning
-  tool/manual, not here. For example, `soul(action="config")` and
-  `soul(action="voice")` persist `manifest.soul.*` (delay,
-  consultation_past_count, voice, voice_prompt) directly to the agent's own
-  `init.json` via `tools/soul/config.py`'s `_persist_soul_config` /
-  `_persist_soul_voice`, independent of boot/refresh/preset-swap.
+  tool/manual, not here. (The removed Soul family used to persist a
+  `manifest.soul` block this way; that block is now inert legacy input that
+  boot, refresh, and preset swap read past without rewriting.)
 
 Top-level prompt/env/venv/addons/MCP/manifest field groups follow the same raw
 → derived shape but are owned elsewhere; do not duplicate their detail here:

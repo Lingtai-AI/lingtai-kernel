@@ -31,7 +31,7 @@ run from the repo root with the project's Python.
 - **id**: RW001
 - **title**: a successful refresh spawns the detached watcher exactly once, and failed ACK setup does not spawn
 - **guards**: `refresh-watcher` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
 - **estimate**: ≈ 20 minutes
 
@@ -53,7 +53,7 @@ Pass when the suites pass and the one-spawn/zero-spawn observations hold. Fail o
 - **id**: RW002
 - **title**: a slow-booting relaunch is not declared dead, and a terminated duplicate is gone before the next attempt
 - **guards**: `refresh-watcher` § Contract rules, rule 2
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
 - **estimate**: ≈ 25 minutes
 - **motivation**: production incident 2026-08-19 (`spiritual-bliss-attractor/.lingtai/codex`) exhausted all 12 relaunch attempts. The health check slept `HEALTH_CHECK_WAIT` once and sampled `.agent.heartbeat` a single time — too early for an agent still spawning MCP stdio servers — and the loop retried immediately after SIGKILLing a duplicate that had not yet released the working directory, so every attempt collided again with `another lingtai agent is already running`.
@@ -81,7 +81,7 @@ Pass when a heartbeat that arrives after `HEALTH_CHECK_WAIT` but inside `HEALTH_
 - **title**: a dead owner's lock pathname or young heartbeat never strands the relaunch, and `.refresh.taken` is settled with a truthful exit at every terminal outcome
 - **guards**: `refresh-watcher` § Purpose (lease/heartbeat paragraph), § Adapters and composition (entrypoint fail-safe), § Contract rules, rule 12
 - **pinned by**: `tests/test_refresh_watcher_lease_probe.py` (all tests); `tests/test_perform_refresh_handshake.py::test_refresh_watcher_entrypoint_invoked_via_dash_m_runs_watcher_program` (already-alive requires an advancing heartbeat) and `::test_refresh_watcher_permanent_failure_writes_operator_alert` (exit 1)
-- **runner**: any LingTai coding agent with `shell` and `file` access to this repository
+- **runner**: any LingTai coding agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>` and the project Python with pytest
 - **estimate**: ≈ 10 minutes
 - **motivation**: production incident 2026-09-08 (Runyuan). A `WorkerStillRunningError` poisoned the interface, the CLI hard-exited via `os._exit` seconds after its last heartbeat and before `WorkdirLeasePort.release()`; the OS lease was gone but the `.agent.lock` pathname and a young heartbeat remained. The watcher trusted the pathname, logged `refresh_watcher_timeout phase=lock`, and left `.refresh.taken`, so the TUI showed `Refreshing` for hours; trusting the young heartbeat instead would have exited "already alive" without launching a child.

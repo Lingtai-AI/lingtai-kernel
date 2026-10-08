@@ -21,8 +21,6 @@ related_files:
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/settings.py
-  - src/lingtai/tools/soul/CONTRACT.md
-  - src/lingtai/tools/soul/__init__.py
   - src/lingtai/tools/skills/CONTRACT.md
   - src/lingtai/tools/skills/__init__.py
   - src/lingtai/tools/notification/CONTRACT.md
@@ -85,7 +83,10 @@ both built from the same deep-copied canonical child schemas:
 1. **Schema-level (`allOf`):** one `if`/`then` condition per child — each
    `if` tests root `action` via `const` against that child's own registry
    name (guarded by `required: ["action"]`); each `then` constrains root
-   `input` to that exact child's canonical `input_schema`. Adopted after a
+   `input` to that child's canonical validation constraints. Duplicate
+   `description` annotations are omitted only at recognized schema nodes;
+   field names and literal enum/default/example data are preserved. Full prose
+   remains in typed input disclosure. Adopted after a
    live non-strict Codex Responses probe on 2026-07-27 accepted a raw root
    `allOf`/`if`/`then` schema without error on the current route (see
    `_scrub_responses_schema` in `../../llm/openai/adapter.py` for the
@@ -112,9 +113,9 @@ correct even before Agent composition runs). `build_schema()` always
 advertises `summarize` to the model regardless of family; whether the kernel
 actually honors it is a separate, per-family allowlist decision
 (`kernel/tool_result_summary.py` `_LTP_V2_MIGRATED_FAMILIES`) that this
-package does not own or enforce. Today `web`, `mcp`, `knowledge`, `file`,
-`vision`, `avatar`, `soul`, `shell`, `skills`, `notification`, `system`, and
-`daemon` are on that allowlist, so `summarize` is
+package does not own or enforce. Today `web`, `mcp`, `plugin`, `vision`,
+`avatar`, `shell`, `notification`, `system`, `daemon`, `email`,
+`task_card`, `context`, and `psyche` are on that allowlist, so `summarize` is
 meaningful for the families that use this infrastructure; a family adopting
 `ToolFamily` without also joining the kernel allowlist would advertise a
 model-visible `summarize` control that the kernel silently ignores —
@@ -132,7 +133,7 @@ failures, which this package has no knowledge of.
 `build_manual_child` builds the reserved `manual` `ChildTool`: strict empty
 input — the module-level `MANUAL_INPUT_SCHEMA` literal, exported so a family
 that also composes a schema-only `ToolFamily` advertises the identical object
-rather than a hand-copied near-duplicate (`soul` does; `web` predates the
+rather than a hand-copied near-duplicate (`system` does; `web` predates the
 export and still declares a local copy — collapsing that is `web`'s owner's
 call, not a conformance failure), and so a family supplying its own
 `manual` handler entirely (as `avatar` does) can reference the same literal
@@ -285,8 +286,9 @@ normalizes only the generic `ACTION_REQUIRED` envelope failure back to
 knowledge's exact pre-migration unknown-action result.
 
 `avatar/__init__.py` is the fourth production Adapter/consumer to touch this
-contract (after `file` and `vision`, which adopt this package per
-`../CONTRACT.md` without a dedicated Adapter paragraph here):
+contract (after `vision`, which adopts this package per `../CONTRACT.md`
+without a dedicated Adapter paragraph here, and the since-removed `file`
+family):
 `AvatarManager.__init__` builds a per-instance `ToolFamily` with a `spawn`
 handler bound to that instance (the former `rules` handler was removed, not
 relocated — avatar CONTRACT.md contract_version 9), the generic `settings`
@@ -309,22 +311,12 @@ same Host/presentation-layer ownership boundary `web` uses for
 `spawn` handler out-of-band, because this package correctly refuses to pass any
 envelope field to a child.
 
-`soul/__init__.py` is a declared-host-plugin consumer and the first intrinsic
-in this composition account. Its production binder `_bind(host)` grants the
-five operational children only `host.soul_runtime` (`SoulRuntimePort`) and
-passes `host.workdir` to the reserved `manual` child via
-`build_manual_child(host.workdir, DECLARATION.manual)`. `DECLARATION` owns the
-child registry and input schemas used by both the schema-only family and bound
-dispatch, so duplicate or reserved child names fail loudly and cannot be
-resolved by scan order.
-
-Whole-Agent `handle(agent, args)` and `_coerce_runtime()` are compatibility-only
-at Soul's package root for kernel lifecycle and legacy callers. They are not the
-production composition boundary. The post-dispatch `_adapt_manual_result`
-intentionally restores Soul's historical flat `status`/`manual`/`manual_path`
-shape; the operational children remain bound to `SoulRuntimePort`. Soul drops
-the kernel-injected `_tc_id` at this root compatibility boundary, rather than
-widening the shared envelope or passing transport metadata to a child.
+The first intrinsic consumer in this composition account was `soul/__init__.py`;
+the Soul subsystem was removed and that consumer no longer exists. The
+intrinsic composition shape it introduced — a declaration-owned child registry
+feeding both the schema-only and bound families, and `_tc_id` dropped at the
+Host boundary — is now carried by `notification`, `system`, `email`, and
+`context` below.
 
 `skills/__init__.py` (`../skills/CONTRACT.md`) is the sixth production
 Adapter/consumer. One `_build_family(agent, paths)` builder is its single
@@ -343,7 +335,7 @@ allowed-key check rejects every `input` key on either action.
 
 `system/__init__.py` (`../system/CONTRACT.md`) is the seventh production
 Adapter/consumer named here, and the third that is an intrinsic. It follows
-`soul`'s module-level composition shape exactly — a module-level schema-only
+the intrinsic module-level composition shape exactly — a module-level schema-only
 `ToolFamily` behind `get_schema()` whose import-time construction is the
 registry's duplicate/reserved-name collision check, an agent-bound family built
 per `handle(agent, args)` call, `build_manual_child(agent, "system-manual")`
@@ -389,7 +381,7 @@ Adapter/consumer, and the largest child registry this package composes: one
 whose handlers re-enter the unchanged `EmailManager.handle`, plus
 `manual.build_manual_child(agent, "email")` directly and unwrapped — while an
 import-time `_schema_only_family()` (whose handlers are unreachable) backs
-`get_schema()`, the same module-level shape `soul` and `notification`
+`get_schema()`, the same module-level shape `notification`
 established for an intrinsic. Both come from one `ACTION_ORDER`/
 `INPUT_SCHEMAS` registry in `../email/_family_schema.py`, so the composed
 schema advertises exactly the children dispatch registers. Its
@@ -419,7 +411,7 @@ sibling `summarize`, `rebuild`, and `manual` children declare none, so a
 foreign `input` key on those still renders the exact legacy failure.
 
 It also exercises a boundary the earlier intrinsics could only half-prove.
-`soul`, `notification`, `system`, and `email` merely *drop* the kernel-injected
+`notification`, `system`, and `email` merely *drop* the kernel-injected
 `_tc_id` at their Host boundaries; `context` genuinely **consumes** it because
 `molt` locates its own ToolCallBlock by that wire id for replay into the fresh
 session. Context strips it from the closed root and threads it to that single
@@ -504,8 +496,9 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006) and
   exists only for a genuinely misplaced-and-otherwise-absent field (observed
   cause: a calling model's own native flat tool shape, e.g. an
   `Edit(file_path, old_string, new_string, replace_all)`-style tool, leaking
-  `replace_all` to root instead of nesting it under `input` for the `file`
-  family's `edit` action), not for tolerating a redundant or conflicting
+  `replace_all` to root instead of nesting it under `input` — first observed
+  against the since-removed `file` family's `edit` action), not for
+  tolerating a redundant or conflicting
   duplicate. This exception applies per-family, automatically, to every
   family built on this dispatcher — it is not something an individual family
   opts into or configures.
@@ -567,8 +560,8 @@ key rejection, no double result wrapping, and two dedicated proofs that
 `reasoning`/`summarize` never reach a child handler and never appear in any
 child's own canonical `input_schema`. It also proves the root `allOf`
 correlation directly: every condition's `action` const matches the child
-registry name, `then.input` exactly matches that child's own canonical
-schema, a minimal local `if`/`then` structural evaluator (no JSON Schema
+registry name, `then.input` matches that child's canonical validation constraints,
+with description annotations deduplicated and literal data preserved, a minimal local `if`/`then` structural evaluator (no JSON Schema
 dependency added) shows the schema itself rejects a mismatched
 `action`/`input` pairing, `handle()` remains authoritative and fail-closed
 regardless, and both the `allOf` conditions and the `oneOf` branches are
@@ -636,12 +629,12 @@ key, and no diagnostic ever claims `session_journal_path` must be relative.
 `tests/test_pad_lingtai_split.py` independently pins the two sibling
 families' narrower public inventories.
 
-`tests/test_tool_family_soul_migration.py` is the equivalent family-specific
-evidence for `soul` (`../soul/CONTRACT.md`), and independently exercises this
-package against an intrinsic consumer: all six child schemas and handlers, the
-closed root on both wires, wrong-branch rejection before handler I/O, envelope
-metadata isolation including `_tc_id`, and the reserved `manual` child's
-no-double-wrap result.
+`tests/test_tool_family_system_migration.py` and
+`tests/test_tool_family_context_migration.py` are the equivalent family-specific
+evidence for the intrinsic consumers, and independently exercise this package
+against an intrinsic: the closed root on both wires, wrong-branch rejection
+before handler I/O, envelope metadata isolation including `_tc_id`, and the
+reserved `manual` child's no-double-wrap result.
 
 ## Maintenance
 

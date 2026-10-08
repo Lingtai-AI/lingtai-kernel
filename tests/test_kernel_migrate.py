@@ -454,7 +454,7 @@ def test_m001_moves_context_limit_into_llm_block(tmp_path):
         "name": "old",
         "manifest": {
             "llm": {"provider": "px", "model": "mx", "api_key_env": "X"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
             "context_limit": 32768,
         },
     })

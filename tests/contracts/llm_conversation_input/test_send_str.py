@@ -3,9 +3,9 @@
 The kernel ``ChatSession`` ABC declares ``send(str)`` as one of exactly two
 input shapes. This test proves that a plain user-text turn is serialized into
 the expected provider wire form for every *conforming* production session
-regime — including the DeepSeek configured shared session, the concrete MiMo /
-Zhipu subclasses, Codex, and a ``_GatedSession``-wrapped session — using a mocked
-transport (no network). It also asserts each ``send`` returns a real
+regime — including the reasoning-fallback-configured session, the stateless
+Responses session, Codex, and a ``_GatedSession``-wrapped session — using a
+mocked transport (no network). It also asserts each ``send`` returns a real
 ``LLMResponse`` with concrete ``UsageMetadata``.
 """
 from __future__ import annotations
@@ -42,7 +42,7 @@ def _assert_text_present(regime: regimes.Regime, wire) -> None:
     if isinstance(wire, str):
         assert regimes.USER_TEXT in wire, f"{regime.name}: {wire!r}"
         return
-    # Structured regimes (Anthropic messages / Gemini Interactions input):
+    # Structured regimes (Anthropic messages):
     # the text appears somewhere in the serialized structure.
     import json
 

@@ -17,4 +17,4 @@ maintenance: |
 **术语对照**
 
 - `skills`：技能目录域；无公开工具根。其手册以 `psyche(action='skills', input={}, reasoning='...')` 取之，唯还手册，不扫目录、不注提示。
-- 技能以 `file.write`/`file.edit` 写入 `.library/custom/<名>/SKILL.md`，再以 `context.rebuild` 重扫目录；旧 `skills.info` 已废，无别名。
+- 技能以 `shell`（核实后的精确改写）写入 `.library/custom/<名>/SKILL.md`，再以 `context.rebuild` 重扫目录；旧 `skills.info` 已废，无别名。

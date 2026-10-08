@@ -1,6 +1,6 @@
 ---
 name: mail-transport
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/mail_transport/ANATOMY.md
@@ -56,13 +56,12 @@ one implicitly.
 
 `MailTransportPort` exposes exactly four observable operations:
 
-- `send(address: str, message: dict, *, mode: str = "peer") -> str | None` —
+- `send(address: str, message: dict) -> str | None` —
   deliver `message` to `address` fire-and-forget. Returns `None` on success;
   implementations return a human-readable error string for the failure cases
   they explicitly handle. The Port does not claim that every underlying failure
-  is converted to a string. `mode` selects how the transport interprets
-  `address` (`"peer"` or `"abs"`); the `address` vocabulary is the transport's
-  and Core passes it through opaquely.
+  is converted to a string. There is no addressing-mode argument; the
+  `address` vocabulary is the transport's and Core passes it through opaquely.
 - `listen(on_message: Callable[[dict], None]) -> None` — start non-blocking
   background delivery. Received payloads are passed to `on_message` according to
   adapter delivery semantics; the Port does not promise end-to-end exactly-once
@@ -78,7 +77,8 @@ pseudo-agent subscriptions, `Path`). Those are adapter construction concerns.
 `PosixFilesystemMailAdapter` is the only production adapter
 (`src/lingtai/adapters/posix/mail.py`). It delivers messages as files written
 into the recipient's inbox and polls its own inbox plus subscribed pseudo-agent
-outboxes. It owns peer/abs address resolution, the
+outboxes. Send addresses must be literal absolute agent-workdir paths; relative
+addresses return an error string rather than being resolved. It owns the
 `mailbox/{inbox,outbox,sent}/<id>/message.json` layout and `attachments/`,
 handshake liveness checks, atomic stage-then-rename delivery (a partial inbox
 entry is never observable), the optimistic

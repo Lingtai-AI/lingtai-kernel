@@ -1,8 +1,13 @@
-"""Native Codex multi-account request-path regressions.
+"""Native Codex account-binding request-path regressions.
 
 These tests deliberately exercise one ``CodexOpenAIAdapter`` and one
-``CodexResponsesSession``. ``codex-pool`` remains only a registry spelling for
-the same factory; there is no pool chat wrapper or SessionManager selection hook.
+``CodexResponsesSession`` bound to ONE OAuth account (``FixedAccountSource``).
+The in-kernel account pool was removed; pooling is provided by the external
+subs-pool proxy, so there is no pool chat wrapper, weighted draw, quota read, or
+legacy fallback here. What remains is the per-context binding lifecycle: lazy
+binding, stickiness within a context epoch, re-binding at approved boundaries
+(rebuild, molt), token refresh/401 recovery, ``usage_limit_reached`` exclusion
+(-> terminal ``NoCandidateError``), and safe attribution.
 """
 
 from __future__ import annotations
@@ -18,8 +23,8 @@ import pytest
 from lingtai.auth.codex import CodexAuthError
 from lingtai.auth.codex_account_source import (
     AccountCandidate,
+    FixedAccountSource,
     NoCandidateError,
-    WeightedAccountSource,
 )
 from lingtai.kernel.llm.base import (
     LLMReplayTerminalError,
@@ -84,43 +89,25 @@ class _RefreshingManager:
         return self.access_token
 
 
-class _SequenceSource:
-    def __init__(self, *paths: str):
-        self._candidates = [
-            AccountCandidate(path, f"account-{i}.json", i, 2 if i == 0 else 1)
-            for i, path in enumerate(paths)
-        ]
-        self.calls = []
+class _RecordingSource:
+    """The production ``FixedAccountSource`` plus a record of every draw.
 
-    def snapshot(self):
-        return list(self._candidates)
+    Each successful ``select`` is one account binding: the adapter binds at the
+    first request of each context epoch and reuses that binding until an
+    approved boundary (rebuild, molt) or exclusion.
+    """
 
-    def select(self, exclude=None, quota_left_snapshot=None, snapshot=None):
-        excluded = exclude or set()
-        candidates = list(self._candidates if snapshot is None else snapshot)
-        if not candidates:
-            raise RuntimeError("no candidate")
-        start = len(self.calls) % len(candidates)
-        for offset in range(len(candidates)):
-            candidate = candidates[(start + offset) % len(candidates)]
-            if candidate.auth_path_sha8 not in excluded:
-                self.calls.append(candidate)
-                return candidate
-        raise RuntimeError("no candidate")
+    def __init__(self, path: str):
+        self._source = FixedAccountSource(path)
+        self.candidate: AccountCandidate = self._source.select()
+        self.calls: list[AccountCandidate] = []
+        self.excludes: list[set[str] | None] = []
 
-    def quota_targets(self, exclude=None, snapshot=None):
-        excluded = exclude or set()
-        candidates = self._candidates if snapshot is None else snapshot
-        return [
-            (c.auth_ref, c.auth_path_sha8)
-            for c in candidates
-            if c.auth_path_sha8 not in excluded
-        ]
-
-
-class _NoneSnapshotSource(_SequenceSource):
-    def snapshot(self):
-        return None
+    def select(self, exclude=None):
+        self.excludes.append(set(exclude) if exclude is not None else None)
+        candidate = self._source.select(exclude=exclude)
+        self.calls.append(candidate)
+        return candidate
 
 
 class _Responses:
@@ -166,11 +153,9 @@ def _adapter(source, managers, responses, **kwargs):
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=manager_factory,
-        codex_fallback_auth_path="a.json",
         **kwargs,
     )
     adapter._client = _Client(responses)
@@ -187,40 +172,99 @@ def _managers(*paths):
     }
 
 
-def test_codex_pool_spellings_are_only_aliases_for_native_codex_factory():
-    from lingtai.llm.service import LLMService
-
-    native = LLMService._adapter_registry["codex"]
-    assert LLMService._adapter_registry["codex-pool"] is native
-    assert LLMService._adapter_registry["codex_pool"] is native
-
-
 def test_native_codex_single_account_uses_normal_chat_path():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     responses = _Responses([_success_events])
     adapter = _adapter(source, _managers("one.json"), responses)
 
     chat = adapter.create_chat("gpt-5.5", "system")
     assert chat.interface is not None
-    assert source.calls == []  # chat construction consumes no account draw
+    assert source.calls == []  # chat construction consumes no account binding
 
     response = chat.send("hello")
     assert response.text == "ok"
     assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
+    assert source.excludes == [None]
     assert len(responses.calls) == 1
     assert responses.calls[0]["extra_headers"]["ChatGPT-Account-ID"] == "acct-one.json"
-    assert chat.codex_pool_selection["source_index"] == 0
-    assert (
-        chat.codex_pool_selection["auth_path_sha8"]
-        == source._candidates[0].auth_path_sha8
+    binding = chat.interface._lingtai_codex_account_context.binding
+    assert binding["auth_path_sha8"] == source.candidate.auth_path_sha8
+    assert binding["auth_path_source"] == "configured"
+    assert binding["auth_ref"] == "one.json"
+    assert "selection" not in binding
+    assert chat._codex_auth_path_sha8 == source.candidate.auth_path_sha8
+    assert chat._codex_auth_path_source == "configured"
+    assert not hasattr(chat, "codex_pool_selection")
+    extra = response.usage.extra
+    assert extra["codex_auth_path_sha8"] == source.candidate.auth_path_sha8
+    assert extra["codex_auth_path_source"] == "configured"
+    assert not any(key.startswith("codex_pool") for key in extra)
+    assert "secret-one.json" not in repr(extra)
+
+
+def test_native_codex_without_source_or_factory_uses_constructor_identity():
+    """A bare adapter (no source, no token factory) performs no per-request
+    account resolution: requests use the client built from the constructor key
+    and the adapter-level identity."""
+    responses = _Responses([_success_events])
+    adapter = CodexOpenAIAdapter(
+        api_key="static-key",
+        base_url="http://codex.test",
+        wire_api="responses",
+        codex_account_id="acct-static",
+        codex_auth_path_sha8="0123abcd",
+        codex_auth_path_source="configured",
     )
-    assert "secret-one.json" not in repr(chat.codex_pool_selection)
+    assert adapter._codex_account_resolution_enabled is False
+    client = _Client(responses)
+    client.api_key = "static-key"  # the SDK client is built from the constructor key
+    adapter._client = client
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    response = chat.send("hello")
+
+    assert response.text == "ok"
+    assert responses.client_api_keys == ["static-key"]
+    assert responses.calls[0]["extra_headers"]["ChatGPT-Account-ID"] == "acct-static"
+    assert chat.interface._lingtai_codex_account_context.binding == {}
+    assert response.usage.extra["codex_auth_path_sha8"] == "0123abcd"
+    assert response.usage.extra["codex_auth_path_source"] == "configured"
+
+    # The direct selection seam binds the constructor key without any token
+    # manager or token file.
+    binding = adapter._select_codex_account("gpt-5.5")
+    assert binding["api_key"] == "static-key"
+    assert binding["account_id"] == "acct-static"
+    assert binding["auth_path_sha8"] == "0123abcd"
+    assert "auth_ref" not in binding
+
+
+def test_native_codex_factory_without_source_binds_default_token_path(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("LINGTAI_TUI_DIR", str(tmp_path))
+    default_path = str(tmp_path / "codex-auth.json")
+    responses = _Responses([_success_events])
+    adapter = _adapter(None, _managers(default_path), responses)
+    chat = adapter.create_chat("gpt-5.5", "system")
+
+    assert chat.send("hello").text == "ok"
+
+    assert responses.client_api_keys == [f"secret-{default_path}"]
+    assert (
+        responses.calls[0]["extra_headers"]["ChatGPT-Account-ID"]
+        == f"acct-{default_path}"
+    )
+    binding = chat.interface._lingtai_codex_account_context.binding
+    assert binding["auth_ref"] == default_path
+    assert binding["auth_path_sha8"] == AccountCandidate(default_path).auth_path_sha8
+    assert binding["auth_path_source"] == "configured"
 
 
 def test_native_codex_keeps_one_account_sticky_within_context_epoch():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
     responses = _Responses([_success_events, _success_events])
-    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    adapter = _adapter(source, _managers("one.json"), responses)
     interface = ChatInterface()
     interface.add_system("system")
     hook_calls = []
@@ -246,15 +290,15 @@ def test_native_codex_keeps_one_account_sticky_within_context_epoch():
     assert len(hook_calls) == 2  # exactly once per actual provider request
     assert chat.interface is interface
     assert len(interface.entries) > first_entries
+    assert responses.client_api_keys == ["secret-one.json", "secret-one.json"]
     for call in responses.calls:
         assert "secret-one.json" not in repr(call)
-        assert "secret-two.json" not in repr(call)
 
 
 def test_native_codex_rebuild_is_scoped_to_its_chat_context():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
     responses = _Responses([_success_events, _success_events])
-    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    adapter = _adapter(source, _managers("one.json"), responses)
     main = adapter.create_chat("gpt-5.5", "main")
     other = adapter.create_chat("gpt-5.5", "other")
 
@@ -274,14 +318,14 @@ def test_native_codex_adapter_owner_forces_fresh_shared_interface_context():
     shared = ChatInterface()
     shared.add_system("system")
 
-    source_a = _SequenceSource("one.json")
+    source_a = _RecordingSource("one.json")
     responses_a = _Responses([_success_events])
     adapter_a = _adapter(source_a, _managers("one.json"), responses_a)
     chat_a = adapter_a.create_chat("gpt-5.5", "system", interface=shared)
     context_a = shared._lingtai_codex_account_context
     chat_a.send("from A")
 
-    source_b = _SequenceSource("two.json")
+    source_b = _RecordingSource("two.json")
     responses_b = _Responses([_success_events, _success_events])
     adapter_b = _adapter(source_b, _managers("two.json"), responses_b)
     chat_b = adapter_b.create_chat("gpt-5.5", "system", interface=shared)
@@ -305,99 +349,98 @@ def test_native_codex_adapter_owner_forces_fresh_shared_interface_context():
 
 
 def test_native_codex_rebuild_starts_one_fresh_account_epoch():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
+    manager = _RefreshingManager("one.json")
     responses = _Responses([_success_events, _success_events])
-    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    adapter = _adapter(source, {"one.json": manager}, responses)
     chat = adapter.create_chat("gpt-5.5", "system")
 
     chat.send("before rebuild")
     assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
+    # The token file changed on disk since the first binding.
+    manager.access_token = "rotated-one.json"
 
     assert chat.request_history_rebuild() is True
     chat.send("after rebuild")
+    # The approved boundary re-binds the one account and re-reads its token.
     assert [candidate.auth_ref for candidate in source.calls] == [
         "one.json",
-        "two.json",
+        "one.json",
     ]
+    assert responses.client_api_keys == ["secret-one.json", "rotated-one.json"]
 
 
 def test_native_codex_no_summary_hard_boundary_redraws_once_then_sticks():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
+    manager = _RefreshingManager("one.json")
     responses = _Responses([_success_events, _success_events, _success_events])
-    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    adapter = _adapter(source, {"one.json": manager}, responses)
     chat = adapter.create_chat("gpt-5.5", "system", context_window=10)
 
     chat.send("first")
+    manager.access_token = "rotated-one.json"
     chat.send("100% forced rebuild without a summary")
+    manager.access_token = "rotated-again-one.json"
     chat.send("ordinary request after rebuild")
 
     assert [candidate.auth_ref for candidate in source.calls] == [
         "one.json",
-        "two.json",
+        "one.json",
+    ]
+    assert responses.client_api_keys == [
+        "secret-one.json",
+        "rotated-one.json",
+        "rotated-one.json",
     ]
     assert [call["extra_headers"]["ChatGPT-Account-ID"] for call in responses.calls] == [
         "acct-one.json",
-        "acct-two.json",
-        "acct-two.json",
+        "acct-one.json",
+        "acct-one.json",
     ]
 
 
 def test_native_codex_technical_epoch_reset_keeps_account_sticky():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
+    manager = _RefreshingManager("one.json")
     responses = _Responses([_success_events, _success_events])
-    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    adapter = _adapter(source, {"one.json": manager}, responses)
     chat = adapter.create_chat("gpt-5.5", "system")
 
     chat.send("before technical reset")
+    manager.access_token = "rotated-one.json"
     chat._reset_ws_epoch("encrypted_reasoning_self_heal")
     chat.send("after technical reset")
 
     assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
+    assert responses.client_api_keys == ["secret-one.json", "secret-one.json"]
 
 
 def test_native_codex_molt_starts_one_fresh_account_epoch():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
+    manager = _RefreshingManager("one.json")
     responses = _Responses([_success_events, _success_events])
     adapter = _adapter(
         source,
-        _managers("one.json", "two.json"),
+        {"one.json": manager},
         responses,
         codex_molt_count=0,
     )
     chat = adapter.create_chat("gpt-5.5", "system")
 
     chat.send("before molt")
+    manager.access_token = "rotated-one.json"
     adapter._codex_molt_count_override = 1
     chat.send("after molt")
 
     assert [candidate.auth_ref for candidate in source.calls] == [
         "one.json",
-        "two.json",
+        "one.json",
     ]
-
-
-def test_native_codex_refreshes_bound_quota_without_redrawing(monkeypatch):
-    source = _SequenceSource("one.json", "two.json")
-    responses = _Responses([_success_events, _success_events])
-    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
-    quota_reads = iter([70.0, 30.0, None])
-    monkeypatch.setattr(
-        "lingtai.llm.openai.codex_quota.read_remaining_percent",
-        lambda _auth_ref: next(quota_reads),
-    )
-    chat = adapter.create_chat("gpt-5.5", "system")
-
-    chat.send("first")
-    assert chat.codex_pool_selection["quota_left"] == 70.0
-    chat.send("second")
-
-    assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
-    assert "quota_left" not in chat.codex_pool_selection
-    assert chat.codex_pool_selection.get("quota_left") != 0
+    assert responses.client_api_keys == ["secret-one.json", "rotated-one.json"]
 
 
 def test_native_codex_service_tier_fast_reaches_provider_request():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     responses = _Responses([_success_events])
     adapter = _adapter(
         source, _managers("one.json"), responses, codex_service_tier="priority"
@@ -408,7 +451,7 @@ def test_native_codex_service_tier_fast_reaches_provider_request():
 
 
 def test_native_codex_one_shot_uses_native_request_shape_and_safe_metadata():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     responses = _Responses([_success_events])
     adapter = _adapter(
         source,
@@ -432,13 +475,14 @@ def test_native_codex_one_shot_uses_native_request_shape_and_safe_metadata():
     assert request["max_output_tokens"] == 12
     assert request["extra_headers"]["ChatGPT-Account-ID"] == "acct-one.json"
     assert request["extra_headers"]["originator"] == "lingtai"
-    assert result.usage.extra["codex_pool_source_index"] == "0"
-    assert result.usage.extra["codex_auth_path_sha8"] == source._candidates[0].auth_path_sha8
+    assert result.usage.extra["codex_auth_path_sha8"] == source.candidate.auth_path_sha8
+    assert result.usage.extra["codex_auth_path_source"] == "configured"
+    assert not any(key.startswith("codex_pool") for key in result.usage.extra)
     assert "secret-one.json" not in repr(request)
 
 
 def test_native_codex_one_shot_preserves_list_content_user_envelope():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     responses = _Responses([_success_events])
     adapter = _adapter(source, _managers("one.json"), responses)
     contents = [{"type": "input_text", "text": "list-content"}]
@@ -451,14 +495,10 @@ def test_native_codex_one_shot_preserves_list_content_user_envelope():
 
 
 def test_native_codex_token_expired_refreshes_same_binding_and_retries_once():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
     responses = _Responses([_TokenExpired(), _success_events])
-    adapter = _adapter(
-        source,
-        {"one.json": manager, "two.json": _RefreshingManager("two.json")},
-        responses,
-    )
+    adapter = _adapter(source, {"one.json": manager}, responses)
     chat = adapter.create_chat("gpt-5.5", "system")
 
     class _OpenTransport:
@@ -485,14 +525,10 @@ def test_native_codex_token_expired_refreshes_same_binding_and_retries_once():
 
 
 def test_native_codex_repeated_token_expired_stops_after_one_retry():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
     responses = _Responses([_TokenExpired(), _TokenExpired()])
-    adapter = _adapter(
-        source,
-        {"one.json": manager, "two.json": _RefreshingManager("two.json")},
-        responses,
-    )
+    adapter = _adapter(source, {"one.json": manager}, responses)
     chat = adapter.create_chat("gpt-5.5", "system")
 
     with pytest.raises(LLMReplayTerminalError) as excinfo:
@@ -506,7 +542,7 @@ def test_native_codex_repeated_token_expired_stops_after_one_retry():
 
 
 def test_native_codex_retry_create_different_failure_is_terminal():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
     retry_error = RuntimeError("provider unavailable after auth recovery")
     responses = _Responses([_TokenExpired(), retry_error])
@@ -525,7 +561,7 @@ def test_native_codex_retry_create_different_failure_is_terminal():
 
 
 def test_native_codex_retry_stream_different_failure_is_terminal():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
 
     def expire_before_event():
@@ -556,7 +592,7 @@ def test_native_codex_retry_stream_different_failure_is_terminal():
 
 
 def test_native_codex_create_recovery_retry_iterator_failure_is_terminal():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
     retry_error = RuntimeError("retry iterator disconnected before first event")
 
@@ -583,7 +619,7 @@ def test_native_codex_create_recovery_retry_iterator_failure_is_terminal():
 def test_native_codex_finalize_failure_after_recovery_is_terminal(monkeypatch):
     from lingtai.llm.openai import adapter as openai_adapter
 
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
     finalize_error = RuntimeError("accumulator finalize failed after auth recovery")
     original_accumulator = openai_adapter.StreamingAccumulator
@@ -628,7 +664,7 @@ def test_native_codex_unrenderable_post_recovery_tail_failure_rolls_back():
         def __repr__(self):
             raise RuntimeError("provider __repr__ failed")
 
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
     baseline_error = _SilentMarkerUnrenderableError(
         "baseline bookkeeping failed after auth recovery"
@@ -659,7 +695,7 @@ def test_native_codex_unrenderable_post_recovery_tail_failure_rolls_back():
 
 
 def test_native_codex_arbitrary_refresh_callback_failure_is_terminal():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
     refresh_error = RuntimeError("credential store unavailable")
 
@@ -694,7 +730,7 @@ def test_native_codex_attribute_refusing_retry_failure_uses_terminal_wrapper():
                 raise AttributeError("immutable provider exception")
             super().__setattr__(name, value)
 
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
     retry_error = _AttributeRefusingError("schema failure after auth recovery")
     responses = _Responses([_TokenExpired(), retry_error])
@@ -720,7 +756,7 @@ def test_native_codex_silent_marker_rejection_bypasses_attribute_hooks():
                 return
             super().__setattr__(name, value)
 
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
     retry_error = _SilentMarkerError("provider exception silently ignored marker")
     responses = _Responses([_TokenExpired(), retry_error])
@@ -739,7 +775,7 @@ def test_native_codex_silent_marker_rejection_bypasses_attribute_hooks():
 
 
 def test_native_codex_refresh_rejection_preserves_relogin_error_without_retry():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
 
     def reject_refresh(rejected_access_token: str):
@@ -748,11 +784,7 @@ def test_native_codex_refresh_rejection_preserves_relogin_error_without_retry():
 
     manager.refresh_access_token = reject_refresh
     responses = _Responses([_TokenExpired(), _success_events])
-    adapter = _adapter(
-        source,
-        {"one.json": manager, "two.json": _RefreshingManager("two.json")},
-        responses,
-    )
+    adapter = _adapter(source, {"one.json": manager}, responses)
     chat = adapter.create_chat("gpt-5.5", "system")
 
     with pytest.raises(LLMReplayTerminalError) as excinfo:
@@ -767,7 +799,7 @@ def test_native_codex_refresh_rejection_preserves_relogin_error_without_retry():
 
 
 def test_native_codex_token_expired_during_stream_recovers_before_output():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
 
     def fail_before_output():
@@ -785,7 +817,7 @@ def test_native_codex_token_expired_during_stream_recovers_before_output():
 
 
 def test_native_codex_reasoning_summary_event_prevents_token_replay():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
 
     def reasoning_then_expire():
@@ -812,7 +844,7 @@ def test_native_codex_reasoning_summary_event_prevents_token_replay():
 
 
 def test_native_codex_raw_reasoning_event_prevents_token_replay():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
 
     def raw_reasoning_then_expire():
@@ -846,7 +878,7 @@ def test_native_codex_raw_reasoning_event_prevents_token_replay():
 
 
 def test_native_codex_late_token_failure_cannot_clear_newer_binding():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
     adapter = _adapter(source, {"one.json": manager}, _Responses([_success_events]))
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -877,15 +909,10 @@ def test_native_codex_late_token_failure_cannot_clear_newer_binding():
 def test_native_codex_recovery_publication_cannot_overwrite_newer_owner(
     replacement_kind,
 ):
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
     manager_one = _RefreshingManager("one.json")
-    manager_two = _RefreshingManager("two.json")
     responses = _Responses([_TokenExpired(), _success_events])
-    adapter = _adapter(
-        source,
-        {"one.json": manager_one, "two.json": manager_two},
-        responses,
-    )
+    adapter = _adapter(source, {"one.json": manager_one}, responses)
     chat = adapter.create_chat("gpt-5.5", "system")
     context = chat.interface._lingtai_codex_account_context
 
@@ -922,8 +949,11 @@ def test_native_codex_recovery_publication_cannot_overwrite_newer_owner(
                 original_apply(replacement)
             else:
                 # Exercise the real approved-boundary reset while owning the same
-                # context RLock, then publish the freshly selected second identity.
+                # context RLock, then publish the fresh re-binding of the one
+                # account. Its token file changed since the refresh, so the
+                # newer owner is distinguishable from the recovery publication.
                 chat._reset_ws_epoch("summarize_rebuild_only")
+                manager_one.access_token = "rebound-one.json"
                 replacement = adapter._select_codex_account(context)
                 original_apply(replacement)
         replacement_done.set()
@@ -951,18 +981,17 @@ def test_native_codex_recovery_publication_cannot_overwrite_newer_owner(
     assert responses.calls[1]["extra_headers"]["ChatGPT-Account-ID"] == "acct-one.json"
     assert manager_one.refresh_calls == ["secret-one.json"]
 
+    expected_identity = source.candidate.auth_path_sha8
     if replacement_kind == "same_account":
         expected_token = "newest-same-account"
-        expected_identity = source._candidates[0].auth_path_sha8
         expected_epoch = "codex_token_refresh"
         assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
     else:
-        expected_token = "secret-two.json"
-        expected_identity = source._candidates[1].auth_path_sha8
+        expected_token = "rebound-one.json"
         expected_epoch = "summarize_rebuild_only"
         assert [candidate.auth_ref for candidate in source.calls] == [
             "one.json",
-            "two.json",
+            "one.json",
         ]
 
     assert context.binding["api_key"] == expected_token
@@ -975,40 +1004,63 @@ def test_native_codex_recovery_publication_cannot_overwrite_newer_owner(
     assert chat._ws_epoch_reset_reason_pending == expected_epoch
 
 
-def test_native_codex_usage_limit_marks_account_for_aed_rebuild_without_pool_retry():
-    source = _SequenceSource("one.json", "two.json")
+def test_native_codex_usage_limit_excludes_account_and_aed_rebuild_is_terminal():
+    source = _RecordingSource("one.json")
     responses = _Responses([_UsageLimit(), _success_events])
-    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    adapter = _adapter(source, _managers("one.json"), responses)
     chat = adapter.create_chat("gpt-5.5", "system")
 
     with pytest.raises(_UsageLimit):
         chat.send("hello")
     assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
+    context = chat.interface._lingtai_codex_account_context
+    assert context.excluded_accounts == {source.candidate.auth_path_sha8}
 
+    # AED rebuild reuses the interface/context; construction binds nothing.
     rebuilt = adapter.create_chat("gpt-5.5", "system", interface=chat.interface)
     assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
-    rebuilt.send("aed recovery")
+    with pytest.raises(NoCandidateError) as excinfo:
+        rebuilt.send("aed recovery")
 
+    # The one account is excluded: terminal, no silent retry on it, no
+    # second wire request, and no pool/quota diagnostics.
+    assert source.excludes[-1] == {source.candidate.auth_path_sha8}
+    assert [candidate.auth_ref for candidate in source.calls] == ["one.json"]
+    assert excinfo.value.diagnostic_fields() == {}
+    assert len(responses.calls) == 1
+
+
+def test_native_codex_usage_limit_exclusion_is_scoped_to_its_context():
+    source = _RecordingSource("one.json")
+    responses = _Responses([_UsageLimit(), _success_events])
+    adapter = _adapter(source, _managers("one.json"), responses)
+    limited = adapter.create_chat("gpt-5.5", "limited")
+
+    with pytest.raises(_UsageLimit):
+        limited.send("hello")
+
+    other = adapter.create_chat("gpt-5.5", "other")
+    assert other.send("independent context").text == "ok"
+
+    assert adapter._codex_excluded_accounts == set()
+    assert other.interface._lingtai_codex_account_context.excluded_accounts == set()
+    assert source.excludes == [None, None]
     assert [candidate.auth_ref for candidate in source.calls] == [
         "one.json",
-        "two.json",
+        "one.json",
     ]
     assert len(responses.calls) == 2
-    assert (
-        rebuilt.codex_pool_selection["auth_path_sha8"]
-        == source._candidates[1].auth_path_sha8
-    )
 
 
 def test_native_codex_does_not_retry_after_partial_stream_output():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
 
     def partial_then_fail():
         yield _Event("response.output_text.delta", delta="partial")
         raise _UsageLimit()
 
     responses = _Responses([partial_then_fail])
-    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    adapter = _adapter(source, _managers("one.json"), responses)
     chat = adapter.create_chat("gpt-5.5", "system")
 
     chunks = []
@@ -1023,7 +1075,7 @@ def test_native_codex_does_not_retry_after_partial_stream_output():
 
 
 def test_native_codex_token_expired_does_not_replay_partial_text():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
 
     def partial_then_expire():
@@ -1046,7 +1098,7 @@ def test_native_codex_token_expired_does_not_replay_partial_text():
 
 
 def test_native_codex_token_expired_does_not_replay_partial_tool_call():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     manager = _RefreshingManager("one.json")
 
     def partial_tool_then_expire():
@@ -1071,14 +1123,14 @@ def test_native_codex_token_expired_does_not_replay_partial_tool_call():
 
 
 def test_native_codex_partial_text_cleanup_failure_keeps_terminal_wrapper():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
 
     def partial_then_fail():
         yield _Event("response.output_text.delta", delta="visible")
         raise _UsageLimit()
 
     responses = _Responses([partial_then_fail])
-    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    adapter = _adapter(source, _managers("one.json"), responses)
     chat = adapter.create_chat("gpt-5.5", "system")
 
     def failing_drop_trailing(predicate):
@@ -1098,7 +1150,7 @@ def test_native_codex_partial_text_cleanup_failure_keeps_terminal_wrapper():
 
 
 def test_native_codex_partial_tool_cleanup_failure_keeps_terminal_wrapper():
-    source = _SequenceSource("one.json", "two.json")
+    source = _RecordingSource("one.json")
 
     def partial_tool_then_fail():
         yield _Event(
@@ -1109,7 +1161,7 @@ def test_native_codex_partial_tool_cleanup_failure_keeps_terminal_wrapper():
         raise _UsageLimit()
 
     responses = _Responses([partial_tool_then_fail])
-    adapter = _adapter(source, _managers("one.json", "two.json"), responses)
+    adapter = _adapter(source, _managers("one.json"), responses)
     chat = adapter.create_chat("gpt-5.5", "system")
 
     def failing_drop_trailing(predicate):
@@ -1127,7 +1179,7 @@ def test_native_codex_partial_tool_cleanup_failure_keeps_terminal_wrapper():
 
 
 def test_native_codex_request_builder_propagates_watchdog_timeout():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
     responses = _Responses([_success_events])
     adapter = _adapter(source, _managers("one.json"), responses)
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -1147,7 +1199,7 @@ def test_native_codex_request_builder_propagates_watchdog_timeout():
 
 
 def test_native_codex_recovery_past_deadline_fails_closed_without_second_call():
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
 
     class _SlowRefreshingManager(_RefreshingManager):
         def refresh_access_token(self, rejected_access_token):
@@ -1179,7 +1231,7 @@ def test_native_codex_initial_binding_past_deadline_fails_closed_no_wire_call():
     from lingtai.kernel.base_agent.turn import _is_transient_provider_error
     from lingtai.kernel.llm_utils import send_with_timeout_stream
 
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
 
     class _SlowInitialManager(_RefreshingManager):
         def get_access_token(self):
@@ -1220,7 +1272,7 @@ def test_native_codex_settle_success_is_preserved_not_replaced_by_timeout():
     assistant committed — not discarded as a transient TimeoutError."""
     from lingtai.kernel.llm_utils import send_with_timeout_stream
 
-    source = _SequenceSource("one.json")
+    source = _RecordingSource("one.json")
 
     def slow_success():
         # Cross the 50ms main-thread watchdog inside the stream, then
@@ -1253,111 +1305,17 @@ def test_native_codex_settle_success_is_preserved_not_replaced_by_timeout():
     assert roles == ["system", "user", "assistant"]
 
 
-def test_native_codex_empty_pool_falls_back_to_legacy_account():
-    source = _SequenceSource()
+def test_native_codex_excluded_account_raises_no_candidate_before_wire_call():
+    source = _RecordingSource("one.json")
     responses = _Responses([_success_events])
-    adapter = _adapter(source, _managers("a.json"), responses)
+    adapter = _adapter(source, _managers("one.json"), responses)
+    adapter._codex_excluded_accounts.add(source.candidate.auth_path_sha8)
     chat = adapter.create_chat("gpt-5.5", "system")
 
-    response = chat.send("hello")
-
-    assert response.text == "ok"
-    assert source.calls == []
-    assert responses.calls[0]["extra_headers"]["ChatGPT-Account-ID"] == "acct-a.json"
-    assert chat.codex_pool_selection["fallback"] == "legacy_default"
-
-
-def test_native_codex_weighted_empty_tuple_falls_back_to_legacy_account(tmp_path):
-    source = WeightedAccountSource(tmp_path / "codex-auth-pool.json", tmp_path)
-    assert source.snapshot() == ()
-    responses = _Responses([_success_events])
-    adapter = _adapter(source, _managers("a.json"), responses)
-    chat = adapter.create_chat("gpt-5.5", "system")
-
-    response = chat.send("hello")
-
-    assert response.text == "ok"
-    assert responses.calls[0]["extra_headers"]["ChatGPT-Account-ID"] == "acct-a.json"
-    assert chat.codex_pool_selection["fallback"] == "legacy_default"
-
-
-def test_native_codex_nonempty_exhausted_pool_never_falls_back():
-    source = _SequenceSource("one.json")
-    responses = _Responses([_success_events])
-    adapter = _adapter(source, _managers("one.json", "a.json"), responses)
-    adapter._codex_excluded_accounts.add(source._candidates[0].auth_path_sha8)
-    chat = adapter.create_chat("gpt-5.5", "system")
-
-    with pytest.raises(RuntimeError, match="no candidate"):
-        chat.send("hello")
-
-    assert source.calls == []
-    assert responses.calls == []
-
-
-def test_native_codex_no_candidate_reports_safe_quota_scan_counts(monkeypatch):
-    source = _SequenceSource("one.json", "two.json")
-    responses = _Responses([_success_events])
-    adapter = _adapter(source, _managers("one.json", "two.json", "a.json"), responses)
-
-    def read_quota(auth_ref):
-        if auth_ref == "one.json":
-            raise OSError("quota unavailable")
-        return "invalid"
-
-    def no_candidate(**_kwargs):
-        raise NoCandidateError("No eligible account remaining")
-
-    monkeypatch.setattr(
-        "lingtai.llm.openai.codex_quota.read_remaining_percent", read_quota
-    )
-    monkeypatch.setattr(source, "select", no_candidate)
-
-    chat = adapter.create_chat("gpt-5.5", "system")
     with pytest.raises(NoCandidateError) as excinfo:
         chat.send("hello")
 
-    assert excinfo.value.diagnostic_fields() == {
-        "codex_account_pool_size": 2,
-        "codex_account_excluded_count": 0,
-        "codex_account_zero_quota_count": 0,
-        "codex_account_eligible_count": 2,
-        "codex_account_quota_target_count": 2,
-        "codex_account_quota_observed_count": 0,
-        "codex_account_quota_read_error_count": 1,
-        "codex_account_quota_invalid_count": 1,
-        "codex_account_quota_snapshot_complete": False,
-        "codex_account_legacy_fallback_allowed": False,
-    }
-    assert responses.calls == []
-
-
-def test_native_codex_none_snapshot_never_falls_back():
-    source = _NoneSnapshotSource()
-    responses = _Responses([_success_events])
-    adapter = _adapter(source, _managers("a.json"), responses)
-    chat = adapter.create_chat("gpt-5.5", "system")
-
-    with pytest.raises(RuntimeError, match="no candidate"):
-        chat.send("hello")
-
-    assert source.calls == []
-    assert responses.calls == []
-
-
-@pytest.mark.parametrize("snapshot", ["", {}])
-def test_native_codex_non_collection_falsy_snapshot_never_falls_back(snapshot):
-    class _FalsySnapshotSource(_SequenceSource):
-        def snapshot(self):
-            return snapshot
-
-    source = _FalsySnapshotSource()
-    responses = _Responses([_success_events])
-    adapter = _adapter(source, _managers("a.json"), responses)
-    chat = adapter.create_chat("gpt-5.5", "system")
-
-    with pytest.raises(RuntimeError, match="no candidate"):
-        chat.send("hello")
-
+    assert excinfo.value.diagnostic_fields() == {}
+    assert source.excludes == [{source.candidate.auth_path_sha8}]
     assert source.calls == []
     assert responses.calls == []

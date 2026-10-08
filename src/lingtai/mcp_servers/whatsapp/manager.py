@@ -59,8 +59,11 @@ DESCRIPTION = (
     "bridge (one linked session; not the Meta Cloud API). Send, reply, and "
     "react perform real external actions; check/read/search inspect bounded "
     "conversation data, while contacts, pairing, status, and logout cover "
-    "local account operation. Inbound messages may wake the agent through LICC. "
-    "Call action='manual' for message IDs, bridge media, allowlists/settings, "
+    "local account operation. When the final current LICC notification contains "
+    "the required full message and its exact opaque message_id, "
+    "do not call check/read/search "
+    "merely to reread that content or re-fetch an ID already given. Call "
+    "action='manual' for message IDs, bridge media, allowlists/settings, "
     "lifecycle, and safety guidance."
 )
 
@@ -85,6 +88,19 @@ SEEN_KEYS_MAX = 5000
 
 # Filesystem-safety cap for a single path component built from remote input.
 _MAX_COMPONENT = 120
+
+# Structured-context text caps for the LICC notification (recent_messages /
+# latest_incoming entries) and for the inline body excerpt. These bound
+# notification size; ``_truncate_text`` below reports whether a given cap
+# actually cut real content, so the agent can tell a genuinely full current
+# message from one the producer capped — never guess from length alone.
+_STRUCTURED_TEXT_CAP = 500
+_BODY_TEXT_CAP = 2000
+
+
+def _truncate_text(text: str, cap: int) -> tuple[str, bool]:
+    """Return ``(capped_text, was_truncated)`` — truthful, not a length guess."""
+    return text[:cap], len(text) > cap
 
 
 def _safe_component(value: Any, fallback: str = "unknown") -> str:
@@ -314,13 +330,15 @@ class WhatsAppManager:
         history = self._iter_messages(wa_id, limit=10)
         recent = []
         for m in history:
+            text, text_truncated = _truncate_text(_display_text(m), _STRUCTURED_TEXT_CAP)
             recent.append({
                 "id": m.get("id"),
                 "fromMe": m.get("direction") == "sent",
-                "text": _display_text(m)[:500],
+                "text": text,
+                "text_truncated": text_truncated,
                 "timestamp": m.get("timestamp"),
             })
-        latest_text = _display_text(latest)
+        latest_text, latest_truncated = _truncate_text(_display_text(latest) or "", _STRUCTURED_TEXT_CAP)
         return {
             "platform": "whatsapp",
             "conversation_ref": f"whatsapp:{wa_id}",
@@ -328,7 +346,12 @@ class WhatsAppManager:
             "latest_incoming": {
                 "id": latest.get("id"),
                 "from": latest.get("from"),
-                "text": (latest_text or "")[:500],
+                "text": latest_text,
+                # Ground truth for the "don't reread a full message" rule: the
+                # notification instruction can trust this current message's
+                # text only when this is False. True means the producer's own
+                # cap cut real content, not that content is missing/unsafe.
+                "text_truncated": latest_truncated,
                 "timestamp": latest.get("timestamp"),
                 "type": latest.get("type"),
             },
@@ -467,11 +490,21 @@ class WhatsAppManager:
             self._record_seen(stable_key, msg_id)
         ctx = self._conversation_context(from_id, msg)
         header = _NOTIFICATION_HEADER_TEMPLATE.format(channel="WhatsApp").rstrip("\n")
-        newest = (_display_text(msg) or f"[{msg.get('type')}]")[:2000]
+        newest_full = _display_text(msg) or f"[{msg.get('type')}]"
+        newest, newest_truncated = _truncate_text(newest_full, _BODY_TEXT_CAP)
+        # The shared mcp_inbox preview_truncated flag only sees the outer LICC
+        # body-length cap (10000 chars); it cannot see this producer's own
+        # _BODY_TEXT_CAP cut. When that happens, say so inline — the agent
+        # must not treat a silently shortened excerpt as the full message.
+        newest_note = (
+            f"\n\n_(truncated at {_BODY_TEXT_CAP} chars; call `read` with "
+            f"wa_id=\"{from_id}\" to recover the complete message)_"
+            if newest_truncated else ""
+        )
         push_inbox_event(
             sender="whatsapp",
             subject=f"whatsapp message from {from_id}",
-            body=f"{header}\n\n**Newest WhatsApp message**\n{newest}",
+            body=f"{header}\n\n**Newest WhatsApp message**\n{newest}{newest_note}",
             # Downstream LICC code may use the event id as a file name, so the
             # remote-controlled components are sanitized here too.
             event_id=f"wa:{_safe_component(from_id)}:{_safe_component(msg_id)}",

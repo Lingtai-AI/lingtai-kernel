@@ -18,4 +18,5 @@ SYSTEM_DECLARED_ACTIONS: tuple[str, ...] = (
     "presets",
     "name_set",
     "name_nickname",
+    "meta",
 )

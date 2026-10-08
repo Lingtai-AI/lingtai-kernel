@@ -27,7 +27,7 @@ how the repository's own tests behave rather than asserting a runtime interface.
 - **id**: TS001
 - **title**: tests wait on observable signals instead of arbitrary sleeps, and every failure is classified as harness or product with evidence
 - **guards**: `tests/CONTRACT.md` § Principles
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`
 - **estimate**: ≈ 15 minutes
 

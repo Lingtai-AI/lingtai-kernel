@@ -30,7 +30,7 @@ from lingtai.kernel.llm.base import (
 from lingtai.kernel.llm_utils import WorkerStillRunningError, send_with_timeout_stream
 from lingtai.kernel.message import _make_message, MSG_REQUEST
 from lingtai.kernel.state import AgentState
-from lingtai.auth.codex_account_source import AccountCandidate, NoCandidateError
+from lingtai.auth.codex_account_source import FixedAccountSource, NoCandidateError
 from lingtai.llm.openai.adapter import CodexOpenAIAdapter
 
 
@@ -47,16 +47,15 @@ class _FakeAgent:
     # dangling tool_calls before sleeping). Default to None — fake agents
     # in this suite never have a live chat session.
     _chat: object = None
+    # Tests that only need the run loop to exit once the agent reaches the
+    # terminal ASLEEP boundary set this; the fake's ``_log`` then sets
+    # ``_shutdown`` on the loop's own ``sleep`` event.
+    _stop_on_sleep: bool = False
 
     def _log(self, event_type: str, **fields):
         self._logs.append((event_type, fields))
-
-    def _cancel_soul_timer(self):
-        # Mirror BaseAgent._cancel_soul_timer's delegation to the soul flow hook.
-        # These tests monkeypatch ``lingtai.tools.soul.flow._cancel_soul_timer`` (e.g. to
-        # use it as a shutdown signal), so route through that module attribute.
-        import lingtai.tools.soul.flow as soul_flow
-        soul_flow._cancel_soul_timer(self)
+        if event_type == "sleep" and self._stop_on_sleep:
+            self._shutdown.set()
 
     def _set_state(self, new_state: AgentState, reason: str = ""):
         self._state = new_state
@@ -110,8 +109,7 @@ def test_run_loop_skips_chat_history_save_after_worker_still_running(tmp_path, m
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -206,7 +204,6 @@ def _make_run_loop_agent(tmp_path):
     agent._reset_uptime = lambda: None
     agent._save_chat_history = lambda *a, **kw: None
     agent._config = SimpleNamespace(
-        insights_interval=0,
         max_aed_attempts=10,
         language="en",
         time_awareness=True,
@@ -241,8 +238,6 @@ def test_fresh_dequeue_clears_only_stale_turn_cancel_latch(
         current._shutdown.set()
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _agent: None)
 
     turn._run_loop(agent)
 
@@ -321,8 +316,7 @@ def test_partial_stream_marker_stops_before_transient_or_aed_retry(tmp_path, mon
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -367,8 +361,7 @@ def test_provider_recovery_terminal_marker_stops_before_aed_rebuild(
         raise terminal_error
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -407,14 +400,7 @@ def test_codex_provider_retry_budget_is_terminal_in_run_loop(tmp_path, monkeypat
                 raise _TokenExpired("expired")
             raise RuntimeError("network failed after provider-owned retry")
 
-    candidate = AccountCandidate("one.json", "account.json", 0, 1)
-    source = SimpleNamespace(
-        snapshot=lambda: [candidate],
-        quota_targets=lambda exclude=None, snapshot=None: [
-            (candidate.auth_ref, candidate.auth_path_sha8)
-        ],
-        select=lambda exclude=None, quota_left_snapshot=None, snapshot=None: candidate,
-    )
+    source = FixedAccountSource("one.json")
 
     class _Manager:
         def __init__(self):
@@ -437,11 +423,9 @@ def test_codex_provider_retry_budget_is_terminal_in_run_loop(tmp_path, monkeypat
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
-        codex_fallback_auth_path="one.json",
     )
     adapter._client = SimpleNamespace(responses=responses, api_key="boot")
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -465,8 +449,7 @@ def test_codex_provider_retry_budget_is_terminal_in_run_loop(tmp_path, monkeypat
             raise
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -507,14 +490,7 @@ def test_codex_terminal_wrapper_survives_watchdog_settle_boundary(
             time.sleep(0.08)
             raise RuntimeError("network failed after provider-owned retry")
 
-    candidate = AccountCandidate("one.json", "account.json", 0, 1)
-    source = SimpleNamespace(
-        snapshot=lambda: [candidate],
-        quota_targets=lambda exclude=None, snapshot=None: [
-            (candidate.auth_ref, candidate.auth_path_sha8)
-        ],
-        select=lambda exclude=None, quota_left_snapshot=None, snapshot=None: candidate,
-    )
+    source = FixedAccountSource("one.json")
 
     class _Manager:
         def __init__(self):
@@ -537,11 +513,9 @@ def test_codex_terminal_wrapper_survives_watchdog_settle_boundary(
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
-        codex_fallback_auth_path="one.json",
     )
     adapter._client = SimpleNamespace(responses=responses, api_key="boot")
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -566,8 +540,7 @@ def test_codex_terminal_wrapper_survives_watchdog_settle_boundary(
             raise
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     try:
         turn._run_loop(agent)
@@ -689,14 +662,7 @@ def test_codex_adapter_run_loop_uses_non_dispatching_replay_markers(
 
             return partial_events()
 
-    candidate = AccountCandidate("one.json", "account.json", 0, 1)
-    source = SimpleNamespace(
-        snapshot=lambda: [candidate],
-        quota_targets=lambda exclude=None, snapshot=None: [
-            (candidate.auth_ref, candidate.auth_path_sha8)
-        ],
-        select=lambda exclude=None, quota_left_snapshot=None, snapshot=None: candidate,
-    )
+    source = FixedAccountSource("one.json")
 
     class _Manager:
         def __init__(self):
@@ -719,11 +685,9 @@ def test_codex_adapter_run_loop_uses_non_dispatching_replay_markers(
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
-        codex_fallback_auth_path="one.json",
     )
     adapter._client = SimpleNamespace(responses=responses, api_key="boot")
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -755,10 +719,7 @@ def test_codex_adapter_run_loop_uses_non_dispatching_replay_markers(
             raise
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(
-        soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set()
-    )
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -833,14 +794,7 @@ def test_codex_post_recovery_tail_failure_is_terminal_in_run_loop(
                 ),
             ])
 
-    candidate = AccountCandidate("one.json", "account.json", 0, 1)
-    source = SimpleNamespace(
-        snapshot=lambda: [candidate],
-        quota_targets=lambda exclude=None, snapshot=None: [
-            (candidate.auth_ref, candidate.auth_path_sha8)
-        ],
-        select=lambda exclude=None, quota_left_snapshot=None, snapshot=None: candidate,
-    )
+    source = FixedAccountSource("one.json")
 
     class _Manager:
         def __init__(self):
@@ -863,11 +817,9 @@ def test_codex_post_recovery_tail_failure_is_terminal_in_run_loop(
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
-        codex_fallback_auth_path="one.json",
     )
     adapter._client = SimpleNamespace(responses=responses, api_key="boot")
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -912,8 +864,7 @@ def test_codex_post_recovery_tail_failure_is_terminal_in_run_loop(
         chat.send("hello")
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -973,14 +924,7 @@ def test_codex_post_recovery_snapshot_failure_is_terminal_in_run_loop(
                 ),
             ])
 
-    candidate = AccountCandidate("one.json", "account.json", 0, 1)
-    source = SimpleNamespace(
-        snapshot=lambda: [candidate],
-        quota_targets=lambda exclude=None, snapshot=None: [
-            (candidate.auth_ref, candidate.auth_path_sha8)
-        ],
-        select=lambda exclude=None, quota_left_snapshot=None, snapshot=None: candidate,
-    )
+    source = FixedAccountSource("one.json")
 
     class _Manager:
         def __init__(self):
@@ -1003,11 +947,9 @@ def test_codex_post_recovery_snapshot_failure_is_terminal_in_run_loop(
     adapter = CodexOpenAIAdapter(
         api_key="boot",
         base_url="http://codex.test",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_account_source=source,
         codex_token_manager_factory=lambda **_kwargs: manager,
-        codex_fallback_auth_path="one.json",
     )
     adapter._client = SimpleNamespace(responses=responses, api_key="boot")
     chat = adapter.create_chat("gpt-5.5", "system")
@@ -1036,8 +978,7 @@ def test_codex_post_recovery_snapshot_failure_is_terminal_in_run_loop(
             raise
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1072,19 +1013,10 @@ def test_no_candidate_error_is_terminal_without_aed_retry(tmp_path, monkeypatch)
     def fake_handle(_agent, _msg):
         calls["n"] += 1
         _agent._shutdown.set()
-        raise NoCandidateError(
-            "No eligible account remaining",
-            diagnostics={
-                "codex_account_pool_size": 2,
-                "codex_account_quota_read_error_count": 1,
-                "secret_path": "/tmp/token.json",
-                "no_candidate_token": "secret-token-value",
-            },
-        )
+        raise NoCandidateError("Codex account is excluded")
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1093,13 +1025,15 @@ def test_no_candidate_error_is_terminal_without_aed_retry(tmp_path, monkeypatch)
     assert agent._asleep.is_set()
     logs = [fields for name, fields in agent._logs if name == "no_candidate_terminal"]
     assert len(logs) == 1
-    assert logs[0]["codex_account_pool_size"] == 2
-    assert logs[0]["codex_account_quota_read_error_count"] == 1
-    assert "/tmp/token.json" not in repr(logs[0])
-    assert "secret-token-value" not in repr(logs[0])
+    # The single-account source carries no pool/quota diagnostics: the terminal
+    # log is exactly the bounded error description and exception class.
+    assert logs[0] == {
+        "error": "Codex account is excluded",
+        "exception": "NoCandidateError",
+    }
     assert not any(name == "aed_attempt" for name, _ in agent._logs)
     assert len(agent.reports) == 1
-    assert agent.reports[0][0].args == ("No eligible account remaining",)
+    assert agent.reports[0][0].args == ("Codex account is excluded",)
     assert agent.reports[0][1] == {
         "attempt": None,
         "max_attempts": None,
@@ -1120,8 +1054,6 @@ def test_ordinary_exception_keeps_aed_rebuild_behavior(tmp_path, monkeypatch):
         raise ValueError("ordinary failure")
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
 
@@ -1143,8 +1075,6 @@ def test_transient_provider_error_retries_before_aed_count(tmp_path, monkeypatch
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
 
@@ -1167,8 +1097,7 @@ def test_transient_provider_error_counts_as_aed_after_retry_budget(tmp_path, mon
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1217,8 +1146,7 @@ def test_aed_exhaust_sends_one_sanitized_notice_to_origin(tmp_path, monkeypatch)
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1285,8 +1213,7 @@ def test_aed_exhaust_notice_uses_origin_captured_at_dequeue(tmp_path, monkeypatc
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1325,11 +1252,9 @@ def test_aed_exhaust_notice_rejects_malformed_route(tmp_path, monkeypatch):
 
     # Run one iteration per malformed ref: use a fresh agent each time so the
     # sleep event / shutdown state cannot leak across runs.
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
-
     for ref in malformed_refs:
         agent = _make_run_loop_agent(tmp_path)
+        agent._stop_on_sleep = True
         agent._config.max_aed_attempts = 1
         agent._tool_handlers = {"telegram": fake_telegram}
         sent.clear()
@@ -1383,8 +1308,7 @@ def test_aed_exhaust_notice_records_returned_error_as_failed(tmp_path, monkeypat
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1413,8 +1337,7 @@ def test_aed_exhaust_notice_fail_open_when_telegram_handler_missing(tmp_path, mo
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1432,8 +1355,7 @@ def test_structural_error_skips_transient_retry(tmp_path, monkeypatch):
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1546,8 +1468,6 @@ def test_rate_limit_error_retries_honoring_retry_after(tmp_path, monkeypatch):
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(agent._shutdown, "wait", lambda s: waits.append(s) or False)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
 
@@ -1576,8 +1496,7 @@ def test_rate_limit_error_without_retry_after_uses_exponential_backoff(tmp_path,
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(agent._shutdown, "wait", lambda s: waits.append(s) or False)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1611,8 +1530,7 @@ def test_client_error_fails_fast_when_compaction_cannot_change_wire(tmp_path, mo
         lambda _agent, *, source: CompactionStats(compacted_blocks=0),
     )
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1646,8 +1564,6 @@ def test_client_error_retries_when_compaction_changed_wire(tmp_path, monkeypatch
         lambda _agent, *, source: CompactionStats(compacted_blocks=2),
     )
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
 
@@ -1679,8 +1595,7 @@ def test_over_window_zero_progress_compaction_aborts_aed_retry_loop(tmp_path, mo
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn, "_compact_history_before_retry", fake_compact)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1716,8 +1631,7 @@ def test_over_window_zero_progress_abort_reports_terminal_to_task_card(tmp_path,
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn, "_compact_history_before_retry", fake_compact)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+    agent._stop_on_sleep = True
 
     turn._run_loop(agent)
 
@@ -1755,8 +1669,6 @@ def test_over_window_compaction_with_progress_keeps_aed_retry(tmp_path, monkeypa
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn, "_compact_history_before_retry", fake_compact)
 
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
 
@@ -1923,16 +1835,15 @@ def test_tc_wake_error_logs_empty_response_diagnostics(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-# Issue #655: post-turn _save_chat_history / _run_inquiry must never kill the
-# run loop (they sit outside the AED try/except; an uncaught exception there
-# would propagate out of _run_loop and silently kill the daemon thread).
+# Issue #655: post-turn _save_chat_history must never kill the run loop (it
+# sits outside the AED try/except; an uncaught exception there would
+# propagate out of _run_loop and silently kill the daemon thread).
 # ---------------------------------------------------------------------------
 
 
-def _run_loop_with_post_turn_error(tmp_path, monkeypatch, *, save_error=None,
-                                   inquiry_error=None):
+def _run_loop_with_post_turn_error(tmp_path, monkeypatch, *, save_error=None):
     """Drive one full message turn through _run_loop with an optional
-    post-turn save/inquiry failure, then a second turn that succeeds and
+    post-turn save failure, then a second turn that succeeds and
     sets _shutdown so the loop exits."""
     agent = _make_run_loop_agent(tmp_path)
     agent.saves = 0
@@ -1953,19 +1864,8 @@ def _run_loop_with_post_turn_error(tmp_path, monkeypatch, *, save_error=None,
         if save_error is not None and agent.saves == 1:
             raise save_error
 
-    def fake_inquiry(*a, **kw):
-        if inquiry_error is not None:
-            raise inquiry_error
-
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     agent._save_chat_history = fake_save
-    if inquiry_error is not None:
-        agent._config.insights_interval = 1
-        agent._insight_turn_counter = 0
-        agent._run_inquiry = fake_inquiry
-
-    import lingtai.tools.soul.flow as soul_flow
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
     return agent
@@ -1989,21 +1889,3 @@ def test_run_loop_save_error_logged_not_propagated(tmp_path, monkeypatch):
     assert error_log is not None
     assert error_log["exception"] == "OSError"
     assert "disk full" in error_log["error"]
-
-
-def test_run_loop_inquiry_error_logged_not_propagated(tmp_path, monkeypatch):
-    """An exception raised by post-turn _run_inquiry (auto-insight) is logged
-    as post_turn_error and must NOT propagate out of _run_loop either."""
-    agent = _run_loop_with_post_turn_error(
-        tmp_path, monkeypatch, inquiry_error=RuntimeError("provider down")
-    )
-
-    assert agent.handle_calls == 2
-    assert any(name == "post_turn_error" for name, _ in agent._logs)
-    error_log = next(
-        (fields for name, fields in agent._logs if name == "post_turn_error"),
-        None,
-    )
-    assert error_log is not None
-    assert error_log["exception"] == "RuntimeError"
-    assert "provider down" in error_log["error"]

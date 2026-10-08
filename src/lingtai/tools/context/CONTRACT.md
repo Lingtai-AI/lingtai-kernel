@@ -24,6 +24,8 @@ related_files:
   - tests/test_tool_family_context_migration.py
   - tests/test_deep_refresh.py
   - tests/test_context_declared_tool_plugin.py
+  - src/lingtai/tools/notification/CONTRACT.md
+  - tests/test_notification_one_shot.py
 maintenance: |
   Keep related paths real and the paired Anatomy reciprocal. Update schemas,
   model prose, manuals, results, lifecycle wiring, private summary engine, and
@@ -45,6 +47,8 @@ Guarded by: [K003](../../kernel/BEHAVIORS.md#behavior-k003)
 - `rebuild` — the **one active full context reconstruction operation**;
 - `manual` — return `context-manual` without a lifecycle operation.
 
+Ordinary molt/rebuild changes conversation context, not notification event lifecycle. Already delivered notification identity survives within the same agent process; failed/no-carrier attempts remain pending. New post-molt notices and new producer events still deliver. A new Agent/process restart starts fresh bookkeeping, not cross-crash exactly-once. The [Notification contract](../notification/CONTRACT.md) owns delivery.
+
 The implementation is an official declared host plugin: its static
 `DECLARATION` owns the identity, actions, schemas, and `context-manual`; its
 binder receives only `workdir` and `context_runtime`, whose three narrow
@@ -62,8 +66,8 @@ configurable prompt pairs.
 `psyche.name_set`, and every other old spelling fail as unknown actions: root
 reuse is not action compatibility. The lifecycle actions live here; name changes
 remain `system.name_set | system.name_nickname`. Pad body and LingTai identity
-mutation belong to `file.write | file.edit`; neither domain exposes a public
-mutating action.
+mutation happen through `shell` (verified exact edits on the source file);
+neither domain exposes a public mutating action.
 
 ## LTP v2 port
 
@@ -163,3 +167,8 @@ Evidence pins public action sets and strict retirement; file and append no-hot-
 load; bare zero-pending reconstruction; compose-before-summary-before-provider
 ordering (including provider replay observing the new prompt); all canonical
 durable sources; one shared refresh/molt hook; manual strictness; provider-wire parity; and existing molt refusal/lifecycle semantics.
+
+Successful agent/system molts also request the host's loaded-memory advisory at
+the shared post-molt publication boundary (see
+[Psyche loaded memory contract](../psyche/CONTRACT.md#loaded-memory-lifecycle-advisory)).
+Refused molts never reach this boundary; it performs no memory editing.

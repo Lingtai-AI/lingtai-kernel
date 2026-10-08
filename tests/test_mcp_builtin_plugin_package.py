@@ -8,7 +8,7 @@ import pytest
 from lingtai.agent import Agent
 from lingtai.services.plugin_registry import read_plugin
 from lingtai.tools.mcp import DECLARATION
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "src/lingtai/tools/mcp"
 _SKILL_ROOT = _PACKAGE_ROOT / "skills/mcp-manual"
@@ -29,7 +29,7 @@ def test_mcp_package_is_valid_and_owns_exactly_one_manual_skill():
 @pytest.fixture
 def mcp_agent(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="mcp-builtin-package",
         working_dir=tmp_path / "agent",
         capabilities={"mcp": {}},

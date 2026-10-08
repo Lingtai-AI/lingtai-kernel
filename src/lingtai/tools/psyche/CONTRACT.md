@@ -1,6 +1,6 @@
 ---
 name: psyche-tool-contract
-contract_version: 4
+contract_version: 6
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/psyche/ANATOMY.md
@@ -21,6 +21,8 @@ related_files:
   - src/lingtai/tools/knowledge/CONTRACT.md
   - src/lingtai/tools/skills/CONTRACT.md
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/psyche-manual/reference/settings/SKILL.md
+  - src/lingtai/intrinsic_skills/psyche-manual/reference/network-rules/SKILL.md
   - tests/test_psyche_family.py
   - tests/test_psyche_prompt_settings.py
   - tests/test_deep_refresh.py
@@ -51,11 +53,12 @@ contract exactly:
 
 > pad + lingtai + knowledge + skills = psyche
 
-It is a read-only manual router plus owner settings SHOW. Its five manual
+It is a read-only manual router plus current effective Covenant disclosure and
+owner settings SHOW. Its five manual
 actions teach the durable domains and routing model; its reserved `settings`
-action exposes exactly eight fully redacted Psyche-owned inputs: the existing
-Pad pair plus the three configurable system-prompt pairs. Psyche owns the
-small closed `settings/psyche.json` v1 document for those latter six fields.
+action exposes exactly six fully redacted Psyche-owned inputs: the existing
+Pad pair plus the two configurable system-prompt pairs. Psyche owns the
+small closed `settings/psyche.json` v1 document for those latter four fields.
 
 It replaces four former public roots (`pad`, `lingtai`, `knowledge`, `skills`) as
 a clean break. Those roots, the `pad.append` action, and the `skills.info` /
@@ -74,7 +77,7 @@ dissolved: its lifecycle actions moved to `context`
 
 Reusing the root name grants none of them, and the two cases are distinct:
 
-- **The eight old non-`manual` spellings are unknown actions.**
+- **The six old non-`manual` spellings are unknown actions.**
   `lingtai_update`, `lingtai_load`, `pad_edit`, `pad_load`, `pad_append`,
   `context_molt`, `name_set`, and `name_nickname` — together with the lifecycle
   verbs that now belong to `context` (`molt`, `summarize`, `rebuild`) — fail
@@ -95,20 +98,19 @@ new meaning.
 
 Psyche owns the pure composition input for the static `principle`, `substrate`,
 and `procedures` contributions. `compose_prompt_plan` reads the existing
-`PsychePromptInputs` once and packages those three ordered resident bodies plus
+`PsychePromptInputs` once and packages those three ordered loaded bodies plus
 their mirror metadata into one immutable `PromptPlan`. It does not write a
 mirror, mutate a prompt manager, own the kernel's raw first slot, change cache
 batches, or perform provider/session publication. The Agent resolves the full
 plan once before refresh teardown (or before an active/passive reconstruction
 transaction), carries that same object through the existing seam, and commits
 it only after the final flush succeeds. Packaged bodies retain the existing
-on-disk mirror fallback and frontmatter-stripping behavior; no public Psyche
-action or prompt body changes in this slice.
+on-disk mirror fallback and frontmatter-stripping behavior; the source owners stay separate while the renderer emits one short entry.
 
 ### The `substrate` prompt section keeps its kernel render mechanics
 
 The `substrate` *prompt section* (`lingtai/prompts/substrate/substrate.md` →
-`system/substrate.md`) keeps its name, content, and render order. Its static
+`system/substrate.md`) keeps its name, complete loaded content, and mirror. Its static
 source contribution is carried by the Psyche plan, while the kernel retains the
 render slot and cache mechanics. This family briefly carried the name `substrate`
 as a public root; that root is gone, and nothing keys the two namespaces together.
@@ -119,6 +121,17 @@ Agents MUST treat every `psyche` action as read-only. No action authors,
 edits, pins, installs, migrates, rescans a catalog, writes a prompt or source
 file, or reloads prompt state.
 
+`covenant` returns the current effective loaded body verbatim (including custom
+owner-file resolution or durable mirror fallback), or an empty string when none
+is loaded. It MUST NOT reread ambient sources, return an installed default, or
+trigger reconstruction. BaseAgent initial loading and Agent reconstruction retain
+the complete body outside the resident prompt and merge the protected
+Covenant route into the single resident entry. Load it on first orientation and for duties, collaboration,
+learning, or memory discussions, not on every call. Failed reconstruction restores
+the previous loaded body along with the rest of the applied generation. The
+configured source, durable fulltext mirror, override precedence, and Avatar
+inheritance remain intact; daemon's separate surface still excludes Psyche.
+
 The static prompt plan is an internal composition boundary, not a new action.
 Its section tuple is ordered and immutable, and a reconstruction MUST apply the
 same candidate that was resolved before the seam began. A failed final flush
@@ -127,7 +140,7 @@ sections, configurable prompt mirrors, and SHOW.
 
 `settings` MUST report the applied snapshot consumed by the last successful
 canonical reconstruction and return exactly `pad`, `pad_file`, `base_prompt`,
-`base_prompt_file`, `covenant`, `covenant_file`, `comment`, then `comment_file`.
+`base_prompt_file`, `covenant`, `covenant_file`.
 Ambient edits to init, Pad, or the owner document MUST NOT change SHOW until
 active or passive reconstruction successfully consumes them; a malformed owner
 document or a failed reconstruction MUST leave the prior SHOW available.
@@ -139,19 +152,20 @@ MUST restore the prior prompt-manager sections, wrapper base prompt,
 base/covenant and system mirrors, and SHOW together, so a rejected generation
 cannot be rebuilt or resurrected through later mirror fallback.
 Each row MUST project exactly `key`, `current`, `default`, `configurable`, and
-`comment` in that order. The current and default values of all eight rows MUST
+`comment` in that order. The current and default values of all six rows MUST
 be fully redacted, including empty and null defaults. A provider/snapshot/row
 failure MUST return
 the generic fixed `SETTINGS_UNAVAILABLE` result with no partial inventory or
 exception text. The complete response MUST remain subject to the generic
 incremental 65,536-byte UTF-8 bound.
 
-To change a durable source, an agent MUST use the generic text operations —
-`file.write` for a full create/overwrite, `file.edit` for exact replacement — on
-that domain's own source, and then apply the change with one explicit
-`context(action="rebuild", input={}, reasoning="...")` or let passive
-refresh/molt reconstruction apply it.
-File mutation never hot-loads the prompt.
+To change a durable source, an agent MUST use `shell` on that domain's own
+source — anchor the authorized working directory, precondition an exact
+replacement (verify the old text exists exactly once before replacing), and
+read the file back to verify the mutation — and then apply the change with one
+explicit `context(action="rebuild", input={}, reasoning="...")` or let passive
+refresh/molt reconstruction apply it. Filesystem mutation never hot-loads the
+prompt.
 
 Agents SHOULD read the relevant domain manual before acting on a domain they do
 not already know, and SHOULD leave root `summarize` false so exact procedure and
@@ -173,12 +187,14 @@ and `reasoning` are required. The public action inventory is exactly:
 | `lingtai` | strict empty `{}` | same shape — `lingtai-manual` |
 | `knowledge` | strict empty `{}` | same shape — the installed knowledge manual |
 | `skills` | strict empty `{}` | same shape — the installed skills manual |
-| `settings` | strict empty `{}` | exact `{settings: [...]}` inventory with eight fully redacted five-field rows |
+| `instructions` | strict empty `{}` | `{status: "ok", instructions: <current loaded fixed bodies>}`; no source reread |
+| `covenant` | strict empty `{}` | `{status: "ok", covenant: <current loaded body>}`; not a generic manual |
+| `settings` | strict empty `{}` | exact `{settings: [...]}` inventory with six fully redacted five-field rows |
 | `manual` | strict empty `{}` | same shape — `psyche-manual`, the routing table |
 
 Every call carries required root `action`, `input`, and `reasoning`; a public
 call is spelled `psyche(action="<domain>", input={}, reasoning="...")`. All
-six children share one strict-empty `input` schema, so every `input` key is an
+eight children share one strict-empty `input` schema, so every `input` key is an
 unknown key. Unknown or missing actions, any `input` key, non-object `input`,
 unknown root fields, and a non-boolean root `summarize` fail with the LTP v2
 envelope errors before any file is read. Root `summarize`, `reasoning`, and the
@@ -196,9 +212,10 @@ dispatch in this package's own Host layer, per the no-double-wrap rule.
 Schema composition opts in with an inert callable so the reserved `settings`
 child is injected immediately before `manual`. The static `DECLARATION` binds
 only `workdir` and `PsycheSettingsPort`; the provider reads the Agent-owned
-applied eight-value snapshot through that one read-only operation, copies and
-validates its eight structural scalar fields, and performs no file I/O or Agent
-access. Agent reconstruction consumes one immutable Psyche prompt plan, uses the
+applied six-value snapshot through that one read-only operation, copies and
+validates its six structural scalar fields, and performs no file I/O or Agent
+access. The same narrow Port additionally reads only the current loaded Covenant
+body; it exposes no general prompt/configuration access. Agent reconstruction consumes one immutable Psyche prompt plan, uses the
 existing prompt file-over-inline helper, then publishes the replacement plan and
 snapshot only after the successful final prompt flush.
 
@@ -217,10 +234,10 @@ Neither the binder nor settings provider receives an Agent.
 
 - Schema and dispatch derive from the same fixed child registry; the advertised
   action enum cannot drift from the dispatch keys.
-- The exact action order is `pad | lingtai | knowledge | skills | settings |
-  manual`; the reserved settings action is immediately before `manual`.
+- The exact action order is `pad | lingtai | knowledge | skills | instructions | covenant |
+  settings | manual`; the reserved settings action is immediately before `manual`.
 - Every child is mutation-free. A future mutating action does not belong in this
-  family; durable mutation has exactly one owner, `file`.
+  family; durable mutation happens through `shell`, never through Psyche.
 - The four domain actions load the domains' existing manuals as progressively
   disclosed references. This router MUST NOT copy those manual bodies inline.
 - Catalog composition, configured Skills paths, disabled-domain behavior, and the
@@ -247,11 +264,9 @@ Neither the binder nor settings provider receives an Agent.
     redacted, anchors `#setting-base-prompt` / `#setting-base-prompt-file`.
   - `covenant` / `covenant_file`: defaults `""` / `null`, fully redacted,
     anchors `#setting-covenant` / `#setting-covenant-file`.
-  - `comment` / `comment_file`: defaults `""` / `null`, fully redacted,
-    anchors `#setting-comment` / `#setting-comment-file`.
 - `settings/psyche.json` is optional; when present it is a bounded (64 KiB),
   stable-read UTF-8 JSON object with exact integer `schema_version: 1`, no
-  duplicate/unknown keys, and optional string-only six fields. A non-regular or
+  duplicate/unknown keys, and optional string-only four fields. A non-regular or
   symlink document, invalid bytes/JSON/schema, read race, or I/O failure raises
   one typed Psyche settings error before prompt publication. It has no
   environment layer, mutation action, migration, or writeback.
@@ -265,10 +280,10 @@ Neither the binder nor settings provider receives an Agent.
 python -m pytest -q tests/test_psyche_family.py tests/test_psyche_prompt_settings.py
 ```
 
-These pin the exact six-action inventory and order; strict-empty input on every
+These pin the exact eight-action inventory and order; strict-empty input on every
 child; strict bounded owner parsing and file-over-inline resolution; ambient
 edit isolation; last-good preservation after failed reconstruction; exact
-five-field projection, eight-row order, defaults, anchors, and full redaction;
+five-field projection, six-row order, defaults, anchors, and full redaction;
 whole-inventory failure;
 missing/empty-only Pad seeding; unchanged manual routing; no action mutation;
 the absence of old roots/actions; and both provider wire shapes. The shared
@@ -283,3 +298,35 @@ tests. Update the Port, this contract, the manual, and the tests together when
 the action inventory or the read-only promise changes; update the paired Anatomy
 when structure changes. Follow the root Anatomy/Contract pairing and ownership
 rules, report mismatches, and do not duplicate or auto-fix the rule here.
+
+## Unified fixed entry and retirement
+
+The kernel renderer projects the loaded `principle`, Covenant route, `substrate`,
+`procedures`, and assembled `meta_guidance` into one short resident entry.
+Internal source owners, protected stored bodies, packaged mirrors/fallback,
+transactional rollback, and two cache batches remain intact. `base_prompt` stays
+resident immediately after that entry; catalogs, identity, character and Pad
+remain separate dynamic owners. No generic section selector or opt-out exists.
+
+`instructions` takes strict empty input and returns `{status: "ok", instructions:
+<current loaded fixed bodies>}` through `PsycheSettingsPort.read_instructions`.
+It performs no disk I/O, reconstruction, or mutation. Read it on first orientation
+and before unfamiliar/consequential work. Its runtime guidance includes the
+current adapter's contribution with that adapter still owning the source.
+`covenant` continues to return the full effective body independently.
+
+`comment` and `comment_file` are unknown owner fields. Old configs must remove
+these keys and put desired working instructions in Pad through authorized edits.
+Neither `.rules` nor `system/rules.md` is read, consumed or injected; old files
+remain untouched. Pad is writable working memory, not security enforcement.
+
+## Loaded memory lifecycle advisory
+
+The host measures loaded Pad (including pins) plus Character after successful
+molt or CLI refresh relaunch/start. A threshold warning is advisory, at most once
+per lifecycle identity, not a heartbeat/turn producer. At/below the threshold,
+the next successful check clears its current notification and preserves event
+history. Initial startup/rebuild do not warn and no content is automatically
+changed. Effective environment threshold discovery uses System settings, not a
+new Psyche setting. The [Psyche manual](../../intrinsic_skills/psyche-manual/SKILL.md#loaded-memory-length-reminder)
+teaches the counts and safe response.

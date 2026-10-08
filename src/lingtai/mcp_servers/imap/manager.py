@@ -215,19 +215,15 @@ SCHEMA = {
 }
 
 DESCRIPTION = (
-    "Real email via IMAP/SMTP with multi-account support. Safe first route: "
-    "use check/search, then read the returned email_id before deciding whether "
-    "to reply. send and reply deliver real external mail; verify recipients "
-    "including cc/bcc and the body immediately before calling. External replies "
-    "require the standing reply policy or confirmation that the sender is the "
-    "same human who contacted you through an internal channel. Email IDs use "
-    "account:folder:uid; account defaults when omitted, blank check/search "
-    "folders mean INBOX, and move requires a non-empty destination. delete, "
-    "move, and flag mutate mailbox state; inspect errors and delivery status. "
-    "MCP ownership: this addon is managed by the orchestrator; avatars must not "
-    "configure it. Call imap(action=\"manual\", input={}, reasoning=\"read "
-    "IMAP guidance\") for attachments, settings, configuration, contacts, and "
-    "deeper operation detail."
+    "Real IMAP/SMTP email. First read: check/search, then read the returned "
+    "compound email_id. send/reply deliver real mail; verify to/cc/bcc and body. "
+    "External replies require standing policy or confirmation the sender is the "
+    "same human who contacted you internally. "
+    "Blank check/search folders mean INBOX; account defaults when omitted; move "
+    "needs a destination; delete/move/flag mutate mailbox state. Inspect status/"
+    "errors. The orchestrator owns this addon; avatars must not configure it. "
+    "Read imap(action=\"manual\", input={}, reasoning=\"read IMAP guidance\") "
+    "for attachments, settings, contacts, configuration, and deeper detail."
 )
 
 # Public callers receive the strict LTP-v2 family schema. Manager dispatch
@@ -389,12 +385,15 @@ class IMAPMailManager:
     # ------------------------------------------------------------------
 
     def on_imap_received(self, payload: dict) -> None:
-        """Handle incoming email from an account. Forward to host via LICC.
+        """Forward an incoming email to the host over LICC.
 
-        Body sent to the host is a preview (~300 chars) — agents call
-        ``imap(action="read", email_id=...)`` to fetch the full message.
-        Routing keys travel in metadata so the agent can act on them
-        without parsing the notification text.
+        The listener (``account.py``) fetches headers only, so ``payload``
+        has no ``message`` key today and the pushed body/truncation fields
+        stay empty/``0``/``False`` — content is genuinely absent, not short.
+        ``message`` handling stays for a future body-bearing producer. The
+        compound ``email_id`` is already known here, so it also travels as
+        routing metadata (``platform``/``conversation_ref``/``message_ref``);
+        see SKILL.md/operation-contract.md for the full agent-facing contract.
         """
         account_addr = payload.get("account", "")
         email_id = payload.get("email_id", "")
@@ -421,6 +420,9 @@ class IMAPMailManager:
                     "account": account_addr,
                     "preview_truncated": len(message) > 300,
                     "full_length": len(message),
+                    "platform": "imap",
+                    "conversation_ref": account_addr,
+                    "message_ref": email_id,
                 },
                 "wake": True,
             })

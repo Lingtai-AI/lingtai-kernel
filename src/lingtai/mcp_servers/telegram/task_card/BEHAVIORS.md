@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-behavior-tests
-behavior_version: 2
+behavior_version: 3
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -19,8 +19,9 @@ maintenance: |
 
 Self-contained agent behavior tasks guarding the observable behavior clauses of
 `src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md` (programmable body
-only when status is exactly active and nonempty; diff-only projection;
-no-op preservation; automatic per-call token metrics). Pinned pytest commands
+only when status is exactly active and nonempty; safe Markdown rendering;
+diff-only projection; no-op preservation; automatic per-call token metrics).
+Pinned pytest commands
 must run from the repo root with
 the project's Python.
 
@@ -29,7 +30,7 @@ the project's Python.
 - **id**: TT001
 - **title**: the programmable frame is composed only for exact active with a nonempty body, and diff-only updates suppress transport churn
 - **guards**: `telegram-task-card-projection` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` with `taskcard/status` and `taskcard/taskcard.md`
 - **estimate**: ≈ 20 minutes
 
@@ -59,11 +60,17 @@ Pass when the suite passes and the active/diff-only observations hold. Fail on p
 1. From `<repo>`, run `python -m pytest tests/test_telegram_task_card_event_tail.py -q` and capture the outcome.
 2. Project one tool-call group whose notification carrier reports `current_call.output`, `current_call.thinking`, cache miss/rate, and session context.
 3. Project one pure-text group whose `llm_response` reports `output_tokens` and `thinking_tokens`, then repeat without a thinking field.
+4. Project text, tool-only and mixed `llm_response.stream_timing` with first actual output 1.2s, generation interval 4s and 180 non-reasoning output tokens; then omit timing or final usage.
+
+5. Replay and live-append measured IDLE intervals between progress rows, then tool-only, missing-field, ASLEEP and restart-crossing gaps.
 
 ### Expected evidence
 - [ ] Step 1: the automatic event-tail suite passes.
 - [ ] Step 2: the divider contains `↓<output> (<thinking>) ↑<cache-miss>` with compact counts, while `_usage` remains private projection state.
 - [ ] Step 3: the `llm_response` fallback renders the same parenthesized form; an old event without thinking tokens preserves the prior output/cache/context line with no dangling parentheses.
+- [ ] Step 4: time and speed occupy their own line (`↻12.4s · ⚡1.2s · 45 tok/s`), token symbols remain on the next line; unavailable evidence omits the new metric, never inferred zero.
+
+- [ ] Step 5: only complete IDLE evidence adds `☕X.Ys` on the first line; gap, first-output and speed values stay unchanged; unknown coverage omits coffee.
 
 ### Pass / Fail
 Pass when both normalized usage paths render the same parenthesized reasoning count immediately after output and legacy missing-field input remains unchanged. Fail if the count is misplaced, reasoning text is exposed, or missing/malformed data leaves a dangling marker.
@@ -89,3 +96,25 @@ Pass when both normalized usage paths render the same parenthesized reasoning co
 
 ### Pass / Fail
 Pass when only fully correlated existing data produces the second line in the required order and all unsafe/malformed cases omit it. Fail if a new producer event is required, more than the bounded ledger tail is read, an unsuccessful tool receives a summary line, or private payload fields render.
+
+## Behavior TT004 — Markdown-authored programmable content renders safely inside the complete Telegram resident
+
+- **id**: TT004
+- **title**: Markdown-authored programmable content renders safely inside the complete Telegram resident
+- **guards**: `telegram-task-card-projection` § Behavior rule 13 and Contract rule 14
+- **runner**: any LingTai agent with `shell` access to this repository
+- **prerequisites**: a clean checkout of `<repo>`
+- **estimate**: ≈ 2 minutes
+
+### Steps
+1. From `<repo>`, run `python -m pytest tests/test_telegram_task_card_programmable.py -q` and capture the outcome.
+2. Project an active `taskcard/taskcard.md` body containing ATX heading and subheading lines, `**bold**`, inline backtick code, nested unordered/task-list items, and an ordered item onto a resident that already has automatic content.
+3. Repeat with raw HTML, `<`, `>`, `&`, and unmatched bold/backtick delimiters; inspect both the provider text and the shared resident slot.
+
+### Expected evidence
+- [ ] Step 1: the programmable projection suite passes.
+- [ ] Step 2: the complete provider message retains automatic content and its Telegram HTML header, while the programmable heading markers, strong delimiters, backticks, and unordered markers are replaced by supported rendered HTML/bullets under `parse_mode=HTML`.
+- [ ] Step 3: raw HTML and special characters are escaped, generated tags remain balanced, malformed delimiters remain literal text, and the shared programmable slot still equals the exact authored Markdown bytes.
+
+### Pass / Fail
+Pass when supported Markdown renders without visible source markers, unsafe input cannot become provider markup, malformed input cannot unbalance generated HTML, and raw slot/diff-only state is unchanged. Fail on literal markers for supported syntax, HTML injection, malformed generated tags, any change to ordinary Telegram rendering, or mutation of the authored resident slot.

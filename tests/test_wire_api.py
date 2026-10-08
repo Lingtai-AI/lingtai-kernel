@@ -1,4 +1,9 @@
-"""Regression tests for the canonical ``wire_api`` OpenAI wire selector."""
+"""Regression tests for the ``openai`` provider's ``wire_api`` selector.
+
+``wire_api`` selects ``chat_completions`` (default) or ``responses``; the
+legacy value ``auto`` is accepted and means the same as omitting it. The
+selector belongs to the ``openai`` provider only.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +14,6 @@ import pytest
 
 from lingtai.init_schema import validate_init
 from lingtai.llm._register import register_all_adapters
-from lingtai.llm.custom.adapter import create_custom_adapter
 from lingtai.llm.openai.adapter import OpenAIAdapter
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 
@@ -48,26 +52,14 @@ def test_schema_rejects_non_string_wire_api_value():
         validate_init(_minimal_init({"wire_api": 123}))
 
 
-@pytest.mark.parametrize("provider", ["anthropic", "gemini", "minimax", "claude-code", "codex", "codex-pool"])
+@pytest.mark.parametrize("provider", ["anthropic", "claude-code", "codex"])
 def test_schema_rejects_non_auto_wire_api_for_non_openai_providers(provider):
-    with pytest.raises(ValueError, match="OpenAI-compatible"):
+    with pytest.raises(ValueError, match="only for provider openai"):
         validate_init(_minimal_init({"provider": provider, "wire_api": "responses"}))
 
 
-def test_schema_rejects_non_auto_wire_api_for_custom_anthropic_compat():
-    with pytest.raises(ValueError, match="OpenAI-compatible"):
-        validate_init(_minimal_init({
-            "provider": "custom",
-            "api_compat": "anthropic",
-            "base_url": "https://bedrock.example",
-            "wire_api": "responses",
-        }))
-
-
-def test_schema_allows_wire_api_for_custom_openai_compat():
+def test_schema_allows_wire_api_for_compatible_openai_endpoint():
     validate_init(_minimal_init({
-        "provider": "custom",
-        "api_compat": "openai",
         "base_url": "https://openrouter.ai/api/v1",
         "wire_api": "responses",
     }))
@@ -114,21 +106,14 @@ def _both_client():
     return client
 
 
-def test_openai_defaults_metadata_auto_delegates_to_legacy_responses():
-    """Consumers that inject ``openai/defaults.py`` retain its legacy preference.
-
-    The metadata carries both ``use_responses_api=True`` and ``wire_api="auto"``;
-    the canonical selector delegates to the legacy flag. Bare service/adapter
-    construction does not load this mapping and is covered separately below.
-    """
+def test_openai_defaults_metadata_selects_chat_completions():
     from lingtai.llm.openai.defaults import DEFAULTS
 
     register_all_adapters()
     factory = LLMService._adapter_registry["openai"]
     adapter = factory(model="gpt-5.5", defaults=DEFAULTS, api_key="fake")
-    assert adapter._use_responses is True
-    assert adapter._wire_api == "auto"
-    assert adapter._should_use_responses() is True
+    assert adapter._wire_api == "chat_completions"
+    assert adapter._should_use_responses() is False
 
 
 def test_bare_adapter_constructor_keeps_chat_completions():
@@ -137,55 +122,50 @@ def test_bare_adapter_constructor_keeps_chat_completions():
 
 
 def test_bare_llm_service_keeps_chat_completions():
-    """The runtime service does not implicitly load ``openai/defaults.py``."""
     register_all_adapters()
     service = LLMService(provider="openai", model="gpt-5.5", api_key="fake")
     adapter = service.get_adapter("openai")
-    assert adapter._wire_api == "auto"
-    assert adapter._use_responses is False
+    assert adapter._wire_api == "chat_completions"
     assert adapter._should_use_responses() is False
 
 
-def test_auto_custom_base_url_uses_chat_completions():
-    """Custom OpenAI-compatible endpoints fall back to Chat Completions."""
-    adapter = OpenAIAdapter(api_key="fake", base_url="https://custom.example/v1")
-    assert adapter._should_use_responses() is False
+@pytest.mark.parametrize("base_url", [None, "https://custom.example/v1"])
+def test_omitted_and_legacy_auto_select_chat_completions_for_every_endpoint(base_url):
+    """Neither an official nor a compatible endpoint implies a wire."""
+    omitted = OpenAIAdapter(api_key="fake", base_url=base_url)
+    auto = OpenAIAdapter(api_key="fake", base_url=base_url, wire_api="auto")
+    assert omitted._should_use_responses() is False
+    assert auto._should_use_responses() is False
+    assert auto._wire_api == "chat_completions"
 
 
-def test_auto_with_use_responses_and_no_base_url_uses_responses():
-    """Legacy ``use_responses=True`` without a custom base_url selects Responses."""
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+@pytest.mark.parametrize("base_url", [None, "https://custom.example/v1"])
+def test_wire_api_responses_selects_responses_for_every_endpoint(base_url):
+    adapter = OpenAIAdapter(api_key="fake", base_url=base_url, wire_api="responses")
     assert adapter._should_use_responses() is True
 
 
-def test_auto_with_force_responses_and_base_url_uses_responses():
-    """Legacy ``force_responses=True`` allows Responses even with a custom base_url."""
-    adapter = OpenAIAdapter(
-        api_key="fake",
-        base_url="https://custom.example/v1",
-        use_responses=True,
-        force_responses=True,
-    )
-    assert adapter._should_use_responses() is True
+def test_adapter_rejects_unknown_wire_api():
+    with pytest.raises(ValueError, match="wire_api"):
+        OpenAIAdapter(api_key="fake", wire_api="grpc")
 
 
-def test_wire_api_responses_overrides_chat_default():
-    adapter = OpenAIAdapter(
-        api_key="fake",
-        base_url="https://custom.example/v1",
-        wire_api="responses",
-    )
-    assert adapter._should_use_responses() is True
+def test_adapter_no_longer_accepts_legacy_wire_flags():
+    for legacy in ("use_responses", "force_responses", "responses_stateless_replay",
+                   "reasoning_effort_vocab", "reasoning_policy"):
+        with pytest.raises(TypeError):
+            OpenAIAdapter(api_key="fake", **{legacy: True})
 
 
-def test_wire_api_chat_completions_overrides_responses_default():
-    adapter = OpenAIAdapter(
-        api_key="fake",
-        use_responses=True,
-        force_responses=True,
-        wire_api="chat_completions",
-    )
-    assert adapter._should_use_responses() is False
+def test_openai_default_endpoint_is_official():
+    from lingtai.llm.openai.adapter import OPENAI_OFFICIAL_BASE_URL
+
+    assert OPENAI_OFFICIAL_BASE_URL == "https://api.openai.com/v1"
+    adapter = OpenAIAdapter(api_key="fake")
+    assert adapter.base_url is None
+    assert adapter.effective_base_url == OPENAI_OFFICIAL_BASE_URL
+    compat = OpenAIAdapter(api_key="fake", base_url="https://custom.example/v1")
+    assert compat.effective_base_url == "https://custom.example/v1"
 
 
 def test_codex_factory_is_unaffected_by_wire_api_in_defaults():
@@ -195,27 +175,13 @@ def test_codex_factory_is_unaffected_by_wire_api_in_defaults():
 
     register_all_adapters()
     factory = LLMService._adapter_registry["codex"]
-    # Even an explicit non-auto value in defaults must be ignored by the Codex
-    # factory — it never forwards wire_api to CodexOpenAIAdapter.
     adapter = factory(
         model="gpt-5.5",
         defaults={"wire_api": "chat_completions"},
         api_key="fake",
     )
     assert isinstance(adapter, CodexOpenAIAdapter)
-    # Codex is forcibly on Responses; its constructor default leaves _wire_api
-    # at ``auto`` because the factory does not pass wire_api through.
-    assert adapter._wire_api == "auto"
-    assert adapter._should_use_responses() is True
-
-
-def test_wire_api_auto_preserves_legacy_responses_preference():
-    adapter = OpenAIAdapter(
-        api_key="fake",
-        use_responses=True,
-        force_responses=True,
-        wire_api="auto",
-    )
+    assert adapter._wire_api == "responses"
     assert adapter._should_use_responses() is True
 
 
@@ -240,11 +206,7 @@ def test_custom_base_url_responses_creates_responses_session():
 
 
 def test_chat_completions_explicit_creates_chat_session():
-    adapter = OpenAIAdapter(
-        api_key="fake",
-        use_responses=True,
-        wire_api="chat_completions",
-    )
+    adapter = OpenAIAdapter(api_key="fake", wire_api="chat_completions")
     adapter._client = _both_client()
     session = adapter.create_chat("gpt-5.5", "system prompt")
 
@@ -254,7 +216,7 @@ def test_chat_completions_explicit_creates_chat_session():
     assert adapter._client.responses.create.called is False
 
 
-def test_auto_custom_base_url_creates_chat_session():
+def test_omitted_wire_on_compatible_base_url_creates_chat_session():
     adapter = OpenAIAdapter(api_key="fake", base_url="https://custom.example/v1")
     adapter._client = _both_client()
     session = adapter.create_chat("gpt-5.5", "system prompt")
@@ -266,18 +228,17 @@ def test_auto_custom_base_url_creates_chat_session():
 
 
 # ---------------------------------------------------------------------------
-# v1 Chat Completions reasoning projection
+# Standard ``thinking`` passthrough on both wires
 # ---------------------------------------------------------------------------
-# The Responses semantics are canonical (``reasoning.effort`` verbatim,
-# omitted/default -> explicit ``xhigh``); the Chat Completions wire is a
-# projection of that vocabulary onto ``reasoning_effort``.
+# ``thinking`` is sent verbatim as the standard field: Chat Completions
+# ``reasoning_effort`` and Responses ``reasoning: {effort}``; the omitted /
+# ``default`` sentinel sends no field so the endpoint's own default applies.
+
+_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 
-def _chat_session_kwargs(*, thinking=None, reasoning_effort_vocab=None):
-    kwargs = {"api_key": "fake", "base_url": "https://custom.example/v1"}
-    if reasoning_effort_vocab is not None:
-        kwargs["reasoning_effort_vocab"] = reasoning_effort_vocab
-    adapter = OpenAIAdapter(**kwargs)
+def _chat_session_kwargs(*, thinking=None):
+    adapter = OpenAIAdapter(api_key="fake", base_url="https://custom.example/v1")
     adapter._client = _both_client()
     session = adapter.create_chat(
         "gpt-5.5", "system prompt", thinking=thinking or "default"
@@ -286,59 +247,53 @@ def _chat_session_kwargs(*, thinking=None, reasoning_effort_vocab=None):
     return adapter._client.chat.completions.create.call_args.kwargs
 
 
-@pytest.mark.parametrize(
-    ("thinking", "expected"),
-    [
-        ("minimal", "minimal"),
-        ("low", "low"),
-        ("medium", "medium"),
-        ("high", "high"),
-        ("xhigh", "high"),  # OpenAI v1 has no xhigh; clamp to the v1 ceiling
-        ("max", "high"),
-    ],
-)
-def test_chat_completions_projects_explicit_thinking(thinking, expected):
-    """Explicit levels project faithfully onto the v1 ``reasoning_effort``
-    field (the old mapping collapsed every non-high level to ``low``)."""
-    assert _chat_session_kwargs(thinking=thinking)["reasoning_effort"] == expected
+def _responses_session_kwargs(*, thinking=None, base_url=None):
+    adapter = OpenAIAdapter(api_key="fake", base_url=base_url, wire_api="responses")
+    adapter._client = _both_client()
+    session = adapter.create_chat(
+        "gpt-5.5", "system prompt", thinking=thinking or "default"
+    )
+    session.send("hello")
+    return adapter._client.responses.create.call_args.kwargs
+
+
+@pytest.mark.parametrize("thinking", _LEVELS)
+def test_chat_completions_sends_thinking_verbatim(thinking):
+    assert _chat_session_kwargs(thinking=thinking)["reasoning_effort"] == thinking
 
 
 @pytest.mark.parametrize("thinking", [None, "default"])
 def test_chat_completions_omits_reasoning_effort_on_default(thinking):
-    """OpenAI v1 has no ``xhigh``; the omitted/``default`` sentinel omits the
-    field so the upstream v1 default applies (the graceful v1 projection of
-    the Responses xhigh default)."""
     assert "reasoning_effort" not in _chat_session_kwargs(thinking=thinking)
 
 
-def test_chat_completions_none_omits_reasoning_effort():
-    """``none`` means no reasoning; on v1 there is no ``none`` effort, so the
-    field is omitted."""
-    assert "reasoning_effort" not in _chat_session_kwargs(thinking="none")
+@pytest.mark.parametrize("thinking", _LEVELS)
+@pytest.mark.parametrize("base_url", [None, "https://custom.example/v1"])
+def test_responses_sends_thinking_verbatim(thinking, base_url):
+    kwargs = _responses_session_kwargs(thinking=thinking, base_url=base_url)
+    assert kwargs["reasoning"] == {"effort": thinking}
+    assert "reasoning_effort" not in kwargs
 
 
-def test_chat_completions_rejects_invalid_thinking():
+@pytest.mark.parametrize("thinking", [None, "default"])
+def test_responses_omits_reasoning_on_default(thinking):
+    assert "reasoning" not in _responses_session_kwargs(thinking=thinking)
+
+
+@pytest.mark.parametrize("wire", ["chat_completions", "responses"])
+def test_invalid_thinking_is_rejected_on_both_wires(wire):
+    adapter = OpenAIAdapter(api_key="fake", wire_api=wire)
     with pytest.raises(ValueError, match="thinking must be one of"):
-        _chat_session_kwargs(thinking="ultra")
+        adapter.create_chat("gpt-5.5", "system prompt", thinking="ultra")
 
 
-def test_chat_completions_seven_tier_projects_xhigh_default():
-    """The retained generic ``seven_tier`` compatibility vocabulary projects
-    the Responses xhigh default explicitly instead of omitting it."""
-    kwargs = _chat_session_kwargs(
-        thinking="default", reasoning_effort_vocab="seven_tier"
-    )
-    assert kwargs["reasoning_effort"] == "xhigh"
+def test_codex_keeps_its_explicit_xhigh_default():
+    """Only Codex substitutes an explicit ``xhigh`` for the omitted default."""
+    from lingtai.llm.openai.adapter import _responses_reasoning_kwargs
 
-
-@pytest.mark.parametrize(
-    "thinking", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
-)
-def test_chat_completions_seven_tier_passes_levels_verbatim(thinking):
-    kwargs = _chat_session_kwargs(
-        thinking=thinking, reasoning_effort_vocab="seven_tier"
-    )
-    assert kwargs["reasoning_effort"] == thinking
+    assert _responses_reasoning_kwargs("default") == {}
+    assert _responses_reasoning_kwargs(None) == {}
+    assert _responses_reasoning_kwargs("low") == {"reasoning": {"effort": "low"}}
 
 
 # ---------------------------------------------------------------------------
@@ -410,36 +365,26 @@ def test_openai_factory_passes_wire_api_from_defaults():
     assert adapter._wire_api == "responses"
 
 
-def test_openai_factory_legacy_use_responses_api_still_works():
+def test_openai_factory_ignores_legacy_use_responses_api():
+    """``use_responses_api`` is a recognized-and-ignored legacy manifest key:
+    it no longer selects a wire."""
     register_all_adapters()
-    factory = LLMService._adapter_registry["openai"]
-    adapter = factory(
-        model="gpt-5.5",
-        defaults={"use_responses_api": True},
-        api_key="fake",
+    defaults = build_provider_defaults_from_manifest_llm(
+        {"provider": "openai", "model": "gpt-5.5", "use_responses_api": True},
+        max_rpm=0,
     )
-    assert adapter._use_responses is True
-    assert adapter._should_use_responses() is True
-
-
-def test_openai_factory_wire_api_wins_over_legacy_use_responses_api():
-    register_all_adapters()
+    assert defaults is None
     factory = LLMService._adapter_registry["openai"]
-    adapter = factory(
-        model="gpt-5.5",
-        defaults={"wire_api": "chat_completions", "use_responses_api": True},
-        api_key="fake",
-    )
-    assert adapter._wire_api == "chat_completions"
+    adapter = factory(model="gpt-5.5", defaults={}, api_key="fake")
     assert adapter._should_use_responses() is False
 
 
-def test_custom_factory_passes_wire_api_for_openai_compat():
+def test_openai_factory_passes_wire_api_for_compatible_endpoint():
     register_all_adapters()
-    factory = LLMService._adapter_registry["custom"]
+    factory = LLMService._adapter_registry["openai"]
     adapter = factory(
         model="gpt-5.5",
-        defaults={"api_compat": "openai", "wire_api": "responses"},
+        defaults={"wire_api": "responses"},
         api_key="fake",
         base_url="https://openrouter.ai/api/v1",
     )
@@ -561,53 +506,6 @@ def test_safe_llm_from_service_does_not_surface_wire_api():
 
 
 # ---------------------------------------------------------------------------
-# Custom adapter scoping / non-OpenAI misuse
-# ---------------------------------------------------------------------------
-
-
-def test_custom_adapter_openai_compat_honors_legacy_responses_flags():
-    """When wire_api is absent, create_custom_adapter still honors legacy flags."""
-    adapter = create_custom_adapter(
-        api_key="fake",
-        api_compat="openai",
-        base_url="https://custom.example/v1",
-        use_responses=True,
-        force_responses=True,
-    )
-    assert adapter._should_use_responses() is True
-
-
-def test_custom_adapter_rejects_non_auto_wire_api_for_anthropic():
-    with pytest.raises(ValueError, match="OpenAI-compatible"):
-        create_custom_adapter(
-            api_key="fake",
-            api_compat="anthropic",
-            base_url="https://bedrock.example",
-            wire_api="responses",
-        )
-
-
-def test_custom_adapter_allows_auto_wire_api_for_anthropic():
-    """wire_api=auto is harmless for non-OpenAI compat and should be ignored."""
-    adapter = create_custom_adapter(
-        api_key="fake",
-        api_compat="anthropic",
-        base_url="https://bedrock.example",
-        wire_api="auto",
-    )
-    assert not hasattr(adapter, "_wire_api")
-
-
-def test_custom_adapter_rejects_non_auto_wire_api_for_gemini():
-    with pytest.raises(ValueError, match="OpenAI-compatible"):
-        create_custom_adapter(
-            api_key="fake",
-            api_compat="gemini",
-            wire_api="chat_completions",
-        )
-
-
-# ---------------------------------------------------------------------------
 # Daemon preset propagation
 # ---------------------------------------------------------------------------
 
@@ -617,9 +515,8 @@ def test_daemon_llm_defaults_from_manifest_retains_wire_api():
 
     # _llm_defaults_from_manifest is a static method; no instance needed.
     llm = {
-        "provider": "custom",
+        "provider": "openai",
         "model": "gpt-5.5",
-        "api_compat": "openai",
         "base_url": "https://openrouter.ai/api/v1",
         "wire_api": "responses",
         "max_rpm": 60,

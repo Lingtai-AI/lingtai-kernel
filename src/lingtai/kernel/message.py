@@ -13,8 +13,8 @@ MSG_USER_INPUT = "user_input"
 # turn receipt. It is intentionally not included in text-message concatenation.
 MSG_CORRELATED_TURN = "correlated_turn"
 # Sentinel — no payload; just unblocks inbox.get() so the run loop can pick
-# up a queued involuntary tool-call pair from tc_inbox. Used for soul flow
-# and system notifications (mail arrival, bounce, future MCP listeners).
+# up a queued involuntary tool-call pair from tc_inbox. Used for system
+# notifications (mail arrival, bounce, future MCP listeners).
 MSG_TC_WAKE = "tc_wake"
 
 # The closed set of message kinds accepted by the BaseAgent inbox.  Turn

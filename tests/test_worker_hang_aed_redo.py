@@ -33,10 +33,9 @@ def _hang():
     return WorkerStillRunningError(elapsed=300.0, grace=5.0, agent_name="test")
 
 
-def _stop_on_sleep(monkeypatch):
-    import lingtai.tools.soul.flow as soul_flow
-
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda a: a._shutdown.set())
+def _stop_on_sleep(agent):
+    # The shared fake agent exits the run loop at the ASLEEP boundary.
+    agent._stop_on_sleep = True
 
 
 def _load(path: Path) -> dict:
@@ -60,7 +59,7 @@ def _run_hang(tmp_path, monkeypatch, msg, *, persisted=False):
         raise _hang()
 
     monkeypatch.setattr(turn, "_handle_message", handle)
-    _stop_on_sleep(monkeypatch)
+    _stop_on_sleep(agent)
     turn._run_loop(agent)
     return agent, calls
 
@@ -264,7 +263,7 @@ def _claimed(tmp_path, monkeypatch, *, attempt=1, mode="request"):
     agent._config.max_aed_attempts = 3
     path = _seed(tmp_path, attempt=attempt, mode=mode)
     assert wr.redrive_worker_hang_redo(agent) == "enqueued"
-    _stop_on_sleep(monkeypatch)
+    _stop_on_sleep(agent)
     return agent, path
 
 
@@ -493,7 +492,7 @@ def test_bound_legacy_tc_wake_mark_failure_settles_no_provider_call_through_the_
         a._shutdown.set()
 
     monkeypatch.setattr(turn, "_handle_message", handle)
-    _stop_on_sleep(monkeypatch)
+    _stop_on_sleep(agent)
     turn._run_loop(agent)
     assert agent._tc_inbox.items == items and not agent._chat.interface.appended
     redo = _load(path)["redo"]

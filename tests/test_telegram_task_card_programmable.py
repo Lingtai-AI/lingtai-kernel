@@ -19,12 +19,12 @@ class FakeAccount:
     def send_message(self, chat_id, text, reply_to_message_id=None, **kwargs):
         msg_id = len(self.calls) + 100
         self.sent[msg_id] = text
-        self.calls.append(("send", chat_id, text))
+        self.calls.append(("send", chat_id, text, kwargs))
         return {"message_id": msg_id}
 
     def edit_message(self, chat_id, message_id, text, **kwargs):
         self.sent[message_id] = text
-        self.calls.append(("edit", chat_id, message_id, text))
+        self.calls.append(("edit", chat_id, message_id, text, kwargs))
         return {"ok": True}
 
     def delete_message(self, chat_id, message_id, **kwargs):
@@ -114,18 +114,62 @@ def _controlled_gate(manager):
     return drain
 
 
-def test_active_intrinsic_body_projects_onto_existing_resident(tmp_path):
+def test_active_markdown_body_renders_the_complete_resident_card(tmp_path):
     manager, acct, _service = _manager(tmp_path)
     _auto(manager, reasoning="compiling")
-    _write_intrinsic_taskcard(tmp_path, status="active", body="# Task Card\n\n- first\n")
+    body = (
+        "# Release readiness\n\n"
+        "## Current phase\n"
+        "- **Parser:** render `taskcard.md`\n"
+        "  - [x] preserve resident state\n"
+        "1) Run focused tests\n"
+    )
+    _write_intrinsic_taskcard(tmp_path, status="active", body=body)
 
     manager._broadcast_programmable_task_card_file()
 
     text = _current(acct)
     assert "compiling" in text
-    assert "— TASK CARD —" in text
-    assert "# Task Card" in text
-    assert "- first" in text
+    assert "🎯 <b>TASK CARD</b>" in text
+    assert "<b>Release readiness</b>" in text
+    assert "<b>Current phase</b>" in text
+    assert "• <b>Parser:</b> render <code>taskcard.md</code>" in text
+    assert "  ☑ preserve resident state" in text
+    assert "1. Run focused tests" in text
+    assert "# Release readiness" not in text
+    assert "## Current phase" not in text
+    assert "**Parser:**" not in text
+    assert "`taskcard.md`" not in text
+    assert "- **Parser:" not in text
+    assert acct.calls[-1][-1] == {"parse_mode": "HTML"}
+    # The shared resident keeps the authored bytes. Rendering at the Telegram
+    # transport boundary must not change diff-only or slot-composition semantics.
+    assert manager._task_card_channels["mybot:55"]["programmable"] == body
+
+
+def test_programmable_markdown_escapes_html_and_malformed_delimiters(tmp_path):
+    manager, acct, _service = _manager(tmp_path)
+    _auto(manager)
+    body = (
+        "# <b>Owner & safety</b>\n"
+        "- **escaped <script>:** use `<tag> & value`\n"
+        "- <a href=\"tg://user?id=1\">injection</a>\n"
+        "Malformed **bold and `code\n"
+    )
+    _write_intrinsic_taskcard(tmp_path, status="active", body=body)
+
+    manager._broadcast_programmable_task_card_file()
+
+    text = _current(acct)
+    assert "<b>&lt;b&gt;Owner &amp; safety&lt;/b&gt;</b>" in text
+    assert "• <b>escaped &lt;script&gt;:</b> use <code>&lt;tag&gt; &amp; value</code>" in text
+    assert "• &lt;a href=\"tg://user?id=1\"&gt;injection&lt;/a&gt;" in text
+    assert "Malformed **bold and `code" in text
+    assert "<script>" not in text
+    assert "<a href=" not in text
+    assert text.count("<b>") == text.count("</b>")
+    assert text.count("<code>") == text.count("</code>")
+    assert acct.calls[-1][-1] == {"parse_mode": "HTML"}
 
 
 def test_projection_is_diff_only_against_last_programmable_frame(tmp_path):
@@ -202,7 +246,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
 
     Telegram owns the resident message and its automatic content: inactive
     must update the same resident (never delete/send-new), drop the
-    programmable ``— TASK CARD —`` section while keeping the automatic content
+    programmable ``🎯 <b>TASK CARD</b>`` section while keeping the automatic content
     intact, and never touch automatic updates going forward. Repeated
     inactive handling must be idempotent, and it must never delete the local
     body file either.
@@ -216,7 +260,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
     resident_before = acct.get_task_card(55)
     assert resident_before is not None
     assert "v1" in _current(acct)
-    assert "— TASK CARD —" in _current(acct)
+    assert "🎯 <b>TASK CARD</b>" in _current(acct)
     assert (tmp_path / "taskcard" / "taskcard.md").exists()
 
     # `stop` writes inactive but leaves the last body on disk (possibly stale).
@@ -234,7 +278,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
     text = _current(acct)
     assert "stay put" in text  # Telegram-owned automatic content preserved
     assert "v1" not in text and "v2" not in text  # programmable frame excluded
-    assert "— TASK CARD —" not in text
+    assert "🎯 <b>TASK CARD</b>" not in text
     assert manager._task_card_channels["mybot:55"].get("programmable") is None
 
     # Repeated inactive handling (e.g. every 1s poll tick) is idempotent: no

@@ -15,14 +15,15 @@ from lingtai.kernel.token_ledger import (
     append_token_entry,
     count_main_api_calls,
     is_daemon_entry,
-    safe_codex_pool_usage_extra,
+    safe_codex_usage_extra,
     sum_token_ledger,
 )
 
 
-def test_safe_codex_pool_usage_extra_is_narrow_and_type_preserving():
+def test_safe_codex_usage_extra_is_narrow_and_type_preserving():
     source = {
         "codex_auth_path_sha8": "a1b2c3d4",
+        # Retired in-kernel pool attribution keys are no longer projected.
         "codex_pool_source_index": 1,
         "codex_pool_size": 2,
         "codex_pool_weight": 1.5,
@@ -31,16 +32,19 @@ def test_safe_codex_pool_usage_extra_is_narrow_and_type_preserving():
         "codex_account_id_sha8": "not-needed",
         "unsafe": "secret",
     }
-    assert safe_codex_pool_usage_extra(source) == {
+    assert safe_codex_usage_extra(source) == {
         "codex_auth_path_sha8": "a1b2c3d4",
-        "codex_pool_source_index": 1,
-        "codex_pool_size": 2,
-        "codex_pool_weight": 1.5,
-        "codex_pool_model_scope": "gpt-5.6",
     }
-    assert safe_codex_pool_usage_extra({"codex_pool_weight": None}) == {}
-    assert safe_codex_pool_usage_extra({"codex_pool_size": [2]}) == {}
-    assert safe_codex_pool_usage_extra(None) == {}
+    assert safe_codex_usage_extra({"codex_auth_path_sha8": None}) == {}
+    assert safe_codex_usage_extra({"codex_auth_path_sha8": ["a1b2c3d4"]}) == {}
+    assert safe_codex_usage_extra({"codex_pool_size": 2}) == {}
+    assert safe_codex_usage_extra(None) == {}
+
+
+def test_safe_codex_pool_usage_extra_helper_is_removed():
+    from lingtai.kernel import token_ledger
+
+    assert not hasattr(token_ledger, "safe_codex_pool_usage_extra")
 
 
 def test_sum_empty_ledger(tmp_path):
@@ -375,8 +379,9 @@ def test_tc_wake_is_not_a_daemon_entry():
     """tc_wake is an involuntary splice in the agent's own context, NOT a daemon.
 
     Guards against the easy mistake of treating every non-'main' source as
-    daemon spend. tc_wake/heal/soul/notification_sync run in the parent's own
-    context and must survive a main-agent-only filter.
+    daemon spend. tc_wake/heal/notification_sync run in the parent's own
+    context and must survive a main-agent-only filter; legacy ``soul`` rows
+    written before the Soul subsystem was removed stay readable the same way.
     """
     for source in ("main", "tc_wake", "heal", "soul",
                    "notification_sync", "summarize"):

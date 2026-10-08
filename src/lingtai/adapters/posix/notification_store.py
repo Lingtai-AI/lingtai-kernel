@@ -355,54 +355,6 @@ def _daemon_control_error_fingerprint() -> tuple[str, int, str]:
     return (_DAEMON_AGGREGATE_FILENAME, len(raw), hashlib.sha256(raw).hexdigest())
 
 
-def _daemon_report_payload(workdir: Path, records: list[tuple[Path, bytes, dict | None, bytes]]) -> dict:
-    """Build a non-authoritative compatibility report from a captured aggregate."""
-    runs: list[dict] = []
-    total_events = 0
-    active_runs = 0
-    terminal_runs = 0
-    terminal_states = {"done", "failed", "cancelled", "timeout"}
-    for path, _raw, payload, _physical in records:
-        if not isinstance(payload, dict):
-            continue
-        events = _daemon_events(payload)
-        data = payload.get("data")
-        state = payload.get("state")
-        if not isinstance(state, str) and isinstance(data, dict):
-            candidate = data.get("state") or data.get("run_state")
-            state = candidate if isinstance(candidate, str) else None
-        if not isinstance(state, str) and events:
-            candidate = events[-1].get("status")
-            state = candidate if isinstance(candidate, str) else None
-        total_events += len(events)
-        if state in terminal_states:
-            terminal_runs += 1
-        elif state:
-            active_runs += 1
-        run = {"daemon_id": path.stem, "event_count": len(events)}
-        if state:
-            run["state"] = state
-        runs.append(run)
-    report = {"kind": "daemon_report", "version": 1, "derived": True, "stats": {"run_count": len(runs), "event_count": total_events, "active_run_count": active_runs, "terminal_run_count": terminal_runs}, "runs": runs}
-    try:
-        previous = json.loads(_daemon_report_path(workdir).read_bytes())
-    except (OSError, json.JSONDecodeError):
-        previous = None
-    if isinstance(previous, dict) and previous.get("kind") == "daemon_report":
-        migration = previous.get("migration")
-        if isinstance(migration, dict):
-            report["migration"] = migration
-    elif previous is not None:
-        report["migration"] = {"legacy_root": previous}
-    return report
-
-
-def _write_daemon_report(workdir: Path, records: list[tuple[Path, bytes, dict | None, bytes]]) -> None:
-    path = _daemon_report_path(workdir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, _daemon_report_payload(workdir, records), ensure_ascii=False, indent=None)
-
-
 def _version_entry(path: Path, raw: bytes) -> list:
     return [path.name, len(raw), hashlib.sha256(raw).hexdigest()]
 

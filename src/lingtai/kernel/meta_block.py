@@ -21,16 +21,19 @@ The canonical runtime sidecar has exactly two model-visible axes:
   re-stamped on every tail result.  It rides with ``agent_meta`` on the
   designated final result.
 - ``agent_meta.notifications`` / ``agent_meta.guidance.transient`` — the
-  notification portion of that same current snapshot. Delivery fingerprints
-  are independent and never suppress the current snapshot.
+  notification portion of that same snapshot. Notification delivery is
+  one-shot: only channels/events not yet delivered (shared identity across the
+  ACTIVE and IDLE paths) are attached; the runtime ``agent_state`` half is
+  still attached every batch.
 
 Channel encoding:
 - Tool-result channel: the executor captures runtime state on a non-serialized
   ToolResultBlock field, which ``attach_active_runtime`` promotes into the final
   block's complete ``agent_meta`` sidecar whenever private capture exists.
-  ``attach_active_notifications`` merges the current channel-owned notification
-  payload into that same final snapshot; delivery fingerprints are diagnostic
-  and compatibility state, not gates on snapshot attachment.
+  ``attach_active_notifications`` merges the not-yet-delivered channel-owned
+  notification payload into that same final snapshot and commits the delivered
+  identity only after stamping; a deliberate ``notification(action="check")``
+  always receives the complete current mirrors.
 - Text-input channel: `render_meta` formats the same dict into a prose
   prefix line. Inbox content is NOT rendered here — it lives in the
   user-turn body, drained by ``_concat_queued_messages`` upstream.
@@ -91,8 +94,10 @@ NOTIFICATIONS_KEY = "notifications"
 NOTIFICATION_GUIDANCE_KEY = "notification_guidance"
 NOTIFICATION_PERSISTENT_KEY = "notification_persistent"
 AGENT_META_INSTRUCTION = (
-    "Only the latest agent_meta in conversation is current; older ones are "
-    "historical traces."
+    "Only the latest agent_meta.agent_state is current runtime state; older "
+    "runtime snapshots are historical traces. Delivered notification messages "
+    "remain usable task records, subject to newer human instructions and "
+    "producer safeguards; an empty later tail does not resolve them."
 )
 # Telegram lives under an `mcp` namespace level to mirror the ephemeral
 # `notifications.mcp.telegram` shape and match Jason #6148: the required path is
@@ -141,8 +146,8 @@ NOTIFICATION_PERSISTENT_FEISHU_SEEN_LIMIT = 200
 
 # WhatsApp lives at `_meta.agent_meta.notifications.persistent.mcp.whatsapp` but runs the
 # shared IM lane in snapshot mode (email-style): every block carries the
-# producer's current bounded context in full, with no delivered-id delta
-# tracking and no previous_block hook, so it has no min-context/seen-limit
+# selected source records (the shared event ledger projects automatic deltas),
+# without a previous_block hook, so it has no min-context/seen-limit
 # tuning knobs.
 NOTIFICATION_PERSISTENT_WHATSAPP_CHANNEL = "whatsapp"
 
@@ -181,8 +186,9 @@ NOTIFICATION_PERSISTENT_TELEGRAM_SELF_OUTGOING_COMMENT = (
     "This is the agent's own recent outgoing message, included for continuity."
 )
 NOTIFICATION_PERSISTENT_TELEGRAM_TRUNCATED_COMMENT = (
-    "This message is truncated; call telegram.read for the exact full producer "
-    "state."
+    "This text copy is truncated. Only if required content is absent from "
+    "all available current copies, call telegram.read for the missing content; "
+    "do not reread a complete alternate/raw current copy."
 )
 NOTIFICATION_PERSISTENT_TELEGRAM_REFERENCED_COMMENT = (
     "This is the full Telegram message referenced by the current reply; "
@@ -200,8 +206,9 @@ NOTIFICATION_PERSISTENT_WECHAT_SELF_OUTGOING_COMMENT = (
     "This is the agent's own recent outgoing message, included for continuity."
 )
 NOTIFICATION_PERSISTENT_WECHAT_TRUNCATED_COMMENT = (
-    "This message is truncated; call wechat.read for the exact full producer "
-    "state."
+    "This text copy is truncated. Only if required content is absent from "
+    "all available current copies, call wechat.read for the missing content; "
+    "do not reread a complete alternate/raw current copy."
 )
 
 # Feishu mirrors the Telegram comment set with channel-appropriate wording.
@@ -215,15 +222,16 @@ NOTIFICATION_PERSISTENT_FEISHU_SELF_OUTGOING_COMMENT = (
     "This is the agent's own recent outgoing message, included for continuity."
 )
 NOTIFICATION_PERSISTENT_FEISHU_TRUNCATED_COMMENT = (
-    "This message is truncated; call feishu.read for the exact full producer "
-    "state."
+    "This text copy is truncated. Only if required content is absent from "
+    "all available current copies, call feishu.read for the missing content; "
+    "do not reread a complete alternate/raw current copy."
 )
 
 # Concise English comments attached to the WhatsApp persistent block. The
-# WhatsApp lane runs in snapshot mode (email-style): each block carries the
-# producer's current structured context in full, with no delivered-id delta
-# tracking, so the comments focus on producer authority and the Cloud API
-# reply rules rather than block-to-block continuity.
+# WhatsApp lane renders selected source records without a provider-context
+# previous-block hook; the shared event ledger selects automatic message deltas.
+# Comments focus on producer authority and existing reply rules rather than
+# block-to-block continuity.
 NOTIFICATION_PERSISTENT_WHATSAPP_CONTEXT_COMMENT = (
     "Durable WhatsApp context moved here from the legacy input path "
     "_meta.agent_meta.notifications.attention.mcp.whatsapp. The canonical path is "
@@ -239,21 +247,22 @@ NOTIFICATION_PERSISTENT_WHATSAPP_SELF_OUTGOING_COMMENT = (
     "This is the agent's own recent outgoing message, included for continuity."
 )
 NOTIFICATION_PERSISTENT_WHATSAPP_TRUNCATED_COMMENT = (
-    "This message is truncated; call whatsapp.read with the compound message "
-    "id for the exact full producer state."
+    "This text copy is truncated. Only if required content is absent from "
+    "all available current copies, call whatsapp.read for this conversation; "
+    "do not reread a complete alternate current copy."
 )
 NOTIFICATION_PERSISTENT_WHATSAPP_MEDIA_COMMENT = (
-    "Non-text WhatsApp message; only type/id metadata is stored locally — use "
-    "whatsapp.read for the exact stored producer state."
+    "Non-text WhatsApp message; only type/id metadata is stored locally. "
+    "If the task needs missing media content, read cannot download it; "
+    "ask the sender to resend it through a supported transfer method."
 )
 
 NOTIFICATION_PERSISTENT_EMAIL_CONTEXT_COMMENT = (
     "Unread email content moved here from the legacy input path "
     "_meta.agent_meta.notifications.attention.email. The canonical path is "
     "_meta.agent_meta.notifications.persistent.email. Bodies "
-    "are injected in full up to the 50,000 character send-layer limit; prefer "
-    "email.dismiss after handling content, and use email.read/reply for "
-    "source-of-truth actions."
+    "are injected in full up to the 50,000 character send-layer limit, once "
+    "per delivery; use email.read/reply/dismiss for source-of-truth actions."
 )
 NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT = (
     "This legacy email body exceeded the current 50,000 character send-layer "
@@ -482,32 +491,18 @@ def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
     by ``tool_call_id`` rather than at any external sidecar/saved-path file.
 
     There is deliberately exactly one comment topic for this feature —
-    ``overflow``.  All guidance (what happened, where the original is, how to
-    retrieve it, what to do after consuming it) lives under this single key, not
-    split across parallel ``comment.retrieval`` / ``comment.summarize`` headings.
+    ``overflow``.  It is a compact retrieval locator plus one cleanup
+    instruction; retrieval procedure lives in the sqlite-log-query manual.
     """
     call_id = tool_call_id or "<unknown>"
     return {
-        "summary": (
-            "The model-visible context for this tool result is capped or large; "
-            "what you see here may be a preview or compacted form, not the full payload."
-        ),
         "full_original": (
-            f"The full original is preserved in logs/events.jsonl under "
-            f"tool_call_id={call_id}."
-        ),
-        "how_to_retrieve": (
-            f"Retrieve it from the durable log by tool_call_id: "
-            f"grep '{call_id}' <workdir>/logs/events.jsonl, or use "
-            f"`lingtai-agent log query` (see the sqlite-log-query manual). For a "
-            f"broad extraction, delegate to a daemon/subagent with the "
-            f"tool_call_id and the exact question instead of pulling the whole "
-            f"original back into your own context."
+            f"Visible payload may be capped; full original: "
+            f"<workdir>/logs/events.jsonl, tool_call_id={call_id}."
         ),
         "after_consuming": (
-            "After you have consumed what you need, call "
-            "system(action=\"summarize\") for this tool_call_id to replace the "
-            "visible payload with your own agent-authored summary."
+            "Once consumed, context(action=\"summarize\") replaces the visible "
+            "payload with your own summary."
         ),
     }
 
@@ -707,8 +702,7 @@ DEFAULT_LARGE_RESULT_THRESHOLD = 3000
 TOOL_RESULT_CHARS_README = (
     "listing top 5 tool results over 1000 chars by char count "
     "(id, tool_name, chars; no preview); no need to summarize this helper "
-    "(it rides on agent_meta; read the current final-carrier snapshot for the "
-    "current list); these are summarize candidates, "
+    "(read it with system(action=\"meta\", input={})); these are summarize candidates, "
     "not a directive to summarize "
     "every entry: prefer summarizing prior results that are already "
     "consumed/digested and useless, irrelevant, obsolete, or no longer needed "
@@ -784,20 +778,6 @@ def current_tool_result_chars(agent, extra_results=()) -> dict:
     }
 
 
-def _meta_block(result: dict) -> dict:
-    """Return ``result["_meta"]``, creating an empty dict if absent.
-
-    Centralizes the envelope so the per-result ``tool_meta`` writer and the
-    current ``agent_meta``/``guidance`` updater and notification merger all share
-    one container.
-    """
-    meta = result.get(META_ENVELOPE_KEY)
-    if not isinstance(meta, dict):
-        meta = {}
-        result[META_ENVELOPE_KEY] = meta
-    return meta
-
-
 def build_meta_readme() -> dict:
     """Self-describing readme for the two canonical ``_meta`` axes.
 
@@ -814,9 +794,12 @@ def build_meta_readme() -> dict:
             "name when needed, completion time, elapsed time, status/error phase, "
             "character counts, spill, and a-priori-summary effects. It has no "
             "agent/session/current-state semantics and remains valid historically. "
-            "Token diagnostics live in the nested "
-            "`agent_meta.agent_state.token_usage` block: "
-            "`token_usage.current_call` contains this result's own "
+            "The default `agent_meta.agent_state` is small: `current_time`, "
+            "`token_usage.session.context_tokens/context_window/context_usage`, "
+            "and active warnings only. Call `system(action=\"meta\", input={})` "
+            "(read-only) for the complete nested "
+            "`agent_meta.agent_state.token_usage` diagnostics: "
+            "`token_usage.current_call` contains the latest provider call's own "
             "token/cache/output facts; `token_usage.session` contains the "
             "since-last-molt `session_cache_rate`, `api_calls`, cumulative token "
             "fields, context fields, and the ALWAYS-ON "
@@ -829,22 +812,25 @@ def build_meta_readme() -> dict:
         AGENT_META_KEY: {
             "instruction": AGENT_META_INSTRUCTION,
             "agent_state": (
-                "Timely current main-agent/runtime state and diagnostics, including "
-                "`agent_meta.agent_state.token_usage` with nested "
-                "`current_call` and `session` halves. only the NEWEST emission "
-                "is current; older payloads remain historical traces. Replay "
-                "preserves those historical holders and does not strip them. "
-                "`current_tool_result_chars` reports total/threshold/count and "
-                "`top_results` entries with id, tool_name, and chars; entries "
-                "have no preview and are proactive summarization candidates. "
-                "`adapter_comment` carries dynamic adapter state."
+                "Timely current main-agent state: `current_time`, context size, "
+                "and active `context`/`events` warnings; the nested "
+                "`agent_meta.agent_state.token_usage` and full diagnostics are on "
+                "demand via `system(action=\"meta\", input={})`. only the NEWEST "
+                "emission is current; older payloads remain historical traces. "
+                "Replay preserves those historical holders and does not strip "
+                "them. The full snapshot's `current_tool_result_chars` reports "
+                "total/threshold/count and `top_results` entries with id, "
+                "tool_name, and chars; entries have no preview and are proactive "
+                "summarization candidates. `adapter_comment` carries dynamic "
+                "adapter state."
             ),
             "notifications": (
-                "Timely current notifications and persistent communication "
-                "context. only the NEWEST emission is current; older payloads "
-                "remain historical traces. Replay preserves those historical "
-                "holders and does not strip them. Older payloads are not current "
-                "instructions; the producer channel is the source of truth."
+                "One-shot event/message records and persistent communication "
+                "context. Earlier delivered messages remain usable for the active "
+                "task after later empty tails, subject to newer human instructions "
+                "and sender/admission/routing/edit safeguards. Replay preserves "
+                "these records; producer channels remain canonical business state. "
+                "Older runtime warnings are not current instructions."
             ),
             "guidance": {
                 "persistent": "Stable references and rules.",
@@ -892,7 +878,7 @@ def build_meta_readme_section() -> Dict[str, str]:
     readme = build_meta_readme()
     body_lines = [
         "This section explains the `_meta` envelope carried on tool results.",
-        "These explanations are resident here in the `meta_guidance` system-prompt section; the tail `_meta.agent_meta.guidance` on each tool result carries only a lightweight ref back to this section, not the full body.",
+        "These explanations are current loaded `meta_guidance` disclosed by psyche(action=\"instructions\", input={}); the tail `_meta.agent_meta.guidance` carries a lightweight read route, not the full body.",
         "",
     ]
     body_lines.extend(f"- `{key}`: {value}" for key, value in readme.items())
@@ -943,13 +929,13 @@ META_GUIDANCE_SECTION_ID = "meta_guidance"
 # sentence (not a bare path) pointing at the ``token_efficiency`` subsection of
 # the ``meta_guidance`` system-prompt section.
 TOKEN_USAGE_GUIDANCE_REF = (
-    f"See {META_GUIDANCE_SECTION_ID}.token_efficiency for details."
+    'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.'
 )
 
 
 def build_meta_guidance_ref() -> dict:
     """Return the lightweight guidance hook for the current runtime block."""
-    return {"ref": META_GUIDANCE_SECTION_ID}
+    return {"ref": 'psyche(action="instructions", input={}): meta_guidance'}
 
 def _render_guidance_sections_markdown(guidance: dict) -> list[str]:
     """Render guidance.sections (incl. meta_readme) as Markdown subsections."""
@@ -1166,14 +1152,16 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
         return None
     return (
         "context now above 85%: recording summaries does NOT itself rebuild the "
-        "active provider context. If recorded summaries are worth making active "
-        "sooner, you MAY pay for a provider-context rebuild via "
-        "context(action='rebuild') (with or without new items). This "
-        "is a permitted option, not a requirement; if you do nothing, the runtime "
+        "active provider context. Prefer preparing a deliberate molt (tend changed "
+        "durable stores, write the session journal and a short handoff) over a "
+        "manual rebuild; a manual context(action='rebuild') is strongly "
+        "discouraged as routine compaction because full replay is costly, can "
+        "disturb prompt-prefix cache reuse, and keeps the bulky history. Reserve "
+        "one targeted rebuild for the rare case where recorded summaries or new "
+        "prompt sources must apply in this conversation and a molt is unsuitable. "
+        "This is not a requirement; if you do nothing, the runtime "
         "forces a rebuild at the 1.0 hard boundary (full context) regardless. "
-        "Preferring a proactive rebuild here avoids the emergency forced path. Keep "
-        "summarizing digested results to shrink recorded history either way. See "
-        "meta_guidance for details."
+        'Read psyche(action="instructions", input={}) for meta_guidance details.'
     )
 
 
@@ -1654,6 +1642,57 @@ def _session_context_window(agent) -> int:
     return fallback if isinstance(fallback, int) and fallback > 0 else 0
 
 
+def build_session_token_economy(
+    aggregate: Mapping[str, Any],
+    *,
+    context_tokens: int | None = None,
+    context_window: int | None = None,
+    cache_miss_budget: int | None = None,
+) -> dict[str, Any]:
+    """Build one canonical since-molt token economy from raw counters.
+
+    This pure projection is shared by model-visible ``agent_meta`` and durable
+    ``llm_response.session_usage`` telemetry.  Keeping the arithmetic here makes
+    cache rate, cache miss, averages, context usage, and budget remaining
+    byte-for-byte comparable at both boundaries.
+    """
+    api_calls = _non_negative_int(aggregate.get("api_calls"))
+    input_tokens = _non_negative_int(aggregate.get("input_tokens"))
+    output_tokens = _non_negative_int(aggregate.get("output_tokens"))
+    cached_tokens = _non_negative_int(aggregate.get("cached_tokens"))
+    avg_input = int(round(input_tokens / api_calls)) if api_calls > 0 else 0
+    session_cache_rate = (
+        round(min(cached_tokens / input_tokens, 1.0), 5)
+        if input_tokens > 0
+        else 0.0
+    )
+    cache_miss = max(input_tokens - cached_tokens, 0)
+    economy: dict[str, Any] = {
+        "session_cache_rate": session_cache_rate,
+        "api_calls": api_calls,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_tokens": cached_tokens,
+        "avg_input_tokens_per_api_call": avg_input,
+        TOKEN_USAGE_CACHE_MISS_TOKENS_KEY: cache_miss,
+    }
+
+    if type(context_tokens) is int and context_tokens >= 0:
+        economy[TOKEN_USAGE_CONTEXT_TOKENS_KEY] = context_tokens
+        if type(context_window) is int and context_window > 0:
+            economy[TOKEN_USAGE_CONTEXT_WINDOW_KEY] = context_window
+            economy[TOKEN_USAGE_CONTEXT_USAGE_KEY] = round(
+                context_tokens / context_window, 5
+            )
+
+    if type(cache_miss_budget) is int and cache_miss_budget > 0:
+        economy[TOKEN_USAGE_CACHE_MISS_BUDGET_KEY] = cache_miss_budget
+        economy[TOKEN_USAGE_CACHE_MISS_REMAINING_KEY] = max(
+            cache_miss_budget - cache_miss, 0
+        )
+    return economy
+
+
 def _build_session_token_economy(
     agent, *, resolved_budget: int | None = None
 ) -> dict:
@@ -1685,7 +1724,8 @@ def _build_session_token_economy(
 
     Projects the aggregate counters agents act on now: ``session_cache_rate``
     (cached/input clamped to a 0-1 fraction), ``api_calls``,
-    ``input_tokens``/``cached_tokens``, and ``avg_input_tokens_per_api_call``,
+    ``input_tokens``/``output_tokens``/``cached_tokens``, and
+    ``avg_input_tokens_per_api_call``,
     deriving the rates from the raw counters.
 
     It also carries the current CONTEXT state (moved off ``current_call``, since
@@ -1736,46 +1776,23 @@ def _build_session_token_economy(
         if isinstance(candidate, Mapping):
             agg = candidate
 
-    api_calls = _non_negative_int(agg.get("api_calls"))
-    input_tokens = _non_negative_int(agg.get("input_tokens"))
-    cached_tokens = _non_negative_int(agg.get("cached_tokens"))
-    avg_input = int(round(input_tokens / api_calls)) if api_calls > 0 else 0
-    session_cache_rate = (
-        round(min(cached_tokens / input_tokens, 1.0), 5)
-        if input_tokens > 0
-        else 0.0
+    context_tokens = (
+        _non_negative_int(usage.get("ctx_total_tokens"))
+        if "ctx_total_tokens" in usage
+        else None
     )
-    cache_miss = max(input_tokens - cached_tokens, 0)
-    economy = {
-        "session_cache_rate": session_cache_rate,
-        "api_calls": api_calls,
-        "input_tokens": input_tokens,
-        "cached_tokens": cached_tokens,
-        "avg_input_tokens_per_api_call": avg_input,
-        # Always-on: derivable from the cumulative counters alone.
-        TOKEN_USAGE_CACHE_MISS_TOKENS_KEY: cache_miss,
-    }
-
-    # Current context state — only when resolvable (never invented).
-    if "ctx_total_tokens" in usage:
-        context_tokens = _non_negative_int(usage.get("ctx_total_tokens"))
-        economy[TOKEN_USAGE_CONTEXT_TOKENS_KEY] = context_tokens
-        window = _session_context_window(agent)
-        if window > 0:
-            economy[TOKEN_USAGE_CONTEXT_WINDOW_KEY] = window
-            economy[TOKEN_USAGE_CONTEXT_USAGE_KEY] = round(
-                context_tokens / window, 5
-            )
-
+    window = _session_context_window(agent) if context_tokens is not None else None
     budget = (
         _resolve_cache_miss_budget(agent)
         if resolved_budget is None
         else resolved_budget
     )
-    if isinstance(budget, int) and not isinstance(budget, bool) and budget > 0:
-        economy[TOKEN_USAGE_CACHE_MISS_BUDGET_KEY] = budget
-        economy[TOKEN_USAGE_CACHE_MISS_REMAINING_KEY] = max(budget - cache_miss, 0)
-    return economy
+    return build_session_token_economy(
+        agg,
+        context_tokens=context_tokens,
+        context_window=window,
+        cache_miss_budget=budget,
+    )
 
 
 def build_tool_meta_token_usage(
@@ -1797,7 +1814,7 @@ def build_tool_meta_token_usage(
       ``thinking`` (see :func:`_build_provider_round_token_usage`).  Current
       context state is NOT here — it moved to the ``session`` half.
     * ``session`` — the SINCE-LAST-MOLT cumulative aggregate: ``session_cache_rate``,
-      ``api_calls``, ``input_tokens``, ``cached_tokens``,
+      ``api_calls``, ``input_tokens``, ``output_tokens``, ``cached_tokens``,
       ``avg_input_tokens_per_api_call``, the current context state
       ``context_tokens`` / ``context_window`` / ``context_usage`` (when
       resolvable), plus the always-on cache-miss/budget telemetry
@@ -2054,6 +2071,110 @@ def build_meta(agent) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Default (slim) vs on-demand (full) runtime snapshot.
+#
+# ``build_meta`` above stays the single full fact source.  The default
+# model-visible tail snapshot is a small projection of it
+# (:func:`slim_agent_state_for_tail`); the complete diagnostics are available
+# on demand through ``system(action="meta")`` (:func:`build_full_runtime_meta`).
+# Neither projection invents numbers: both read what ``build_meta`` computed.
+# ---------------------------------------------------------------------------
+
+# Diagnostics that are only carried by the on-demand full snapshot.
+_FULL_ONLY_STATE_KEYS = frozenset({
+    "current_tool_result_chars",
+    "adapter_comment",
+    "active_turn_tool_calls",
+})
+_TAIL_CONTEXT_STATE_KEYS = (
+    TOKEN_USAGE_CONTEXT_TOKENS_KEY,
+    TOKEN_USAGE_CONTEXT_WINDOW_KEY,
+    TOKEN_USAGE_CONTEXT_USAGE_KEY,
+)
+_PROMOTED_CONTEXT_KEYS = (
+    TOOL_META_CONTEXT_REBUILD_KEY,
+    "molt",
+    TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY,
+    TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY,
+    TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY,
+)
+
+
+def agent_state_from_meta(meta: Mapping[str, Any]) -> dict:
+    """Project a :func:`build_meta` result into the ``agent_state`` shape.
+
+    Transit keys are promoted exactly like ``ToolExecutor._attach_tool_block``
+    does (token usage, context warnings); the emission-event transit key is
+    dropped so projecting never causes a log event.
+    """
+    state: dict = {}
+    for key, value in meta.items():
+        if key == TOOL_META_TOKEN_USAGE_PENDING_KEY:
+            if isinstance(value, Mapping) and value:
+                state[TOOL_META_TOKEN_USAGE_KEY] = _copy.deepcopy(dict(value))
+        elif key == TOOL_META_CONTEXT_PENDING_KEY:
+            if isinstance(value, Mapping):
+                promoted = {
+                    context_key: value[context_key]
+                    for context_key in _PROMOTED_CONTEXT_KEYS
+                    if value.get(context_key)
+                }
+                if promoted:
+                    state[TOOL_META_CONTEXT_KEY] = promoted
+        elif key == TOOL_META_CONTEXT_EVENT_PENDING_KEY:
+            continue
+        else:
+            state[key] = value
+    return state
+
+
+def slim_agent_state_for_tail(agent_state: Mapping[str, Any]) -> dict:
+    """Return the small default ``agent_state`` carried on every final result.
+
+    Keeps ``current_time``, the current context size
+    (``token_usage.session.context_tokens/context_window/context_usage``),
+    and every active warning or one-shot event (``context``, ``events``,
+    ``daemon``, ``notification_wake``).  Cumulative token/cache statistics, the
+    result-size candidate list, adapter diagnostics, and the tool-call counter
+    are left to ``system(action="meta")``.
+    """
+    slim: dict = {}
+    for key, value in agent_state.items():
+        if key in _FULL_ONLY_STATE_KEYS:
+            continue
+        if key == TOOL_META_TOKEN_USAGE_KEY:
+            session = value.get(TOKEN_USAGE_SESSION_KEY) if isinstance(value, Mapping) else None
+            if not isinstance(session, Mapping):
+                continue
+            context = {
+                name: session[name] for name in _TAIL_CONTEXT_STATE_KEYS if name in session
+            }
+            if context:
+                slim[key] = {TOKEN_USAGE_SESSION_KEY: context}
+            continue
+        slim[key] = value
+    return slim
+
+
+def build_full_runtime_meta(agent) -> dict:
+    """Return the complete current runtime diagnostics for ``system(action="meta")``.
+
+    Read-only: it reuses :func:`build_meta` (same token, context, warning and
+    result-size builders as the default tail) and never takes the one-shot
+    reconstruction event, logs an emission event, refreshes, or mutates state.
+    The adapter comment is the full dynamic view, not the tail-slimmed one.
+    """
+    state = agent_state_from_meta(build_meta(agent))
+    comment = dynamic_adapter_comment(agent)
+    if comment:
+        state["adapter_comment"] = dict(comment)
+    calls = _active_turn_tool_calls(agent)
+    if calls is not None:
+        state["active_turn_tool_calls"] = calls
+    return {"agent_state": state}
+
+
+# ---------------------------------------------------------------------------
 # Active-state notification stamping — canonical current payload.
 # ---------------------------------------------------------------------------
 
@@ -2078,7 +2199,7 @@ def build_notification_payload(notifications: dict) -> dict:
 
     return {
         NOTIFICATION_GUIDANCE_KEY: {
-            "ref": "meta_guidance.notification_handling",
+            "ref": 'psyche(action="instructions", input={}): meta_guidance.notification_handling',
             "sources": sources,
         },
         NOTIFICATIONS_KEY: payloads,
@@ -2100,9 +2221,10 @@ class _ImPersistentLane(NamedTuple):
 
     - ``"delta"`` — seed/delta blocks with in-memory delivered-id tracking and
       a ``previous_block`` hook to the prior block (Telegram, WeChat, Feishu).
-    - ``"snapshot"`` — email-style: every block carries the producer's current
-      bounded context in full under a standing ``snapshot_context_comment``;
-      no delivered-id state, no ``previous_block``, no burst/seed comments
+    - ``"snapshot"`` — render selected source records under a standing
+      ``snapshot_context_comment``; automatic deltas are selected by the shared
+      event ledger upstream. No provider-context ID state, no ``previous_block``,
+      no burst/seed comments
       (WhatsApp, whose producer re-sends the last-10 window per event and
       whose replies are gated by the Cloud API 24-hour window).
 
@@ -2190,9 +2312,8 @@ _WHATSAPP_PERSISTENT_LANE = _ImPersistentLane(
     source_key="mcp.whatsapp",
     path=NOTIFICATION_PERSISTENT_WHATSAPP_PATH,
     display_name="WhatsApp",
-    # Snapshot lane (email-style): full bounded context per block, no
-    # delivered-id delta state, no previous_block hook — see the class
-    # docstring for why WhatsApp deliberately differs from the delta lanes.
+    # Record renderer without provider-context continuity hooks. The shared
+    # event ledger upstream still projects automatic message deltas.
     mode="snapshot",
     self_outgoing_comment=NOTIFICATION_PERSISTENT_WHATSAPP_SELF_OUTGOING_COMMENT,
     truncated_comment=NOTIFICATION_PERSISTENT_WHATSAPP_TRUNCATED_COMMENT,
@@ -2208,6 +2329,11 @@ _IM_PERSISTENT_LANES = (
     _FEISHU_PERSISTENT_LANE,
     _WHATSAPP_PERSISTENT_LANE,
 )
+
+# Lookup from the persistent-payload channel key (e.g. "telegram") back to its
+# lane, so the size cap can attach the right channel-specific truncated-message
+# comment without re-deriving lane wiring.
+_IM_PERSISTENT_LANES_BY_CHANNEL = {lane.channel: lane for lane in _IM_PERSISTENT_LANES}
 
 
 def _im_preview_list(notification_payload: dict, source_key: str) -> list[dict]:
@@ -2595,11 +2721,13 @@ def _build_snapshot_im_persistent_payload(
 ) -> dict:
     """Build a snapshot (email-style) persistent payload for one IM lane.
 
-    Every block carries the producer's current bounded conversation context in
-    full under a standing ``context_comment``.  There is no delivered-id delta
+    Every block carries the selected source conversation records under a
+    standing ``context_comment``. Automatic callers have already projected the
+    message delta with the shared event ledger; direct/full reads can select
+    the complete current window. There is no provider-context delivered-id
     tracking, no ``previous_block`` hook, and no burst/seed comments: the
-    snapshot lane re-emits the producer's current window each material update
-    and the producer tool remains the source of truth (building this block marks
+    renderer does not select events itself and the producer tool remains the
+    source of truth (building this block marks
     nothing read).  Per-message continuity/truncation/media comments are applied
     via the shared ``_annotate_im_message`` helper.
     """
@@ -2619,7 +2747,7 @@ def _build_snapshot_im_persistent_payload(
 
 
 def _build_im_notification_persistent_payload(
-    agent, notification_payload: dict, lane: _ImPersistentLane
+    agent, notification_payload: dict, lane: _ImPersistentLane, *, event_records: bool = False
 ) -> dict | None:
     """Build the `_meta.agent_meta.notifications.persistent` payload for one IM lane.
 
@@ -2630,10 +2758,14 @@ def _build_im_notification_persistent_payload(
     only carry messages whose producer message IDs have not been delivered yet,
     plus a ``previous_block`` hook pointing at the prior block for this lane.
 
-    ``mode == "snapshot"`` lanes (WhatsApp, email-style) re-emit the producer's
-    current bounded context in full on every material update, with no
-    delivered-id state and no ``previous_block`` hook; see
-    ``_build_snapshot_im_persistent_payload``.
+    Automatic delivery and deliberate checks set ``event_records=True``:
+    records were already selected by the shared ledger (or full mirror read),
+    so provider-context IDs must not hide material edits or re-seed old records.
+    Direct legacy builder callers retain the seed/window selection above.
+
+    ``mode == "snapshot"`` lanes (WhatsApp) render the selected records without
+    provider-context delivered-ID state or a ``previous_block`` hook; automatic
+    event selection still belongs to the shared ledger upstream.
     """
     candidates = _im_persistent_messages_from_notifications(
         notification_payload, lane.source_key
@@ -2669,7 +2801,13 @@ def _build_im_notification_persistent_payload(
     )
 
     is_seed_block = False
-    if candidates and has_recent_context:
+    if event_records:
+        # The shared event ledger already selected these records. Do not run
+        # the provider-context ID/window filter again: edited IDs are material
+        # updates and every selected record must be represented before commit.
+        messages = candidates
+        is_seed_block = not has_previous_block
+    elif candidates and has_recent_context:
         messages = [
             message
             for message in candidates
@@ -2837,15 +2975,32 @@ def _truncate_persistent_value(value: object, budget: int) -> tuple[object, bool
     return value[:budget] + "...", True
 
 
-def _compact_persistent_record(record: object, fields: tuple[str, ...], budget: int) -> object:
-    """Return a copy of *record* with its heavy string *fields* truncated."""
+def _compact_persistent_record(
+    record: object,
+    fields: tuple[str, ...],
+    budget: int,
+    *,
+    truncated_flag: str | None = None,
+) -> object:
+    """Return a copy of *record* with its heavy string *fields* truncated.
+
+    When *truncated_flag* names a boolean field (the producer's own
+    "this content is incomplete" flag, e.g. ``text_truncated`` /
+    ``message_truncated``) and truncation actually shortened a field, that flag
+    is forced ``True`` — the cap must never leave a blanked field paired with a
+    stale ``False`` that would make the record read as complete when it is not.
+    """
     if not isinstance(record, dict):
         return record
     compacted = dict(record)
+    any_changed = False
     for field in fields:
         value, changed = _truncate_persistent_value(compacted.get(field), budget)
         if changed:
             compacted[field] = value
+            any_changed = True
+    if any_changed and truncated_flag:
+        compacted[truncated_flag] = True
     return compacted
 
 
@@ -2869,7 +3024,10 @@ def _compact_email_persistent_lane(
             out.append(item)
             continue
         email = _compact_persistent_record(
-            item, NOTIFICATION_PERSISTENT_EMAIL_HEAVY_FIELDS, budget
+            item,
+            NOTIFICATION_PERSISTENT_EMAIL_HEAVY_FIELDS,
+            budget,
+            truncated_flag="message_truncated",
         )
         if comment is not None:
             existing = item.get("comment")
@@ -2883,15 +3041,59 @@ def _compact_email_persistent_lane(
     return compacted
 
 
-def _compact_im_persistent_lane(lane_payload: dict, budget: int) -> dict:
+def _compact_im_persistent_record(
+    record: object,
+    budget: int,
+    lane: _ImPersistentLane | None,
+    *,
+    protect_current: bool,
+) -> object:
+    """Protect current records first; mark each shortened field truthfully.
+
+    Recovery notes are conditional on required content being unavailable in
+    every current representation. A channel key alone does not prove that
+    a raw payload is complete, current, or sufficient for the task.
+    """
+    if not isinstance(record, dict):
+        return record
+    if protect_current and record.get("is_current"):
+        return dict(record)
+    compacted = _compact_persistent_record(
+        record,
+        NOTIFICATION_PERSISTENT_IM_HEAVY_FIELDS,
+        budget,
+        truncated_flag="text_truncated",
+    )
+    if (
+        isinstance(compacted, dict)
+        and compacted.get("text_truncated")
+        and lane is not None
+    ):
+        existing = compacted.get("comment")
+        note = lane.truncated_comment
+        if isinstance(existing, str) and existing:
+            if note not in existing:
+                compacted["comment"] = f"{existing} {note}"
+        else:
+            compacted["comment"] = note
+    return compacted
+
+
+def _compact_im_persistent_lane(
+    lane_payload: dict,
+    budget: int,
+    lane: _ImPersistentLane | None,
+    *,
+    protect_current: bool,
+) -> dict:
     """Compact one IM lane: keep every message and its identity fields."""
     compacted = dict(lane_payload)
     for key in ("messages", "referenced_messages"):
         records = compacted.get(key)
         if isinstance(records, list):
             compacted[key] = [
-                _compact_persistent_record(
-                    record, NOTIFICATION_PERSISTENT_IM_HEAVY_FIELDS, budget
+                _compact_im_persistent_record(
+                    record, budget, lane, protect_current=protect_current
                 )
                 for record in records
             ]
@@ -2899,9 +3101,21 @@ def _compact_im_persistent_lane(lane_payload: dict, budget: int) -> dict:
 
 
 def _compact_notification_persistent(
-    persistent: dict, budget: int, overflow_marker: dict, comment: str | None
+    persistent: dict,
+    budget: int,
+    overflow_marker: dict,
+    comment: str | None,
+    *,
+    protect_current: bool = False,
 ) -> dict:
-    """Return a fresh compacted copy of *persistent* at one per-field budget."""
+    """Return a fresh compacted copy of *persistent* at one per-field budget.
+
+    *protect_current* leaves any IM record flagged ``is_current`` untouched at
+    this budget tier — see ``_compact_im_persistent_record``. The per-record
+    IM truncated-message comment is only ever attached to a record that is
+    actually returned truncated below, so it never fires for the protected
+    current message (see ``_compact_im_persistent_record``).
+    """
     compacted: dict = {}
     for key, value in persistent.items():
         if key == NOTIFICATION_PERSISTENT_EMAIL_CHANNEL and isinstance(value, dict):
@@ -2909,11 +3123,16 @@ def _compact_notification_persistent(
         elif key == NOTIFICATION_PERSISTENT_MCP_KEY and isinstance(value, dict):
             compacted[key] = {
                 channel: (
-                    _compact_im_persistent_lane(lane, budget)
-                    if isinstance(lane, dict)
-                    else lane
+                    _compact_im_persistent_lane(
+                        lane_payload,
+                        budget,
+                        _IM_PERSISTENT_LANES_BY_CHANNEL.get(channel),
+                        protect_current=protect_current,
+                    )
+                    if isinstance(lane_payload, dict)
+                    else lane_payload
                 )
-                for channel, lane in value.items()
+                for channel, lane_payload in value.items()
             }
         else:
             compacted[key] = value
@@ -2938,7 +3157,10 @@ def _stub_persistent_record(record: dict) -> dict:
 
 
 def _drop_notification_persistent_records(
-    persistent: dict, max_chars: int | None = None
+    persistent: dict,
+    max_chars: int | None = None,
+    *,
+    passes: tuple[bool, ...] = (True, False),
 ) -> dict:
     """Replace the oldest messages with id-only stubs until the envelope fits.
 
@@ -2947,6 +3169,16 @@ def _drop_notification_persistent_records(
     leaves an ``{"id": ..., "event_id": ...}`` stub (so
     ``record_notification_persistent_delivery`` still records it and the agent
     never re-receives it forever) plus its id in the lane's ``dropped_ids``.
+
+    Runs one pass per entry in *passes* (default both): a ``True`` pass skips
+    any record flagged ``is_current`` (the producer's current/new message),
+    stubbing only obsolete history across every lane; a ``False`` pass also
+    stubs the current message once every other record is already a stub.
+    Callers that must not touch the current message yet pass ``(True,)``
+    alone. Email records never carry ``is_current``, so the ``True`` pass does
+    not skip or protect any of them — it already stubs eligible email records
+    exactly like the ``False`` pass would; only the IM lanes get a distinct
+    protected first pass ahead of their current message being touched.
     """
     lanes: list[tuple[dict, str]] = []
     email_lane = persistent.get(NOTIFICATION_PERSISTENT_EMAIL_CHANNEL)
@@ -2962,30 +3194,35 @@ def _drop_notification_persistent_records(
     if not lanes:
         return persistent
 
-    cursors = [0] * len(lanes)
-    progressed = True
     if max_chars is None:
         max_chars = _notification_persistent_max_chars()
-    while progressed:
-        if _notification_persistent_envelope_chars(persistent) <= max_chars:
-            return persistent
-        progressed = False
-        for slot, (lane_payload, key) in enumerate(lanes):
-            records = lane_payload[key]
-            index = cursors[slot]
-            while index < len(records) and not isinstance(records[index], dict):
-                index += 1
-            if index >= len(records):
-                cursors[slot] = index
-                continue
-            record = records[index]
-            records[index] = _stub_persistent_record(record)
-            dropped = lane_payload.setdefault("dropped_ids", [])
-            record_id = record.get("id")
-            if isinstance(record_id, str) and record_id and record_id not in dropped:
-                dropped.append(record_id)
-            cursors[slot] = index + 1
-            progressed = True
+
+    for protect_current in passes:
+        cursors = [0] * len(lanes)
+        progressed = True
+        while progressed:
+            if _notification_persistent_envelope_chars(persistent) <= max_chars:
+                return persistent
+            progressed = False
+            for slot, (lane_payload, key) in enumerate(lanes):
+                records = lane_payload[key]
+                index = cursors[slot]
+                while index < len(records) and (
+                    not isinstance(records[index], dict)
+                    or (protect_current and records[index].get("is_current"))
+                ):
+                    index += 1
+                if index >= len(records):
+                    cursors[slot] = index
+                    continue
+                record = records[index]
+                records[index] = _stub_persistent_record(record)
+                dropped = lane_payload.setdefault("dropped_ids", [])
+                record_id = record.get("id")
+                if isinstance(record_id, str) and record_id and record_id not in dropped:
+                    dropped.append(record_id)
+                cursors[slot] = index + 1
+                progressed = True
     return persistent
 
 
@@ -3102,6 +3339,13 @@ def _cap_notification_persistent(agent, persistent: dict) -> dict:
     file, no marker, byte-identical block.  Over the cap the full block is
     spilled to disk and the returned copy carries an ``overflow`` marker with
     the spill path, the original size, and truncated content.
+
+    Obsolete history is always fully compacted AND fully stubbed — both
+    degradation steps — before the current/new IM message is touched at all;
+    a record with bulky non-text fields that compaction alone cannot shrink
+    (heavy-field truncation caps ``text``/``caption`` only) still gets fully
+    stubbed ahead of the current message, which never has its own content
+    shortened merely because stubbing history was still pending.
     """
     full_chars = _notification_persistent_envelope_chars(persistent)
     max_chars = _notification_persistent_max_chars(agent)
@@ -3122,29 +3366,49 @@ def _cap_notification_persistent(agent, persistent: dict) -> dict:
         marker["spill_failed"] = True
         comment = NOTIFICATION_PERSISTENT_OVERFLOW_NO_SPILL_COMMENT
 
-    compacted = persistent
     widest = NOTIFICATION_PERSISTENT_COMPACT_BUDGETS[0]
-    for budget in NOTIFICATION_PERSISTENT_COMPACT_BUDGETS:
-        compacted = _compact_notification_persistent(
-            persistent, budget, marker, comment if budget >= widest else None
+    base = persistent
+    compacted = persistent
+    # Two full degradation tiers — current/new IM message protected in the
+    # first, unprotected only in the second (common-contract priority of
+    # current-message retention over obsolete history). Within EACH tier,
+    # compaction (shrink every heavy text field, budget by budget) always
+    # runs to exhaustion before stubbing (blank even non-text bulk that
+    # compaction cannot touch) is tried at that same tier, and the stubbed
+    # result becomes the base for the next tier — so obsolete history is
+    # always fully compacted AND fully stubbed before the current message is
+    # compacted, and fully compacted AND fully stubbed again before the
+    # current message is ever stubbed.
+    for protect_current in (True, False):
+        for budget in NOTIFICATION_PERSISTENT_COMPACT_BUDGETS:
+            compacted = _compact_notification_persistent(
+                base,
+                budget,
+                marker,
+                comment if budget >= widest else None,
+                protect_current=protect_current,
+            )
+            if (
+                _notification_persistent_envelope_chars(compacted)
+                <= max_chars
+            ):
+                return compacted
+        dropped = _drop_notification_persistent_records(
+            compacted, max_chars, passes=(protect_current,)
         )
-        if (
-            _notification_persistent_envelope_chars(compacted)
-            <= max_chars
-        ):
-            return compacted
-    dropped = _drop_notification_persistent_records(compacted, max_chars)
-    if _notification_persistent_envelope_chars(dropped) <= max_chars:
-        return dropped
-    return _drop_notification_persistent_terminal(dropped, marker, max_chars)
+        if _notification_persistent_envelope_chars(dropped) <= max_chars:
+            return dropped
+        base = dropped
+        compacted = dropped
+    return _drop_notification_persistent_terminal(compacted, marker, max_chars)
 
 
 def _notification_attention_envelope_chars(attention: dict) -> int:
     """Return the serialized size of the model-visible attention lane.
 
     Measures exactly what the provider sees under
-    ``_meta.agent_meta.notifications.attention``.  The canonical Anthropic,
-    OpenAI Chat/Responses, and Gemini ToolResultBlock converters re-serialize
+    ``_meta.agent_meta.notifications.attention``.  The canonical Anthropic and
+    OpenAI Chat/Responses ToolResultBlock converters re-serialize
     projected dictionaries with default ASCII escaping
     (``json.dumps(..., default=str)``, i.e. ``ensure_ascii=True``), so the
     ruler uses the same escaping: multilingual content is counted exactly as
@@ -3304,16 +3568,23 @@ def _compact_attention_node(node, budget: int) -> tuple[object, bool]:
 
     Walks the attention lane's per-source payloads (dicts and lists) and caps
     every heavy free-text field at *budget*; structural fields (ids, routing,
-    counts, subjects, dates) are left untouched.
+    counts, subjects, dates) are left untouched. When a heavy field is
+    actually shortened and its sibling ``<field>_truncated`` flag (the
+    producer's own naming convention: ``text_truncated``, ``preview_truncated``,
+    ``message_truncated``, ...) is present on the same dict, that flag is
+    forced ``True`` so a blanked field never survives paired with a stale
+    ``False`` that would read as complete content.
     """
     if isinstance(node, dict):
         out: dict = {}
         changed = False
+        truncated_fields: set[str] = set()
         for key, value in node.items():
             if key in NOTIFICATION_ATTENTION_HEAVY_FIELDS and isinstance(value, str):
                 new_value, this_changed = _truncate_persistent_value(value, budget)
                 if this_changed:
                     changed = True
+                    truncated_fields.add(key)
                 out[key] = new_value
             elif isinstance(value, (dict, list)):
                 new_value, this_changed = _compact_attention_node(value, budget)
@@ -3322,6 +3593,10 @@ def _compact_attention_node(node, budget: int) -> tuple[object, bool]:
                 out[key] = new_value
             else:
                 out[key] = value
+        for field in truncated_fields:
+            flag_key = f"{field}_truncated"
+            if flag_key in out:
+                out[flag_key] = True
         return out, changed
     if isinstance(node, list):
         out_list = []
@@ -3558,7 +3833,7 @@ def _cap_notification_attention(agent, attention: dict) -> dict:
     return _drop_notification_attention_records(attention, marker, comment, max_chars)
 
 
-def build_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
+def build_notification_persistent_payload(agent, notification_payload: dict, *, event_records: bool = False) -> dict | None:
     persistent: dict = {}
 
     email_payload = _build_email_notification_persistent_payload(
@@ -3569,7 +3844,7 @@ def build_notification_persistent_payload(agent, notification_payload: dict) -> 
 
     for lane in _IM_PERSISTENT_LANES:
         lane_payload = _build_im_notification_persistent_payload(
-            agent, notification_payload, lane
+            agent, notification_payload, lane, event_records=event_records
         )
         if lane_payload is not None:
             persistent.setdefault(NOTIFICATION_PERSISTENT_MCP_KEY, {})[
@@ -3721,7 +3996,11 @@ def _sanitize_im_notification_after_persistent(
     channel["data"] = minimal_data
     channel["instructions"] = (
         f"High-attention {lane.display_name} hook: use notification_persistent "
-        "for content/context; when handled, dismiss this notification."
+        "for content/context; when it already has the full current message and "
+        f"exact id, act from it directly — do not call {lane.display_name}'s "
+        "read/check merely to reread that same content. This event is delivered "
+        "once and is not re-attached automatically; act through the "
+        f"{lane.display_name} tool, whose own state is not cleared by delivery."
     )
 
 
@@ -3832,6 +4111,8 @@ def build_synthetic_meta_envelope(
         state[TOOL_META_TOKEN_USAGE_KEY] = token_usage
     if isinstance(context, dict) and context:
         state[TOOL_META_CONTEXT_KEY] = context
+    # Same small default snapshot as a real final carrier.
+    state = slim_agent_state_for_tail(state)
     envelope: dict = {
         TOOL_META_KEY: tool_meta,
         AGENT_META_KEY: {
@@ -3855,8 +4136,15 @@ def build_synthetic_meta_envelope(
     return envelope
 
 
-def _collect_active_notifications(agent):
-    """Return ``(payload, versions)`` for the current active notifications.
+def _collect_active_notifications(agent, *, full: bool = False):
+    """Return ``(payload, versions)`` for the undelivered active notifications.
+
+    ``payload`` carries only channels/events not yet delivered (see
+    :func:`pending_notification_payloads`); ``full=True`` — a deliberate
+    ``notification(action="check")`` read — carries the complete current
+    mirrors instead. ``payload`` is ``None`` when nothing is pending; the caller
+    distinguishes "nothing active" from "everything already delivered" through
+    ``versions.payloads``.
 
     ``versions`` is the ``CoherentAttentionRead`` the payload was built from, so
     the caller can commit the fingerprint **of the bytes it is about to
@@ -3895,7 +4183,14 @@ def _collect_active_notifications(agent):
             return None, None
         if not observed.payloads:
             return None, observed
-        return build_notification_payload(observed.payloads), observed
+        pending = (
+            observed.payloads
+            if full
+            else pending_notification_payloads(agent, observed.payloads)
+        )
+        if not pending:
+            return None, observed
+        return build_notification_payload(pending), observed
     except Exception:
         return None, None
 
@@ -3961,10 +4256,10 @@ def sanitize_email_notification_after_persistent(notification_payload: dict) -> 
     sanitized["data"] = {"email_ids": email_ids}
     sanitized["instructions"] = (
         "High-attention email hook: full unread content lives in "
-        "notification_persistent.email. Prefer email.dismiss after handling; "
-        "use email.read/reply for source-of-truth mailbox actions. When "
-        "handled through the email tool, the producer mirror updates or "
-        "clears this notification."
+        "notification_persistent.email. This event is delivered once and is not "
+        "re-attached automatically; use email.read/reply/dismiss for "
+        "source-of-truth mailbox actions. Handling mail through the email tool "
+        "updates the producer mirror."
     )
     notifications["email"] = sanitized
 
@@ -4004,6 +4299,262 @@ def _is_notification_check_placeholder(content) -> bool:
     own fingerprint-gated path and never reaches here.
     """
     return isinstance(content, dict) and content.get("_notification_placeholder") is True
+
+
+def notification_source_signatures(payloads: Mapping[str, Any]) -> dict[str, str]:
+    """Return bounded deterministic signatures for an observed channel snapshot."""
+    signatures: dict[str, str] = {}
+    for source, payload in payloads.items():
+        try:
+            material = _json.dumps(
+                payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            material = repr(payload).encode("utf-8", "replace")
+        signatures[str(source)] = _hashlib.sha256(material).hexdigest()
+    return signatures
+
+
+_SYSTEM_NOTIFICATION_CHANNEL = "system"
+
+
+def _system_event_signatures(payload: Any) -> dict[str, str]:
+    """Return ``event_id -> signature`` for the events inside a system payload."""
+    from .notifications import _system_events
+
+    signatures: dict[str, str] = {}
+    for event in _system_events(payload):
+        event_id = event.get("event_id") if isinstance(event, dict) else None
+        if isinstance(event_id, str) and event_id:
+            signatures[event_id] = notification_source_signatures({event_id: event})[
+                event_id
+            ]
+    return signatures
+
+
+def _pending_system_payload(agent, payload: Any) -> Any:
+    """Return the system payload restricted to undelivered events, or ``None``.
+
+    ``system.json`` is one aggregate file holding many independent events, so a
+    new event must not re-attach the older ones already delivered. Events
+    without a usable ``event_id`` are always treated as pending (fail toward
+    delivery, never toward silence).
+    """
+    from .notifications import _system_events, _system_payload_with_events
+
+    delivered = getattr(agent, "_notification_delivered_system_events", None)
+    if not isinstance(delivered, Mapping):
+        delivered = {}
+    if not _system_events(payload):
+        # No event list to compare: the aggregate itself is the only identity.
+        return payload
+    pending = []
+    for event in _system_events(payload):
+        event_id = event.get("event_id") if isinstance(event, dict) else None
+        if isinstance(event_id, str) and event_id:
+            signature = notification_source_signatures({event_id: event})[event_id]
+            if delivered.get(event_id) == signature:
+                continue
+        pending.append(event)
+    if not pending:
+        return None
+    if len(pending) == len(_system_events(payload)):
+        return payload
+    return _system_payload_with_events(
+        payload, pending, str(payload.get("published_at") or "")
+    )
+
+
+def _notification_record_signature(record: Any) -> str:
+    """Sign source material, excluding only derived message presentation fields."""
+    def material(value):
+        if isinstance(value, Mapping):
+            return {
+                key: material(item) for key, item in value.items()
+                if key not in {"is_current", "relative_time"}
+            }
+        if isinstance(value, list):
+            return [material(item) for item in value]
+        return value
+    return notification_source_signatures({"record": material(record)})["record"]
+
+
+def _notification_records(source: str, payload: Any) -> dict[str, str]:
+    """Known producer identities. Unknown/ID-less hooks remain versioned snapshots.
+
+    IM message identity includes per-update event IDs (callbacks/edits), sender,
+    routing and source content. Counts, cursors, headers and relative ages are
+    aggregate presentation, not additional events. Reply targets remain context
+    on a retained preview, not independent arrivals.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return {}
+    data = payload["data"]
+    records = {}
+    if source in {"system", "daemon", "email"}:
+        field = "emails" if source == "email" else "events"
+        values = data.get(field)
+        for record in values if isinstance(values, list) else []:
+            if not isinstance(record, dict):
+                continue
+            identity = record.get("id") if source == "email" else record.get("event_id")
+            if isinstance(identity, str) and identity:
+                records[identity] = _notification_record_signature(record)
+    elif source in {lane.source_key for lane in _IM_PERSISTENT_LANES}:
+        for preview in _im_preview_list({NOTIFICATIONS_KEY: {source: payload}}, source):
+            single = {NOTIFICATIONS_KEY: {source: {"data": {"previews": [preview]}}}}
+            route = {key: preview[key] for key in ("platform", "conversation_ref") if key in preview}
+            candidates = _im_persistent_messages_from_notifications(single, source)
+            lane = next(lane for lane in _IM_PERSISTENT_LANES if lane.source_key == source)
+            if lane.min_context:
+                # The established producer preview window bounds historical
+                # seed context (Telegram 20, WeChat/Feishu 10). Oversize legacy
+                # mirrors do not imply that older omitted context was delivered.
+                candidates = candidates[-lane.min_context:]
+            for record in candidates:
+                identity = _im_message_identity(record)
+                if identity:
+                    material = record
+                    if source == "mcp.whatsapp":
+                        # Native WhatsApp's latest record has from/type while
+                        # its recent window has fromMe. Compare their shared
+                        # source fields, not the current-to-history shape.
+                        material = {
+                            key: value for key, value in record.items()
+                            if key not in {"from", "fromMe", "direction", "type"}
+                        }
+                        outgoing = bool(record.get("fromMe")) or record.get("direction") in {"sent", "outgoing"}
+                        material["outgoing"] = outgoing
+                        peer = str(preview.get("conversation_ref", "")).removeprefix("whatsapp:")
+                        material["sender"] = "self" if outgoing else record.get("from") or peer
+                        # Native media type is already source text ([image],
+                        # [audio], etc.) in both current and recent records.
+                        # All other source extensions remain material above.
+                    records[identity] = _notification_record_signature({"message": material, "route": route})
+    return records
+
+
+def _pending_record_payload(agent, source: str, payload: Any) -> Any:
+    """Project a known mirror to new/materially changed records, without mutation."""
+    records = _notification_records(source, payload)
+    if not records:
+        return payload
+    ledger = getattr(agent, "_notification_delivered_events", {})
+    delivered = ledger.get(source, {}) if isinstance(ledger, Mapping) else {}
+    if source == "system":
+        delivered = getattr(agent, "_notification_delivered_system_events", {})
+    pending = {identity for identity, signature in records.items() if delivered.get(identity) != signature}
+    data = payload["data"]
+    projected = dict(payload)
+    projected["data"] = dict(data)
+    if source in {"system", "daemon", "email"}:
+        field, id_field = ("emails", "id") if source == "email" else ("events", "event_id")
+        values = [record for record in data[field] if not isinstance(record, dict) or record.get(id_field) not in records or record.get(id_field) in pending]
+        if not values:
+            return None
+        projected["data"][field] = values
+        if source == "email":
+            projected["data"]["email_ids"] = [record["id"] for record in values if isinstance(record, dict) and "id" in record]
+            projected["data"]["count"] = len(values)
+            projected["header"] = f"{len(values)} email events"
+        else:
+            projected["header"] = f"{len(values)} {source} notifications"
+        return projected
+    previews = []
+    for preview in _im_preview_list({NOTIFICATIONS_KEY: {source: payload}}, source):
+        single = {NOTIFICATIONS_KEY: {source: {"data": {"previews": [preview]}}}}
+        values = _im_persistent_messages_from_notifications(single, source)
+        values = [record for record in values if _im_message_identity(record) in pending]
+        if not values:
+            # Preserve omission/ID-less preview records rather than acknowledge
+            # content we cannot identify. They retain snapshot semantics.
+            if not _im_persistent_messages_from_notifications(single, source):
+                previews.append(dict(preview))
+            continue
+        retained = dict(preview)
+        retained["recent_messages"] = values
+        latest = preview.get("latest_incoming")
+        if isinstance(latest, dict) and _im_message_identity(latest) in pending:
+            retained["latest_incoming"] = latest
+        else:
+            retained.pop("latest_incoming", None)
+            # Never turn a generated legacy-preview display ID into a real
+            # producer reply/routing target. Only update an existing target.
+            if preview.get("message_ref"):
+                retained["message_ref"] = values[-1]["id"]
+            else:
+                retained.pop("message_ref", None)
+            retained.pop("event_id", None)
+        # The retained preview's routing/event fields and referenced_messages
+        # are copied verbatim: a new reply may require an already-seen target.
+        previews.append(retained)
+    if not previews:
+        return None
+    projected["data"]["previews"] = previews
+    projected["data"]["count"] = len(previews)
+    return projected
+
+
+def pending_notification_payloads(agent, payloads: Mapping[str, Any]) -> dict:
+    """Return only the channel payloads whose current state was never delivered.
+
+    This is the one shared delivered identity for the ACTIVE tool-result path
+    and the IDLE/ASLEEP synthesized-pair path. A channel counts as delivered
+    only after :func:`commit_delivered_notification_sources` recorded a
+    successful delivery of that exact observed state; an unchanged channel is
+    not attached again, a changed or new one is. Known system/daemon/email/IM
+    aggregates are projected by event/message identity and material content;
+    unknown ID-less hooks retain channel-version snapshot semantics.
+    """
+    delivered = getattr(agent, "_notification_delivered_source_signatures", None)
+    if not isinstance(delivered, Mapping):
+        delivered = {}
+    signatures = notification_source_signatures(payloads)
+    pending: dict = {}
+    for source, payload in payloads.items():
+        if delivered.get(str(source)) == signatures[str(source)]:
+            continue
+        payload = _pending_record_payload(agent, str(source), payload)
+        if payload is None:
+            continue
+        pending[source] = payload
+    return pending
+
+
+def commit_delivered_notification_sources(agent, payloads: Mapping[str, Any]) -> None:
+    """Record ``payloads`` (one coherent observation) as delivered.
+
+    Callers pass the observation the delivered bytes were built from, never a
+    later reread, so a concurrently published event stays pending. Channels
+    absent from ``payloads`` lose their mirror version, but known event/message
+    identities remain in the process-local ledger. We do not infer business
+    processing from observation. Delivery never touches producer/store state.
+    """
+    try:
+        agent._notification_delivered_source_signatures = (
+            notification_source_signatures(payloads)
+        )
+        ledger = getattr(agent, "_notification_delivered_events", {})
+        ledger = dict(ledger) if isinstance(ledger, Mapping) else {}
+        for source, payload in payloads.items():
+            records = _notification_records(str(source), payload)
+            if records:
+                ledger[str(source)] = {**ledger.get(str(source), {}), **records}
+        agent._notification_delivered_events = ledger
+        agent._notification_delivered_system_events = dict(ledger.get("system", {}))
+    except Exception:
+        pass
+
+
+def reset_delivered_notification_sources(agent) -> None:
+    """Forget empty mirror versions, not already delivered event identities.
+
+    The event ledger lasts for this agent process, including ordinary context
+    rebuild/molt/resync. A new Agent after restart starts a fresh ledger.
+    """
+    agent._notification_delivered_source_signatures = {}
+    if not isinstance(getattr(agent, "_notification_delivered_system_events", None), Mapping):
+        agent._notification_delivered_system_events = {}
 
 
 def _commit_notification_fp(agent, delivered=None) -> None:
@@ -4059,37 +4610,48 @@ def attach_active_notifications(
     *,
     prior_holder: dict | None = None,
 ) -> dict | None:
-    """Attach the current notification payload to the final agent_meta carrier.
+    """Attach not-yet-delivered notification state to the final agent_meta carrier.
 
-    The current channel payload is merged into the newest final
-    ``ToolResultBlock`` on every eligible batch, including when its material
-    content is unchanged. ``agent._notification_payload_signature`` remains for
-    delivery diagnostics and persistent-message bookkeeping; it is not an
-    attachment gate. Older holders remain historical traces.
+    Delivery is one-shot. The shared delivered identity
+    (``agent._notification_delivered_source_signatures`` plus per-event
+    ``_notification_delivered_system_events``) is committed only when this
+    function actually stamps a final carrier — or when the IDLE/ASLEEP
+    synthesized pair is injected — so an unchanged event is never attached or
+    re-delivered through either path, while a new or changed event still is.
+    ``agent._notification_payload_signature`` remains a delivery diagnostic.
+    Older holders remain historical traces and are never rewritten. Producer
+    and notification files are never modified by delivery.
+
+    Serialized under ``agent._notification_sync_lock`` (when present) so an
+    IDLE sync and an ACTIVE batch cannot both deliver the same state.
 
     Contract:
         * When there are no active notifications, no stamping happens,
           ``_notification_fp`` is left untouched, ``prior_holder`` (if any) is
           released (a synthesized pair is skeletonized; a normal tool result
           RETAINS its payload as a historical trace),
-          ``_notification_payload_signature`` is reset to ``None``
-          (so a later reappearance of the same payload attaches afresh as the
-          first active payload), and ``None`` is returned.
-        * When active notifications exist but this batch has no final
+          ``_notification_payload_signature`` is reset to ``None`` and the
+          mirror-version bookkeeping is forgotten (known delivered event IDs
+          remain in the process-local ledger), and ``None`` is returned.
+        * When active notifications exist but are all already delivered, nothing
+          is stamped, the live holder is kept, the fingerprint is committed for
+          the observed state, and ``prior_holder`` is returned.
+        * When undelivered notifications exist but this batch has no final
           ``ToolResultBlock`` to receive them, the prior holder is kept intact,
-          ``_notification_fp`` is left uncommitted, and ``prior_holder`` is
-          returned — the state can still be delivered later.
-        * The current payload is copied for both unchanged and changed
-          signatures, including a deliberate ``notification(action="check")``
-          read. The prior holder is released (a
+          nothing is marked delivered, and ``prior_holder`` is returned — the
+          state can still be delivered later.
+        * Undelivered channels/events are stamped once. A deliberate
+          ``notification(action="check")`` read on the final result always
+          receives the complete current mirrors (a read, not a replay) and
+          marks them delivered. The prior holder is released (a
           synthesized pair is skeletonized; a normal tool result RETAINS its old
           payload as a historical trace — timely transient semantics, Jason
           #4307), the same ``notifications`` + ``notification_guidance`` payload
           shape used by the synthesized notification pair is stamped under
-          ``_meta`` on the latest final result, the fingerprint is
-          committed, the new signature is recorded, and that dict is returned as
-          the new holder.  Only the newest emitted payload is current;
-          model-facing full-history serialization preserves every
+          ``_meta`` on the latest final result, the fingerprint and delivered
+          identity (taken from the same observation the stamped bytes came from)
+          are committed, and that dict is returned as the new holder.
+          Model-facing full-history serialization preserves every
           normal-result holder's content and does not strip ``notifications``
           or ``notification_guidance`` keys (see
           ``lingtai.llm.interface_converters``).
@@ -4112,11 +4674,43 @@ def attach_active_notifications(
     the same notification state from being delivered twice (once via tool-result
     meta, again via the synthesized pair).
     """
-    payload, delivered_versions = _collect_active_notifications(agent)
+    lock = getattr(agent, "_notification_sync_lock", None)
+    if not (hasattr(lock, "__enter__") and hasattr(lock, "__exit__")):
+        # Partial test doubles carry no sync lock.
+        return _attach_active_notifications_locked(
+            agent, tool_results, prior_holder=prior_holder
+        )
+    with lock:
+        return _attach_active_notifications_locked(
+            agent, tool_results, prior_holder=prior_holder
+        )
+
+
+def _attach_active_notifications_locked(
+    agent,
+    tool_results: list,
+    *,
+    prior_holder: dict | None = None,
+) -> dict | None:
     target = _final_tool_result_block(tool_results)
+    # A deliberate check read is a read, not a replay: it gets the complete
+    # current mirrors even when they were already delivered automatically.
+    is_check_read = target is not None and _is_notification_check_placeholder(
+        getattr(target, "content", None)
+    )
+    payload, delivered_versions = _collect_active_notifications(
+        agent, full=is_check_read
+    )
     # A failed or unstable store read is not an authoritative empty state.
     # Preserve the existing live holder and leave fingerprints uncommitted.
     if delivered_versions is None:
+        return prior_holder
+    if not payload and delivered_versions.payloads:
+        # Everything active was already delivered once: attach nothing, keep the
+        # live holder, and only advance the fingerprint/delivered identity to
+        # the observed state (a delivered channel may have disappeared).
+        commit_delivered_notification_sources(agent, delivered_versions.payloads)
+        _commit_notification_fp(agent, delivered_versions)
         return prior_holder
     if not payload:
         # Explicitly clear the current axis on the newest final carrier. Older
@@ -4136,26 +4730,20 @@ def attach_active_notifications(
             agent._notification_payload_signature = None
         except Exception:
             pass
+        reset_delivered_notification_sources(agent)
         return None
 
     if target is None:
-        # Active notifications exist, but this batch has no final
-        # result to receive the moving payload. Keep the prior live holder
-        # (if any) intact and leave _notification_fp uncommitted so the
-        # state can still be delivered later via another tool result or
-        # the IDLE synthesized-pair path.
+        # Undelivered notifications exist, but this batch has no final
+        # result to receive them. Keep the prior live holder (if any) intact
+        # and mark nothing delivered so the state can still be delivered later
+        # via another tool result or the IDLE synthesized-pair path.
         return prior_holder
 
-    # Signature and placeholder status remain delivery/accounting inputs only;
-    # the current payload is always copied onto the final carrier.
+    # The signature is a delivery diagnostic only.
     signature = notification_payload_signature(payload)
-    is_check_read = _is_notification_check_placeholder(getattr(target, "content", None))
-    unchanged = signature == getattr(agent, "_notification_payload_signature", None)
 
-    # ``signature`` and ``is_check_read`` remain delivery/accounting inputs only;
-    # an unchanged active payload is still copied onto this final carrier.
-
-    # Material change (or deliberate check read). Release the previous holder:
+    # New delivery (or deliberate check read). Release the previous holder:
     # a synthesized pair is skeletonized; a normal tool result keeps its old
     # payload as a historical trace (only the newest emission is current).
     if prior_holder is not None:
@@ -4164,7 +4752,7 @@ def attach_active_notifications(
 
     # Nest the canonical notification payload under the result's agent_meta
     # sidecar. Handler content is never used as a transport holder.
-    persistent_payload = build_notification_persistent_payload(agent, payload)
+    persistent_payload = build_notification_persistent_payload(agent, payload, event_records=True)
     # Move (not duplicate): curated durable IM fields are always stripped
     # from the model-visible ephemeral lane, even when every message id was
     # already delivered and no new persistent block is emitted this round.
@@ -4193,20 +4781,23 @@ def attach_active_notifications(
         agent_meta.setdefault("notifications", {})["persistent"] = persistent_payload.get(
             NOTIFICATION_PERSISTENT_KEY, {}
         )
-        if not unchanged or is_check_read:
-            record_notification_persistent_delivery(
-                agent,
-                persistent_payload,
-                tool_call_id=_result_tool_call_id(target),
-            )
+        record_notification_persistent_delivery(
+            agent,
+            persistent_payload,
+            tool_call_id=_result_tool_call_id(target),
+        )
     # Register this dict as the new live holder.
     agent._notification_live_holder = target
 
-    # Record the new signature so a subsequent unchanged batch is recognized.
     try:
         agent._notification_payload_signature = signature
     except Exception:
         pass
+
+    # Mark delivered exactly what this carrier received: the identity comes from
+    # the same coherent observation the payload was built from, never a reread,
+    # so an event published meanwhile stays pending for the next delivery.
+    commit_delivered_notification_sources(agent, delivered_versions.payloads)
 
     # Commit the fingerprint so the IDLE-path `_sync_notifications` will
     # see fp == agent._notification_fp and skip the synthesized pair for
@@ -4477,9 +5068,9 @@ def attach_active_runtime(
 
       * Build the candidate ``agent_meta`` from the final block's private runtime
         capture:
-        kernel runtime state, including token/context/reconstruction state, plus
-        ``elapsed_ms`` + ``active_turn_tool_calls``
-        + ``current_tool_result_chars`` + a slimmed dynamic ``adapter_comment``.
+        the slim :func:`slim_agent_state_for_tail` projection (current time,
+        context size, active warnings and one-shot events).  Full diagnostics
+        are on demand via ``system(action="meta")``.
       * Compute the diagnostic signature and record it.  Always promote the
         complete ``agent_meta`` + the ``_meta.agent_meta.guidance`` ref onto
         the new target and return the new holder.  The prior holder RETAINS its
@@ -4548,28 +5139,15 @@ def attach_active_runtime(
         return prior_holder
 
     agent_state = pending.get("agent_state", {}) if isinstance(pending, dict) else {}
-    agent_meta: dict = {"agent_state": dict(agent_state) if isinstance(agent_state, dict) else {}}
-    agent_meta.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
-    # Defensive backstop: current_time belongs in agent_state. Hand-built tests
-    # or future producers must not create a second top-level state axis.
-    agent_meta.pop(TOOL_META_CURRENT_TIME_KEY, None)
-    # Context/rebuild/molt transit keys belong in agent_state; keep them out of
-    # the compatibility signature's top-level carrier.
-    agent_meta.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
-    agent_meta.pop(TOOL_META_CONTEXT_EVENT_PENDING_KEY, None)
-    calls = _active_turn_tool_calls(agent)
-    if calls is not None:
-        agent_meta["active_turn_tool_calls"] = calls
-    agent_meta["current_tool_result_chars"] = current_tool_result_chars(
-        agent, extra_results=tool_results
-    )
-    # The adapter_comment carries both dynamic per-turn scalars and static
-    # rule-like prose plus a long cache ledger.  The static content is resident
-    # in the ``meta_guidance`` system-prompt section, so the tail keeps only the
-    # slim dynamic view plus a ref back to that section.
-    comment = dynamic_adapter_comment(agent)
-    if comment:
-        agent_meta["adapter_comment"] = slim_adapter_comment_for_tail(comment)
+    # The default tail is deliberately small: time, context size, and active
+    # warnings/events only.  Full diagnostics (cumulative token/cache numbers,
+    # result-size candidates, adapter state) are on demand via
+    # ``system(action="meta")``; see :func:`slim_agent_state_for_tail`.
+    agent_meta: dict = {
+        "agent_state": slim_agent_state_for_tail(
+            agent_state if isinstance(agent_state, dict) else {}
+        )
+    }
 
     # The signature is diagnostic/compatibility state only. The final block
     # always receives the newest whole snapshot.
@@ -4591,10 +5169,6 @@ def attach_active_runtime(
                and "transient" in existing_agent_meta["guidance"] else {}),
         },
     }
-    # Keep runtime diagnostics alongside the state, never as a second wrapper.
-    target_block.metadata[AGENT_META_KEY]["agent_state"].update(
-        {k: v for k, v in agent_meta.items() if k != "agent_state"}
-    )
     try:
         agent._agent_meta_signature = signature
     except Exception:

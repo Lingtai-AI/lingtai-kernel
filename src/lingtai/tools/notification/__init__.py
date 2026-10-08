@@ -1,17 +1,10 @@
-"""Notification's declared official host-plugin slice.
+"""Official host-plugin family for notification mirrors, hooks, and delay.
 
-``notification`` remains the sole model-facing surface for reading notification
-mirrors, atomically dismissing a mirror target, managing hook registrations,
-and applying consumer-only delay.  This module owns only the LTP family and its
-small input/result adaptations.  Notification Core continues to own real
-producer, dismissal, delay, and Store state; the declared plugin receives those
-operations through one narrow ``notification_state`` host port rather than a
-whole Agent.
-
-The public tool name, nine operational actions, strict operational input/result
-shapes, and Core authorization gates are unchanged. This slice adds the generic
-reserved read-only ``settings`` action immediately before ``manual``. The family
-is bound to the least-privilege host facade and mounted by the kernel registrar.
+This module adapts the strict LTP family only. Notification Core owns producer,
+delay, and Store state behind the narrow ``notification_state`` port; the public
+actions are ``check | add | drop | edit | list | delay`` with read-only
+``settings`` before ``manual``. There is no public dismiss action: delivery is
+one-shot and never clears producer or mirror state.
 """
 from __future__ import annotations
 
@@ -68,79 +61,6 @@ def _adapt_manual_result(mcp_result: dict[str, Any]) -> dict[str, Any]:
     if "error" in mcp_result:
         flat["error"] = mcp_result["error"]
     return flat
-
-
-def _dismiss_channel(state: "NotificationStatePort", args: dict[str, Any]) -> dict[str, Any]:
-    """Adapt a whole-channel dismissal; Core owns every policy decision."""
-    channel = args.get("channel")
-    if channel is None:
-        state.log("notification_dismiss_missing_channel")
-        return {
-            "status": "error",
-            "reason": "missing_channel",
-            "message": (
-                "notification(action='dismiss_channel') requires "
-                "input={'channel': '<name>', ...}."
-            ),
-        }
-    if args.get("event_id") or args.get("ref_id"):
-        return {
-            "status": "error",
-            "reason": "channel_dismiss_rejects_event_target",
-            "channel": channel,
-            "message": (
-                "dismiss_channel clears a whole channel; use dismiss_event "
-                "(event_id=...) or dismiss_ref (ref_id=...) for a single "
-                "system event."
-            ),
-        }
-    return state.dismiss(
-        channel,
-        force=bool(args.get("force", False)),
-        reason=args.get("reason"),
-    )
-
-
-def _dismiss_event(state: "NotificationStatePort", args: dict[str, Any]) -> dict[str, Any]:
-    """Adapt a targeted system event dismissal; Core owns target policy."""
-    event_id = args.get("event_id")
-    if not event_id:
-        state.log("notification_dismiss_missing_event_id")
-        return {
-            "status": "error",
-            "reason": "missing_event_id",
-            "message": (
-                "notification(action='dismiss_event') requires "
-                "input={'event_id': '<id>', ...}."
-            ),
-        }
-    return state.dismiss(
-        args.get("channel", "system"),
-        force=bool(args.get("force", False)),
-        reason=args.get("reason"),
-        event_id=event_id,
-    )
-
-
-def _dismiss_ref(state: "NotificationStatePort", args: dict[str, Any]) -> dict[str, Any]:
-    """Adapt a targeted system ref dismissal; Core owns target policy."""
-    ref_id = args.get("ref_id")
-    if not ref_id:
-        state.log("notification_dismiss_missing_ref_id")
-        return {
-            "status": "error",
-            "reason": "missing_ref_id",
-            "message": (
-                "notification(action='dismiss_ref') requires "
-                "input={'ref_id': '<id>', ...}."
-            ),
-        }
-    return state.dismiss(
-        args.get("channel", "system"),
-        force=bool(args.get("force", False)),
-        reason=args.get("reason"),
-        ref_id=ref_id,
-    )
 
 
 def _delay(state: "NotificationStatePort", args: dict[str, Any]) -> dict[str, Any]:
@@ -233,9 +153,6 @@ def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
     read_settings = state.read_settings
     handlers: dict[str, Callable[["NotificationStatePort", dict[str, Any]], dict[str, Any]]] = {
         "check": _check,
-        "dismiss_channel": _dismiss_channel,
-        "dismiss_event": _dismiss_event,
-        "dismiss_ref": _dismiss_ref,
         "add": _add_hook,
         "drop": _drop_hook,
         "edit": _edit_hook,

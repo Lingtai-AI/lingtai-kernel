@@ -75,6 +75,7 @@ class RootProviderAdmission:
 
     correlation_id: str
     policy_version: str
+    connection_authority_required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +261,55 @@ def _discard_derived_launch_decision(
 _current_parent: ContextVar[ProviderAdmissionParent | None] = ContextVar(
     "lingtai_current_provider_admission", default=None
 )
+_current_connection_port: ContextVar[ProviderCallAdmissionPort | None] = ContextVar(
+    "lingtai_current_connection_provider_port", default=None
+)
+_current_connection_derived_port: ContextVar[DerivedLaunchAdmissionPort | None] = (
+    ContextVar("lingtai_current_connection_derived_port", default=None)
+)
+
+
+def bind_connection_admission_ports(
+    provider_port: ProviderCallAdmissionPort,
+    derived_port: DerivedLaunchAdmissionPort,
+) -> tuple[Token, Token]:
+    """Bind an attached connection's authority to this logical turn only."""
+    return (
+        _current_connection_port.set(provider_port),
+        _current_connection_derived_port.set(derived_port),
+    )
+
+
+def clear_connection_admission_ports(tokens: tuple[Token, Token]) -> None:
+    _current_connection_derived_port.reset(tokens[1])
+    _current_connection_port.reset(tokens[0])
+
+
+class ConnectionScopedProviderAdmissionPort:
+    """Resident service gate: generic turns retain local policy, attached turns do not."""
+
+    def authorize_provider_call(
+        self, parent: ProviderAdmissionParent, call_class: ProviderCallClass
+    ) -> ProviderCallDecision:
+        root = parent.root if isinstance(parent, DerivedProviderAdmission) else parent
+        if (
+            not isinstance(root, RootProviderAdmission)
+            or not root.connection_authority_required
+        ):
+            return ProviderCallDecision(ProviderAdmissionState.GRANTED, "legacy_default")
+        port = _current_connection_port.get()
+        if port is None:
+            return ProviderCallDecision(
+                ProviderAdmissionState.INDETERMINATE,
+                "connection_authority_unavailable",
+                ProviderAdmissionDecisionSource.TRANSPORT,
+            )
+        return port.authorize_provider_call(parent, call_class)
+
+    @staticmethod
+    def allow_unbound_local_call() -> bool:
+        """Uncorrelated local ingress retains its existing provider behavior."""
+        return _current_connection_port.get() is None
 
 
 def bind_provider_admission(parent: ProviderAdmissionParent) -> Token:
@@ -286,6 +336,8 @@ def clear_current_provider_admission() -> None:
     """
 
     _current_parent.set(None)
+    _current_connection_port.set(None)
+    _current_connection_derived_port.set(None)
 
 
 def current_provider_admission() -> ProviderAdmissionParent | None:
@@ -319,6 +371,14 @@ def require_derived_launch_admission(
 
     if not isinstance(capability, DerivedLaunchCapability):
         raise TypeError("derived launch capability must be typed")
+    root = current_provider_admission()
+    if (
+        port is None
+        and isinstance(root, RootProviderAdmission)
+        and root.connection_authority_required
+    ):
+        port = _current_connection_derived_port.get()
+        required = True
     if port is None:
         if required:
             raise DerivedLaunchAdmissionError(
@@ -383,6 +443,11 @@ def require_provider_admission(port: ProviderCallAdmissionPort | None) -> None:
         return
     parent = current_provider_admission()
     if parent is None:
+        if (
+            isinstance(port, ConnectionScopedProviderAdmissionPort)
+            and port.allow_unbound_local_call()
+        ):
+            return
         raise ProviderAdmissionError("missing_provider_admission")
     call_class = current_provider_call_class()
     try:
@@ -499,6 +564,9 @@ __all__ = [
     "DerivedProviderAdmission",
     "ProviderAdmittedChatSession",
     "ProviderAdmittedLLMService",
+    "ConnectionScopedProviderAdmissionPort",
+    "bind_connection_admission_ports",
+    "clear_connection_admission_ports",
     "DerivedLaunchAdmissionError",
     "DerivedLaunchAdmissionPort",
     "DerivedLaunchCapability",

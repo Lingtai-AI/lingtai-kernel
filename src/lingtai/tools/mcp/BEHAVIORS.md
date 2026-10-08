@@ -29,7 +29,7 @@ commands must run from the repo root with the project's Python.
 - **id**: MC001
 - **title**: info is read-only and any input field fails before the registry is re-read
 - **guards**: `mcp-contract` § Tool surface
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` with an `mcp_registry.jsonl`
 - **estimate**: ≈ 15 minutes
 

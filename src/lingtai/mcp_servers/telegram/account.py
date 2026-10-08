@@ -188,7 +188,7 @@ class TelegramAccount:
         # this account is one of several Telegram bots/chats.
         self._taskcard_enabled = taskcard_enabled or (lambda: True)
         self._set_taskcard_enabled = set_taskcard_enabled
-        self._taskcard_normal_rows = taskcard_normal_rows or (lambda: 1)
+        self._taskcard_normal_rows = taskcard_normal_rows or (lambda: 3)
         self._set_taskcard_normal_rows = set_taskcard_normal_rows
         self._taskcard_locale = taskcard_locale or (lambda: "en")
         self._set_taskcard_locale = set_taskcard_locale
@@ -657,8 +657,7 @@ class TelegramAccount:
         elif layer_key == "4":
             # Layer 4: Mind / durable stores
             lines.append("🧠 *Layer 4 · Mind & Memory*")
-            soul_text = f"{int(float(data['soul_delay']) // 60)}m" if data["soul_delay"] else "off"
-            lines.append(f"  Language: {data['language']}  |  Soul delay: {soul_text}")
+            lines.append(f"  Language: {data['language']}")
             store_parts = [
                 f"knowledge={data['knowledge_count']}",
                 f"custom skills={data['skill_count']}",

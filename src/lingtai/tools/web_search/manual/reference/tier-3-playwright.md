@@ -1,87 +1,40 @@
 ---
 related_files:
-  - src/lingtai/tools/web_search/manual/reference/stealth.md
   - src/lingtai/tools/web_search/manual/SKILL.md
+  - src/lingtai/tools/web_search/manual/reference/tier-quick-refs/SKILL.md
+  - src/lingtai/tools/web_search/manual/reference/stealth.md
 maintenance: |
-  Keep this bundled web-search reference synchronized with its parent manual and implementation when behavior or routing changes.
+  Keep this public JS-rendering fallback aligned with the tier index and stealth
+  reference. Verify the installed Playwright API; do not imply login or
+  access-control bypass authority.
 ---
-# Tier 3 — Playwright Stealth
+# Tier 3 — Playwright for public JS pages
 
-> External legacy recipe, not a built-in `web` engine or installed-capability
-> promise. Start with public `web(search/browse)`; select a separate fallback
-> explicitly through [web-manual](../SKILL.md) only when needed. Check the
-> selected vendor's current API, dependencies, account access and quotas before
-> use. These examples grant no install, credential/config change, paid use or
-> access-control bypass authority. No live vendor validation is claimed here.
-
-> Part of the [web-manual](../SKILL.md) skill.
-> See also: [stealth.md](./stealth.md) for comprehensive anti-detection techniques.
-
-**When it applies:** JS-rendered pages, login-gated content, sites blocking simple requests.
-**Tools:** `playwright` + `playwright-stealth` (verify the selected environment).
-**Speed:** ~3-5s per page.
-**⚠️ CRITICAL:** For Nature / Springer, use `domcontentloaded`, NOT `networkidle` (it hangs forever).
+Use only for an authorized public page that genuinely needs JavaScript after
+static/API extraction fails. Verify the selected environment's installed
+Playwright and stealth APIs; this reference does not install dependencies.
 
 ```python
 from playwright.sync_api import sync_playwright
-
-# Select the API exposed by the installed playwright-stealth package
-try:
-    from playwright_stealth import Stealth
-    _apply_stealth = lambda page: Stealth().use_sync(page)
-except ImportError:
-    from playwright_stealth import stealth_sync
-    _apply_stealth = lambda page: stealth_sync(page)
-
-def tier3(url, wait_time=3):
-    """Playwright stealth — JS-rendered or protected pages."""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        _apply_stealth(page)
-
-        # Block images/styles/fonts for speed
-        def block_resources(route):
-            if route.request.resource_type in ["image", "stylesheet", "font", "media"]:
-                route.abort()
-            else:
-                route.continue_()
-        page.route("**/*", block_resources)
-
-        # CRITICAL: do NOT use networkidle (Nature / Springer hang forever)
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(wait_time * 1000)
-
-        content = page.inner_text("body")
-        html = page.content()
-        title = page.title()
-        final_url = page.url
-        browser.close()
-
-        return {
-            "url": final_url,
-            "method": "tier3-playwright-stealth",
-            "title": title,
-            "body_preview": content[:5000],
-            "html_len": len(html),
-        }
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    text = page.inner_text("body")
+    browser.close()
 ```
 
-### Advanced Stealth Techniques
+For Nature or Springer use `domcontentloaded`, prefer it over `networkidle` (long-lived
+connections can hang). Keep a complete result when the caller needs one; do
+not silently return a preview as if it were the page. Forms, login, uploads,
+SSO, and human verification belong to
+[agent-native-browser.md](agent-native-browser.md). Never solve CAPTCHA,
+impersonate a user, or bypass a paywall/robots/access control.
 
-Read the corresponding owner sections in [stealth.md](stealth.md):
-[manual overrides](stealth.md#manual-stealth-overrides),
-[persistent sessions](stealth.md#session-management-cookie-persistence),
-[rate limiting](stealth.md#rate-limiting), and
-[User-Agent rotation](stealth.md#user-agent-rotation). They own the detailed
-recipes; do not maintain a second set of browser-version strings here.
-A simple delay is `base + random.random() * jitter`; the deep reference adds
-per-domain tracking and exponential backoff. Persist storage only in the
-explicitly authorized dedicated session directory.
+For fingerprinting, rate limiting, and detection-specific hazards load
+[stealth.md](stealth.md), which owns those details.
 
-**Use when:** Tier 1 / 1.5 / 2 fail, or the page genuinely requires JS rendering within authorized access.
-
-**Going deeper:** fingerprinting/detection theory, additional manual overrides, proxy
-strategies, session/cookie persistence, CAPTCHA handling, rate limiting, per-site
-stealth notes, and `nodriver` all live in [stealth.md](./stealth.md) — read it when
-`playwright-stealth` alone still gets detected.
+The retained helper checks stealth v2 `Stealth().use_sync(page)` then legacy
+`stealth_sync(page)`; verify your installed version instead of assuming either.
+That helper blocks visual resources and truncates its result; for screenshots
+or complete-text validation use an explicitly suitable harness, not its preview.

@@ -19,7 +19,6 @@ _KEYS = (
     "api_key",
     "api_key_env",
     "max_tokens",
-    "api_compat",
     "wire_api",
     "default_headers",
     "token_path",
@@ -162,8 +161,7 @@ def test_local_inventory_is_exact_applied_snapshot_and_has_true_defaults(
     assert rows["model"]["default"] is None
     assert rows["max_tokens"]["current"] == 321
     assert rows["max_tokens"]["default"] == 1024
-    assert rows["api_compat"]["current"] is None
-    assert rows["api_compat"]["default"] is None
+    assert "api_compat" not in rows
     assert rows["wire_api"]["current"] == "chat_completions"
     assert rows["wire_api"]["default"] == "chat_completions"
     assert rows["max_output_tokens"]["current"] is None
@@ -265,10 +263,8 @@ def test_inherited_route_snapshots_only_the_same_active_provider(tmp_path):
     active.api_key = "active-private-key"
     active._provider_defaults = {
         "openai": {
-            "api_compat": "openai",
             "default_headers": {"X-Private": "active-private-header"},
             "wire_api": "auto",
-            "use_responses_api": True,
         }
     }
     agent = _StubAgent(tmp_path)
@@ -292,7 +288,7 @@ def test_inherited_route_snapshots_only_the_same_active_provider(tmp_path):
     assert rows["model"]["default"] is None
     assert rows["wire_api"]["current"] == "chat_completions"
     assert rows["wire_api"]["default"] == "chat_completions"
-    assert rows["api_compat"]["current"] is None
+    assert "api_compat" not in rows
     rendered = repr(result)
     for private in (
         "https://active-private.invalid/v1",
@@ -303,9 +299,12 @@ def test_inherited_route_snapshots_only_the_same_active_provider(tmp_path):
         assert private not in rendered
 
 
-def test_api_compat_reports_only_a_protocol_selected_by_the_resolver(tmp_path):
+def test_legacy_api_compat_is_neither_a_row_nor_a_route_selector(tmp_path):
+    """The retired ``custom`` provider stays manual-only (no inventory), and a
+    leftover ``api_compat`` kwarg on a supported family neither selects a
+    protocol nor appears as a settings row."""
     with patch("lingtai.services.vision.create_vision_service") as factory:
-        result = _show(
+        removed = _show(
             setup(
                 _StubAgent(tmp_path),
                 provider="custom",
@@ -314,13 +313,32 @@ def test_api_compat_reports_only_a_protocol_selected_by_the_resolver(tmp_path):
                 api_compat="anthropic",
             )
         )
+        factory.assert_not_called()
+    assert removed == {
+        "status": "failed",
+        "error_code": "SETTINGS_UNAVAILABLE",
+        "message": "settings inventory is unavailable",
+    }
+
+    with patch("lingtai.services.vision.create_vision_service") as factory:
+        result = _show(
+            setup(
+                _StubAgent(tmp_path),
+                provider="anthropic",
+                api_key="fake-relay-key",
+                model="relay-vision-model",
+                api_compat="openai",
+            )
+        )
         factory.assert_called_once_with(
             "anthropic",
             api_key="fake-relay-key",
             model="relay-vision-model",
         )
-
-    assert _by_key(result)["api_compat"]["current"] == "anthropic"
+    rows = _by_key(result)
+    assert "api_compat" not in rows
+    assert rows["provider"]["current"] == "anthropic"
+    assert rows["wire_api"]["current"] is None
 
 
 def test_every_comment_targets_its_exact_owner_manual_heading(tmp_path):
@@ -402,3 +420,37 @@ def test_ordinary_analyze_action_is_unchanged(tmp_path):
     service.analyze_image.assert_called_once_with(
         str(image), prompt="Describe what you see in this image."
     )
+
+
+def test_local_manual_selects_provider_before_owner_file_example(tmp_path):
+    import re
+
+    manual = Path(__file__).resolve().parents[1] / "src/lingtai/tools/vision/manual"
+    body = (manual / "reference/backends.md").read_text(encoding="utf-8")
+    examples = [json.loads(value) for value in re.findall(r"```json\n(.*?)\n\s*```", body, re.S)]
+    capability = examples[0]["vision"]
+    assert capability["provider"] == "local"
+    document = examples[1]
+    _write_local_settings(tmp_path, **{k: v for k, v in document.items() if k != "schema_version"})
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as factory:
+        # File alone must not select a route or construct a client.
+        unselected = setup(_StubAgent(tmp_path))
+        assert "settings" not in _show(unselected)
+        factory.assert_not_called()
+        selected = setup(_StubAgent(tmp_path), **capability)
+        assert _by_key(_show(selected))["provider"]["current"] == "local"
+        assert factory.call_args.kwargs["model"] == document["model"]
+    assert "file alone does not select" in body
+
+
+def test_setting_anchor_routes_to_exact_detail_and_redaction_is_explicit():
+    manual = Path(__file__).resolve().parents[1] / "src/lingtai/tools/vision/manual"
+    root = (manual / "SKILL.md").read_text(encoding="utf-8")
+    reference = (manual / "reference/settings.md").read_text(encoding="utf-8")
+    for key in _KEYS:
+        slug = key.replace("_", "-")
+        section = root.split(f"## Setting: {slug}\n", 1)[1].split("\n## ", 1)[0]
+        assert f"reference/settings.md#setting-{slug}" in section
+        assert f"## Setting: {slug}" in reference
+    assert "both current and default" in reference
+    assert "even when unused" in reference

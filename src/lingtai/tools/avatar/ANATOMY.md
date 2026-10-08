@@ -79,16 +79,15 @@ family (`src/lingtai/tools/CONTRACT.md`) whose actions are canonical children:
 
 | Action | Own strict `input` | Description |
 |------|------|-------------|
-| `spawn` | `name`, `type`, `comment`, `dry_run`, `confirm` | Spawn a new avatar agent (shallow or deep). `dry_run` previews only; `confirm` acknowledges the mission-quality gate. |
+| `spawn` | `name`, `type`, `dry_run`, `confirm` | Spawn a new avatar agent (shallow or deep). `dry_run` previews only; `confirm` acknowledges the mission-quality gate. |
 | `settings` | `{}` | Return 16 immutable Avatar defaults, validation constraints, and lifecycle policies as exact five-field rows. |
 | `manual` | *(empty)* | Read-only: returns the exact `manual/SKILL.md` body plus its host-local `manual_path`. No spawn I/O. |
 
 Avatar no longer owns a `rules` action or an automatic post-spawn rules
 fan-out (removed, not relocated — see `src/lingtai/tools/avatar/CONTRACT.md`
-contract_version 9). The `.rules` heartbeat signal and `system/rules.md`
-persistence remain real, unchanged kernel state owned by
-`src/lingtai/kernel/base_agent/lifecycle.py`; see `psyche-manual` for that
-protocol.
+contract_version 9). The retired `.rules` heartbeat signal and inert `system/rules.md`
+files remain untouched as inert data; no reader, consumer or protected
+injection remains. `psyche-manual` documents ordinary authorized Pad edits.
 
 The model-facing root is exactly `action` + `input` + required `reasoning` +
 optional `summarize`, `additionalProperties: false`. Each action owns exactly
@@ -98,7 +97,7 @@ dispatch key — there is no mapping layer.
 
 `action` has no default — it is required both by the schema and at runtime,
 matching the established action-tool convention already used by `knowledge`,
-`mcp`, `skills`, `notification`, `system`, `soul`, and `daemon`. Omitting
+`mcp`, `skills`, `notification`, `system`, and `daemon`. Omitting
 `action` fails deterministically with avatar's own pinned unknown-action
 envelope; it never falls through to `spawn`.
 
@@ -141,7 +140,7 @@ avatar/__init__.py
   │  Spawn pipeline:
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
   ├── _make_avatar_init()           — builds avatar's init.json from parent's (strips identity, reroots paths)
-  ├── _make_avatar_psyche_settings() — delegates to Psyche's v1 serializer with inherited base/covenant inputs and the replacement spawn comment
+  ├── _make_avatar_psyche_settings() — delegates to Psyche's v1 serializer with inherited base/covenant inputs only
   ├── _prepare_deep()               — copies system/ + knowledge/ + exports/ + combo.json for deep mode
   ├── _launch()                     — resolves argv and delegates to the launcher Port
   ├── _wait_for_boot()              — polls .agent.heartbeat or Port exit truth
@@ -174,7 +173,7 @@ anymore.
   handoff, and invocation/session state are omitted rather than sampled.
 - **Name validation:** Avatar names must match `^[\w-]+$` (Unicode-aware), max 64 chars, no dots or path separators. The name doubles as the working directory basename.
 - **Path scope:** The avatar's working directory must be a direct sibling of the parent's (same parent directory). Resolved path is checked against the network root to prevent escape.
-- **No identity inheritance:** Avatars get no inherited name (`agent_name` is set to the avatar name), admin privileges, parent comment, brief, or addons (IMAP/Telegram). The inherited `lingtai` seed is blanked; the spawn comment is newly authored and the first turn still arrives via a separate `.prompt` signal file.
+- **No identity inheritance:** Avatars get no inherited name (`agent_name` is set to the avatar name), admin privileges, parent comment, brief, or addons (IMAP/Telegram). The inherited `lingtai` seed is blanked; durable notes require authorized Pad edits and the first turn still arrives via a separate `.prompt` signal file.
 - **Preset stability:** Avatars always spawn on the parent's DEFAULT preset, not its currently-active one. Materialized `llm` + `capabilities` are stripped so the avatar re-materializes from the preset on first boot.
 - **Relative path re-rooting:** Preset paths (`default`, `active`, `allowed`) that are relative are re-rooted against the parent's working dir so they remain valid from the avatar's different directory.
 - **Liveness check:** Before spawning, existing ledger entries are observed through a target-bound `PosixAgentPresenceStoreAdapter` and Core `observe_alive()` policy. If a live avatar with the same name exists, the spawn is refused with `already_active`.
@@ -222,3 +221,11 @@ Platform process mechanics are in `adapters/avatar_launcher.py` plus the POSIX
 and Windows adapters. A Driver child-endpoint handoff is POSIX-only: the POSIX
 adapter inherits exactly the one-shot endpoint, while the Windows adapter
 closes and rejects that lease rather than dropping it.
+
+## Literal instruction retirement
+
+The kernel `.rules` consumer and `system/rules.md` protected injection are now
+retired too. Old files can be copied as inert ordinary data but are never read
+as instructions. Avatar's spawn `comment` argument, default row, helper argument
+and Psyche serialization are removed. Root `reasoning` remains the purpose brief;
+durable working instructions use ordinary authorized Pad edits, not a new API.

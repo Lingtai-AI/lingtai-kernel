@@ -2,9 +2,8 @@
 
 Live wire evidence (2026-07-14, model ``gpt-5.6-sol``) showed the ChatGPT Codex
 backend accepts a standalone ``POST /responses/compact`` call — distinct from
-the generic OpenAI Responses ``context_management`` compaction, which Codex
-rejects (see ``CodexOpenAIAdapter._create_responses_session``, which always
-passes ``compact_threshold=None``). Compaction returns
+the OpenAI Responses ``context_management`` field, which Codex rejects and no
+LingTai adapter sends. Compaction returns
 ``object="response.compaction"`` with two opaque output items (``message`` +
 ``compaction_summary``, the latter carrying an opaque ``encrypted_content``);
 replaying those items verbatim plus new input reproduced an exact retained
@@ -44,8 +43,7 @@ These are pure/mock tests — no network, no OAuth. They cover:
   * invalidation on a history rewrite (``_reset_ws_epoch``) rather than
     silently keeping a stale compacted base.
   * no recompaction loop once compaction is active for the current prefix.
-  * the generic ``compact_threshold``/``context_management`` axis stays
-    ``None`` for Codex, untouched by this feature.
+  * no request ever carries ``context_management``.
 """
 
 from __future__ import annotations
@@ -248,8 +246,7 @@ def _make_dynamic_session(
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_compact_token_limit=compact_token_limit,
     )
     client = DynamicFakeClient(scale=scale)
@@ -273,8 +270,7 @@ def _make_session(
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_compact_token_limit=compact_token_limit,
     )
     adapter._client = FakeClient(turns or [], compact_output)
@@ -612,7 +608,6 @@ def test_compact_request_kwargs_bind_against_real_sdk_signature():
 
 def test_never_uses_context_management_for_codex():
     session = _make_session(compact_token_limit=100, turns=[text_turn(10)])
-    assert session._compact_threshold is None
     session.send("hello")
     sent = session._client.responses.create_calls[0]
     assert "context_management" not in sent
@@ -1141,8 +1136,7 @@ def test_compact_failure_is_non_fatal_and_skips_compaction():
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_compact_token_limit=150,
     )
     client = FakeClient([])
@@ -1201,8 +1195,7 @@ def test_self_heal_invalidates_compaction_when_compacted_replay_rejected():
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         codex_compact_token_limit=150,
     )
     client = FakeClient([])

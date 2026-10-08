@@ -52,7 +52,6 @@ Choose the smallest form that fits the need:
 ACTIVE works; IDLE keeps listeners available. ASLEEP remains wakeable;
 SUSPENDED is process-dead and needs CPR or restart. Diagnose STUCK before
 choosing recovery. Routine waiting is IDLE, not repeated polling or timed sleep.
-Soul reflection is advice, not an external event or command.
 
 Messages belong to their producer channels. A notification is a hint, not the
 canonical message; plain text output is private diary, not a reply channel.
@@ -70,7 +69,7 @@ Configured files, installed code, and the live runtime are distinct. Verify the
 runtime actually in use; `refresh` reloads but does not fetch or install code.
 `system` owns lifecycle and preset operations; `context` owns conversation
 summarization, prompt rebuild, and molt; `notification` owns notification
-inspection and mirror dismissal. Prefer producer-specific message handling.
+inspection, hooks, and delay. Prefer producer-specific message handling.
 
 Settings are runtime facts, not numbers to memorize here. Query the owning
 tool's `settings`; `system(action="settings", input={})` covers kernel settings

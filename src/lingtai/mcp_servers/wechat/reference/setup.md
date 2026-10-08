@@ -1,12 +1,11 @@
 ---
 name: wechat-setup-reference
 description: |
-  Focused WeChat setup and recovery reference: config/credentials resolution,
-  QR or headless login, read-only settings SHOW, per-account poller locking,
-  session expiry, and safe owner procedures. Read before changing setup or
-  diagnosing startup.
-version: 1.0.1
-last_changed_at: "2026-09-08T00:00:00Z"
+  WeChat owner setup and recovery: config/credential resolution, QR or headless
+  login, read-only settings, one-poller locking, session expiry, and safe restart.
+  Load before changing setup or diagnosing startup.
+version: 1.1.0
+last_changed_at: "2026-09-09T03:15:00Z"
 related_files:
 - src/lingtai/mcp_servers/wechat/SKILL.md
 - src/lingtai/mcp_servers/wechat/server.py
@@ -20,88 +19,83 @@ related_files:
 - tests/test_wechat_settings.py
 - ENVIRONMENT_VARIABLES.md
 maintenance: |
-  Tracks WeChat configuration, login, settings projection, and poller recovery
-  guidance; update when owner procedures, path precedence, redaction, or startup
-  behavior changes.
+  Tracks WeChat configuration, login, settings projection, and poller recovery;
+  update when owner procedures, path precedence, redaction, or startup behavior changes.
 ---
 
 # WeChat setup and recovery
 
-Registration and activation are host-owned. This reference covers the provider's
-files, login, startup, and read-only settings after the host has selected the
-curated WeChat addon.
+Registration and activation belong to the host. This reference covers provider
+files, owner login, startup, SHOW, and recovery after the host selects WeChat.
+Obtain explicit authority before login, changing configuration/credentials,
+stopping another owner or restarting the MCP; avatars must not reconfigure it.
 
-## CONFIGURATION FILES
+## Configuration and credentials
 
-`LINGTAI_WECHAT_CONFIG` points to `config.json`; the required sibling
-`credentials.json` is loaded from the same directory. An absolute config path is
-used as-is. A relative path prefers `LINGTAI_AGENT_DIR`, then the legacy project
-root for compatibility; without an agent directory, the process working directory
-is used. Put new configuration under the agent directory and use the `settings`
-action for redacted active verification; treat host status diagnostics as local
-and do not paste them into public reports.
+`LINGTAI_WECHAT_CONFIG` points to `config.json`; sibling `credentials.json` is read
+from the same directory. Absolute paths are used as-is. Relative paths resolve
+against `LINGTAI_AGENT_DIR` first, then its legacy project root (two parents up)
+if no file exists at the first candidate. Without an agent directory, use the
+process working directory instead. Prefer the agent directory for new setups.
 
-The authored `config.json` fields are:
+`config.json` may contain `base_url`, legacy `cdn_base_url`, `poll_interval` (float,
+default `1.0`), and optional `allowed_users`. A falsy allow-list preserves
+unrestricted compatibility behavior. Credentials contain the login-produced
+`bot_token`, account `user_id`, and optional effective `base_url`; never print,
+paste, commit, or diagnose their contents. Login writes credentials atomically with
+mode `0600`.
 
-## setting-config-path
+### setting-config-path
+`config_path` is the sensitive resolved `config.json` path captured at startup; it
+is not an authored config field.
 
-`config_path` is the sensitive resolved `config.json` path captured at manager
-startup. It is not an authored JSON field; `LINGTAI_WECHAT_CONFIG` is its source.
+### setting-base-url
+`base_url` uses truthy `credentials.json.base_url`; otherwise it uses config
+`base_url`, defaulting to the provider endpoint only when that config key is
+absent. Explicit null/empty config values do not select that default. The manager
+loads legacy `cdn_base_url` but does not pass it to its upload call; changing it
+does not override uploads through this tool.
 
-## setting-base-url
+### setting-poll-interval
+`poll_interval` is converted with Python `float`; default is `1.0`. Choose a
+positive finite value: runtime construction accepts zero/negative values, while
+a nonfinite snapshot makes SHOW fail. This guidance is not stricter validation.
 
-`base_url` is the endpoint fallback: a truthy `credentials.json.base_url` wins,
-then this config value, then the provider default. `cdn_base_url` is retained for
-configuration compatibility and is not a current upload-destination override when
-the provider supplies its upload route.
+### setting-allowed-users
+`allowed_users` is the optional inbound sender allow-list. Missing, null, empty, or
+other falsy values mean unrestricted compatibility behavior.
 
-## setting-poll-interval
+### setting-bot-token
+`bot_token` is the required login-produced secret; it has no default and is always
+redacted by SHOW.
 
-`poll_interval` is converted with Python `float`; default `1.0`. Use a positive
-finite value even though the loader does not reject every non-positive value.
+### setting-user-id
+`user_id` is the required login-produced account identity; it has no default and is
+redacted by SHOW. It is distinct from recipient IDs used by messaging actions.
 
-## setting-allowed-users
+## QR login (owner procedure)
 
-`allowed_users` is an optional inbound sender allow-list. A missing, null, empty,
-or other falsy value means unrestricted compatibility behavior; a truthy value is
-used as the configured sender set.
-
-`credentials.json` contains the login-produced `bot_token`, account `user_id`,
-and optional effective `base_url`. Treat the file as secret material: do not
-print, paste, commit, or include it in diagnostics. The login writer uses an
-atomic replacement and mode `0600`.
-
-## setting-bot-token
-
-`bot_token` is the required secret written by QR login. It has no default and is
-always redacted by SHOW; replace it only through the login/bootstrap procedure.
-
-## setting-user-id
-
-`user_id` is the required account identity written by QR login. It has no default
-and is redacted by SHOW; it is distinct from recipient IDs used by actions.
-
-## QR LOGIN
-
-Use the existing owner bootstrap procedure, not a messaging action:
+Use the existing bootstrap, not a messaging action:
 
 ```text
 lingtai-wechat-bootstrap <config-directory>
 ```
 
-For a headless host, the same login core is available through the documented
-`cli_login('<config-directory>')` entry point. It creates a default config when
-needed, displays a QR in the terminal (or uses the browser bootstrap flow), polls
-for confirmation, and writes sibling credentials on success. The QR authorizes
-the backend account; it is an admin login QR, not a contact or group QR. Never
-share it. After credentials are saved, restart or refresh the WeChat MCP through
-the host owner procedure, then use `settings` to verify only the redacted active
-snapshot.
+For a headless host, use the kernel environment's Python:
 
-If the session expires, rerun the login/bootstrap flow and restart the MCP. Do
-not hand-edit a token or attempt to repair credentials through `settings`.
+```text
+python -c "from lingtai.mcp_servers.wechat.login import cli_login; cli_login('<config-directory>')"
+```
 
-## SETTINGS SHOW
+It uses the same flow. It creates config when needed, displays an admin login QR,
+polls for confirmation, and atomically replaces sibling credentials, including
+any existing login. Confirm the target directory and replacement authority first. The QR authorizes the
+backend account; it is not a contact/group QR. Never share it. After login, restart
+or refresh the MCP through the host procedure and use `settings` only for redacted
+verification. Session expiry is a reason to request authorized login/restart,
+not permission to hand-edit a token or repair credentials through SHOW.
+
+## Settings SHOW
 
 Call the strict-empty action:
 
@@ -109,56 +103,30 @@ Call the strict-empty action:
 {"action":"settings","input":{},"reasoning":"inspect active WeChat settings"}
 ```
 
-Success is exactly `{"settings":[...]}`; each row has only `key`, `current`,
-`default`, `configurable`, and `comment`. The six keys are `config_path`, `base_url`,
-`poll_interval`, `allowed_users`, `bot_token`, and `user_id`, in that order.
-Sensitive rows redact both `current` and `default`; SHOW never writes, resets, or
-rereads owner files, and any unavailable/invalid row fails the complete inventory
-rather than returning a partial one. A `configurable` row describes the owner
-procedure for the next manager construction, not a mutation input to this action.
+Success is `{"settings":[...]}` with rows containing only `key`, `current`,
+`default`, `configurable`, and `comment`, in order: `config_path`, `base_url`,
+`poll_interval`, `allowed_users`, `bot_token`, `user_id`. Sensitive rows redact
+both values. SHOW is read-only: it never writes, resets, or rereads owner files;
+unavailable/invalid truth returns one bounded `SETTINGS_UNAVAILABLE` result
+(`status: failed`, `error_code`, `message`), with no rows or automatic retry. All
+six rows are configurable through their owner procedures. A row describes the
+owner procedure for the next manager construction, not a mutation input.
 
-Change the selected owner file or login credentials through the procedure above,
-restart/refresh at the required boundary, and call SHOW again. Do not expose the
-resolved config path, endpoint, allow-list, token, or account identity in chat or
-public diagnostics; the redacted settings result is the safe verification view.
+## One poller per account
 
-## ONE POLLER PER ACCOUNT
+The iLink updates stream is single-consumer. The MCP holds an exclusive per-account
+POSIX lock for the poller's lifetime and refuses a second poller; on platforms
+without `fcntl`, startup fails rather than pretending safety. Normal exit releases
+the lock. Do not delete lockfiles blindly: presence on disk alone does not prove a
+lock is held.
 
-The iLink updates stream is single-consumer. The MCP takes an exclusive per-account
-POSIX lock for the lifetime of the poller and fails startup with a clear error if
-another process already holds it. A normal process exit releases the lock; do not
-delete lockfiles blindly. Stop or reconfigure the other owner process, then
-restart the intended MCP. On a platform without `fcntl`, startup fails rather
-than pretending duplicate-poller safety exists.
-
-### Why `PollerLockBusy` can persist
-
-`PollerLockBusy` is decided when the MCP server starts, not on every tool call.
-If lock acquisition fails, the server keeps the manager unavailable and records
-the startup exception so later actions can return the same diagnostic. Those
-actions do not reacquire the lock or rebuild the manager. The reported holder PID
-is therefore a startup-time snapshot: if that process exits later, the operating
-system releases its POSIX lock, but the failed MCP server still needs a restart.
-The lockfile intentionally remains on disk; its presence alone does not mean the
-lock is still held.
-
-### Recovery sequence
-
-1. Inspect the holder named by the error before stopping anything:
-
-   ```text
-   ps -p <holder-pid> -o pid,command
-   lsof -p <holder-pid> 2>/dev/null | grep cwd
-   ```
-
-   Identify which project owns that process and confirm which project should keep
-   the account. Do not stop an unknown owner merely because the PID appears in an
-   earlier error.
-2. Gracefully stop or reconfigure the duplicate owner, then verify that the PID is
-   gone. Do not delete the lockfile: process exit releases the lock, while removing
-   the file can race with another acquisition.
-3. Restart or refresh the intended WeChat MCP through the host owner's supported
-   procedure. Repeating ordinary WeChat tool calls in the already-failed server
-   cannot recover its manager, and starting another poller is not a workaround.
-4. After recovery, use `check` or `read` to reconcile recent history before
-   sending or replying, so a recovered client does not duplicate a response.
+If `PollerLockBusy` persists, the failed server keeps its startup-time diagnostic
+and does not reacquire or rebuild its manager on ordinary calls. Inspect the named
+holder and confirm the owning project; do not stop an unknown PID. With exact
+authority, gracefully stop
+or reconfigure the duplicate owner, verify it is gone, then restart/refresh the
+intended MCP through the host procedure. The holder PID is a startup snapshot,
+not current liveness. Inspect locally with `ps -p <pid> -o pid,command` and
+`lsof -p <pid> 2>/dev/null | grep cwd`; do not publish raw diagnostics.
+Reconcile with `read` before
+sending or replying.

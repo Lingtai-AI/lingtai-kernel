@@ -2,7 +2,9 @@
 name: context-behavior-tests
 behavior_version: 1
 labt_version: 2
-contract: CONTRACT.md
+contract:
+  - CONTRACT.md
+  - ../system/CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
   - src/lingtai/tools/context/__init__.py
@@ -13,14 +15,21 @@ related_files:
   - src/lingtai/tools/system/karma.py
   - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/preset.py
+  - src/lingtai/tools/system/CONTRACT.md
+  - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/kernel/state.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/nudge/goal.py
-  - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/agent-name-move/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
+  - src/lingtai/cli.py
+  - tests/test_cli.py
+  - tests/test_how_to_change_name.py
   - tests/test_cli_integration.py
   - tests/test_molt_notification_persistence.py
   - tests/test_post_molt_notification.py
+  - tests/test_notification_one_shot.py
   - tests/test_preset_context_guard.py
   - tests/test_how_to_change_name_e2e.py
   - tests/test_goal_notification.py
@@ -58,7 +67,7 @@ self-contained and executable verbatim by an agent with the tools listed in its
   ASLEEP, process keeps running; state machine
   `ACTIVE/IDLE --(sleep)--> ASLEEP` (`src/lingtai/kernel/state.py`)
 - **supersedes**: `tests/test_cli_integration.py::test_sleep_signal_triggers_asleep`
-- **runner**: any LingTai agent with a `shell` and `file` tool on POSIX
+- **runner**: any LingTai agent with a `shell` tool on POSIX
   (Linux/macOS), with `lingtai` importable (installed, or
   `PYTHONPATH=<repo>/src`)
 - **prerequisites**: a scratch agent workdir `<WD>` (empty directory);
@@ -72,8 +81,8 @@ self-contained and executable verbatim by an agent with the tools listed in its
    {
      "manifest": {
        "agent_name": "integration-test", "language": "en",
-       "llm": {"provider": "gemini", "model": "test-model", "api_key": "fake-key", "base_url": null},
-       "capabilities": {}, "soul": {"delay": 5}, "stamina": 10,
+       "llm": {"provider": "openai", "model": "test-model", "api_key": "fake-key", "base_url": null},
+       "capabilities": {}, "stamina": 10,
        "context_limit": null, "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 5,
        "admin": {}, "streaming": false
      },
@@ -114,7 +123,7 @@ touched by this LABT, and `<WD>` must not be deleted.
   shuts down; state machine `ASLEEP --(.suspend/SIGINT)--> SUSPENDED`
   (`src/lingtai/kernel/state.py`)
 - **supersedes**: `tests/test_cli_integration.py::test_suspend_triggers_shutdown`
-- **runner**: any LingTai agent with a `shell` and `file` tool on POSIX, with
+- **runner**: any LingTai agent with a `shell` tool on POSIX, with
   `lingtai` importable (same environment as L001)
 - **prerequisites**: same scratch workdir `<WD>` and `init.json` as L001 (step 1)
 - **estimate**: 2 min
@@ -151,7 +160,7 @@ if process exit + file consumption are observed.
   summary paths remain under `history/` and `system/summaries/`; notification
   files survive the shed
 - **supersedes**: `tests/test_molt_notification_persistence.py::test_notification_files_survive_agent_molt`
-- **runner**: any LingTai agent with `context`, `file`, and `shell` tools
+- **runner**: any LingTai agent with `context` and `shell` tools
 - **prerequisites**: a **disposable executor agent** — this LABT performs a real
   molt on the executing agent's own context. The session-journal sub-entry must
   exist BEFORE the molt call (the kernel refuses a molt without it)
@@ -194,7 +203,7 @@ if process exit + file consumption are observed.
 
 ### Expected evidence
 - [ ] Molt result `status == "ok"` and `molt_count` is an integer ≥ 1.
-- [ ] `.notification/email.json` survived with unchanged content.
+- [ ] `.notification/email.json` survived with unchanged content. Already-delivered event identity remains retained in the same process; no-carrier/failed attempts remain retryable, and new post-molt/new producer events still deliver. Focused executable coverage: `tests/test_notification_one_shot.py::test_real_molt_retains_delivery_identity_and_retries_undelivered`.
 - [ ] `system/pad.md` survived with unchanged content.
 - [ ] The session-journal sub-entry survived.
 - [ ] The summary file exists at `<WD>/system/summaries/molt_<count>_<ts>.md` and
@@ -209,7 +218,7 @@ resolve. Forbidden side effects: the molt must not delete `.notification/`,
 ## Behavior L004 — post-molt continuation channel
 
 - **id**: L004
-- **title**: every molt publishes `.notification/post-molt.json` with continuation identity and a reason-required ack
+- **title**: every molt publishes `.notification/post-molt.json` with continuation identity, delivered once and never auto-cleared
 - **guards**: `context-contract` § Passive lifecycle scenarios
   ([CONTRACT.md](CONTRACT.md#passive-lifecycle-scenarios)) — "updates
   `molt_count`, writes its summary, and publishes the post-molt reminder"
@@ -217,7 +226,7 @@ resolve. Forbidden side effects: the molt must not delete `.notification/`,
   (`test_agent_molt_publishes_post_molt_with_reasoning`,
   `test_agent_molt_carries_continuation_fields`,
   `test_instructions_spell_out_reconstruct_then_ack`)
-- **runner**: any LingTai agent with `context`, `notification`, and `file` tools
+- **runner**: any LingTai agent with `context`, `notification`, and `shell` tools
 - **prerequisites**: a disposable executor agent; stage the same journal entry
   and pad file as L003 steps 1–2 before molting
 - **estimate**: 3 min
@@ -235,36 +244,33 @@ resolve. Forbidden side effects: the molt must not delete `.notification/`,
    - `data.molt_id` starts with `molt-<molt_count>-`;
    - `data.molt_at` is a non-empty ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`);
    - `data.source_agent` equals the agent's true name;
-   - `data.ack_options == ["continue", "defer", "obsolete"]`;
+   - `data` carries no `ack_options` key (there is no dismiss/ack action);
    - `data.reminder` is non-empty; `data.summary_path` is present;
      `data.session_journal_path` is present; `data.reasoning` equals
      `"LABT: verify post-molt continuation"`.
 4. Verify `data` does NOT contain a `next_action` key (no heuristic extraction).
 5. Verify `instructions` is non-empty and mentions `pad`, `summary`,
-   `human-channel`, the labels `continue`/`defer`/`obsolete`, and the taught
-   dismiss call `notification(action='dismiss_channel', input={'channel': 'post-molt', 'force': null, 'reason': 'continue: ...'}, reasoning='...')`.
-6. Attempt dismissal WITHOUT a reason:
-   ```
-   notification(action="dismiss_channel", input={"channel": "post-molt"}, reasoning="LABT")
-   ```
-   Expect an error result with `reason == "missing_ack_reason"`.
-7. Dismiss WITH a reason:
-   ```
-   notification(action="dismiss_channel", input={"channel": "post-molt", "force": null, "reason": "continue: LABT L004 complete"}, reasoning="LABT")
-   ```
-   Expect `status == "ok"`; verify `<WD>/.notification/post-molt.json` is gone.
+   `human-channel`, the labels `continue`/`defer`/`obsolete`, the session
+   journal/pad, and that the reminder is delivered once; it must NOT mention any
+   `dismiss_channel` call.
+6. Dispatch the removed `dismiss_channel` action for channel `post-molt` through
+   the notification family and expect a closed-schema rejection (the action no
+   longer exists) with no side effects.
+7. Verify `<WD>/.notification/post-molt.json` still exists unchanged: delivery and
+   the rejected call never clear it, and `notification(action="check")` still
+   returns it.
 
 ### Expected evidence
 - [ ] `post-molt.json` exists with every field and value from step 3.
-- [ ] No `next_action` key in `data`.
-- [ ] Dismiss without a reason is refused with `missing_ack_reason`.
-- [ ] Dismiss with `reason: 'continue: ...'` succeeds and clears the channel.
+- [ ] No `next_action` or `ack_options` key in `data`.
+- [ ] The removed dismiss action is rejected and the file is untouched.
+- [ ] `instructions` teaches one-shot delivery, not a dismiss call.
 
 ### Pass / Fail
 Pass when all evidence holds. Fail if fields are missing/mismatched, a
-`next_action` heuristic field appears, or the ack gate is bypassed (dismiss
-succeeds without a reason). Forbidden side effects: legacy `molt` channel
-cleanup must never remove `post-molt.json`.
+`next_action` heuristic field appears, the instructions still teach a dismiss
+call, or the file is cleared by delivery. Forbidden side effects: legacy `molt`
+channel cleanup must never remove `post-molt.json`.
 
 ## Behavior L005 — preset context guard: refresh refused when context exceeds the target preset
 
@@ -278,7 +284,7 @@ cleanup must never remove `post-molt.json`.
   (`test_swap_refused_when_current_context_exceeds_target_limit`,
   `test_guard_reads_context_limit_from_llm_block`,
   `test_revert_refused_when_current_context_exceeds_default_limit`)
-- **runner**: any LingTai agent with `system` and `file` tools
+- **runner**: any LingTai agent with `system` and `shell` tools
 - **prerequisites**: a **disposable agent** whose `<WD>/init.json` you may edit
   (this LABT mutates the `manifest.preset` block and may persist
   `manifest.preset.default`); the preset library and `.env` file created in the
@@ -289,12 +295,12 @@ cleanup must never remove `post-molt.json`.
 1. Create a preset library `<PLIB>/` with four files. Use your own working
    provider values (api key/base_url from your environment) but keep the
    `context_limit` values exactly:
-   - `big.json`: `{"name": "big", "manifest": {"llm": {"provider": "<yours>", "model": "<yours>", "api_key": "<yours>", "context_limit": 200000}, "capabilities": {"file": {}}}}`
+   - `big.json`: `{"name": "big", "manifest": {"llm": {"provider": "<yours>", "model": "<yours>", "api_key": "<yours>", "context_limit": 200000}, "capabilities": {"shell": {}}}}`
    - `small.json`: same shape with `"name": "small"` and `"context_limit": 1000`
      at the **manifest root** (sibling of `llm`)
    - `tight.json`: same shape with `"name": "tight"` and `"context_limit": 1000`
      **inside** `manifest.llm` (nested layout — the guard must find it there too)
-   - `no_limit.json`: `{"name": "no_limit", "manifest": {"llm": {"provider": "<yours>", "model": "<yours>", "api_key": "<yours>"}, "capabilities": {"file": {}}}}` — no `context_limit` field at all
+   - `no_limit.json`: `{"name": "no_limit", "manifest": {"llm": {"provider": "<yours>", "model": "<yours>", "api_key": "<yours>"}, "capabilities": {"shell": {}}}}` — no `context_limit` field at all
 2. Write `<WD>/.env` containing `P1KEY=sk-test` (or any value your provider
    reads) and set `manifest.env_file` in `<WD>/init.json` to `"<WD>/.env"`.
 3. Edit `<WD>/init.json` so `manifest.preset` is:
@@ -339,67 +345,95 @@ still fail with the not-found/unauthorized error (the guard must not mask it).
 ## Behavior L006 — physical rename of a live POSIX agent (address/workdir)
 
 - **id**: L006
-- **title**: `change_name.py` renames a live agent's workdir/address via suspend → no-replace rename → resume, without changing `agent_name` or `agent_id`
+- **title**: `change_name.py` renames a live Agent via suspend → no-replace rename → exact local-runtime/MCP relocation → resume, without changing `agent_name` or `agent_id`
 - **guards**: `system-contract` § Routing Card
   ([CONTRACT.md](../system/CONTRACT.md#routing-card)) — name actions "mutate
   neither address nor working directory — that is the operator migration
-  workflow in `system-manual`"; V1 contract of
-  `reference/how-to-change-name/SKILL.md`
-- **supersedes**: `tests/test_how_to_change_name_e2e.py::test_real_agent_suspend_rename_rebase_and_resume`
-- **runner**: an agent with `shell` and `file` tools on POSIX (Linux/macOS);
-  Windows and network filesystems are out of scope
-- **prerequisites**: POSIX host; Python ≥ 3.10 that can import `lingtai`;
-  `<REPO>` = the lingtai-kernel checkout; a scratch root `<ROOT>` (empty); the
-  helper source at
-  `<REPO>/src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py`
+  workflow in `system-manual`"; narrow POSIX
+  [Agent-name helper contract](../../intrinsic_skills/system-manual/reference/migration-guide/reference/agent-name-move/SKILL.md)
+- **supersedes**: `tests/test_how_to_change_name_e2e.py::test_real_agent_suspend_rename_relocates_local_runtime_and_mcp_then_resumes`
+- **runner**: an agent with the `shell` tool on Linux/macOS;
+  Windows, other POSIX cells, and network filesystems are out of scope
+- **prerequisites**: Linux or macOS host with the required libc no-replace
+  primitive; Python ≥ 3.11 that can import `lingtai` and its
+  dependencies; `<REPO>` = the lingtai-kernel checkout; an empty scratch root
+  `<ROOT>`; the helper source at
+  `<REPO>/src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py`
 - **estimate**: 5 min
 
 ### Steps
-1. Create scratch dirs `<ROOT>/old` and `<ROOT>/new` (new must NOT exist at
-   rename time). Create a venv inside the old workdir:
-   `python -m venv --copies --without-pip --system-site-packages <ROOT>/old/runtime/venv`.
-2. Write `<ROOT>/old/init.json` with exactly:
-   ```json
-   {
-     "manifest": {
-       "agent_name": "temporary-true-name", "language": "en",
-       "llm": {"provider": "gemini", "model": "test", "api_key": "fake", "base_url": null},
-       "capabilities": {}, "soul": {"delay": 60}, "stamina": 10,
-       "context_limit": null, "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 5,
-       "admin": {}, "streaming": false
-     },
-     "principle": "", "covenant": "No network.", "pad": "", "lingtai": "",
-     "venv_path": "<ROOT>/old/runtime/venv"
-   }
-   ```
-3. Copy the helper and make it executable:
-   `cp <REPO>/src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py <ROOT>/old/change_name.py && chmod 755 <ROOT>/old/change_name.py`.
-4. Boot the agent in the background:
-   `cd <ROOT>/old && PYTHONPATH=<REPO>/src <ROOT>/old/runtime/venv/bin/python -m lingtai run <ROOT>/old`.
-   Wait (up to 25 s) for `<ROOT>/old/.agent.heartbeat`, `.agent.lock`, and
-   `.agent.json`.
-5. Read `<ROOT>/old/.agent.json`; record `agent_id`, `agent_name`
-   (must be `temporary-true-name`), and `address` (must be `old`).
-6. Run the helper in the foreground (must return exit code 0):
-   `PYTHONPATH=<REPO>/src <ROOT>/old/runtime/venv/bin/python <ROOT>/old/change_name.py <ROOT>/old new --timeout 20`.
-7. Wait (up to 25 s) for `<ROOT>/new/.agent.heartbeat` to reappear.
-8. Verify: `<ROOT>/old` no longer exists; `<ROOT>/new` exists; read
-   `<ROOT>/new/.agent.json`: `agent_id` unchanged from step 5, `agent_name` still
-   `temporary-true-name`, `address == "new"`; read `<ROOT>/new/init.json`:
-   `venv_path == "<ROOT>/new/runtime/venv"` (rebased).
-9. Cleanup: `touch <ROOT>/new/.suspend`; wait up to 20 s for the process to
-   exit; `kill -TERM` any surviving `python -m lingtai run <ROOT>/new` pid.
+1. Create `<ROOT>/old` only; `<ROOT>/new` must remain absent. Create
+   `<ROOT>/old/runtime/venv` with
+   `python -m venv --copies --without-pip` (no `--system-site-packages`).
+2. Copy `<REPO>/src/lingtai` to `<ROOT>/old/runtime/source/lingtai`. In the
+   venv's `site-packages`, write `lingtai-editable.pth` with the absolute
+   `<ROOT>/old/runtime/source` on its first line and the invoking interpreter's
+   external `purelib`/`platlib` directories on following lines for dependencies.
+   Do not set `PYTHONPATH`; nested `.pth` files in those external directories
+   are not processed merely because their directory is added.
+3. In that site-packages directory, write
+   `lingtai-test.dist-info/direct_url.json` with
+   `{"dir_info":{"editable":true},"url":"<OLD-SOURCE-FILE-URL>"}`. Write an
+   executable `<OLD-VENV>/bin/lingtai-agent` whose first line is exactly
+   `#!<OLD-VENV>/bin/python`; record its mode.
+4. Write the same minimal `init.json` manifest used by this file's pytest E2E,
+   with `manifest.disable: ["mcp"]`, the old absolute `venv_path`, and top-level
+   `mcp` entries for: old-root stdio `command`, external stdio `command`, and
+   HTTP plus an old-looking `command`. Give the local stdio entry old-root
+   strings in `args` and `env`. Write matching valid `mcp_registry.jsonl`
+   records with the same three cases and old-root strings in non-command fields.
+5. Copy the helper to `<ROOT>/old/change_name.py` and make it executable. With
+   `PYTHONPATH`/`PYTHONHOME` unset and `PYTHONNOUSERSITE=1`, boot
+   `<OLD-VENV>/bin/python -m lingtai run <ROOT>/old`. Wait up to 25 seconds for
+   `.agent.heartbeat`, `.agent.lock`, and `.agent.json`; record `agent_id`,
+   `agent_name`, and `address`.
+6. Copy the current `lingtai` package to a separate decoy import root, replace
+   only its `__main__.py` with a marker write plus nonzero exit, and set that
+   decoy as `PYTHONPATH` **only for the helper invocation**. Run
+   `<OLD-VENV>/bin/python <ROOT>/old/change_name.py <ROOT>/old new --timeout 20`;
+   require exit 0, require the decoy marker remain absent, and wait up to 25
+   seconds for the target heartbeat. This proves the background supervisor and
+   resumed Agent use the same explicit clean import environment as the probes.
+7. Verify the old path is absent; immutable identity is unchanged; address is
+   `new`; `init.venv_path`, old-root stdio commands in init/registry, the `.pth`
+   path, direct-url file URL, and launcher shebang name the new root. Verify
+   external/HTTP commands and every args/env/extra old-looking decoded value are
+   equivalent to their inputs, and launcher/registry modes are unchanged. This
+   is semantic JSON preservation, not byte-identical formatting/escape evidence.
+8. From target cwd and the same clean environment, run
+   `<NEW-VENV>/bin/python -c 'import lingtai; print(lingtai.__file__)'`; require
+   the printed module path to be below `<ROOT>/new/runtime/source`. Execute
+   `<NEW-VENV>/bin/lingtai-agent --help` directly and require exit 0 plus usage
+   output. Confirm the target Agent process is live.
+9. Verify `<ROOT>/new/.change-name-incomplete` is absent on this proven-success
+   path. The focused unit/CLI regressions separately inject a second target-write
+   failure and prove any marker shape blocks ordinary launch before signal
+   cleanup, init loading, or Agent construction, both under the migration lease
+   and after helper failure.
+10. Cleanup only this scratch Agent: `touch <ROOT>/new/.suspend`, wait up to 20
+    seconds, then `kill -TERM` only a surviving
+    `python -m lingtai run <ROOT>/new` process.
 
 ### Expected evidence
-- [ ] The helper exits 0.
-- [ ] `<ROOT>/old` is gone; `<ROOT>/new` exists with a fresh `.agent.heartbeat`.
-- [ ] `agent_id` and `agent_name` are identical before/after; `address` changed to `new`.
-- [ ] `venv_path` in the new `init.json` points into `<ROOT>/new/runtime/venv`.
+- [ ] The helper exits 0; target heartbeat and process are fresh/live.
+- [ ] `agent_id` and `agent_name` are identical before/after; only address becomes `new`.
+- [ ] The isolated target interpreter imports the copied LingTai source below the new root.
+- [ ] The helper-invocation decoy `PYTHONPATH` marker remains absent; the resumed
+  process therefore uses the same explicit import lane as the accepted probes.
+- [ ] Local `.pth`, direct-url, executable shebang, venv, and stdio command fields are rebased.
+- [ ] The relocated `lingtai-agent --help` executes directly in the clean environment.
+- [ ] External/HTTP paths and non-command decoded values are unchanged; tracked modes are preserved.
+- [ ] The successful target has no incomplete marker; injected partial targets remain fenced from ordinary CLI launch.
 
 ### Pass / Fail
-Pass when all evidence holds. Fail if `agent_id`/`agent_name` changed, if the
-old directory was replaced instead of renamed (RENAME_NOREPLACE violation), or
-if the resumed agent does not come back up under the new path.
+Pass when all evidence holds. Fail on identity drift, replacement rather than
+no-replace rename, stale target runtime/stdio command binding, broadened field
+rewrite, mode drift, fallback import outside the exact target source, a broken
+relocated launcher, missing partial-target launch fence, or failure to resume
+under the new path. L006 deliberately uses `manifest.disable: ["mcp"]` and no
+network: it proves no configured Telegram, IMAP, MCP, or other channel health.
+That owner-selected integration acceptance remains external and separately
+required; helper success is not that evidence.
 
 ## Behavior L007 — name_set immutable / name_nickname mutable
 
@@ -429,8 +463,8 @@ if the resumed agent does not come back up under the new path.
 
    svc = MagicMock()
    svc.get_adapter.return_value = MagicMock()
-   svc.provider = "gemini"
-   svc.model = "gemini-test"
+   svc.provider = "openai"
+   svc.model = "gpt-test"
    workdir = Path(tempfile.mkdtemp()) / "named"
    agent = Agent(service=svc, working_dir=workdir)
    before_dir = agent._working_dir
@@ -480,7 +514,7 @@ action renames the workdir/address.
   (`test_goal_reminder_publishes_short_system_event_after_idle_delay`,
   `test_goal_reminder_does_not_duplicate_existing_event`,
   `test_goal_reminder_clears_when_goal_becomes_done`)
-- **runner**: any LingTai agent with `shell` and `file` tools on POSIX, with
+- **runner**: any LingTai agent with the `shell` tool on POSIX, with
   `lingtai` importable (the target agent must be IDLE — the goal check runs in
   the target's own idle loop, never while it is ACTIVE)
 - **prerequisites**: a scratch agent workdir `<WD>` booted as in L001 steps 1–3

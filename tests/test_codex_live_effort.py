@@ -4,8 +4,9 @@ process-local live reasoning-effort vertical (issue #1197).
 Scope of the ONE native integration under test:
 
   * integration — LingTai main-agent native ``codex`` provider path;
-  * provider aliases ``codex`` / ``codex-pool`` / ``codex_pool`` share the one
-    adapter, so they resolve the SAME route identity;
+  * the single registered provider name ``codex`` resolves the one native
+    adapter route identity (the removed ``codex-pool`` / ``codex_pool``
+    spellings are not registered);
   * exact model ``gpt-5.6-sol`` only;
   * every non-empty endpoint selected for that native Codex session, with the
     normalized actual endpoint retained in its endpoint-sensitive fingerprint;
@@ -214,8 +215,7 @@ def _make_codex_session(
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url=base_url,
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         max_rpm=max_rpm,
         codex_compact_token_limit=compact_token_limit,
         codex_base_urls=codex_base_urls,
@@ -817,7 +817,7 @@ def test_effort_evidence_is_allowlisted_for_the_kernel_event_seam():
 
 
 def test_generic_openai_responses_session_exposes_no_effort_capability():
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True, force_responses=True)
+    adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     session = adapter.create_chat("gpt-5.1", "system prompt", tools=None)
 
     capability = session.reasoning_effort_capability()
@@ -931,17 +931,19 @@ def test_compaction_request_carries_no_reasoning_field():
 
 
 # ---------------------------------------------------------------------------
-# Invariant 9 — aliases share the one implementation and one route identity
+# Invariant 9 — one registered spelling, one implementation, one route identity
 # ---------------------------------------------------------------------------
 
 
-def test_codex_aliases_share_one_factory_and_one_route_identity():
+def test_codex_single_factory_and_one_route_identity():
     from lingtai.llm._register import register_all_adapters
 
     register_all_adapters()
     registry = LLMService._adapter_registry
-    factories = {registry[name] for name in ("codex", "codex-pool", "codex_pool")}
-    assert len(factories) == 1
+    assert "codex" in registry
+    # The in-kernel account pool spellings were removed (pooling is external).
+    assert "codex-pool" not in registry
+    assert "codex_pool" not in registry
 
     descriptor = _descriptor()
     # The route identity is the native adapter route, never the configuration

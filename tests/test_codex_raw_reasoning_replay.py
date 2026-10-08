@@ -78,8 +78,7 @@ def _create_codex_session(events: list[Event]):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
     )
     adapter._client = FakeClient(events)
     return adapter.create_chat(
@@ -202,8 +201,7 @@ def test_codex_include_merge_does_not_duplicate():
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
     )
     events = _reasoning_events_with_encrypted() + [_completed()]
     adapter._client = FakeClient(events)
@@ -223,8 +221,7 @@ def test_codex_include_merge_accepts_existing_string_include():
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
     )
     events = _reasoning_events_with_encrypted() + [_completed()]
     adapter._client = FakeClient(events)

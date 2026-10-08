@@ -17,7 +17,6 @@ related_files:
   - src/lingtai/tools/bash/BEHAVIORS.md
   - src/lingtai/tools/telegram/BEHAVIORS.md
   - src/lingtai/tools/tool_family/BEHAVIORS.md
-  - src/lingtai/tools/file/BEHAVIORS.md
   - src/lingtai/tools/feishu/BEHAVIORS.md
   - src/lingtai/tools/web_search/BEHAVIORS.md
   - src/lingtai/tools/notification/BEHAVIORS.md

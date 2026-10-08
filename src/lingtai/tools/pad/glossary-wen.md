@@ -17,4 +17,4 @@ maintenance: |
 **名相对照**
 
 - `pad`：志板之域（`system/pad.md` 及所钉之簿 `system/pad_append.json`）；无公开之根。
-- 其文以 `psyche(action='pad', input={}, reasoning='...')` 召之，唯还其文。二源皆以 `file.write`/`file.edit` 易之，继以 `context.rebuild` 而行；旧 `pad.append` 已废，无所别名。
+- 其文以 `psyche(action='pad', input={}, reasoning='...')` 召之，唯还其文。二源皆以 `shell`（核而后易）易之，继以 `context.rebuild` 而行；旧 `pad.append` 已废，无所别名。

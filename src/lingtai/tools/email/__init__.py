@@ -116,7 +116,6 @@ from .primitives import (  # noqa: F401
     _sent_dir,
     _summary_to_list,
     _unread_notification_context,
-    mode_field,
 )
 
 # Schema — the legacy flat description/schema. ``get_description`` remains the
@@ -378,7 +377,7 @@ def _build_family(agent) -> ToolFamily:
 
     Every non-``manual`` child re-enters the unchanged ``EmailManager.handle``
     with its historical flat argument shape (``{"action": ..., **input}``),
-    which keeps the whole engine — delivery threads, the duplicate-send guard,
+    which keeps the whole engine — delivery threads,
     read tracking, the digest rerender, reply routing, contacts — untouched by
     this migration. The child's own strict ``input_schema`` is what makes that
     safe: ``ToolFamily.handle()`` has already rejected any key outside the
@@ -449,7 +448,7 @@ def handle(agent, args: dict) -> dict:
     ``_tc_id`` is stripped first. ``base_agent.tools._dispatch_tool`` injects
     it into **every** intrinsic's args (only ``psyche`` molt consumes it), so
     it is kernel plumbing that predates and is invisible to the LTP v2
-    envelope — the same boundary ``soul`` and ``notification`` own.
+    envelope — the same boundary ``notification`` owns.
 
     Two Email-specific results are rendered here, before/after the generic
     dispatcher, rather than by changing its canonical shapes:

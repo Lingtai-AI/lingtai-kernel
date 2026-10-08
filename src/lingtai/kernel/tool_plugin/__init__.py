@@ -45,9 +45,6 @@ __all__ = [
     "HostPortError",
     "WorkdirPort",
     "PromptSectionPort",
-    "FileGrepMatch",
-    "FileTraversalStats",
-    "FileIOPort",
     "ContextRuntimePort",
     "AvatarParentPort",
     "DaemonRuntimePort",
@@ -60,7 +57,6 @@ __all__ = [
     "ConfigurationPort",
     "ActiveProviderPort",
     "ProviderIdentityPort",
-    "SoulRuntimePort",
     "SystemRuntimePort",
     "IdentityPort",
     "ShutdownPort",
@@ -101,13 +97,11 @@ def _settings_input_schema() -> dict[str, Any]:
 #:
 #: Earned, not enumerated: each name below is consumed by a real vertical
 #: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
-#: ``email``, ``file``, ``plugin``, ``psyche``, ``notification``, ``shell``,
-#: ``soul``, ``system``, ``task_card``, ``vision``, or ``web``). Plugin
+#: ``email``, ``plugin``, ``psyche``, ``notification``, ``shell``,
+#: ``system``, ``task_card``, ``vision``, or ``web``). Plugin
 #: consumes only the read-only ``plugin_catalog`` projection; Psyche consumes
 #: only its last-applied Pad and prompt-owner configuration through
-#: ``psyche_settings``; File consumes ``workdir``/``file_io`` plus its
-#: factory-applied bounded
-#: ``configuration`` snapshot; Shell consumes
+#: ``psyche_settings``; Shell consumes
 #: ``workdir`` plus its explicit setup ``configuration`` and durable
 #: ``notifications`` ports; System consumes its ``system_runtime`` lifecycle
 #: vocabulary plus the durable naming ``identity`` port; Task Card consumes
@@ -119,7 +113,7 @@ def _settings_input_schema() -> dict[str, Any]:
 #: plus its Web-owned typed ``web_runtime`` composition value (browser
 #: transport, immutable engine specs, default provenance — granted by its own
 #: setup, like Email's ``email_runtime``) and the narrow read-only
-#: ``provider_identity`` label that gates its explicit Anthropic/Gemini opt-in.
+#: ``provider_identity`` label that gates its backend-gated OpenAI/Anthropic engines.
 #: Root ``CONTRACT.md`` rules 10-11
 #: forbid a speculative port taxonomy, so a
 #: later family adds the port it actually needs together with its own slice.
@@ -134,13 +128,11 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "context_runtime",
     "daemon_runtime",
     "email_runtime",
-    "file_io",
     "plugin_catalog",
     "psyche_settings",
     "notification_state",
     "notifications",
     "configuration",
-    "soul_runtime",
     "system_runtime",
     "identity",
     "shutdown",
@@ -161,8 +153,8 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
 OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
-    "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "psyche",
-    "notification", "shell", "soul", "system", "task_card", "vision", "web",
+    "mcp", "avatar", "context", "daemon", "email", "plugin", "psyche",
+    "notification", "shell", "system", "task_card", "vision", "web",
 )
 
 
@@ -246,20 +238,27 @@ class PsycheSettingsSnapshotPort(Protocol):
     base_prompt_file: str | None
     covenant: str
     covenant_file: str | None
-    comment: str
-    comment_file: str | None
 
 
 class PsycheSettingsPort(Protocol):
     """Read Psyche's last completely applied prompt-owner configuration.
 
-    The immutable structural snapshot contains Pad plus the three configurable
+    The immutable structural snapshot contains Pad plus the two configurable
     prompt pairs. It grants no prompt mutation, reconstruction, settings write,
     owner-source read, or Agent access.
     """
 
     def read_snapshot(self) -> PsycheSettingsSnapshotPort:
         """Return the current applied Psyche owner-input snapshot."""
+
+    def read_instructions(self) -> str:
+        """Return current loaded fixed instructions; no source I/O or mutation."""
+
+    def read_covenant(self) -> str:
+        """Return the current loaded Covenant body, including mirror fallback.
+
+        This grants no source/configuration I/O, mutation, or reconstruction.
+        """
 
 
 class PromptSectionPort(Protocol):
@@ -273,64 +272,6 @@ class PromptSectionPort(Protocol):
 
     def write_protected_section(self, body: str) -> None:
         """Replace this plugin's protected prompt section with *body*."""
-
-
-class FileGrepMatch(Protocol):
-    """The three immutable match fields File consumes from bounded grep."""
-
-    path: str
-    line_number: int
-    line: str
-
-
-class FileTraversalStats(Protocol):
-    """The bounded traversal facts File surfaces for partial glob/grep results."""
-
-    visited: int
-    elapsed_ms: int
-    truncated_reason: str | None
-    files_skipped_size: int
-    files_skipped_binary: int
-    dirs_pruned: int
-
-
-class FileIOPort(Protocol):
-    """The File family's narrow runtime file-operation capability.
-
-    This is deliberately not ``Agent._file_io`` exposed as an attribute and is
-    not a generic filesystem or dispatch port. It is the exact vocabulary the
-    official ``file`` family consumes: UTF-8 text read/write, bounded glob/grep,
-    the latest traversal facts those searches report, and the active result-size
-    ceiling used by its paged reader. Path rooting remains the separate
-    :class:`WorkdirPort` capability.
-    """
-
-    def read(self, path: str) -> str:
-        """Read one UTF-8 text file."""
-
-    def write(self, path: str, content: str) -> None:
-        """Create or overwrite one UTF-8 text file."""
-
-    def glob(self, pattern: str, root: str | None = None) -> list[str]:
-        """Return sorted paths matching *pattern* below *root*."""
-
-    def grep(
-        self,
-        pattern: str,
-        path: str | None = None,
-        max_results: int = 50,
-        *,
-        glob_filter: str | None = None,
-    ) -> list[FileGrepMatch]:
-        """Return concrete text matches from the bounded search service."""
-
-    @property
-    def last_traversal(self) -> FileTraversalStats | None:
-        """The latest glob/grep traversal facts, if the service reports them."""
-
-    @property
-    def max_result_chars(self) -> int | None:
-        """The live executor result limit, if it exposes a positive integer."""
 
 
 class ContextRuntimePort(Protocol):
@@ -505,24 +446,13 @@ class PluginCatalogPort(Protocol):
 class NotificationStatePort(Protocol):
     """Notification Core operations bound to one live agent's real state.
 
-    The notification family may ask Core to manipulate notification-owned
-    mirrors and hook registration, but it never receives the Agent, its Store,
-    delivery fingerprints, or producer state directly. The host adapter binds
-    each operation to the real agent before the plugin is composed, preserving
-    Core's allowlist, producer-guard, stale-version, acknowledgement, timer,
-    and Store semantics rather than recreating a parallel local state machine.
+    The notification family may ask Core to manipulate hook registration and
+    consumer delay, but it never receives the Agent, its Store, delivery
+    fingerprints, or producer state directly. The host adapter binds each
+    operation to the real agent before the plugin is composed, preserving
+    Core's allowlist, timer, and Store semantics rather than recreating a
+    parallel local state machine. No dismissal operation is exposed.
     """
-
-    def dismiss(
-        self,
-        channel: str,
-        *,
-        force: bool,
-        reason: str | None,
-        event_id: str | None = None,
-        ref_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Ask Notification Core to clear one permitted mirror target."""
 
     def delay(self, channel: str, seconds: int) -> dict[str, Any]:
         """Apply consumer-only delay policy without mutating producer state."""
@@ -584,7 +514,7 @@ class ConfigurationPort(Protocol):
     A declaration is static, while capability setup supplies its policy and
     platform overrides at boot.  This port exposes only that explicit copied
     mapping; it is not an Agent configuration API and does not permit writes.
-    File, Shell, and Vision each consume it for their own setup snapshot; the
+    Shell and Vision each consume it for their own setup snapshot; the
     kernel gives the mapping no schema — the consuming family owns its
     interpretation.
     """
@@ -613,8 +543,8 @@ class ProviderIdentityPort(Protocol):
     """Read only the current canonical LLM provider *label*, if one exists.
 
     Deliberately narrower than :class:`ActiveProviderPort`: Web needs one
-    truthful string to decide whether an explicit Anthropic/Gemini opt-in is
-    eligible, and nothing else. The port grants neither the provider service,
+    truthful string to decide whether a backend-gated OpenAI/Anthropic engine
+    is eligible, and nothing else. The port grants neither the provider service,
     its credentials or model configuration, the Agent, nor any provider
     registry; the adapter reads the label through on every access so a refresh
     never leaves a stale identity. Web is the one consumer today.
@@ -623,93 +553,6 @@ class ProviderIdentityPort(Protocol):
     @property
     def provider(self) -> str | None:
         """The current canonical provider name, or ``None`` when unavailable."""
-
-
-class SoulRuntimePort(Protocol):
-    """Soul's bounded live-self and soul-flow runtime surface.
-
-    This port exists because Soul's public actions are real self-state
-    operations, not signposts: they inspect the current conversation, mutate
-    only ``manifest.soul``-backed cadence/voice state, use the existing
-    consultation lock/timer, and publish or dismiss Soul's own notification.
-    The explicit members below are the complete vocabulary the Soul package
-    consumes; it receives neither the live Agent nor a generic attribute
-    escape hatch. The production adapter owns translations to the Agent's
-    private storage and kernel notification helpers.
-    """
-
-    @property
-    def working_dir(self) -> Path: ...
-
-    @property
-    def config(self) -> Any: ...
-
-    @property
-    def service(self) -> Any: ...
-
-    @property
-    def chat(self) -> Any: ...
-
-    @property
-    def session(self) -> Any: ...
-
-    @property
-    def agent_name(self) -> str: ...
-
-    @property
-    def state(self) -> Any: ...
-
-    @property
-    def idle_event(self) -> Any: ...
-
-    @property
-    def shutdown(self) -> Any: ...
-
-    @property
-    def soul_delay(self) -> float: ...
-
-    @soul_delay.setter
-    def soul_delay(self, value: float) -> None: ...
-
-    @property
-    def soul_timer(self) -> Any: ...
-
-    @soul_timer.setter
-    def soul_timer(self, value: Any) -> None: ...
-
-    @property
-    def fire_lock(self) -> Any: ...
-
-    @property
-    def notification_store(self) -> Any: ...
-
-    @property
-    def notification_fingerprint(self) -> Any: ...
-
-    @property
-    def appendix_ids_by_source(self) -> dict[str, str]: ...
-
-    def log(self, event: str, **fields: Any) -> None: ...
-
-    def restart_soul_timer(self) -> None: ...
-
-    def run_consultation_fire(self) -> None: ...
-
-    def sync_notifications(self) -> None: ...
-
-    def wake_nap(self, reason: str) -> None: ...
-
-    def persist_soul_entry(
-        self, result: dict, mode: str = "flow", source: str = "agent"
-    ) -> None: ...
-
-    def append_soul_flow_record(self, record: dict) -> None: ...
-
-    def publish_notification(self, channel: str, **kwargs: Any) -> None: ...
-
-    def clear_notification(self, channel: str) -> None: ...
-
-    def dismiss_notification(self, channel: str, *, invoked_by: str) -> dict: ...
 
 
 class SystemRuntimePort(Protocol):
@@ -738,6 +581,9 @@ class SystemRuntimePort(Protocol):
     def log(self, event: str, **fields: Any) -> None: ...
 
     def token_usage(self) -> Mapping[str, Any]: ...
+
+    def runtime_meta(self) -> Mapping[str, Any]:
+        """Read-only complete current runtime diagnostics (``system.meta``)."""
 
     def load_preset(self, name: str) -> dict: ...
 

@@ -27,7 +27,7 @@ pytest commands must run from the repo root with the project's Python.
 - **id**: NS001
 - **title**: a compare conflict never calls the mutator, and changed=False performs no write
 - **guards**: `notification-store` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch working directory `<scratch>`
 - **estimate**: ≈ 20 minutes
 

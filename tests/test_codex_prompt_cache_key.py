@@ -120,8 +120,7 @@ def _create_codex_session(events: list[Event], *, model: str = "gpt-5.5"):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
     )
     adapter._client = FakeClient(events)
     return adapter.create_chat(
@@ -145,6 +144,57 @@ def test_codex_request_includes_default_prompt_cache_key():
 
     sent = session._client.responses.kwargs[0]
     assert sent["prompt_cache_key"] == "lingtai-codex:gpt-5.5:v1"
+
+
+def _completed_with(usage: SimpleNamespace) -> Event:
+    return Event("response.completed", response=SimpleNamespace(id="resp_fake", usage=usage))
+
+
+def test_codex_pool_usage_carries_known_billable_output_from_responses_wire():
+    """Native Codex/pool rounds get the Responses ``output_tokens`` (reasoning
+    already included) as billable output for the Telegram list-price line; no
+    cache-write wire field exists there, so it stays unknown, never 0."""
+    usage = SimpleNamespace(
+        input_tokens=100,
+        output_tokens=20,
+        input_tokens_details=SimpleNamespace(cached_tokens=40),
+        output_tokens_details=SimpleNamespace(reasoning_tokens=8),
+    )
+    result = _create_codex_session([_completed_with(usage)]).send("x")
+
+    assert (result.usage.input_tokens, result.usage.output_tokens) == (100, 20)
+    assert (result.usage.thinking_tokens, result.usage.cached_tokens) == (8, 40)
+    assert result.usage.billable_output_tokens == 20
+    assert result.usage.cache_write_tokens is None
+    assert result.usage.cache_write_1h_tokens is None
+
+
+@pytest.mark.parametrize("tier", ["priority", "default", None])
+def test_codex_usage_records_the_requested_service_tier_sent_on_the_wire(tier):
+    """Billing evidence is the tier this request asked for, from the sent kwargs
+    (REST/native Codex); an omitted tier stays unknown, never filled in."""
+    adapter_kw = {} if tier is None else {"codex_service_tier": tier}
+    session = _create_codex_session_cfg([_completed()], **adapter_kw)
+    result = session.send("x")
+
+    assert session._client.responses.kwargs[0].get("service_tier") == tier
+    assert result.usage.requested_service_tier == tier
+
+
+@pytest.mark.parametrize("bad", [None, -1, True])
+def test_codex_usage_absent_or_invalid_output_is_unknown_not_zero(bad):
+    usage = SimpleNamespace(
+        input_tokens=100,
+        output_tokens=bad,
+        input_tokens_details=SimpleNamespace(cached_tokens=0),
+        output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+    )
+    result = _create_codex_session([_completed_with(usage)]).send("x")
+
+    assert result.usage.billable_output_tokens is None
+    missing = SimpleNamespace(input_tokens=100)
+    result = _create_codex_session([_completed_with(missing)]).send("x")
+    assert result.usage.billable_output_tokens is None
 
 
 def test_codex_request_sends_lingtai_identity_headers():
@@ -382,8 +432,7 @@ def _create_codex_session_cfg(events, *, model="gpt-5.5", **adapter_kw):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         **adapter_kw,
     )
     adapter._client = FakeClient(events)
@@ -555,8 +604,7 @@ def _build_codex_adapter(events, **adapter_kw):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
         **adapter_kw,
     )
     adapter._client = FakeClient(events)
@@ -847,14 +895,6 @@ def test_codex_usage_extra_carries_safe_auth_attribution():
         codex_auth_path_sha8="0123abcd",
         codex_auth_path_source="configured",
     )
-    session.codex_pool_selection = {
-        "source_ref": "pool.json",
-        "source_index": 2,
-        "pool_size": 5,
-        "weight": 3,
-        "auth_path_sha8": "poolabcd",
-        "model_scope": "gpt-5.6-sol",
-    }
 
     result = session.send("x")
 
@@ -864,11 +904,9 @@ def test_codex_usage_extra_carries_safe_auth_attribution():
     ).hexdigest()[:8]
     assert extra["codex_auth_path_sha8"] == "0123abcd"
     assert extra["codex_auth_path_source"] == "configured"
-    assert extra["codex_pool_source_ref"] == "pool.json"
-    assert extra["codex_pool_source_index"] == "2"
-    assert extra["codex_pool_size"] == "5"
-    assert extra["codex_pool_weight"] == "3"
-    assert extra["codex_pool_model_scope"] == "gpt-5.6-sol"
+    # The in-kernel account pool was removed: no pool attribution is emitted.
+    assert not any(key.startswith("codex_pool") for key in extra)
+    assert not hasattr(session, "codex_pool_selection")
     assert _TEST_ACCOUNT_ID not in json.dumps(extra, default=str)
 
 
@@ -954,11 +992,12 @@ def test_codex_factory_builds_adapter_with_per_agent_ids():
 
 
 # ---------------------------------------------------------------------------
-# Per-agent Codex OAuth token file — ``codex_auth_path`` (true multiple Codex
-# accounts). The manifest/preset can point one agent at its own token file; the
-# factory passes it to ``CodexTokenManager(token_path=...)``. Blank/absent falls
-# back to the legacy default path (``~/.lingtai-tui/codex-auth.json``). The path
-# is a non-secret local path and travels with the other provider defaults.
+# Per-agent Codex OAuth token file — ``codex_auth_path``. The manifest/preset
+# can point one agent at its own token file; the factory passes it to
+# ``CodexTokenManager(token_path=...)``. Blank/absent binds the default path
+# (``<tui_dir>/codex-auth.json``). The path is a non-secret local path and
+# travels with the other provider defaults. Account pooling is external
+# (subs-pool), not a kernel concern.
 # ---------------------------------------------------------------------------
 
 
@@ -1009,48 +1048,38 @@ def test_codex_factory_defers_and_passes_token_path_when_auth_path_set():
         mgr_cls.assert_called_once_with(token_path=auth_path)
 
 
-def test_codex_factory_empty_pool_falls_back_to_legacy_default_lazily():
-    """No auth path and an empty pool bind the legacy default at request time."""
+def test_codex_factory_binds_default_token_path_lazily_when_auth_path_omitted():
+    """No auth path binds the default token file at request time, not at boot."""
     from unittest import mock
 
     import lingtai  # noqa: F401
-    from lingtai.auth.codex_pool import legacy_codex_token_path
+    from lingtai.auth.codex import default_codex_token_path
+    from lingtai.auth.codex_account_source import FixedAccountSource
     from lingtai.llm.service import LLMService
 
-    with (
-        mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls,
-        mock.patch(
-            "lingtai.auth.codex_account_source.WeightedAccountSource.snapshot",
-            return_value=[],
-        ),
-    ):
+    with mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls:
         mgr_cls.return_value.get_access_token.return_value = "fake-token"
         mgr_cls.return_value.get_account_id.return_value = None
 
         svc = LLMService(provider="codex", model="gpt-5.5")
         adapter = svc.get_adapter("codex")
 
+        assert isinstance(adapter._codex_account_source, FixedAccountSource)
         mgr_cls.assert_not_called()
         adapter._select_codex_account("gpt-5.5")
-        mgr_cls.assert_called_once_with(token_path=str(legacy_codex_token_path()))
+        mgr_cls.assert_called_once_with(token_path=str(default_codex_token_path()))
 
 
 def test_codex_factory_treats_blank_auth_path_as_omitted():
-    """Blank auth paths use the same lazy empty-pool legacy fallback."""
+    """Blank auth paths bind the same lazy default token file."""
     from unittest import mock
 
     import lingtai  # noqa: F401
-    from lingtai.auth.codex_pool import legacy_codex_token_path
+    from lingtai.auth.codex import default_codex_token_path
     from lingtai.llm.service import LLMService
 
     for blank in ("", "   ", "\t\n"):
-        with (
-            mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls,
-            mock.patch(
-                "lingtai.auth.codex_account_source.WeightedAccountSource.snapshot",
-                return_value=[],
-            ),
-        ):
+        with mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls:
             mgr_cls.return_value.get_access_token.return_value = "fake-token"
             mgr_cls.return_value.get_account_id.return_value = None
 
@@ -1063,7 +1092,7 @@ def test_codex_factory_treats_blank_auth_path_as_omitted():
 
             mgr_cls.assert_not_called()
             adapter._select_codex_account("gpt-5.5")
-            mgr_cls.assert_called_once_with(token_path=str(legacy_codex_token_path()))
+            mgr_cls.assert_called_once_with(token_path=str(default_codex_token_path()))
 
 
 # ---------------------------------------------------------------------------

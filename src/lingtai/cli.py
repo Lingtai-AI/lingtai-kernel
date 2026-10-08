@@ -51,6 +51,24 @@ def load_init(working_dir: Path) -> dict:
     )
     if outcome.status is InitReadStatus.READ_FAILED:
         print(f"error: {json.dumps(outcome.to_payload(), ensure_ascii=False, default=str)}", file=sys.stderr)
+        # Older Puffo ACP drivers show only the last `error:` line and clip it
+        # to 300 characters. Keep this one static and short: the structured
+        # JSON above may put its safe repair fields after a long config/path
+        # prefix, leaving users with an unhelpful truncated startup error.
+        if (
+            outcome.stage == "VALIDATE"
+            and (outcome.safe_excerpt or "").startswith(
+                "manifest.capabilities.daemon.max_emanations was retired"
+            )
+        ):
+            print(
+                "error: LingTai cannot start: "
+                "manifest.capabilities.daemon.max_emanations is retired. "
+                "Remove it from init.json or the active preset; choose "
+                "default manager_pool_size=100 or set daemon.manager_pool_size. "
+                "See migration/migration.md.",
+                file=sys.stderr,
+            )
         sys.exit(1)
 
     from lingtai.kernel.workdir import write_resolved_manifest
@@ -236,6 +254,32 @@ def build_agent(
     return agent
 
 
+CHANGE_NAME_INCOMPLETE_MARKER = ".change-name-incomplete"
+
+
+def _refuse_incomplete_name_change(working_dir: Path) -> None:
+    """Fail closed while a name-change transaction is not proven complete.
+
+    Presence is intentionally shape-agnostic: a regular file, symlink,
+    directory, or other object cannot be treated as an absent fence. The CLI
+    never consumes this transaction-owned marker.
+    """
+    marker = working_dir / CHANGE_NAME_INCOMPLETE_MARKER
+    try:
+        marker.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        print(f"error: cannot inspect incomplete name-change fence {marker}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(
+        f"error: refusing to run an Agent with an incomplete name change: {marker}\n"
+        "  Inspect the retained target and use a separately authorized recovery.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 def _clean_signal_files(working_dir: Path) -> None:
     """Remove stale .suspend / .sleep files left over from a previous run."""
     for name in (".suspend", ".sleep", ".refresh"):
@@ -345,8 +389,9 @@ def _derived_avatar_requires_admission(working_dir: Path) -> bool:
     return probe_derived_avatar_state(working_dir) is not DerivedAvatarState.ABSENT
 
 
-def run(working_dir: Path) -> None:
+def run(working_dir: Path, *, acp_socket: bool = False) -> None:
     """Boot agent into ASLEEP — wakes on external messages (mail/imap/telegram)."""
+    _refuse_incomplete_name_change(working_dir)
     _check_duplicate_process(working_dir)
     _clean_signal_files(working_dir)
     # Durable file logging for daemonized agents: stderr alone is DEVNULL for
@@ -380,6 +425,13 @@ def run(working_dir: Path) -> None:
     from lingtai.tools.avatar._launcher import DERIVED_AVATAR_EXECUTION_ENV
 
     build_options = {}
+    resident_socket_enabled = (
+        acp_socket
+        or os.environ.get("LINGTAI_ACP_SOCKET_AGENT_DIR") == str(working_dir.resolve())
+    )
+    if resident_socket_enabled:
+        from lingtai.kernel.provider_admission import ConnectionScopedProviderAdmissionPort
+        build_options["_provider_call_admission_port"] = ConnectionScopedProviderAdmissionPort()
     if (
         _derived_avatar_requires_admission(working_dir)
         or os.environ.get(DERIVED_AVATAR_EXECUTION_ENV) == "1"
@@ -399,8 +451,18 @@ def run(working_dir: Path) -> None:
     if is_refresh:
         taken_file.unlink()
 
+    resident_acp = None
     try:
         agent.start()
+        if is_refresh:
+            import uuid
+
+            agent._publish_memory_length_warning(f"refresh-{uuid.uuid4().hex}")
+        if resident_socket_enabled:
+            from lingtai.adapters.acp.resident_socket import ResidentAcpSocket
+
+            resident_acp = ResidentAcpSocket(agent, working_dir)
+            resident_acp.start()
 
         # A WorkerStillRunning poison recovery leaves an open artifact whose
         # `redo` block is redriven here, on every boot, once per boot: the
@@ -432,6 +494,8 @@ def run(working_dir: Path) -> None:
 
         agent._shutdown.wait()
     finally:
+        if resident_acp is not None:
+            resident_acp.close()
         try:
             agent.stop(timeout=10.0)
         except Exception:
@@ -599,10 +663,20 @@ def main() -> None:
     run_parser = sub.add_parser("run", help="Boot agent into sleep — wakes on external messages")
     run_parser.add_argument("working_dir", type=Path, help="Agent working directory containing init.json")
     run_parser.add_argument(
+        "--acp-socket",
+        action="store_true",
+        help="Serve owner-only local ACP on a short Unix socket (not a Puffo profile)",
+    )
+    run_parser.add_argument(
         "--verbose",
         action="store_true",
         help="DEBUG-level console logging (equivalent to LINGTAI_VERBOSE=1)",
     )
+
+    acp_path_parser = sub.add_parser(
+        "acp-socket-path", help="Print the local resident ACP socket path"
+    )
+    acp_path_parser.add_argument("working_dir", type=Path)
 
     sub.add_parser("check-caps", help="Output capability provider metadata as JSON")
 
@@ -682,7 +756,16 @@ def main() -> None:
             sys.exit(1)
         if getattr(args, "verbose", False):
             os.environ["LINGTAI_VERBOSE"] = "1"
-        run(working_dir)
+        if args.acp_socket:
+            # Refresh watcher inherits the environment, not CLI flags. Bind
+            # this opt-in to one Agent directory so unrelated run children
+            # cannot enable their own endpoints by inheriting the marker.
+            os.environ["LINGTAI_ACP_SOCKET_AGENT_DIR"] = str(working_dir.resolve())
+        run(working_dir, acp_socket=args.acp_socket)
+    elif args.command == "acp-socket-path":
+        from lingtai.adapters.acp.resident_socket import resident_acp_socket_path
+
+        print(resident_acp_socket_path(args.working_dir))
     elif args.command == "check-caps":
         from lingtai.tools.registry import get_all_providers
         print(json.dumps(get_all_providers()))

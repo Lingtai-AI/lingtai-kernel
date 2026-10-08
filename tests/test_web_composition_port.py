@@ -12,7 +12,7 @@ import pytest
 
 from lingtai.agent import Agent
 from lingtai.kernel.tool_plugin import HostPortError, ToolPluginHost
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 from lingtai.tools.web_search import (
     DECLARATION,
     WebComposition,
@@ -101,7 +101,7 @@ def test_web_grant_without_setup_composition_fails_before_bind(tmp_path):
     from lingtai.adapters.tool_plugin_host import agent_host_ports
 
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="web-composition-port-grant",
         working_dir=tmp_path / "agent",
         capabilities={},
@@ -133,7 +133,7 @@ def test_web_composition_publishes_one_manager_only(tmp_path):
 
 def test_web_real_agent_bind_returns_manager_and_preserves_manual_surface(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="web-composition-port",
         working_dir=tmp_path / "agent",
         capabilities={},
@@ -157,7 +157,7 @@ def test_web_real_agent_bind_returns_manager_and_preserves_manual_surface(tmp_pa
 
 def _real_web_agent(tmp_path: Path) -> Agent:
     return Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="web-manual-contract",
         working_dir=tmp_path / "agent",
         capabilities={},

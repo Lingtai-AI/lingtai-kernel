@@ -27,7 +27,7 @@ commands must run from the repo root with the project's Python.
 - **id**: MT001
 - **title**: send returns None on success and a partial inbox entry is never observable
 - **guards**: `mail-transport` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
 - **estimate**: ≈ 20 minutes
 

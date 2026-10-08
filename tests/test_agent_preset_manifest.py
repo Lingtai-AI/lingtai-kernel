@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from lingtai.agent import Agent
 from lingtai.kernel.base_agent import BaseAgent, _build_identity_section
 from lingtai.kernel.base_agent.identity import _build_manifest, _safe_llm_from_service, sanitize_endpoint
@@ -25,8 +27,8 @@ from tests._agent_presence_helpers import make_test_presence_store
 
 
 def _mock_service(
-    provider: str = "gemini",
-    model: str = "gemini-test",
+    provider: str = "anthropic",
+    model: str = "claude-test",
     base_url: str | None = None,
 ):
     """Build a mock LLMService with the live attributes the manifest reads."""
@@ -49,7 +51,7 @@ def _write_init(
     """Write a minimal init.json that exercises the preset/llm surface."""
     workdir.mkdir(parents=True, exist_ok=True)
     llm: dict = {
-        "provider": "deepseek",
+        "provider": "openai",
         "model": "deepseek-v4-pro",
         "base_url": "https://api.deepseek.com",
     }
@@ -104,7 +106,9 @@ def test_kernel_manifest_omits_base_url_when_none(tmp_path):
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "bob"),
     )
     data = _build_manifest(agent)
-    assert data["llm"] == {"provider": "openai", "model": "gpt-4.6"}
+    # No base_url key; official OpenAI forwards service_tier, so the omitted
+    # tier is labeled with the request-side default.
+    assert data["llm"] == {"provider": "openai", "model": "gpt-4.6", "service_tier": "default"}
     agent.stop(timeout=1.0)
 
 
@@ -146,9 +150,9 @@ def test_sanitize_endpoint_rejects_non_url_secret_like_input():
 
 def test_safe_llm_from_service_uses_provider_default_base_url():
     agent = MagicMock()
-    svc = _mock_service("custom", "model-x", None)
+    svc = _mock_service("openai", "model-x", None)
     svc._provider_defaults = {
-        "custom": {
+        "openai": {
             "base_url": "https://relay.example.test/v1",
             "api_compat": "openai",
         }
@@ -158,14 +162,15 @@ def test_safe_llm_from_service_uses_provider_default_base_url():
 
     out = _safe_llm_from_service(agent)
     assert out["base_url"] == "https://relay.example.test/v1"
-    assert out["api_compat"] == "openai"
+    # The retired ``api_compat`` key is never surfaced as identity.
+    assert "api_compat" not in out
     assert out["context_limit"] == 123456
 
 
 def test_safe_llm_from_service_exposes_codex_responses_service_tier():
     agent = MagicMock()
-    svc = _mock_service("codex-pool", "gpt-5.6-terra", None)
-    svc._provider_defaults = {"codex-pool": {"service_tier": "fast"}}
+    svc = _mock_service("codex", "gpt-5.6-terra", None)
+    svc._provider_defaults = {"codex": {"service_tier": "fast"}}
     agent.service = svc
 
     assert _safe_llm_from_service(agent)["service_tier"] == "fast"
@@ -173,11 +178,59 @@ def test_safe_llm_from_service_exposes_codex_responses_service_tier():
 
 def test_safe_llm_from_service_labels_omitted_codex_service_tier_default():
     agent = MagicMock()
-    svc = _mock_service("codex-pool", "gpt-5.6-terra", None)
-    svc._provider_defaults = {"codex-pool": {}}
+    svc = _mock_service("codex", "gpt-5.6-terra", None)
+    svc._provider_defaults = {"codex": {}}
     agent.service = svc
 
     assert _safe_llm_from_service(agent)["service_tier"] == "default"
+
+
+@pytest.mark.parametrize(
+    "provider,defaults,expected",
+    [
+        ("openai", {"service_tier": " fast "}, "fast"),
+        ("openai", {"service_tier": "flex"}, "flex"),
+        ("openai", {"service_tier": "priority"}, "priority"),
+        ("openai", {"service_tier": "unsupported"}, "default"),
+        ("openai", {}, "default"),
+        ("codex", {"service_tier": "auto"}, "auto"),
+    ],
+    ids=["openai-fast", "openai-flex", "openai-priority", "openai-invalid-not-claimed", "openai-omitted", "codex-auto"],
+)
+def test_safe_llm_from_service_reports_tier_on_openai_compatible_routes(provider, defaults, expected):
+    from lingtai.llm._register import register_all_adapters
+
+    register_all_adapters()
+    agent = MagicMock()
+    svc = _mock_service(provider, "gpt-6.1-sol", None)
+    svc._provider_defaults = {provider: dict(defaults)}
+    agent.service = svc
+
+    assert _safe_llm_from_service(agent)["service_tier"] == expected
+
+
+@pytest.mark.parametrize(
+    "provider,defaults",
+    [
+        ("anthropic", {"service_tier": "fast"}),
+        ("claude-code", {"service_tier": "fast"}),
+        ("gemini", {"service_tier": "fast"}),
+        ("custom", {"service_tier": "fast"}),
+        ("codex-pool", {"service_tier": "fast"}),
+        ("codex_pool", {"service_tier": "fast"}),
+    ],
+    ids=["anthropic", "claude-code", "removed-gemini", "removed-custom", "removed-codex-pool", "removed-codex_pool"],
+)
+def test_safe_llm_from_service_omits_tier_where_not_forwarded(provider, defaults):
+    from lingtai.llm._register import register_all_adapters
+
+    register_all_adapters()
+    agent = MagicMock()
+    svc = _mock_service(provider, "m", None)
+    svc._provider_defaults = {provider: dict(defaults)}
+    agent.service = svc
+
+    assert "service_tier" not in _safe_llm_from_service(agent)
 
 
 def test_safe_llm_from_service_with_no_service():
@@ -190,13 +243,13 @@ def test_identity_section_renders_llm_line():
     text = _build_identity_section({
         "agent_name": "alice",
         "llm": {
-            "provider": "deepseek",
+            "provider": "openai",
             "model": "deepseek-v4-pro",
             "base_url": "https://api.deepseek.com",
         },
     })
     assert "deepseek-v4-pro" in text
-    assert "deepseek" in text
+    assert "openai" in text
     assert "https://api.deepseek.com" in text
 
 

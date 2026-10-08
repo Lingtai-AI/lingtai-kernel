@@ -16,7 +16,7 @@ maintenance: |
 **术语对照**
 
 - `knowledge`：私有长存知识域；无公开工具根。其手册经 `psyche(action='knowledge', input={}, reasoning='...')` 取之，唯还手册，不扫目录、不改盘。
-- 条目以 `file.write`/`file.edit` 直书 `knowledge/<名>/KNOWLEDGE.md`，再以 `context.rebuild` 使之现于提示；旧 `knowledge.info` 已废，无别名。
+- 条目以 `shell`（核实后的精确改写）直书 `knowledge/<名>/KNOWLEDGE.md`，再以 `context.rebuild` 使之现于提示；旧 `knowledge.info` 已废，无别名。
 - `action`：psyche 之动作，取 `knowledge` 即还本域手册；旧 `info` 已废。
 - `input`：严格空对象（strict-empty）：不接受任何字段，多余字段在动作执行前即被拒。
 - `reasoning`：必填的根级调用理由，属宿主审计元数据，绝不下沉入 input。

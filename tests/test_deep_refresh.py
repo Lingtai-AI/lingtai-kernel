@@ -159,9 +159,15 @@ def _events(tmp_path: Path, event_type: str) -> list[dict]:
 
 
 def test_deep_refresh_loads_new_capability(tmp_path):
-    """After editing init.json to add a capability, refresh picks it up."""
+    """After editing init.json to add a capability, refresh picks it up.
+
+    ``shell`` is a core default and boots on every agent, so this uses an
+    explicit opt-in capability (``web_search``, registered as ``web``) to prove
+    the refresh actually loads something new.
+    """
     agent = _make_agent(tmp_path, _make_init(capabilities={}))
     agent._sealed = True
+    assert "web" not in [name for name, _ in agent._capabilities]
 
     mock_interface = MagicMock()
     mock_session = MagicMock()
@@ -169,13 +175,13 @@ def test_deep_refresh_loads_new_capability(tmp_path):
     mock_session.chat.interface = mock_interface
     agent._session = mock_session
 
-    new_init = _make_init(capabilities={"file": {}})
+    new_init = _make_init(capabilities={"web_search": {"provider": "duckduckgo"}})
     (tmp_path / "init.json").write_text(json.dumps(new_init))
 
     agent._setup_from_init()
 
     cap_names = [name for name, _ in agent._capabilities]
-    assert "file" in cap_names
+    assert "web" in cap_names
     assert agent._sealed is True
 
 
@@ -213,14 +219,14 @@ def test_deep_refresh_no_init_json_is_noop(tmp_path):
 
 def test_deep_refresh_at_boot_no_history(tmp_path):
     """_setup_from_init works at boot time (no session, not sealed)."""
-    init = _make_init(capabilities={"file": {}})
+    init = _make_init(capabilities={"shell": {}})
     agent = _make_agent(tmp_path, init)
     assert agent._sealed is False
 
     agent._setup_from_init()
 
     cap_names = [name for name, _ in agent._capabilities]
-    assert "file" in cap_names
+    assert "shell" in cap_names
     assert agent._sealed is True
 
 
@@ -229,7 +235,7 @@ def test_cli_build_agent_uses_refresh(tmp_path):
     from lingtai.cli import load_init, build_agent
 
     init = _make_init(
-        capabilities={"file": {}},
+        capabilities={"shell": {}},
         covenant="LEGACY INIT COVENANT MUST STAY INERT",
     )
     (tmp_path / "init.json").write_text(json.dumps(init))
@@ -243,12 +249,14 @@ def test_cli_build_agent_uses_refresh(tmp_path):
 
     # Capabilities remain init-owned.
     cap_names = [name for name, _ in agent._capabilities]
-    assert "file" in cap_names
+    assert "shell" in cap_names
 
     # Covenant is Psyche-owned and the legacy init value is inert.
     covenant_content = agent._prompt_manager.read_section("covenant")
     assert covenant_content is not None
-    assert "Be helpful" in covenant_content
+    assert 'psyche(action="covenant", input={})' in covenant_content
+    assert agent._effective_covenant == "Be helpful."
+    assert "Be helpful" not in agent._build_system_prompt()
     assert "LEGACY INIT COVENANT" not in covenant_content
 
     agent._workdir_lease.release()
@@ -377,7 +385,7 @@ def test_cli_build_agent_context_window_ignores_legacy_init_and_uses_system_poli
 
 def test_deep_refresh_invalid_init_keeps_old_config(tmp_path):
     """If init.json is invalid, refresh logs error and keeps old state."""
-    init = _make_init(capabilities={"file": {}})
+    init = _make_init(capabilities={"shell": {}})
     agent = _make_agent(tmp_path, init)
     agent._setup_from_init()  # initial setup
 
@@ -421,7 +429,7 @@ def test_invalid_psyche_owner_aborts_live_refresh_before_teardown(
     agent = _make_agent(
         tmp_path,
         _make_init(
-            capabilities={"file": {}},
+            capabilities={"shell": {}},
             base_prompt="APPLIED BASE",
             covenant="APPLIED COVENANT",
         ),
@@ -507,12 +515,6 @@ def test_invalid_psyche_owner_aborts_live_refresh_before_teardown(
             "covenant_mirror": (tmp_path / "system/covenant.md").read_bytes(),
             "system_mirror": (tmp_path / "system/system.md").read_bytes(),
         }
-        teardown_calls: list[str] = []
-        monkeypatch.setattr(
-            agent,
-            "_cancel_soul_timer",
-            lambda: teardown_calls.append("cancel_soul_timer"),
-        )
         real_read = psyche_settings.read_resolved_prompt_inputs
         owner_reads: list[Path] = []
 
@@ -530,7 +532,6 @@ def test_invalid_psyche_owner_aborts_live_refresh_before_teardown(
             agent._setup_from_init()
 
         assert owner_reads == [tmp_path]
-        assert teardown_calls == []
         assert agent._sealed is state["sealed"] is True
         assert agent.service is state["service"]
         assert agent._session is state["session"]
@@ -749,7 +750,8 @@ def test_init_procedures_override_is_migrated_not_prompted(tmp_path):
     packaged = _packaged_procedures()
     prompt = agent._prompt_manager.render()
     assert legacy not in prompt
-    assert packaged in prompt
+    assert packaged in agent._prompt_manager.read_instructions()
+    assert packaged not in prompt
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
     # Compatibility is diagnosed/read-only; the reader never rewrites input or
     # creates migration archives/progress.
@@ -844,7 +846,7 @@ def test_psyche_base_prompt_reaches_rendered_prompt_via_boot(tmp_path):
     from lingtai.cli import load_init, build_agent
 
     init = _make_init(
-        capabilities={"file": {}},
+        capabilities={"shell": {}},
         covenant="LEGACY INIT COVENANT",
         base_prompt="LEGACY INIT BASE",
     )
@@ -864,7 +866,9 @@ def test_psyche_base_prompt_reaches_rendered_prompt_via_boot(tmp_path):
         assert "Recipe-injected base prompt." in prompt
         assert "LEGACY INIT BASE" not in prompt
         assert "LEGACY INIT COVENANT" not in prompt
-        assert prompt.index("Recipe-injected base prompt.") < prompt.index("Be helpful.")
+        assert "Be helpful." not in prompt
+        assert agent._effective_covenant == "Be helpful."
+        assert prompt.index('psyche(action="covenant"') < prompt.index("Recipe-injected base prompt.")
     finally:
         agent._workdir_lease.release()
 
@@ -879,7 +883,7 @@ def test_psyche_base_prompt_file_reaches_rendered_prompt_via_boot(tmp_path):
     (tmp_path / "ignored-base-prompt.md").write_text(
         "LEGACY INIT BASE FILE", encoding="utf-8"
     )
-    init = _make_init(capabilities={"file": {}}, covenant="LEGACY INIT COVENANT")
+    init = _make_init(capabilities={"shell": {}}, covenant="LEGACY INIT COVENANT")
     init["base_prompt_file"] = "ignored-base-prompt.md"
     (tmp_path / "init.json").write_text(json.dumps(init))
     (tmp_path / "settings").mkdir()
@@ -897,7 +901,9 @@ def test_psyche_base_prompt_file_reaches_rendered_prompt_via_boot(tmp_path):
         assert "Recipe base prompt from file." in prompt
         assert "LEGACY INIT BASE FILE" not in prompt
         assert "LEGACY INIT COVENANT" not in prompt
-        assert prompt.index("Recipe base prompt from file.") < prompt.index("Be helpful.")
+        assert "Be helpful." not in prompt
+        assert agent._effective_covenant == "Be helpful."
+        assert prompt.index('psyche(action="covenant"') < prompt.index("Recipe base prompt from file.")
     finally:
         agent._workdir_lease.release()
 
@@ -928,7 +934,8 @@ def test_init_substrate_override_is_migrated_not_prompted(tmp_path):
 
     prompt = agent._prompt_manager.render()
     assert legacy not in prompt
-    assert _packaged_substrate() in prompt
+    assert _packaged_substrate() in agent._prompt_manager.read_instructions()
+    assert _packaged_substrate() not in prompt
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
     assert data["substrate"] == legacy
     assert not (tmp_path / "system" / "migrations").exists()
@@ -965,7 +972,7 @@ def test_reload_keeps_covenant_and_character_separate(tmp_path):
     """Boot/refresh-style reload: covenant.md → `covenant`, lingtai.md →
     `character`. The character text must never be folded into covenant."""
     agent = _make_agent(tmp_path, _make_init(covenant="The operator contract."))
-    # Author the durable character file as the agent would via file.write/edit.
+    # Author the durable character file as the agent would via bounded Shell editing.
     system_dir = agent._working_dir / "system"
     system_dir.mkdir(exist_ok=True)
     (system_dir / "lingtai.md").write_text("I am a meticulous archivist.")
@@ -975,7 +982,8 @@ def test_reload_keeps_covenant_and_character_separate(tmp_path):
     covenant = agent._prompt_manager.read_section("covenant") or ""
     character = agent._prompt_manager.read_section("character") or ""
 
-    assert "The operator contract." in covenant
+    assert agent._effective_covenant == "The operator contract."
+    assert 'psyche(action="covenant"' in covenant
     assert "I am a meticulous archivist." in character
     # Separation: neither section bleeds into the other.
     assert "I am a meticulous archivist." not in covenant

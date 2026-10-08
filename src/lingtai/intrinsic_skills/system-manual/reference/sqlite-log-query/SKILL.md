@@ -26,7 +26,7 @@ LingTai keeps durable runtime traces and token ledgers in JSONL files. The SQLit
 sources of truth. Use it to answer questions that are painful with `grep`: which
 event types are hottest, what happened inside daemon runs, what chat-history
 turn surrounded a failure, whether notification/daemon/context events are
-storming, or how token usage is distributed across main/soul/daemon sources.
+storming, or how token usage is distributed across main/daemon sources.
 
 ## Start here for log.sqlite (quick start)
 
@@ -191,7 +191,7 @@ lingtai-agent log query "$AGENT_DIR" \
 | `ts_text` | original `ts` value from JSONL |
 | `input_tokens`, `output_tokens`, `thinking_tokens`, `cached_tokens` | token counters from the JSONL ledger row |
 | `model`, `endpoint` | model/provider endpoint metadata when present |
-| `source` | ledger source tag such as `main`, `soul`, `daemon`, `tc_wake`, or legacy/null |
+| `source` | ledger source tag such as `main`, `daemon`, `tc_wake`, legacy `soul` (removed producer), or legacy/null |
 | `em_id`, `run_id`, `api_call_id` | daemon/run/API attribution when present |
 | `entry_json` | full source token-ledger row as JSON text |
 | `source_file`, `source_offset`, `source_line` | source JSONL identity |

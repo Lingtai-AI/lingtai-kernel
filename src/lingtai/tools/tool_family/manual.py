@@ -32,7 +32,7 @@ __all__ = ["MANUAL_INPUT_SCHEMA", "build_manual_child"]
 #: that compare composed schemas byte-for-byte — whether a family registers
 #: ``build_manual_child`` below or, like ``avatar``, supplies its own ``manual``
 #: handler while still reusing this same literal. Exported so a family that
-#: must also *declare* this schema (e.g. ``soul``'s module-level schema-only
+#: must also *declare* this schema (e.g. ``system``'s module-level schema-only
 #: ``ToolFamily`` built before an agent exists) references the one owned
 #: definition instead of copying it — the schema and the child that dispatches
 #: it cannot then drift apart.

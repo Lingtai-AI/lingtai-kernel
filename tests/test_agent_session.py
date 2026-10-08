@@ -62,6 +62,7 @@ def test_agent_session_derived_token_views():
     usage = s.token_usage()
     assert usage["api_calls"] == 4
     assert usage["input_tokens"] == 1000
+    assert usage["output_tokens"] == 200
     assert usage["cached_tokens"] == 600
     assert usage["cache_miss_tokens"] == 400
     assert usage["session_cache_rate"] == 0.6

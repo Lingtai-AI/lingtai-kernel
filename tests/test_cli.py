@@ -69,6 +69,27 @@ def test_load_init_reads_file(tmp_path):
     assert data["manifest"]["agent_name"] == "test-agent"
 
 
+def test_retired_daemon_boot_error_has_short_last_line_for_old_acp(tmp_path, capsys):
+    from lingtai.cli import load_init
+
+    _write_init(tmp_path, {"manifest": {
+        "capabilities": {"daemon": {"max_emanations": 30}},
+    }})
+    with pytest.raises(SystemExit) as stopped:
+        load_init(tmp_path)
+
+    assert stopped.value.code == 1
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0].startswith("error: {")
+    assert '"read_result": "READ_FAILED"' in lines[0]
+    assert lines[-1].startswith("error: LingTai cannot start:")
+    assert len(lines[-1]) < 300
+    assert "manifest.capabilities.daemon.max_emanations" in lines[-1]
+    assert "manager_pool_size=100" in lines[-1]
+    assert "migration/migration.md" in lines[-1]
+    assert "test-key" not in lines[-1]
+
+
 def test_load_init_missing_file(tmp_path):
     from lingtai.cli import load_init
     with pytest.raises(SystemExit):
@@ -133,7 +154,7 @@ def test_build_agent_constructs_correctly(mock_mail, mock_agent, mock_llm, tmp_p
     assert call_kwargs.kwargs["agent_name"] == "test-agent"
     assert call_kwargs.kwargs["admin"] == {"karma": True}
     assert call_kwargs.kwargs["working_dir"] == tmp_path
-    assert call_kwargs.kwargs["streaming"] is False
+    assert call_kwargs.kwargs["streaming"] is True
     assert call_kwargs.kwargs["_from_init_boot"] is True
     # covenant, memory, capabilities, addons no longer passed to constructor —
     # they are loaded by _setup_from_init() from init.json
@@ -839,6 +860,39 @@ def test_windows_venv_launcher_stub_is_not_a_duplicate(tmp_path, monkeypatch):
     _check_duplicate_process(working_dir)
 
 
+@pytest.mark.parametrize("marker_shape", ["regular", "symlink", "directory"])
+def test_run_refuses_change_name_incomplete_before_signal_cleanup_or_agent_construction(
+    marker_shape, monkeypatch, tmp_path, capsys
+):
+    from lingtai import cli
+
+    marker = tmp_path / cli.CHANGE_NAME_INCOMPLETE_MARKER
+    if marker_shape == "regular":
+        marker.write_text("incomplete\n", encoding="utf-8")
+    elif marker_shape == "symlink":
+        target = tmp_path / "marker-target"
+        target.write_text("sentinel\n", encoding="utf-8")
+        marker.symlink_to(target)
+    else:
+        marker.mkdir()
+    suspend = tmp_path / ".suspend"
+    suspend.write_text("must remain\n", encoding="utf-8")
+
+    calls = []
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda root: calls.append("process"))
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda root: calls.append("cleanup"))
+    monkeypatch.setattr(cli, "load_init", lambda root: calls.append("init"))
+    monkeypatch.setattr(cli, "build_agent", lambda *args, **kwargs: calls.append("Agent"))
+
+    with pytest.raises(SystemExit) as raised:
+        cli.run(tmp_path)
+    assert raised.value.code == 1
+    assert "incomplete name change" in capsys.readouterr().err
+    assert calls == []
+    assert marker.lstat()
+    assert suspend.read_text(encoding="utf-8") == "must remain\n"
+
+
 def test_run_wires_file_logging(monkeypatch, tmp_path):
     """run() must wire setup_logging(log_dir=working_dir/logs) into boot.
 
@@ -1146,7 +1200,7 @@ def test_avatar_spawned_directory_stays_restricted_without_launch_env(
     )
     from lingtai.tools.avatar import AvatarManager
     from lingtai.tools.avatar._launcher import AvatarLaunchReceipt, derived_avatar_state_path
-    from tests._service_helpers import make_gemini_mock_service
+    from tests._service_helpers import make_mock_llm_service
 
     class _GrantingPort:
         def authorize_derived_launch(self, _parent, _capability):
@@ -1163,7 +1217,7 @@ def test_avatar_spawned_directory_stays_restricted_without_launch_env(
         {"manifest": {"capabilities": {"avatar": {}}}},
     )
     parent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="parent",
         working_dir=parent_dir,
         capabilities=["avatar"],

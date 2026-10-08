@@ -34,8 +34,8 @@ MANUAL_CALL = {"action": "manual", "input": {}, "reasoning": "load vision guidan
 
 def make_mock_service():
     svc = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "openai"
+    svc.model = "gpt-test"
     svc.api_key = None
     svc._key_resolver = MagicMock(return_value="fake-key")
     return svc
@@ -89,43 +89,49 @@ def make_provider_agent(
     return make_mock_agent(tmp_path, svc=svc)
 
 
-@pytest.mark.parametrize(
-    "provider",
-    ["openrouter", "deepseek", "zhipu", "glm", "grok", "qwen", "kimi", "custom"],
+REMOVED_LLM_PROVIDERS = (
+    "deepseek", "zhipu", "glm", "mimo", "minimax", "openrouter", "grok",
+    "qwen", "kimi", "gemini", "kimi-code", "kimi_code", "custom", "claude_code",
 )
-def test_compatible_aliases_build_current_openai_route(tmp_path, provider):
-    headers = {"X-Preset": "active"}
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
-        mock_factory.return_value = MagicMock(spec=VisionService)
+
+
+@pytest.mark.parametrize("provider", REMOVED_LLM_PROVIDERS)
+def test_removed_llm_providers_are_manual_only_vision_routes(tmp_path, provider):
+    """No removed LLM provider name keeps a vision route or a fallback provider."""
+    assert provider not in PROVIDERS["providers"]
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.services.vision.openai.OpenAIVisionService"
+    ) as mock_openai, patch(
+        "lingtai.services.vision.anthropic.AnthropicVisionService"
+    ) as mock_anthropic:
         agent = make_provider_agent(
             tmp_path,
             provider=provider,
             model="vision-current",
             base_url="https://relay.example/v1",
-            defaults={provider: {"api_compat": "openai", "default_headers": headers, "wire_api": "chat_completions"}},
+            defaults={provider: {"api_compat": "openai", "wire_api": "chat_completions"}},
         )
-        setup(agent, provider=provider, api_key="sk-test")
-    assert mock_factory.call_args.args == ("openai",)
-    assert mock_factory.call_args.kwargs == {
-        "api_key": "sk-test",
-        "model": "vision-current",
-        "base_url": "https://relay.example/v1",
-        "default_headers": headers,
-        "wire_api": "chat_completions",
-    }
+        agent.service.api_key = "sk-current"
+        mgr = setup(agent, provider=provider, api_key="sk-test")
+
+    mock_factory.assert_not_called()
+    mock_openai.assert_not_called()
+    mock_anthropic.assert_not_called()
+    assert mgr._vision_service is None
+    assert "No direct vision route is supported" in mgr._manual_reason
+    assert "claude -p" not in mgr._manual_reason
+    result = mgr.handle(analyze())
+    assert result["status"] == "error"
+    assert "sk-" not in result["message"]
 
 
-@pytest.mark.parametrize("wire_api", ["auto", "", " \t "])
+@pytest.mark.parametrize("wire_api", [None, "auto", "", " \t ", "chat_completions"])
 @pytest.mark.parametrize(
-    ("base_url", "expected_wire"),
-    [
-        (None, "responses"),
-        ("https://openai-compatible.example/v1", "chat_completions"),
-    ],
+    "base_url", [None, "https://openai-compatible.example/v1"],
 )
-def test_openai_automatic_wire_values_preserve_active_effective_route(
-    tmp_path, wire_api, base_url, expected_wire
-):
+def test_openai_wire_defaults_to_chat_completions(tmp_path, wire_api, base_url):
+    """Omitted/legacy ``auto``/blank wire selects Chat Completions everywhere."""
+    defaults = {"openai": {} if wire_api is None else {"wire_api": wire_api}}
     with patch("lingtai.services.vision.create_vision_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=VisionService)
         agent = make_provider_agent(
@@ -133,18 +139,34 @@ def test_openai_automatic_wire_values_preserve_active_effective_route(
             provider="openai",
             model="gpt-5.4",
             base_url=base_url,
-            defaults={
-                "openai": {
-                    "api_compat": "openai",
-                    "wire_api": wire_api,
-                    "use_responses_api": True,
-                }
-            },
+            defaults=defaults,
         )
         setup(agent, provider="openai", api_key="sk-test")
 
     assert mock_factory.call_args.args == ("openai",)
-    assert mock_factory.call_args.kwargs["wire_api"] == expected_wire
+    assert mock_factory.call_args.kwargs["wire_api"] == "chat_completions"
+
+
+def test_openai_responses_wire_propagates_from_active_bucket(tmp_path):
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_provider_agent(
+            tmp_path,
+            provider="openai",
+            model="gpt-5.4",
+            base_url="https://relay.example/v1",
+            defaults={"openai": {"wire_api": "responses"}},
+        )
+        agent.service.api_key = "sk-current"
+        setup(agent)
+
+    assert mock_factory.call_args.args == ("openai",)
+    assert mock_factory.call_args.kwargs == {
+        "api_key": "sk-current",
+        "model": "gpt-5.4",
+        "base_url": "https://relay.example/v1",
+        "wire_api": "responses",
+    }
 
 
 def test_openai_unknown_wire_remains_manual_without_factory_call(tmp_path):
@@ -154,13 +176,7 @@ def test_openai_unknown_wire_remains_manual_without_factory_call(tmp_path):
             provider="openai",
             model="gpt-5.4",
             base_url=None,
-            defaults={
-                "openai": {
-                    "api_compat": "openai",
-                    "wire_api": "unproven_wire",
-                    "use_responses_api": True,
-                }
-            },
+            defaults={"openai": {"wire_api": "unproven_wire"}},
         )
         mgr = setup(agent, provider="openai", api_key="sk-test")
 
@@ -172,35 +188,7 @@ def test_openai_unknown_wire_remains_manual_without_factory_call(tmp_path):
     assert "unproven_wire" not in result["message"]
 
 
-def test_generic_openai_compatible_unknown_wire_remains_manual(tmp_path):
-    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_cls:
-        agent = make_provider_agent(
-            tmp_path,
-            provider="openai-compatible-relay",
-            model="vision-current",
-            base_url="https://relay.example/v1",
-            defaults={
-                "openai-compatible-relay": {
-                    "api_compat": "openai",
-                    "wire_api": "unproven_wire",
-                }
-            },
-        )
-        mgr = setup(
-            agent,
-            provider="openai-compatible-relay",
-            api_key="sk-test",
-        )
-
-    mock_cls.assert_not_called()
-    assert mgr._vision_service is None
-    result = mgr.handle(analyze())
-    assert result["status"] == "error"
-    assert "manual" in result["message"]
-    assert "unproven_wire" not in result["message"]
-
-
-@pytest.mark.parametrize("provider", ["claude-p", "claude-code", "claude_code"])
+@pytest.mark.parametrize("provider", ["claude-p", "claude-code"])
 def test_claude_family_returns_cli_guidance_not_service(tmp_path, provider):
     """Every claude-family spelling routes to the claude-cli guidance comment."""
     agent = make_provider_agent(
@@ -312,7 +300,7 @@ def test_default_vision_failure_informs_agent_of_alternatives(tmp_path):
 
     assert result["status"] == "error"
     assert "default vision route" in result["message"]
-    assert "Responses-API" in result["message"]
+    assert "current provider's own endpoint" in result["message"]
     assert "provider='local'" in result["message"]
     assert "provider's MCP" in result["message"]
     assert "consent" in result["message"]
@@ -427,51 +415,25 @@ def test_local_vision_kwargs_override_settings_json(tmp_path):
     )
 
 
-def test_minimax_vision_preserves_active_default_headers(tmp_path):
+def test_anthropic_vision_preserves_active_default_headers(tmp_path):
     headers = {"X-Preset": "active"}
     with patch("lingtai.services.vision.create_vision_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=VisionService)
         agent = make_provider_agent(
             tmp_path,
-            provider="minimax",
-            model="MiniMax-M3",
-            base_url="https://api.minimax.io/anthropic",
-            defaults={"minimax": {"default_headers": headers}},
+            provider="anthropic",
+            model="claude-sonnet-4-20250514",
+            base_url="https://anthropic-compatible.example",
+            defaults={"anthropic": {"default_headers": headers}},
         )
-        setup(agent, provider="minimax", api_key="sk-test")
-    assert mock_factory.call_args.kwargs["default_headers"] == headers
-
-
-def test_mimo_chat_route_does_not_forward_unsupported_constructor_kwargs(tmp_path):
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
-        mock_factory.return_value = MagicMock(spec=VisionService)
-        agent = make_provider_agent(
-            tmp_path,
-            provider="mimo",
-            model="mimo-v2.5",
-            base_url="https://mimo.example/v1",
-            defaults={"mimo": {"default_headers": {"X": "1"}, "wire_api": "chat_completions"}},
-        )
-        setup(agent, provider="mimo", api_key="sk-test")
-    assert mock_factory.call_args.args == ("mimo",)
+        setup(agent, provider="anthropic", api_key="sk-test")
+    assert mock_factory.call_args.args == ("anthropic",)
     assert mock_factory.call_args.kwargs == {
         "api_key": "sk-test",
-        "model": "mimo-v2.5",
-        "base_url": "https://mimo.example/v1",
+        "model": "claude-sonnet-4-20250514",
+        "base_url": "https://anthropic-compatible.example",
+        "default_headers": headers,
     }
-
-
-def test_mimo_responses_wire_is_manual_only(tmp_path):
-    agent = make_provider_agent(
-        tmp_path,
-        provider="mimo",
-        model="mimo-v2.5",
-        base_url="https://mimo.example/v1",
-        defaults={"mimo": {"wire_api": "responses"}},
-    )
-    mgr = setup(agent, provider="mimo", api_key="sk-test")
-    assert mgr._vision_service is None
-    assert mgr.handle(analyze())["status"] == "error"
 
 
 def test_vision_setup_resolves_api_key_env(tmp_path, monkeypatch):
@@ -483,31 +445,32 @@ def test_vision_setup_resolves_api_key_env(tmp_path, monkeypatch):
 
         agent = make_provider_agent(
             tmp_path,
-            provider="zhipu",
+            provider="openai",
             model="GLM-5.2",
             base_url="https://open.bigmodel.cn/api/coding/paas/v4",
         )
-        mgr = setup(agent, provider="zhipu", api_key_env="VISION_TEST_API_KEY")
+        mgr = setup(agent, provider="openai", api_key_env="VISION_TEST_API_KEY")
 
         mock_factory.assert_called_once()
         assert mock_factory.call_args.args == ("openai",)
         assert mock_factory.call_args.kwargs["api_key"] == "sk-from-env"
         assert mock_factory.call_args.kwargs["model"] == "GLM-5.2"
+        assert (
+            mock_factory.call_args.kwargs["base_url"]
+            == "https://open.bigmodel.cn/api/coding/paas/v4"
+        )
         assert isinstance(mgr, VisionManager)
 
 
-def test_codex_vision_without_explicit_current_oauth_identity_is_manual_only(tmp_path):
-    """Codex must not silently open the legacy default OAuth account.
-
-    An active ``codex`` service whose bucket configures neither ``codex_auth_path``
-    nor a populated pool resolves to the bucket-driven pool route (no nonblank
-    ``codex_auth_path``); with an empty pool it must fail closed to manual rather
-    than fall back to the legacy single-token default. The pool loader is mocked
-    empty so no real pool file on the host is consulted."""
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_pool.load_codex_auth_pool",
-        return_value=[],
-    ):
+def test_active_codex_vision_without_auth_path_uses_default_token_path(tmp_path, monkeypatch):
+    """An active ``codex`` service whose bucket configures no ``codex_auth_path``
+    binds the default Codex token file, mirroring the canonical Codex factory
+    (``FixedAccountSource(codex_auth_path or default_codex_token_path())``).
+    ``LINGTAI_TUI_DIR`` points at a disposable dir so no real host token file
+    is named."""
+    monkeypatch.setenv("LINGTAI_TUI_DIR", str(tmp_path / "tui"))
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
         agent = make_provider_agent(
             tmp_path,
             provider="codex",
@@ -516,51 +479,53 @@ def test_codex_vision_without_explicit_current_oauth_identity_is_manual_only(tmp
         )
         mgr = setup(agent, provider="codex")
 
-    mock_factory.assert_not_called()
-    assert mgr._vision_service is None
-    assert "no selected current OAuth identity" in mgr._manual_reason
-    # The legacy single-token default must never be silently opened.
-    assert "codex-auth.json" not in mgr._manual_reason
+    mock_factory.assert_called_once()
+    assert mock_factory.call_args.args == ("codex",)
+    assert mock_factory.call_args.kwargs["api_key"] is None
+    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
+    assert mock_factory.call_args.kwargs["token_path"] == str(tmp_path / "tui" / "codex-auth.json")
+    assert mgr._vision_service is mock_factory.return_value
 
 
-@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
-def test_codex_family_vision_aliases_use_codex_service(tmp_path, provider):
-    """All current Codex-family aliases construct the native Codex service path."""
-    from lingtai.auth.codex_account_source import AccountCandidate
-
-    selection = None if provider == "codex" else AccountCandidate(
-        auth_ref="/tmp/codex-pool.json",
-        source_ref="pool.json",
-        source_index=0,
-        weight=1,
-    )
-    defaults = (
-        {"codex": {"codex_auth_path": "/tmp/codex-direct.json"}}
-        if provider == "codex"
-        else None
-    )
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        return_value=selection,
-    ) as mock_select:
+def test_codex_vision_uses_native_codex_service(tmp_path):
+    """The ``codex`` provider constructs the native Codex service path."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=VisionService)
         agent = make_provider_agent(
             tmp_path,
-            provider=provider,
+            provider="codex",
             model="gpt-5.6-sol",
             base_url=None,
-            defaults=defaults,
+            defaults={"codex": {"codex_auth_path": "/tmp/codex-direct.json"}},
         )
-        setup(agent, provider=provider)
+        setup(agent, provider="codex")
         assert mock_factory.call_args.args == ("codex",)
         assert mock_factory.call_args.kwargs["api_key"] is None
         assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
-        if provider == "codex":
-            mock_select.assert_not_called()
-            assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-direct.json"
-        else:
-            assert mock_select.call_count >= 1
-            assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-pool.json"
+        assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-direct.json"
+
+
+@pytest.mark.parametrize("provider", ["codex-pool", "codex_pool"])
+def test_removed_codex_pool_spellings_are_not_codex_vision_routes(tmp_path, provider):
+    """The in-kernel Codex pool was removed (pooling now lives in the external
+    subs-pool proxy behind ``provider: openai``). Its old spellings are no longer
+    Codex aliases: even over an active Codex service they never construct the
+    native Codex vision service nor borrow the active Codex identity."""
+    assert provider not in PROVIDERS["providers"]
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        agent = make_provider_agent(
+            tmp_path,
+            provider="codex",
+            model="gpt-5.6-sol",
+            base_url=None,
+            defaults={"codex": {"codex_auth_path": "/tmp/codex-direct.json"}},
+        )
+        mgr = setup(agent, provider=provider)
+
+    mock_factory.assert_not_called()
+    assert mgr._vision_service is None
+    assert "No direct vision route is supported" in mgr._manual_reason
+    assert "/tmp/codex-direct.json" not in mgr._manual_reason
 
 
 def test_codex_vision_inherits_active_model_and_endpoint(tmp_path):
@@ -583,9 +548,9 @@ def test_codex_vision_inherits_active_model_and_endpoint(tmp_path):
 def test_codex_vision_does_not_inherit_non_codex_model(tmp_path):
     with patch("lingtai.services.vision.create_vision_service") as mock_factory:
         agent = make_mock_agent(tmp_path)
-        agent.service.provider = "gemini"
-        agent.service._model = "gemini-2.5-pro"
-        agent.service._base_url = "https://generativelanguage.example"
+        agent.service.provider = "anthropic"
+        agent.service._model = "claude-opus-4.1"
+        agent.service._base_url = "https://anthropic.example"
         mgr = setup(agent, provider="codex")
         mock_factory.assert_not_called()
         assert mgr._vision_service is None
@@ -605,163 +570,58 @@ def test_direct_codex_vision_uses_configured_auth_path(tmp_path):
         assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-a.json"
 
 
-def test_codex_pool_vision_selects_exact_model_and_passes_result(tmp_path):
-    from lingtai.auth.codex_account_source import AccountCandidate
-    selected = AccountCandidate(
-        auth_ref="/tmp/codex-b.json",
-        source_ref="b.json",
-        source_index=1,
-        weight=1,
-    )
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        return_value=selected,
-    ), patch(
-        "lingtai.auth.codex_pool.load_codex_auth_pool",
-        return_value=[{"path": "b.json", "weight": 1}],
-    ):
-        mock_factory.return_value = MagicMock(spec=VisionService)
-        agent = make_mock_agent(tmp_path)
-        agent.service.provider = "codex-pool"
-        agent.service._model = "gpt-5.6-terra"
-        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
-        agent.service._provider_defaults = {"codex-pool": {"codex_auth_pool_path": "pool.json"}}
-        setup(agent, provider="codex-pool")
-        assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-terra"
-        assert mock_factory.call_args.kwargs["base_url"] == "https://codex-pool.example/backend-api/codex"
-        assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-b.json"
+# ---------------------------------------------------------------------------
+# Codex vision OAuth identity resolution
+#
+# Mirrors the canonical Codex factory in ``lingtai/llm/_register.py``, which
+# binds exactly one account: an explicit capability ``token_path``, else the
+# active bucket's nonblank trimmed ``codex_auth_path``, else — only when the
+# active provider is Codex — the default token file. An unrelated active
+# provider never supplies a Codex identity; the request fails closed to manual.
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("active_provider", ["codex-pool", "codex_pool"])
-def test_generic_codex_over_active_pool_follows_active_pool_route(tmp_path, active_provider):
-    """Live mixed-name repro: generic ``codex`` over an active ``codex-pool``/
-    ``codex_pool`` service must take the active pool route — preserving the active
-    pool model/base and passing the exact pool-selected credential reference
-    (the selected candidate's ``auth_ref`` token path) to the native Codex vision
-    service, never a direct ``codex_auth_path``."""
-    from lingtai.auth.codex_account_source import AccountCandidate
-    selected = AccountCandidate(
-        auth_ref="/tmp/codex-pool-selected.json",
-        source_ref="pool.json",
-        source_index=0,
-        weight=1,
-    )
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        return_value=selected,
-    ) as mock_select, patch(
-        "lingtai.auth.codex_pool.load_codex_auth_pool",
-        return_value=[{"path": "pool.json", "weight": 1}],
-    ):
+def test_active_codex_padded_auth_path_is_trimmed(tmp_path):
+    """Canonical parity: like the factory's ``FixedAccountSource``, a space-padded
+    bucket ``codex_auth_path`` is trimmed, and that same trimmed value — not the
+    raw padded string — reaches ``create_vision_service`` together with the active
+    model and endpoint."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=VisionService)
         agent = make_mock_agent(tmp_path)
-        agent.service.provider = active_provider
+        agent.service.provider = "codex"
         agent.service._model = "gpt-5.6-sol"
-        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
+        agent.service._base_url = "https://codex.example/backend-api/codex"
         agent.service._provider_defaults = {
-            active_provider: {"codex_auth_pool_path": "pool.json"}
+            "codex": {"codex_auth_path": "  /tmp/codex-direct.json  "}
         }
         setup(agent, provider="codex")
 
     assert mock_factory.call_args.args == ("codex",)
     assert mock_factory.call_args.kwargs["api_key"] is None
     assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
-    assert mock_factory.call_args.kwargs["base_url"] == "https://codex-pool.example/backend-api/codex"
-    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-pool-selected.json"
-    mock_select.assert_called()
-
-
-def test_explicit_pool_request_over_active_direct_codex_follows_bucket_direct(tmp_path):
-    """Spelling is only a Codex-family gate, not a route selector. An explicit
-    ``codex-pool`` request over an active *direct* Codex service (bucket carries a
-    nonblank ``codex_auth_path``) resolves to the bucket-driven direct route,
-    exactly as the canonical Codex factory does — the pool selector is never
-    consulted and the configured direct ``codex_auth_path`` is used."""
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        return_value=None,
-    ) as mock_select:
-        mock_factory.return_value = MagicMock(spec=VisionService)
-        agent = make_mock_agent(tmp_path)
-        agent.service.provider = "codex"
-        agent.service._model = "gpt-5.6-sol"
-        agent.service._base_url = None
-        agent.service._provider_defaults = {"codex": {"codex_auth_path": "/tmp/codex-direct.json"}}
-        setup(agent, provider="codex-pool")
-
-    mock_select.assert_not_called()
-    assert mock_factory.call_args.args == ("codex",)
-    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
-    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-direct.json"
-
-
-# ---------------------------------------------------------------------------
-# PR #1012 — bucket-driven Codex vision route matrix
-#
-# The fixed/direct vs weighted/pool choice is determined SOLELY by whether the
-# active provider-default bucket carries a nonblank trimmed ``codex_auth_path``,
-# mirroring the canonical Codex factory in ``lingtai/llm/_register.py`` — never
-# by the ``codex`` / ``codex-pool`` / ``codex_pool`` provider spelling.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("active_provider", ["codex-pool", "codex_pool"])
-def test_active_pool_spelling_with_auth_path_takes_direct_route(tmp_path, active_provider):
-    """Matrix (a) — the core regression. An active ``codex-pool``/``codex_pool``
-    service that ALSO configures a nonblank ``codex_auth_path`` is a direct/Fixed
-    route: the pool selector must not be called even though a pool path is present,
-    and the direct ``codex_auth_path`` is propagated. This is the case the old
-    spelling-driven code got wrong (it saw ``codex-pool`` and forced the pool).
-
-    The bucket path is space-padded to prove canonical parity: like the factory's
-    ``FixedAccountSource``, the route uses the *trimmed* value, and that same
-    trimmed value — not the raw padded string — reaches ``create_vision_service``."""
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        return_value=None,
-    ) as mock_select:
-        mock_factory.return_value = MagicMock(spec=VisionService)
-        agent = make_mock_agent(tmp_path)
-        agent.service.provider = active_provider
-        agent.service._model = "gpt-5.6-sol"
-        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
-        agent.service._provider_defaults = {
-            active_provider: {
-                "codex_auth_path": "  /tmp/codex-direct.json  ",
-                "codex_auth_pool_path": "pool.json",
-            }
-        }
-        setup(agent, provider=active_provider)
-
-    mock_select.assert_not_called()
-    assert mock_factory.call_args.args == ("codex",)
-    assert mock_factory.call_args.kwargs["api_key"] is None
-    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
-    assert mock_factory.call_args.kwargs["base_url"] == "https://codex-pool.example/backend-api/codex"
+    assert mock_factory.call_args.kwargs["base_url"] == "https://codex.example/backend-api/codex"
     # The trimmed value is used as token_path, never the raw space-padded string.
     assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-direct.json"
 
 
-def test_whitespace_only_bucket_auth_path_does_not_route_direct(tmp_path):
-    """Canonical parity — a whitespace-only bucket ``codex_auth_path`` is not a
-    fixed identity (the factory would trim it to empty and fall to Weighted), so
-    vision must not route direct. With an empty pool it fails closed to manual
-    rather than forwarding the blank path as a direct ``token_path``."""
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_pool.load_codex_auth_pool",
-        return_value=[],
-    ):
+def test_whitespace_only_bucket_auth_path_falls_back_to_default_token(tmp_path, monkeypatch):
+    """Canonical parity — a whitespace-only bucket ``codex_auth_path`` is not an
+    identity (the factory trims it to empty and binds the default token file), so
+    vision never forwards the blank path as ``token_path``; the active Codex
+    service falls back to the default token file instead."""
+    monkeypatch.setenv("LINGTAI_TUI_DIR", str(tmp_path / "tui"))
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
         agent = make_mock_agent(tmp_path)
         agent.service.provider = "codex"
         agent.service._model = "gpt-5.6-sol"
         agent.service._base_url = None
         agent.service._provider_defaults = {"codex": {"codex_auth_path": "   "}}
-        mgr = setup(agent, provider="codex")
+        setup(agent, provider="codex")
 
-    mock_factory.assert_not_called()
-    assert mgr._vision_service is None
-    # Fails on the pool identity (blank fixed path never counts as a direct one).
-    assert "no selected current OAuth identity" in mgr._manual_reason
+    mock_factory.assert_called_once()
+    assert mock_factory.call_args.kwargs["token_path"] == str(tmp_path / "tui" / "codex-auth.json")
 
 
 def test_whitespace_only_explicit_token_path_falls_back_to_bucket_identity(tmp_path):
@@ -781,24 +641,27 @@ def test_whitespace_only_explicit_token_path_falls_back_to_bucket_identity(tmp_p
     assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-bucket.json"
 
 
-def test_active_codex_pool_path_only_selects_pool_candidate(tmp_path):
-    """Matrix (b) — active ``codex`` with only a pool path (no ``codex_auth_path``)
-    takes the pool route: the pool selector is called and its selected candidate's
-    ``auth_ref`` token path is propagated to the native Codex vision service."""
-    from lingtai.auth.codex_account_source import AccountCandidate
-    selected = AccountCandidate(
-        auth_ref="/tmp/codex-pool-b.json",
-        source_ref="pool.json",
-        source_index=0,
-        weight=1,
-    )
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        return_value=selected,
-    ) as mock_select, patch(
-        "lingtai.auth.codex_pool.load_codex_auth_pool",
-        return_value=[{"path": "pool.json", "weight": 1}],
-    ):
+def test_explicit_token_path_takes_precedence_over_bucket_identity(tmp_path):
+    """An explicit capability ``token_path`` (trimmed) wins over the active
+    bucket's ``codex_auth_path``: a vision call may bind its own account."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "codex"
+        agent.service._model = "gpt-5.6-sol"
+        agent.service._base_url = None
+        agent.service._provider_defaults = {"codex": {"codex_auth_path": "/tmp/codex-bucket.json"}}
+        setup(agent, provider="codex", token_path="  /tmp/codex-explicit.json  ")
+
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-explicit.json"
+
+
+def test_stale_pool_path_in_active_codex_bucket_is_ignored(tmp_path, monkeypatch):
+    """A leftover ``codex_auth_pool_path`` (legacy-ignored since the in-kernel
+    pool was removed) is not an identity: an active ``codex`` bucket carrying only
+    that key binds the default token file, never the pool file."""
+    monkeypatch.setenv("LINGTAI_TUI_DIR", str(tmp_path / "tui"))
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=VisionService)
         agent = make_mock_agent(tmp_path)
         agent.service.provider = "codex"
@@ -807,20 +670,18 @@ def test_active_codex_pool_path_only_selects_pool_candidate(tmp_path):
         agent.service._provider_defaults = {"codex": {"codex_auth_pool_path": "pool.json"}}
         setup(agent, provider="codex")
 
-    mock_select.assert_called()
     assert mock_factory.call_args.args == ("codex",)
     assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
     assert mock_factory.call_args.kwargs["base_url"] == "https://codex.example/backend-api/codex"
-    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-pool-b.json"
+    assert mock_factory.call_args.kwargs["token_path"] == str(tmp_path / "tui" / "codex-auth.json")
 
 
-def test_active_codex_fixed_path_takes_direct_route(tmp_path):
-    """Matrix (c) — active ``codex`` with a nonblank ``codex_auth_path`` is the
-    direct/Fixed route: no pool selection, the configured auth path is used."""
+def test_active_codex_configured_auth_path_never_consults_default_token(tmp_path):
+    """Active ``codex`` with a nonblank ``codex_auth_path`` binds that account:
+    the default token file is never consulted."""
     with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        return_value=None,
-    ) as mock_select:
+        "lingtai.auth.codex.default_codex_token_path",
+    ) as mock_default:
         mock_factory.return_value = MagicMock(spec=VisionService)
         agent = make_mock_agent(tmp_path)
         agent.service.provider = "codex"
@@ -829,119 +690,78 @@ def test_active_codex_fixed_path_takes_direct_route(tmp_path):
         agent.service._provider_defaults = {"codex": {"codex_auth_path": "/tmp/codex-c.json"}}
         setup(agent, provider="codex")
 
-    mock_select.assert_not_called()
+    mock_default.assert_not_called()
     assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
     assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-c.json"
 
 
-@pytest.mark.parametrize("active_provider", ["codex-pool", "codex_pool"])
-def test_active_pool_path_only_takes_pool_route(tmp_path, active_provider):
-    """Matrix (d) — active ``codex-pool``/``codex_pool`` with only a pool path
-    (no ``codex_auth_path``) takes the pool route and uses the selected candidate."""
-    from lingtai.auth.codex_account_source import AccountCandidate
-    selected = AccountCandidate(
-        auth_ref="/tmp/codex-pool-d.json",
-        source_ref="pool.json",
-        source_index=0,
-        weight=1,
-    )
+def test_codex_request_over_unrelated_active_provider_fails_closed(tmp_path):
+    """A Codex request over an unrelated active provider must fail closed to
+    manual, never borrowing the unrelated provider's model, base URL, or
+    credential and never consulting the default Codex token file."""
     with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        return_value=selected,
-    ) as mock_select, patch(
-        "lingtai.auth.codex_pool.load_codex_auth_pool",
-        return_value=[{"path": "pool.json", "weight": 1}],
-    ):
-        mock_factory.return_value = MagicMock(spec=VisionService)
+        "lingtai.auth.codex.default_codex_token_path",
+    ) as mock_default:
         agent = make_mock_agent(tmp_path)
-        agent.service.provider = active_provider
-        agent.service._model = "gpt-5.6-terra"
-        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
-        agent.service._provider_defaults = {active_provider: {"codex_auth_pool_path": "pool.json"}}
-        setup(agent, provider=active_provider)
-
-    mock_select.assert_called()
-    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-terra"
-    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-pool-d.json"
-
-
-@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
-def test_codex_request_over_unrelated_active_provider_fails_closed(tmp_path, provider):
-    """Matrix (e) — any Codex-family request over an unrelated active provider
-    must fail closed to manual, never borrowing the unrelated provider's model,
-    base URL, or credential and never calling the pool selector."""
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        return_value=None,
-    ) as mock_select:
-        agent = make_mock_agent(tmp_path)
-        agent.service.provider = "gemini"
-        agent.service._model = "gemini-2.5-pro"
-        agent.service._base_url = "https://generativelanguage.example"
-        agent.service._provider_defaults = {"gemini": {"codex_auth_path": "/tmp/should-not-be-used.json"}}
-        mgr = setup(agent, provider=provider)
-
-    mock_factory.assert_not_called()
-    mock_select.assert_not_called()
-    assert mgr._vision_service is None
-    assert "no resolved current model" in mgr._manual_reason
-    assert "gemini-2.5-pro" not in mgr._manual_reason
-    assert "/tmp/should-not-be-used.json" not in mgr._manual_reason
-
-
-@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
-def test_codex_request_over_unrelated_provider_with_explicit_model_never_reads_pool(
-    tmp_path, provider
-):
-    """Matrix (e), explicit-model variant — even when the request supplies its own
-    ``model`` (clearing the missing-model guard) and a whitespace-only explicit
-    ``token_path``, an unrelated active provider must NOT treat that blank value as
-    an identity, run the pool selector, or read any default pool file; the request
-    fails closed on the missing pool identity instead. Proves both normalization
-    and the ``same_provider`` gate, not merely the model guard."""
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        return_value=None,
-    ) as mock_select, patch(
-        "lingtai.auth.codex_pool.load_codex_auth_pool",
-        return_value=[{"path": "pool.json", "weight": 1}],
-    ) as mock_pool_load:
-        agent = make_mock_agent(tmp_path)
-        agent.service.provider = "gemini"
-        agent.service._model = "gemini-2.5-pro"
-        agent.service._base_url = "https://generativelanguage.example"
-        agent.service._provider_defaults = {"gemini": {}}
-        mgr = setup(agent, provider=provider, model="gpt-5.6-sol", token_path="   ")
-
-    mock_factory.assert_not_called()
-    mock_select.assert_not_called()
-    mock_pool_load.assert_not_called()
-    assert mgr._vision_service is None
-    assert "no selected current OAuth identity" in mgr._manual_reason
-
-
-def test_generic_codex_over_active_pool_without_candidate_fails_closed(tmp_path):
-    """Generic ``codex`` over an active pool whose source yields no candidate must
-    stay manual-only rather than manufacture a direct/default identity."""
-    from lingtai.auth.codex_account_source import NoCandidateError
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        side_effect=NoCandidateError("empty pool"),
-    ), patch(
-        "lingtai.auth.codex_pool.load_codex_auth_pool",
-        return_value=[],
-    ):
-        agent = make_mock_agent(tmp_path)
-        agent.service.provider = "codex-pool"
-        agent.service._model = "gpt-5.6-sol"
-        agent.service._base_url = "https://codex-pool.example/backend-api/codex"
-        agent.service._provider_defaults = {"codex-pool": {"codex_auth_pool_path": "pool.json"}}
+        agent.service.provider = "anthropic"
+        agent.service._model = "claude-opus-4.1"
+        agent.service._base_url = "https://anthropic.example"
+        agent.service._provider_defaults = {"anthropic": {"codex_auth_path": "/tmp/should-not-be-used.json"}}
         mgr = setup(agent, provider="codex")
 
     mock_factory.assert_not_called()
+    mock_default.assert_not_called()
     assert mgr._vision_service is None
-    assert "no selected current OAuth identity" in mgr._manual_reason
-    assert "Exception" not in mgr._manual_reason
+    assert "no resolved current model" in mgr._manual_reason
+    assert "claude-opus-4.1" not in mgr._manual_reason
+    assert "/tmp/should-not-be-used.json" not in mgr._manual_reason
+
+
+def test_codex_request_over_unrelated_provider_with_explicit_model_never_uses_default_token(
+    tmp_path,
+):
+    """Explicit-model variant — even when the request supplies its own ``model``
+    (clearing the missing-model guard) and a whitespace-only explicit
+    ``token_path``, an unrelated active provider must NOT treat that blank value
+    as an identity or fall back to the default Codex token file; the request
+    fails closed on the missing identity instead. Proves both normalization and
+    the ``same_provider`` gate, not merely the model guard."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex.default_codex_token_path",
+    ) as mock_default:
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "anthropic"
+        agent.service._model = "claude-opus-4.1"
+        agent.service._base_url = "https://anthropic.example"
+        agent.service._provider_defaults = {"anthropic": {}}
+        mgr = setup(agent, provider="codex", model="gpt-5.6-sol", token_path="   ")
+
+    mock_factory.assert_not_called()
+    mock_default.assert_not_called()
+    assert mgr._vision_service is None
+    assert "no explicit current OAuth identity" in mgr._manual_reason
+
+
+def test_explicit_token_path_over_unrelated_provider_is_an_independent_identity(tmp_path):
+    """An explicit model plus nonblank ``token_path`` is a complete, independent
+    Codex identity: it is honored over an unrelated active provider without
+    inheriting that provider's endpoint or consulting the default token file."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory, patch(
+        "lingtai.auth.codex.default_codex_token_path",
+    ) as mock_default:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_mock_agent(tmp_path)
+        agent.service.provider = "anthropic"
+        agent.service._model = "claude-opus-4.1"
+        agent.service._base_url = "https://anthropic.example"
+        agent.service._provider_defaults = {"anthropic": {}}
+        setup(agent, provider="codex", model="gpt-5.6-sol", token_path="/tmp/codex-own.json")
+
+    mock_default.assert_not_called()
+    assert mock_factory.call_args.args == ("codex",)
+    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-own.json"
+    assert "base_url" not in mock_factory.call_args.kwargs
 
 
 @pytest.mark.parametrize(
@@ -949,7 +769,6 @@ def test_generic_codex_over_active_pool_without_candidate_fails_closed(tmp_path)
     [
         ("openai", "gpt-4.1", "https://openai.example/v1", True),
         ("anthropic", "claude-sonnet-4-20250514", "https://anthropic.example", True),
-        ("gemini", "gemini-3-flash-preview", "https://gemini.example", False),
     ],
 )
 def test_direct_native_vision_inherits_same_provider_model_and_endpoint(
@@ -1055,125 +874,9 @@ def test_direct_vision_does_not_reuse_unrelated_current_credential(tmp_path):
         assert "no resolved current credential" in mgr._manual_reason
 
 
-def test_mimo_vision_preserves_current_model_and_endpoint(tmp_path):
-    """MiMo uses the active current identity on its supported route."""
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
-        mock_factory.return_value = MagicMock(spec=VisionService)
-        agent = make_provider_agent(
-            tmp_path,
-            provider="mimo",
-            model="mimo-v2.5-pro",
-            base_url="https://mimo-proxy.example/v1",
-        )
-        setup(agent, provider="mimo", api_key="sk-test")
-
-        kwargs = mock_factory.call_args.kwargs
-        assert kwargs["api_key"] == "sk-test"
-        assert kwargs["model"] == "mimo-v2.5-pro"
-        assert kwargs["base_url"] == "https://mimo-proxy.example/v1"
-
-
-def test_mimo_vision_honors_explicit_model_and_endpoint(tmp_path):
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
-        mock_factory.return_value = MagicMock(spec=VisionService)
-        agent = make_provider_agent(
-            tmp_path,
-            provider="mimo",
-            model="mimo-v2.5-pro",
-            base_url="https://active-mimo.example/v1",
-        )
-        setup(
-            agent,
-            provider="mimo",
-            api_key="sk-test",
-            model="mimo-v2-omni",
-            base_url="https://vision-mimo.example/v1",
-        )
-
-        kwargs = mock_factory.call_args.kwargs
-        assert kwargs["model"] == "mimo-v2-omni"
-        assert kwargs["base_url"] == "https://vision-mimo.example/v1"
-
-
-def test_minimax_vision_uses_current_anthropic_route(tmp_path):
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
-        mock_factory.return_value = MagicMock(spec=VisionService)
-        agent = make_provider_agent(
-            tmp_path,
-            provider="minimax",
-            model="MiniMax-M3",
-            base_url="https://api.minimax.io/anthropic",
-        )
-        setup(agent, provider="minimax", api_key="sk-test")
-
-        mock_factory.assert_called_once_with("anthropic", api_key="sk-test", model="MiniMax-M3", base_url="https://api.minimax.io/anthropic")
-
-
-def test_zhipu_vision_uses_current_openai_compatible_route(tmp_path):
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
-        mock_factory.return_value = MagicMock(spec=VisionService)
-        agent = make_provider_agent(
-            tmp_path,
-            provider="zhipu",
-            model="GLM-5.2",
-            base_url="https://open.bigmodel.cn/api/coding/paas/v4",
-        )
-        setup(agent, provider="zhipu", api_key="sk-test")
-
-        mock_factory.assert_called_once_with(
-            "openai",
-            api_key="sk-test",
-            model="GLM-5.2",
-            base_url="https://open.bigmodel.cn/api/coding/paas/v4",
-            wire_api="chat_completions",
-        )
-
-
-def test_glm_vision_alias_uses_openai_compatible_route(tmp_path):
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
-        mock_factory.return_value = MagicMock(spec=VisionService)
-        agent = make_provider_agent(
-            tmp_path,
-            provider="glm",
-            model="GLM-5.2",
-            base_url="https://api.z.ai/api/coding/paas/v4",
-        )
-        setup(agent, provider="glm", api_key="sk-test")
-
-        mock_factory.assert_called_once_with(
-            "openai",
-            api_key="sk-test",
-            model="GLM-5.2",
-            base_url="https://api.z.ai/api/coding/paas/v4",
-            wire_api="chat_completions",
-        )
-
-
-def test_glm_vision_alias_inherits_current_zhipu_identity(tmp_path):
-    """The documented GLM/Zhipu spelling pair shares one current route."""
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
-        mock_factory.return_value = MagicMock(spec=VisionService)
-        agent = make_provider_agent(
-            tmp_path,
-            provider="zhipu",
-            model="GLM-5.2",
-            base_url="https://api.z.ai/api/coding/paas/v4",
-        )
-        agent.service.api_key = "sk-current-zhipu"
-        setup(agent, provider="glm")
-
-        mock_factory.assert_called_once_with(
-            "openai",
-            api_key="sk-current-zhipu",
-            model="GLM-5.2",
-            base_url="https://api.z.ai/api/coding/paas/v4",
-            wire_api="chat_completions",
-        )
-
-
 @pytest.mark.parametrize(
     "provider",
-    ["openrouter", "deepseek", "kimi", "grok", "qwen", "claude-code", "claude_code", "custom"],
+    ["openrouter", "deepseek", "kimi", "grok", "qwen", "claude-code", "claude_code", "custom", "gemini"],
 )
 def test_registered_adapters_remain_callable_with_manual_route(tmp_path, provider):
     agent = make_provider_agent(
@@ -1269,18 +972,6 @@ assert "lingtai.auth.codex" not in sys.modules
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
-
-
-def test_mimo_chat_completions_constructor_accepts_current_route(monkeypatch):
-    fake_client = MagicMock()
-    fake_openai = SimpleNamespace(OpenAI=MagicMock(return_value=fake_client))
-    monkeypatch.setitem(sys.modules, "openai", fake_openai)
-    svc = create_vision_service(
-        "mimo", api_key="sk-test", model="mimo-v2.5", base_url="https://mimo.example/v1", max_tokens=777
-    )
-    from lingtai.services.vision.mimo import MiMoVisionService
-    assert isinstance(svc, MiMoVisionService)
-    fake_openai.OpenAI.assert_called_once_with(api_key="sk-test", base_url="https://mimo.example/v1")
 
 
 def test_create_vision_service_codex_uses_explicit_path_and_filters_extra_kwargs(monkeypatch):
@@ -1418,132 +1109,264 @@ def test_vision_service_abc_cannot_instantiate():
         VisionService()
 
 
-def make_custom_agent(tmp_path, *, api_compat=None, base_url=None, model=None):
-    """Agent whose main LLM is a `provider='custom'` relay.
-
-    `_provider_defaults` is the real shape: ``{provider_name: defaults_dict}``,
-    so the fallback must peek into the per-provider bucket to read api_compat.
-    """
-    svc = MagicMock()
-    svc.provider = "custom"
-    svc._model = model
-    svc._base_url = base_url
-    svc._provider_defaults = {"custom": {"api_compat": api_compat}} if api_compat else {"custom": {}}
-    return make_mock_agent(tmp_path, svc=svc)
-
-
 # ---------------------------------------------------------------------------
-# Issue #114 — vision fallback for provider='custom'
+# Default route inherits the agent's own provider family (four-family collapse)
 # ---------------------------------------------------------------------------
 
-def test_vision_fallback_reads_api_compat_from_provider_bucket(tmp_path):
-    """C-1: api_compat is read from _provider_defaults[provider], not the outer dict.
 
-    `_provider_defaults` is shaped {provider_name: defaults_dict}. The old code
-    called defaults.get("api_compat") on the OUTER dict, which always returned
-    None, so the OpenAI fallback never engaged for custom providers.
-    """
+def _real_service(provider: str, **kwargs):
+    """A real LLMService for the active provider (no network is touched)."""
+    import lingtai.llm  # noqa: F401 — registers the adapter factories
+    from lingtai.llm.service import LLMService
+
+    return LLMService(provider=provider, **kwargs)
+
+
+def _agent_over(tmp_path, service):
+    agent = make_mock_agent(tmp_path)
+    agent.service = service
+    return agent
+
+
+def test_default_openai_route_uses_effective_official_endpoint_when_base_url_omitted(
+    tmp_path, monkeypatch
+):
+    """Regression: vision must use the adapter's effective endpoint, never a
+    missing manifest ``base_url`` that lets the key reach a guessed host."""
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    service = _real_service("openai", model="gpt-5.5", api_key="sk-active-test")
+    assert service.effective_base_url == "https://api.openai.com/v1"
     with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_cls:
-        agent = make_custom_agent(
-            tmp_path, api_compat="openai", base_url="http://127.0.0.1:34891/v1", model="GLM-5.1"
-        )
-        mgr = setup(agent, provider="custom", api_key="sk-test")
+        mock_cls.return_value = MagicMock(spec=VisionService)
+        mgr = setup(_agent_over(tmp_path, service))
 
-        mock_cls.assert_called_once()
-        kwargs = mock_cls.call_args.kwargs
-        assert kwargs["api_key"] == "sk-test"
-        assert kwargs["base_url"] == "http://127.0.0.1:34891/v1"
-        assert kwargs["model"] == "GLM-5.1"
-        assert isinstance(mgr, VisionManager)
+    mock_cls.assert_called_once_with(
+        api_key="sk-active-test",
+        model="gpt-5.5",
+        base_url="https://api.openai.com/v1",
+        wire_api="chat_completions",
+    )
+    assert mgr._vision_service is mock_cls.return_value
 
 
-def test_vision_fallback_anthropic_compat_routes_to_anthropic_service(tmp_path):
-    """C-2: api_compat='anthropic' routes vision through AnthropicVisionService.
+def test_default_openai_route_uses_configured_endpoint_and_responses_wire(tmp_path):
+    service = _real_service(
+        "openai",
+        model="vendor-vision",
+        api_key="sk-active-test",
+        base_url="https://api.vendor.example/v1",
+        provider_defaults={
+            "openai": {
+                "wire_api": "responses",
+                "default_headers": {"X-Tenant": "t1"},
+            }
+        },
+    )
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_cls:
+        mock_cls.return_value = MagicMock(spec=VisionService)
+        setup(_agent_over(tmp_path, service))
 
-    Previously only the openai branch existed; anthropic-compat custom proxies
-    retains a manual route even though AnthropicVisionService exists.
-    """
+    mock_cls.assert_called_once_with(
+        api_key="sk-active-test",
+        model="vendor-vision",
+        base_url="https://api.vendor.example/v1",
+        default_headers={"X-Tenant": "t1"},
+        wire_api="responses",
+    )
+
+
+def test_inherit_expansion_routes_to_the_active_openai_endpoint(tmp_path, monkeypatch):
+    """``provider: inherit`` expands to the main provider and still targets the
+    active effective endpoint rather than the (omitted) manifest base_url."""
+    from lingtai.kernel.presets import expand_inherit
+
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("VISION_INHERIT_TEST_KEY", "sk-active-test")
+    caps = expand_inherit(
+        {"vision": {"provider": "inherit"}},
+        {"provider": "openai", "model": "gpt-5.5", "api_key_env": "VISION_INHERIT_TEST_KEY"},
+    )
+    assert "api_compat" not in caps["vision"]
+    service = _real_service("openai", model="gpt-5.5", api_key="sk-active-test")
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_cls:
+        mock_cls.return_value = MagicMock(spec=VisionService)
+        setup(_agent_over(tmp_path, service), **caps["vision"])
+
+    assert mock_cls.call_args.kwargs["base_url"] == "https://api.openai.com/v1"
+    assert mock_cls.call_args.kwargs["api_key"] == "sk-active-test"
+    assert mock_cls.call_args.kwargs["model"] == "gpt-5.5"
+
+
+def test_default_anthropic_route_inherits_effective_endpoint_key_and_model(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    service = _real_service("anthropic", model="claude-sonnet-5", api_key="sk-ant-test")
     with patch("lingtai.services.vision.anthropic.AnthropicVisionService") as mock_cls:
-        agent = make_custom_agent(
-            tmp_path, api_compat="anthropic", base_url="http://127.0.0.1:34891", model="GLM-5.1"
+        mock_cls.return_value = MagicMock(spec=VisionService)
+        setup(_agent_over(tmp_path, service))
+
+    mock_cls.assert_called_once_with(
+        api_key="sk-ant-test",
+        model="claude-sonnet-5",
+        base_url="https://api.anthropic.com",
+    )
+
+
+def test_default_anthropic_compatible_endpoint_is_inherited(tmp_path):
+    service = _real_service(
+        "anthropic",
+        model="glm-vision",
+        api_key="sk-ant-test",
+        base_url="https://anthropic-compatible.example/api",
+    )
+    with patch("lingtai.services.vision.anthropic.AnthropicVisionService") as mock_cls:
+        mock_cls.return_value = MagicMock(spec=VisionService)
+        setup(_agent_over(tmp_path, service))
+
+    assert mock_cls.call_args.kwargs["base_url"] == "https://anthropic-compatible.example/api"
+    assert mock_cls.call_args.kwargs["api_key"] == "sk-ant-test"
+
+
+def test_default_codex_route_keeps_active_account(tmp_path):
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_provider_agent(
+            tmp_path,
+            provider="codex",
+            model="gpt-5.6-sol",
+            base_url=None,
+            defaults={"codex": {"codex_auth_path": "/tmp/codex-default-route.json"}},
         )
-        mgr = setup(agent, provider="custom", api_key="sk-test")
+        setup(agent)
 
-        mock_cls.assert_called_once()
-        kwargs = mock_cls.call_args.kwargs
-        assert kwargs["api_key"] == "sk-test"
-        assert kwargs["base_url"] == "http://127.0.0.1:34891"
-        assert kwargs["model"] == "GLM-5.1"
-        assert isinstance(mgr, VisionManager)
+    assert mock_factory.call_args.args == ("codex",)
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/codex-default-route.json"
+    assert mock_factory.call_args.kwargs["model"] == "gpt-5.6-sol"
 
 
-def test_vision_fallback_honors_capability_kwargs_over_service(tmp_path):
-    """C-3: explicit capability model/base_url/api_compat override the main LLM.
+def test_default_claude_code_route_is_manual_cli_guidance(tmp_path):
+    agent = make_provider_agent(tmp_path, provider="claude-code", model="opus", base_url=None)
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mgr = setup(agent)
+    mock_factory.assert_not_called()
+    assert mgr._vision_service is None
+    assert "claude -p" in mgr._manual_reason
 
-    The whole point of explicit kwargs in init.json is to route vision through a
-    different (vision-capable) model than the text-only main LLM. The fallback
-    must consult kwargs first and only fall back to service._model/._base_url.
-    """
+
+def test_active_credential_never_reaches_a_different_explicit_endpoint(tmp_path):
+    """Credential-leak guard: an explicit vision base_url that differs from the
+    active effective endpoint must bring its own key; the active key is never
+    sent there."""
+    service = _real_service(
+        "openai",
+        model="gpt-5.5",
+        api_key="sk-active-secret",
+        base_url="https://api.active.example/v1",
+    )
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_cls, patch(
+        "lingtai.services.vision.create_vision_service"
+    ) as mock_factory:
+        mgr = setup(
+            _agent_over(tmp_path, service),
+            provider="openai",
+            base_url="https://other-vision.example/v1",
+        )
+
+    mock_cls.assert_not_called()
+    mock_factory.assert_not_called()
+    assert mgr._vision_service is None
+    assert "no resolved current credential" in mgr._manual_reason
+    assert "sk-active-secret" not in mgr._manual_reason
+    assert "other-vision.example" not in mgr._manual_reason
+
+
+def test_active_credential_is_reused_for_the_same_explicit_endpoint(tmp_path):
+    """Naming the active endpoint explicitly (trailing slash ignored) is not a
+    different host, so the active credential may be reused."""
+    service = _real_service(
+        "openai",
+        model="gpt-5.5",
+        api_key="sk-active-test",
+        base_url="https://api.active.example/v1",
+    )
     with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_cls:
-        # main LLM is GLM-5.1 (text-only) on an anthropic-compat proxy
-        agent = make_custom_agent(
-            tmp_path, api_compat="anthropic", base_url="http://127.0.0.1:34891", model="GLM-5.1"
+        mock_cls.return_value = MagicMock(spec=VisionService)
+        setup(
+            _agent_over(tmp_path, service),
+            provider="openai",
+            base_url="https://api.active.example/v1/",
+            model="gpt-vision",
         )
-        # capability explicitly overrides: openai-compat vision model on the /v1 route
+
+    assert mock_cls.call_args.kwargs["api_key"] == "sk-active-test"
+    assert mock_cls.call_args.kwargs["model"] == "gpt-vision"
+    assert mock_cls.call_args.kwargs["base_url"] == "https://api.active.example/v1/"
+
+
+def test_explicit_endpoint_with_its_own_key_is_honored(tmp_path, monkeypatch):
+    monkeypatch.setenv("VISION_OWN_ENDPOINT_KEY", "sk-vision-own")
+    service = _real_service(
+        "openai",
+        model="gpt-5.5",
+        api_key="sk-active-secret",
+        base_url="https://api.active.example/v1",
+    )
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_cls:
+        mock_cls.return_value = MagicMock(spec=VisionService)
+        setup(
+            _agent_over(tmp_path, service),
+            provider="openai",
+            base_url="https://other-vision.example/v1",
+            api_key_env="VISION_OWN_ENDPOINT_KEY",
+            model="vision-model",
+        )
+
+    assert mock_cls.call_args.kwargs["api_key"] == "sk-vision-own"
+    assert mock_cls.call_args.kwargs["base_url"] == "https://other-vision.example/v1"
+
+
+def test_explicit_anthropic_route_over_openai_agent_needs_its_own_identity(tmp_path):
+    """A different family lends nothing: model and credential must be explicit."""
+    service = _real_service("openai", model="gpt-5.5", api_key="sk-active-secret")
+    with patch("lingtai.services.vision.anthropic.AnthropicVisionService") as mock_cls:
+        mgr = setup(_agent_over(tmp_path, service), provider="anthropic")
+    mock_cls.assert_not_called()
+    assert "no resolved current model" in mgr._manual_reason
+
+    with patch("lingtai.services.vision.anthropic.AnthropicVisionService") as mock_cls:
+        mock_cls.return_value = MagicMock(spec=VisionService)
+        setup(
+            _agent_over(tmp_path, service),
+            provider="anthropic",
+            api_key="sk-ant-own",
+            model="claude-sonnet-5",
+        )
+    mock_cls.assert_called_once_with(api_key="sk-ant-own", model="claude-sonnet-5")
+
+
+def test_legacy_api_compat_capability_value_is_ignored(tmp_path):
+    """``api_compat`` belonged to the retired ``custom`` provider: a leftover
+    capability value neither selects nor blocks a route."""
+    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
+        mock_factory.return_value = MagicMock(spec=VisionService)
+        agent = make_provider_agent(
+            tmp_path,
+            provider="anthropic",
+            model="claude-sonnet-5",
+            base_url="https://anthropic-compatible.example",
+        )
         mgr = setup(
             agent,
-            provider="custom",
+            provider="anthropic",
             api_key="sk-test",
             api_compat="openai",
-            model="Kimi-K2.6",
-            base_url="http://127.0.0.1:34891/v1",
-            max_tokens=2048,
         )
 
-        mock_cls.assert_called_once()
-        kwargs = mock_cls.call_args.kwargs
-        assert kwargs["model"] == "Kimi-K2.6"
-        assert kwargs["base_url"] == "http://127.0.0.1:34891/v1"
-        assert kwargs["max_tokens"] == 2048
-        assert isinstance(mgr, VisionManager)
-
-
-def test_vision_fallback_unknown_api_compat_keeps_manual_route(tmp_path):
-    """Fallback with an unhandled api_compat skips and names api_compat in the reason."""
-    agent = make_custom_agent(tmp_path, api_compat="gemini")
-    result = setup(agent, provider="custom", api_key="sk-test")
-    assert isinstance(result, VisionManager)
-    agent.add_tool.assert_called_once()
-    assert result.manual()["status"] in {"ok", "degraded"}
-
-
-def test_minimax_vision_setup_uses_anthropic_route(tmp_path):
-    """MiniMax vision should ignore LLM transport kwargs inherited from presets.
-
-    Regression: presets.expand_inherit copies api_compat from the main LLM into
-    `vision: {provider: inherit}`. The current MiniMax route is Anthropic-
-    compatible, so setup must filter provider transport metadata before factory
-    construction.
-    """
-    with patch("lingtai.services.vision.create_vision_service") as mock_factory:
-        mock_svc = MagicMock(spec=VisionService)
-        mock_factory.return_value = mock_svc
-
-        agent = make_mock_agent(tmp_path)
-        agent.service._base_url = "https://api.minimaxi.com/anthropic"
-        mgr = setup(
-            agent,
-            provider="minimax",
-            api_key="sk-test",
-            api_compat="anthropic",
-            model="MiniMax-M3",
-            base_url="https://api.minimaxi.com/anthropic",
-        )
-
-        mock_factory.assert_called_once_with(
-            "anthropic",
-            api_key="sk-test",
-            model="MiniMax-M3",
-            base_url="https://api.minimaxi.com/anthropic",
-        )
-        assert isinstance(mgr, VisionManager)
+    mock_factory.assert_called_once_with(
+        "anthropic",
+        api_key="sk-test",
+        model="claude-sonnet-5",
+        base_url="https://anthropic-compatible.example",
+    )
+    assert isinstance(mgr, VisionManager)

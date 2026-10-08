@@ -20,8 +20,6 @@ from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel.config import (
     AgentConfig,
     HEARTBEAT_LIVENESS_SECONDS,
-    THINKING_OWNED_PROVIDERS,
-    THINKING_PROVIDERS,
 )
 from lingtai.kernel.llm.base import ToolCall
 from lingtai.llm.service import (
@@ -45,8 +43,6 @@ _TOOL_MANUAL_DESTINATION_NAMES: dict[str, str] = {
     "bash": "shell",
     "web_search": "web",
     "context": "context-manual",
-    "file": "file-manual",
-    "soul": "soul-manual",
 }
 
 
@@ -88,30 +84,53 @@ def load_preset(name: str, working_dir: "Path | None" = None) -> dict:
     preset = _core_load_preset(
         name, working_dir=working_dir, run_migrations=_run_preset_library_migrations
     )
-    _validate_provider_owned_thinking(preset, name)
+    _validate_preset_llm_routes(preset, name)
     return preset
 
 
-def _validate_provider_owned_thinking(preset: dict, name: str) -> None:
-    """Apply a provider-owned effort contract to a loaded preset.
+def _validate_preset_llm_routes(preset: dict, name: str) -> None:
+    """Apply the lingtai-layer LLM route rules to a loaded preset.
 
-    The kernel validator only decides whether ``manifest.llm.thinking`` is in
-    scope; it must not import provider modules (the DAG is
-    lingtai -> tools -> lingtai.kernel, enforced by
-    tests/test_kernel_isolation.py). The exact per-model/per-wire accepted set
-    is owned by the provider and applied here, on the shared preset-loading
-    path the CLI, each ``Agent``'s ``_preset_loader`` hook, and ``Agent``'s own
-    preset paths all use.
+    The kernel preset validator stays provider-agnostic; it must not import
+    ``lingtai`` modules (the DAG is lingtai -> tools -> lingtai.kernel,
+    enforced by tests/test_kernel_isolation.py). The provider-specific rules —
+    a removed LLM provider name on ``manifest.llm.provider`` or on a
+    capability, and the standard ``wire_api``/``service_tier`` values — are
+    the same ``lingtai.init_schema`` rules ``init.json`` obeys, applied here on
+    the shared preset-loading path the CLI, each ``Agent``'s
+    ``_preset_loader`` hook, and ``Agent``'s own preset paths all use.
     """
-    from lingtai.llm.deepseek.policy import owns_provider, validate_llm_block
+    from lingtai.init_schema import (
+        is_removed_llm_provider,
+        removed_provider_message,
+        validate_capability_providers,
+        validate_llm_standard_parameters,
+    )
 
-    llm = (preset or {}).get("manifest", {}).get("llm")
-    if not isinstance(llm, dict) or not owns_provider(llm.get("provider")):
+    manifest = (preset or {}).get("manifest")
+    if not isinstance(manifest, dict):
         return
     try:
-        validate_llm_block(llm)
+        llm = manifest.get("llm")
+        if isinstance(llm, dict):
+            if is_removed_llm_provider(llm.get("provider")):
+                raise ValueError(
+                    removed_provider_message("manifest.llm.provider", llm["provider"])
+                )
+            validate_llm_standard_parameters(llm, prefix="manifest.llm")
+        caps = manifest.get("capabilities")
+        if isinstance(caps, dict):
+            validate_capability_providers(caps, prefix="manifest.capabilities")
     except ValueError as exc:
         raise ValueError(f"preset {name!r}: {exc}") from exc
+
+
+#: Providers whose OMITTED ``manifest.llm.thinking`` keeps the ``"default"``
+#: sentinel so the adapter applies its own omitted default: ``codex`` sends an
+#: explicit ``reasoning.effort = "xhigh"``, and ``openai`` sends no reasoning
+#: field at all (the endpoint's own default). ``anthropic`` and ``claude-code``
+#: keep the historical cross-provider ``"high"`` main-session default.
+_OMITTED_THINKING_DEFAULT_SENTINEL_PROVIDERS = ("codex", "openai")
 
 
 def build_agent_config(
@@ -127,17 +146,12 @@ def build_agent_config(
     apply.  Raw manifest values are compatibility data, never configuration.
     """
     defaults = AgentConfig()
-    soul = manifest.get("soul", {})
     llm = manifest.get("llm", {})
     policy = runtime_policy.as_overrides() if runtime_policy is not None else {}
 
+    # ``manifest.soul`` is a retired, recognized-and-ignored legacy block: old
+    # init.json files still validate, but nothing here reads it.
     return AgentConfig(
-        soul_delay=soul.get("delay", defaults.soul_delay),
-        consultation_past_count=soul.get(
-            "consultation_past_count", defaults.consultation_past_count
-        ),
-        soul_voice=soul.get("voice", defaults.soul_voice),
-        soul_voice_prompt=soul.get("voice_prompt", defaults.soul_voice_prompt),
         # ``manifest.max_turns`` is a legacy/resolved-manifest field and is no
         # longer the authoritative tool-loop guard source. ACTIVE-turn
         # tool-call safety is kernel-owned in ``lingtai.kernel.safety_limits``.
@@ -148,15 +162,15 @@ def build_agent_config(
         context_limit=policy.get("context_limit", defaults.context_limit),
         # Providers that own their omitted-thinking default keep the "default"
         # sentinel instead of being promoted to the legacy cross-provider
-        # "high" main-session default: the Codex family (omitted ->
-        # reasoning.effort "xhigh") and the provider-owned routes such as
-        # DeepSeek (omitted -> no reasoning field at all, so the provider's own
-        # default applies). Every other provider hydrates exactly as before.
+        # "high" main-session default: ``codex`` (omitted -> reasoning.effort
+        # "xhigh") and ``openai`` (omitted -> no reasoning field at all, so the
+        # endpoint's own default applies). ``anthropic``/``claude-code``
+        # hydrate exactly as before.
         thinking=llm.get(
             "thinking",
             "default"
             if str(llm.get("provider") or "").lower()
-            in THINKING_PROVIDERS + THINKING_OWNED_PROVIDERS
+            in _OMITTED_THINKING_DEFAULT_SENTINEL_PROVIDERS
             else defaults.thinking,
         ),
         # Molt thresholds and the context.molt message are kernel-fixed runtime
@@ -201,8 +215,8 @@ class Agent(BaseAgent):
         capabilities: Capability names to enable. Either a list of strings
             (no kwargs) or a dict mapping names to kwargs dicts.
             Each capability dict may include ``"provider"`` to route that
-            capability to a specific LLM provider (e.g. ``"gemini"``, ``"minimax"``).
-            Group names (e.g. ``"file"``) expand to individual capabilities.
+            capability to a specific provider (e.g. vision ``"anthropic"`` or
+            ``"local"``, web ``"duckduckgo"``).
         plugins: Agent Plugin package directories to register, the constructor
             form of ``init.json`` ``manifest.plugins``. Each declared plugin's
             ``skills/`` joins the skills catalog and its ``mcp.json`` servers
@@ -391,26 +405,8 @@ class Agent(BaseAgent):
                     owned_event_journal.close()
             raise
 
-        # Soul remains an injected intrinsic for kernel lifecycle hooks, but its
-        # model-facing root is an official declared plugin. Remove only the
-        # temporary intrinsic dispatcher entry and mount the static declaration
-        # before capability setup; the module remains available to hook lookup.
-        if "soul" in self._intrinsics:
-            from lingtai.tools import soul as _soul
-            self.override_intrinsic("soul")
-            _soul.setup(self)
-
         # Persist LLM config for revive (self-sufficient agents contract)
         self._persist_llm_config()
-
-        # Auto-create FileIOService if not provided by host. Uses the
-        # ``default_file_io_service`` factory so the Rust sidecar gets
-        # picked up automatically when a wheel-bundled or env-provided
-        # binary is available, with transparent pure-Python fallback.
-        # See LINGTAI_FILE_IO_BACKEND in services/file_io_sidecar.py.
-        if self._file_io is None:
-            from .services.file_io_sidecar import default_file_io_service
-            self._file_io = default_file_io_service(root=self._working_dir)
 
         # The CLI has already validated init.json and immediately delegates the
         # complete wrapper composition to `_setup_from_init`. Keep this initial
@@ -821,7 +817,6 @@ class Agent(BaseAgent):
         "provider",
         "model",
         "base_url",
-        "api_compat",
         "context_limit",
         "service_tier",
     )
@@ -1703,6 +1698,11 @@ class Agent(BaseAgent):
         from .services.session_mcp import mount_session_mcp_stdio
         return mount_session_mcp_stdio(self, tuple(configs))
 
+    def open_connection_mcp_stdio(self, configs):
+        """Open a private MCP lease without changing this Agent's tool table."""
+        from .services.session_mcp import open_connection_mcp_stdio
+        return open_connection_mcp_stdio(self, tuple(configs))
+
     def _mount_mcp_tools(self, client: Any, tools: list[dict], mcp_service: Any) -> list[str]:
         """Mount one fully preflighted MCP catalog atomically for this client.
 
@@ -2153,9 +2153,9 @@ class Agent(BaseAgent):
         # Resolve only live init-owned Pad and LingTai seed pointers. Psyche's
         # six prompt pairs are compatibility-known but inert in init.json; the
         # prevalidated owner candidate is passed to final reconstruction below.
-        # Note: "soul" / "soul_file" were retired in v0.7.6 and remain
-        # compatibility-known; they are intentionally not resolved here;
-        # the shared reader reports them without rewriting init.json.
+        # Note: top-level "soul" / "soul_file" and "manifest.soul" are retired
+        # and remain compatibility-known; they are intentionally not resolved
+        # here; the shared reader reports them without rewriting init.json.
         for key in ("pad", "lingtai"):
             file_key = f"{key}_file"
             if file_key in data:
@@ -2169,9 +2169,6 @@ class Agent(BaseAgent):
             saved_interface = self._session.chat.interface
 
         # Tear down
-        # Cancel soul timer to prevent racing on config/service during rebuild
-        self._cancel_soul_timer()
-
         for client in getattr(self, "_mcp_clients", []):
             try:
                 client.close()
@@ -2206,13 +2203,6 @@ class Agent(BaseAgent):
         self._intrinsics.clear()
         self._intrinsic_modules.clear()
         self._wire_intrinsics()
-        # Refresh rebuilds the official surface from scratch. Soul's injected
-        # module remains for lifecycle hooks, while its public root is again
-        # mounted only through the static declaration/registrar route.
-        if "soul" in self._intrinsics:
-            from lingtai.tools import soul as _soul
-            self.override_intrinsic("soul")
-            _soul.setup(self)
 
         # Reset capability-owned flags (``email.boot``, run once by
         # ``_boot_official_intrinsics()`` below, resets to "email box"/"email")
@@ -2288,7 +2278,7 @@ class Agent(BaseAgent):
         )
         # Compare the resolved provider-defaults bucket as a whole so explicit
         # init.json changes (codex_session_anchor, default_headers,
-        # compact_threshold, max_rpm, api_compat, etc.) rebuild coherently.
+        # max_rpm, wire_api, etc.) rebuild coherently.
         if (
             codex_force_rebuild
             or new_provider != self.service.provider
@@ -2348,7 +2338,6 @@ class Agent(BaseAgent):
                 )
                 new_config.snapshot_interval = None
         self._config = new_config
-        self._soul_delay = max(1.0, self._config.soul_delay)
         self._session._config = self._config
         # Streaming is a per-request session flag, not a constructor-only
         # property: install the resolved value on every boot/refresh setup.
@@ -2474,6 +2463,42 @@ class Agent(BaseAgent):
             tools=list(self._tool_handlers.keys()),
         )
 
+    def _publish_memory_length_warning(self, lifecycle_id: str) -> None:
+        """One advisory per successful molt/refresh; measure loaded memory, not disk."""
+        if getattr(self, "_memory_length_lifecycle_id", None) == lifecycle_id:
+            return
+        try:
+            from lingtai.kernel.config import memory_length_warning_chars
+            from lingtai.kernel.notifications import clear, submit
+
+            pad_chars = len(self._prompt_manager.read_section("pad") or "")
+            character_chars = len(self._prompt_manager.read_section("character") or "")
+            total = pad_chars + character_chars
+            limit = memory_length_warning_chars()
+            if total > limit:
+                submit(
+                    self, "memory-length", header="Loaded memory exceeds character threshold",
+                    icon="🧠", priority="high",
+                    data={"lifecycle_id": lifecycle_id, "pad_chars": pad_chars,
+                          "character_chars": character_chars, "total_chars": total,
+                          "limit_chars": limit},
+                    instructions=(
+                        f"Loaded Pad (including pinned references): {pad_chars} characters; "
+                        f"Character: {character_chars}; total {total} exceeds {limit}. "
+                        "Review and archive stale/duplicate memory in its proper durable owner. "
+                        "This is advisory only: no content was erased or truncated. "
+                        "One notification per successful molt/refresh, not per turn."
+                    ),
+                )
+            else:
+                clear(self, "memory-length")
+            self._memory_length_lifecycle_id = lifecycle_id
+            self._log("memory_length_checked", lifecycle_id=lifecycle_id,
+                      pad_chars=pad_chars, character_chars=character_chars,
+                      total_chars=total, limit_chars=limit, over_limit=total > limit)
+        except Exception as error:
+            self._log("memory_length_warning_failed", error=str(error))
+
     def _reconstruct_context(
         self,
         data: dict | None = None,
@@ -2502,6 +2527,7 @@ class Agent(BaseAgent):
         prior_base_prompt = getattr(self, "_base_prompt", missing_base_prompt)
         prior_snapshot = self._psyche_settings_snapshot
         prior_prompt_plan = self._psyche_prompt_plan
+        prior_covenant = self._effective_covenant
         prior_token_decomp_dirty = self._token_decomp_dirty
         system_dir = self._working_dir / "system"
         generation_mirrors = (
@@ -2537,6 +2563,7 @@ class Agent(BaseAgent):
                 self._base_prompt = prior_base_prompt
             self._psyche_settings_snapshot = prior_snapshot
             self._psyche_prompt_plan = prior_prompt_plan
+            self._effective_covenant = prior_covenant
             self._token_decomp_dirty = prior_token_decomp_dirty
 
             from lingtai.kernel._fsutil import atomic_write_text
@@ -2569,7 +2596,7 @@ class Agent(BaseAgent):
             # Directly constructed/testing agents may legitimately have no
             # init.json, but an existing unreadable/invalid file is a failed
             # configured source and must fail loud. Treating both as `{}` would
-            # silently delete config-only sections (for example comment) even
+            # silently delete config-only sections even
             # though the init reader promised KEEP_PREVIOUS_EFFECTIVE.
             if data is None:
                 if (self._working_dir / "init.json").is_file():
@@ -2594,7 +2621,7 @@ class Agent(BaseAgent):
                 if file_key in data:
                     data[key] = resolve_file(data.get(key), data.pop(file_key))
 
-        # Psyche owns the three configurable prompt pairs. The complete
+        # Psyche owns the two configurable prompt pairs. The complete
         # immutable plan was resolved before this composition transaction, then
         # its inputs are overlaid only into this local composition input. `data`
         # remains the effective init mapping and is never mutated with owner
@@ -2604,7 +2631,6 @@ class Agent(BaseAgent):
         data.update({
             "base_prompt": psyche_prompt_inputs.base_prompt,
             "covenant": psyche_prompt_inputs.covenant,
-            "comment": psyche_prompt_inputs.comment,
         })
 
         system_dir = self._working_dir / "system"
@@ -2636,8 +2662,8 @@ class Agent(BaseAgent):
 
         # --- Base prompt (third-party prompt injection point) ---
         # `base_prompt` is the Psyche-owned third-party (application / recipe /
-        # preset) system-prompt injection point — one of the three configurable
-        # prompt surfaces (with `covenant` and `comment`).
+        # preset) system-prompt injection point — one of the two configurable
+        # prompt surfaces (with `covenant`).
         # It is NOT a prompt-manager section: the kernel builder renders it right
         # after the raw kernel-owned `principle` section and before the rest of
         # Batch 1 (see lingtai.kernel.prompt.build_system_prompt_batches), so it
@@ -2665,9 +2691,14 @@ class Agent(BaseAgent):
         if covenant:
             covenant_file.write_text(covenant, encoding="utf-8")
         elif covenant_file.is_file():
-            covenant = covenant_file.read_text(encoding="utf-8")
+            from lingtai.kernel._frontmatter import strip_frontmatter
+
+            covenant = strip_frontmatter(covenant_file.read_text(encoding="utf-8"))
+        self._effective_covenant = covenant
         if covenant:
-            self._prompt_manager.write_section("covenant", covenant, protected=True)
+            from lingtai.kernel.prompt import COVENANT_ROUTE
+
+            self._prompt_manager.write_section("covenant", COVENANT_ROUTE, protected=True)
         else:
             self._prompt_manager.delete_section("covenant")
 
@@ -2690,20 +2721,6 @@ class Agent(BaseAgent):
         # post-molt hook ordering.
         from lingtai.tools.lingtai import _lingtai_load
         _lingtai_load(self, {}, publish=False)
-
-        # --- Rules (from system/rules.md, not init.json) ---
-        rules_md = system_dir / "rules.md"
-        if rules_md.is_file():
-            try:
-                rules_content = rules_md.read_text(encoding="utf-8").strip()
-                if rules_content:
-                    self._prompt_manager.write_section("rules", rules_content, protected=True)
-                else:
-                    self._prompt_manager.delete_section("rules")
-            except OSError:
-                pass
-        else:
-            self._prompt_manager.delete_section("rules")
 
         # --- Pad (pad.md + pinned pad_append.json references) ---
         # Configured Pad content is an initial seed, not an authoritative
@@ -2776,13 +2793,6 @@ class Agent(BaseAgent):
         except Exception:
             if not guidance_file.is_file():
                 guidance_file.write_text("{}\n", encoding="utf-8")
-        # --- Comment ---
-        comment = data.get("comment", "")
-        if comment:
-            self._prompt_manager.write_section("comment", comment)
-        else:
-            self._prompt_manager.delete_section("comment")
-
         # Return discovery state to the full reconstruction seam. It publishes
         # this immutable snapshot only after the final prompt flush succeeds.
         from lingtai.tools.psyche.settings import PsycheSettingsSnapshot
@@ -2794,8 +2804,6 @@ class Agent(BaseAgent):
             base_prompt_file=psyche_prompt_inputs.base_prompt_file,
             covenant=psyche_prompt_inputs.covenant,
             covenant_file=psyche_prompt_inputs.covenant_file,
-            comment=psyche_prompt_inputs.comment,
-            comment_file=psyche_prompt_inputs.comment_file,
         )
 
     def _build_launch_cmd(self) -> list[str] | None:

@@ -375,15 +375,14 @@ def render_current_molt_context(
     recovery_text = _format_ratio_percent(recovery_target)
     return (
         f"Context has stayed high across {int(streak)} consecutive fresh model calls "
-        f"(currently {usage_text} of the context window). This is a context-pressure "
-        "reminder, not an immediate command: when continuing, batch tool results "
-        "you have already digested before summarizing. Repeated summarize "
-        "calls while context stays above 85% substantially hurt token efficiency; "
-        "if you only need a fresh provider context, use one rebuild-only summarize "
-        "call instead. "
-        f"The recovery target is {recovery_text}, but if a batched summarize/"
-        "reconstruction pass still leaves context above 85%, stop repeating summarize, "
-        "tend durable stores, and molt deliberately. See context-manual."
+        f"(currently {usage_text}). This is a context-pressure reminder, not an "
+        "immediate command. Repeated summarize calls while context stays above 85% "
+        "substantially hurt token efficiency; batch tool results if needed. Manual "
+        "rebuild is strongly discouraged. "
+        f"The recovery target is {recovery_text}; if a batched summarize/"
+        "reconstruction pass still leaves context above 85%, stop repeating summarize "
+        "and molt deliberately: tend changed stores, write the session journal and "
+        "a short handoff. See context-manual."
     )
 
 
@@ -415,9 +414,9 @@ def render_reconstruction_molt(
             f"but the rebuilt context is still at {after_text} of the context "
             "window, above the 85% high-context threshold. Repeated small "
             "summarize calls while context stays above 85% substantially hurt "
-            "token efficiency; use at most one rebuild-only summarize call, then "
-            "stop repeating summarize, tend durable stores, and molt "
-            "deliberately. See context-manual."
+            "token efficiency; stop repeating summarize and do not rebuild again, "
+            "tend changed durable stores, and molt deliberately. See "
+            "context-manual."
         )
     return (
         "The runtime already rebuilt the provider context after summarization, "
@@ -470,11 +469,11 @@ def render_forced_rebuild_warning(
         f"Forced provider-context rebuild applied at the {trigger_text} hard context "
         f"boundary. Context changed from {before_str} before to {after_str} after. "
         f"Reaching the full-context boundary means waiting until context was full was "
-        f"not ideal — when context is high, prefer a proactive "
-        f"context(action='rebuild') at the {high_text} rebuild hint "
-        f"instead of letting the emergency boundary force it. If the rebuilt context "
+        f"not ideal — when context is high (from the {high_text} hint), prefer "
+        f"preparing a deliberate molt over a manual context(action='rebuild'), "
+        f"which is strongly discouraged as routine compaction. If the rebuilt context "
         f"is still above the {recovery_text} recovery target, tend durable stores and "
-        f"molt. See meta_guidance, substrate, and procedures."
+        f"molt. Read psyche(action=\"instructions\", input={{}}) for current loaded detail. See meta_guidance, substrate, and procedures."
     )
 
 

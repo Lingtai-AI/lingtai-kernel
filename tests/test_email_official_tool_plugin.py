@@ -7,7 +7,7 @@ import pytest
 
 from lingtai.agent import Agent
 from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 
 
 @pytest.fixture
@@ -18,7 +18,7 @@ def email_agent(tmp_path):
         pseudo_agent_subscriptions=["../private-email-settings-marker"],
     )
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="email-official-plugin",
         working_dir=workdir,
         mail_service=mail_service,
@@ -48,8 +48,8 @@ def _write_refresh_init(workdir, *, capabilities: dict, disable: list[str] | Non
             "agent_name": "email-opt-out",
             "language": "en",
             "llm": {
-                "provider": "gemini",
-                "model": "gemini-test",
+                "provider": "anthropic",
+                "model": "claude-test",
                 "api_key": "test-key",
                 "base_url": None,
             },
@@ -294,7 +294,7 @@ def test_email_official_boot_runs_exactly_once_per_construction_and_refresh(
 
     workdir = tmp_path / "agent"
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="email-exact-once",
         working_dir=workdir,
         capabilities={},
@@ -329,7 +329,7 @@ def test_email_opt_out_forms_keep_one_official_surface_on_construction_and_refre
     """Email's former mandatory surface cannot fall back to a generic intrinsic."""
     workdir = tmp_path / "agent"
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="email-opt-out",
         working_dir=workdir,
         capabilities=capabilities,
@@ -351,3 +351,39 @@ def test_email_opt_out_forms_keep_one_official_surface_on_construction_and_refre
             assert agent._tool_handlers["email"] is not agent._intrinsics["email"]
     finally:
         agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize("action", ["send", "reply"])
+def test_identical_authorized_mail_is_not_blocked(email_agent, tmp_path, monkeypatch, action):
+    """Four identical sends/replies deliver to disposable local mailboxes."""
+    import threading
+    from lingtai.tools.email import manager as email_manager
+    from lingtai.tools.email.manager import EmailManager
+
+    peer = tmp_path / "recipient"
+    peer.mkdir()
+    deliveries = []
+    complete = threading.Event()
+
+    def deliver(agent, msg_id, payload, deliver_at, **kwargs):
+        (peer / f"{msg_id}.json").write_text(json.dumps(payload))
+        deliveries.append(payload)
+        if len(deliveries) == 4:
+            complete.set()
+
+    monkeypatch.setattr(email_manager, "_mailman", deliver)
+    manager = EmailManager(email_agent)
+    if action == "send":
+        request = {"action": "send", "address": str(peer), "subject": "keepalive", "message": "authorized identical body"}
+    else:
+        inbox = email_agent.working_dir / "mailbox" / "inbox" / "seed"
+        inbox.mkdir(parents=True)
+        (inbox / "message.json").write_text(json.dumps({"from": str(peer), "subject": "keepalive", "message": "seed"}))
+        request = {"action": "reply", "email_id": "seed", "message": "authorized identical body"}
+    for _ in range(4):
+        assert manager.handle(request)["status"] == "sent"
+    assert complete.wait(2), "four local delivery threads did not complete"
+    assert len(deliveries) == 4
+    assert len(list(peer.glob("*.json"))) == 4
+    assert len(list((email_agent.working_dir / "mailbox" / "sent").glob("*/message.json"))) == 4
+    assert all(payload["message"] == "authorized identical body" for payload in deliveries)

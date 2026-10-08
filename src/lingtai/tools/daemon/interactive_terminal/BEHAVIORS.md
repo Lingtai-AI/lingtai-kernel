@@ -28,7 +28,7 @@ root with the project's Python.
 - **id**: IT001
 - **title**: spawn returns only an opaque handle, read yields raw bytes and ends with an empty chunk, and wait timeout does not terminate the child
 - **guards**: `daemon-interactive-terminal-contract` § Operations
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a POSIX host with `pty` available (or a Windows runner using the port tests' native lane)
 - **estimate**: ≈ 20 minutes
 

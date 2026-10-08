@@ -23,8 +23,6 @@ jobs:
           python-version: "3.12"
 
       - name: Install kernel with dependencies
-        env:
-          LINGTAI_SKIP_RUST_BUILD: "1"
         run: |
           python -m pip install --disable-pip-version-check pytest
           python -m pip install --disable-pip-version-check -e .

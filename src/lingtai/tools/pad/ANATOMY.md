@@ -21,7 +21,7 @@ maintenance: |
 # tools/pad
 
 Mandatory LTP v2 family for pinned Pad reference persistence. Public actions are
-`append | manual`; body mutation is owned by `file`, and active prompt
+`append | manual`; body mutation happens through `shell`, and active prompt
 reconstruction is owned by `context.rebuild`.
 
 ## Components
@@ -56,8 +56,8 @@ reconstruction is owned by `context.rebuild`.
   `Agent._reconstruct_context`, the one full reconstruction path shared by
   active `context.rebuild`, refresh, and molt. Agent registers that one method as
   the post-molt hook before a fresh session is created.
-- `file.write`/`file.edit` mutate `system/pad.md` without calling this package or
-  changing prompt state.
+- `shell` mutates `system/pad.md` without calling this package or changing
+  prompt state.
 - Persistent: `system/pad.md`, `system/pad_append.json`, referenced text files.
   Derived: prompt section `pad`, `system/system.md`. No module-global mutable
   state.

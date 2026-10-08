@@ -27,26 +27,18 @@ _PROBE_TIMEOUT_S = 2.0
 # Local CLI-login providers authenticate through a locally installed CLI/login
 # session (no per-request API key, no base_url) — so a TCP probe would be a
 # false negative. Health for these is "is the backing provider module importable?".
-# Maps the provider name (and its aliases) to the module that backs it.
+# Maps the provider name to the module that backs it.
 _LOCAL_CLI_LOGIN_PROVIDERS = {
     "claude-code": "lingtai.llm.claude_code.adapter",
-    "claude_code": "lingtai.llm.claude_code.adapter",
-    "kimi-code": "lingtai.llm.kimi_code.adapter",
-    "kimi_code": "lingtai.llm.kimi_code.adapter",
 }
 
-# Default base_url per provider for presets that omit base_url.
+# Default base_url per provider for presets that omit base_url. The ``openai``
+# and ``anthropic`` families reach any compatible vendor through an explicit
+# base_url; these are only the official endpoints used when it is omitted.
 _PROVIDER_DEFAULT_URLS = {
     "openai":     "https://api.openai.com",
     "anthropic":  "https://api.anthropic.com",
-    "gemini":     "https://generativelanguage.googleapis.com",
-    "deepseek":   "https://api.deepseek.com",
-    "minimax":    "https://api.minimax.io",
-    "zhipu":      "https://open.bigmodel.cn",
-    "openrouter": "https://openrouter.ai",
     "codex":      "https://chatgpt.com",
-    "mimo":       "https://api.xiaomimimo.com",
-    "kimi":       "https://api.kimi.com",
 }
 
 

@@ -19,7 +19,7 @@ from uuid import uuid4
 import pytest
 
 from lingtai.agent import Agent
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 

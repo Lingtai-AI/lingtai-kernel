@@ -145,8 +145,8 @@ def test_base_agent_has_rescan_method(tmp_path):
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
     assert callable(agent._rescan_large_tool_results)
@@ -159,8 +159,8 @@ def test_base_agent_rescan_with_chat_session_publishes_nothing(tmp_path):
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-rescan-chat", working_dir=tmp_path / "ag2", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag2"))
     agent._summarize_notification_threshold = 100
@@ -199,8 +199,8 @@ def test_enqueue_skip_if_ref_id_exists(tmp_path):
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-dedup", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
@@ -235,8 +235,8 @@ def test_enqueue_no_skip_publishes_twice(tmp_path):
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test-nodedup", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
@@ -325,14 +325,10 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
     agent._notification_fp = fp
     agent._notification_raw_fp = fp
 
-    res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
-        agent,
-        {
-            "action": "dismiss_ref",
-            "input": {"ref_id": stale_ref},
-            "reasoning": "test",
-        },
-    )
+    from lingtai.kernel.notifications import dismiss_channel
+
+    # Private Core helper (no public dismiss action any more).
+    res = dismiss_channel(agent, "system", invoked_by="notification", ref_id=stale_ref)
 
     assert res["status"] == "ok"
     assert stale_ref in res.get("acked_large_result_refs", [])

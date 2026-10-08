@@ -265,7 +265,8 @@ follow-up migrates it.
 
 `logs/token_ledger.jsonl` (append-only per-call log,
 `src/lingtai/kernel/token_ledger.py`) stays for compatibility and TUI surfaces.
-It is a *mixed lifetime stream* (main + soul + involuntary + daemon rows) and its
+It is a *mixed lifetime stream* (main + involuntary + daemon rows, plus legacy
+`soul` rows from the removed Soul subsystem) and its
 `sum_token_ledger` is a lifetime aggregate (`token_ledger.py:194+`). This spec
 does **not** make the ledger the definition source for either session object:
 

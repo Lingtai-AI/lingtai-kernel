@@ -21,7 +21,8 @@ from .account import TelegramAccount
 
 logger = logging.getLogger(__name__)
 
-_TASKCARD_DEFAULT_NORMAL_ROWS = 1
+_TASKCARD_DEFAULT_ENABLED = True
+_TASKCARD_DEFAULT_NORMAL_ROWS = 3
 _TASKCARD_MIN_NORMAL_ROWS = 1
 _TASKCARD_MAX_NORMAL_ROWS = 10
 # Both the default AND the global hard ceiling: no per-agent setting may
@@ -91,7 +92,7 @@ class TelegramService:
     @staticmethod
     def _taskcard_defaults() -> tuple[bool, int, int, str, tuple[str, ...] | None]:
         return (
-            True,
+            _TASKCARD_DEFAULT_ENABLED,
             _TASKCARD_DEFAULT_NORMAL_ROWS,
             _TASKCARD_DEFAULT_MAX_REFRESHES,
             _TASKCARD_DEFAULT_LOCALE,
@@ -105,7 +106,7 @@ class TelegramService:
         enabled = data.get("taskcard")
         if type(enabled) is not bool:
             logger.warning("Invalid Telegram taskcard state field; defaulting enabled to True")
-            enabled = True
+            enabled = _TASKCARD_DEFAULT_ENABLED
         normal_rows = data.get("normal_rows", _TASKCARD_DEFAULT_NORMAL_ROWS)
         if (
             type(normal_rows) is not int

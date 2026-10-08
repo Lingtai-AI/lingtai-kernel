@@ -7,7 +7,7 @@ Key concepts:
     - **2-layer tool dispatch**: intrinsics (built-in) + capability handlers.
     - **Opaque context**: the host app can pass any context object — the agent
       stores it but never introspects it.
-    - **4 optional services**: LLM, FileIO, Mail, Event Journal —
+    - **3 optional services**: LLM, Mail, Event Journal —
       missing service auto-disables the intrinsics it backs.
 """
 
@@ -18,6 +18,7 @@ import copy
 import functools
 import hashlib
 import json
+import math
 import queue
 import threading
 import time
@@ -50,7 +51,11 @@ from ..meta_block import (
     build_synthetic_meta_envelope,
     build_notification_payload,
     build_notification_persistent_payload,
+    commit_delivered_notification_sources,
+    notification_source_signatures as _notification_source_signatures,
+    pending_notification_payloads,
     record_notification_persistent_delivery,
+    reset_delivered_notification_sources,
     sanitize_email_notification_after_persistent,
     sanitize_feishu_notification_after_persistent,
     sanitize_telegram_notification_after_persistent,
@@ -71,25 +76,6 @@ from .lifecycle import StopResult, StopStatus
 
 logger = get_logger()
 
-# Retained legacy literal for the retired kernel-driven Telegram Task Card
-# reverse channel. The current public ``task_card`` capability is intrinsic in
-# ``lingtai.tools.task_card``; Telegram only projects its artifact read-only.
-# Keep this only while legacy cleanup paths still reference the historical name.
-_TASK_CARD_TOOL = "_lingtai_telegram_task_card"
-
-
-def _notification_source_signatures(payloads: Mapping[str, object]) -> dict[str, str]:
-    """Return bounded deterministic signatures for an observed channel snapshot."""
-    signatures: dict[str, str] = {}
-    for source, payload in payloads.items():
-        try:
-            material = json.dumps(
-                payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")
-        except (TypeError, ValueError):
-            material = repr(payload).encode("utf-8", "replace")
-        signatures[str(source)] = hashlib.sha256(material).hexdigest()
-    return signatures
 
 
 # Typed daemon event kinds and their durable idempotency-key prefixes. A run's
@@ -285,7 +271,6 @@ def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None
     address = manifest_data.get("address") or ""
     created = manifest_data.get("created_at") or ""
     admin = manifest_data.get("admin") or {}
-    soul_delay = manifest_data.get("soul_delay")
     molt_count = manifest_data.get("molt_count", 0)
 
     lines: list[str] = []
@@ -331,8 +316,6 @@ def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None
                 lines.append(f"You hold admin flags: {', '.join(flags)}.")
 
     # Resources.
-    if soul_delay is not None:
-        lines.append(f"Your soul flow fires {soul_delay}s after you go idle.")
     if mailbox_name:
         lines.append(f"You receive messages via {mailbox_name}.")
 
@@ -448,7 +431,6 @@ class BaseAgent:
 
     Services (all optional):
         - ``service`` (LLMService): The brain — thinking, generating text.
-        - ``file_io`` (FileIOService): File access — backs read/edit/write/glob/grep.
         - ``mail_service`` (MailTransportPort): Message transport — backs mail intrinsic.
         - ``event_journal`` (EventJournalPort): Durable structured event append.
 
@@ -487,7 +469,6 @@ class BaseAgent:
         provider_call_admission_port=None,
         derived_launch_admission_port=None,
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
-        file_io: Any | None = None,
         mail_service: Any | None = None,
         event_journal: EventJournalPort | None = None,
         config: AgentConfig | None = None,
@@ -499,13 +480,12 @@ class BaseAgent:
         substrate: str = "",
         procedures: str = "",
         pad: str = "",
-        comment: str = "",
     ):
         self.agent_name = agent_name  # true name (真名) — immutable once set
         self.nickname: str | None = None  # mutable alias (别名)
         # A constrained composition injects one Core-owned provider-admission
         # Port. Wrap the service rather than only the main run loop: the root
-        # session, summaries, soul, and future calls through this Agent service
+        # session, summaries, and future calls through this Agent service
         # cross the same boundary. Detached daemon/avatar execution constructs
         # independent provider services and therefore requires the separate
         # host-mediated derived-admission adapter; it must not inherit this
@@ -538,7 +518,9 @@ class BaseAgent:
         self._cancel_event = threading.Event()
         # Correlated inbound-turn state is process-local and protected separately
         # from the legacy process-global cooperative latch.
-        self._turn_controls_lock = threading.Lock()
+        # Active handle cancellation re-enters this lock through
+        # _request_turn_cancel -> request_cooperative_cancel.
+        self._turn_controls_lock = threading.RLock()
         self._turn_controls: dict[str, Any] = {}
         self._current_turn_control: Any | None = None
         self._state = AgentState.IDLE
@@ -598,9 +580,6 @@ class BaseAgent:
         self._agent_presence = agent_presence
 
         # --- Wire services ---
-        # FileIOService: optional, provided by Agent or host
-        self._file_io = file_io
-
         # MailService: None means mail intrinsic disabled
         self._mail_service = mail_service
 
@@ -660,28 +639,17 @@ class BaseAgent:
         self._prompt_manager = SystemPromptManager()
         if principle:
             self._prompt_manager.write_section("principle", principle, protected=True)
+        self._effective_covenant = covenant
         if covenant:
-            self._prompt_manager.write_section("covenant", covenant, protected=True)
+            from ..prompt import COVENANT_ROUTE
+
+            self._prompt_manager.write_section("covenant", COVENANT_ROUTE, protected=True)
         if substrate:
             self._prompt_manager.write_section("substrate", substrate, protected=True)
         if procedures:
             self._prompt_manager.write_section("procedures", procedures, protected=True)
-        # Load existing rules from system/rules.md (survives molts, refreshes, and resumes)
-        rules_md = system_dir / "rules.md"
-        if rules_md.is_file():
-            try:
-                rules_content = rules_md.read_text(encoding="utf-8").strip()
-                if rules_content:
-                    self._prompt_manager.write_section("rules", rules_content, protected=True)
-            except OSError:
-                pass
         if loaded_pad.strip():
             self._prompt_manager.write_section("pad", loaded_pad)
-        if comment:
-            self._prompt_manager.write_section("comment", comment)
-
-        # Soul delay — needed before manifest build
-        self._soul_delay = max(1.0, self._config.soul_delay)
 
         # Agent ID, created_at, and molt_count — persistent state restored
         from datetime import datetime, timezone
@@ -783,7 +751,7 @@ class BaseAgent:
 
         # _pending_mail_notifications removed — email arrivals now use
         # single-slot unread-digest (email.unread) instead of per-arrival
-        # notification pairs. Bounce/MCP/soul events publish their own
+        # notification pairs. Bounce/MCP events publish their own
         # `.notification/*.json` files and don't need per-ref tracking.
 
         # LLM worker poison state. Set when WorkerStillRunningError means the
@@ -850,16 +818,26 @@ class BaseAgent:
         # See `meta_block.skeletonize_notification_holder` and
         # `meta_block.attach_active_notifications`.
         #
-        # The current notification payload is merged into the newest final
-        # agent_meta snapshot on every eligible batch. The fingerprint and live
-        # holder remain for delivery bookkeeping and historical ownership, but
-        # they do not suppress the newest whole snapshot.
+        # Not-yet-delivered notification state is merged into the newest final
+        # agent_meta snapshot once (one-shot delivery, see the delivered-identity
+        # fields below). The fingerprint and live holder remain for wake
+        # bookkeeping and historical ownership; they do not re-attach delivered
+        # state.
         self._notification_live_holder: dict | None = None
         # Material signature of the last emitted notification payload; retained
         # for delivery diagnostics and persistent-message bookkeeping. It is
         # not an attachment gate; reset to ``None`` whenever notifications go
         # empty so a later reappearance records a fresh diagnostic baseline.
         self._notification_payload_signature: str | None = None
+        # Shared one-shot delivery identity for the ACTIVE tool-result path and
+        # the IDLE/ASLEEP synthesized pair: versioned generic-hook snapshots plus
+        # material event/message identities inside known aggregates. Written
+        # only after a delivery actually succeeded (never on a failed, blocked,
+        # no-carrier, or degraded attempt); retained across same-process molt,
+        # rebuild and resync, but not persisted across Agent/process restart.
+        self._notification_delivered_source_signatures: dict[str, str] = {}
+        self._notification_delivered_system_events: dict[str, str] = {}
+        self._notification_delivered_events: dict[str, dict[str, str]] = {}
         # Per-IM-channel persistent communication-context lane.  These IDs
         # track which messages have already been emitted in
         # `_meta.agent_meta.notifications.persistent.mcp.<channel>.messages` for the
@@ -918,25 +896,16 @@ class BaseAgent:
         self._state = AgentState.IDLE
         self._sealed = False
 
-        # Soul — inner voice
-        self._soul_prompt = ""       # non-empty during inquiry
-        self._soul_oneshot = False    # True during pending inquiry
-        self._soul_timer: threading.Timer | None = None
-        # Held while a soul flow consultation fire is running. Voluntary
-        # soul(action='flow') calls try-acquire non-blocking — if held,
-        # the call is rejected with "soul flow ongoing".
-        self._soul_fire_lock: threading.Lock = threading.Lock()
-        self._insight_turn_counter: int = 0
-
         # Agent record — throttled by LINGTAI_SESSION_STATS_REFRESH_SECONDS;
         # see _write_session_stats_record. Sequence is process-local only
         # (resets on restart); atomic replace already makes torn reads
         # impossible, sequence is a bonus ordering signal for one process.
         self._session_stats_last_written_at: float | None = None
         self._session_stats_sequence: int = 0
+        self._session_stats_write_lock = threading.Lock()
         # Created lazily by _write_session_stats_record so the explicit
         # background owner is only present for agents that publish this record.
-        self._daemon_stats_snapshot = None
+        self._async_work_snapshot = None
 
         # Heartbeat — always-on health monitor
         self._heartbeat: float = 0.0
@@ -1011,6 +980,10 @@ class BaseAgent:
             logger_fn=self._log,
             build_system_batches_fn=self._build_system_prompt_batches,
             tool_result_recovery_lookup_fn=self._recover_pending_tool_result,
+            molt_count_fn=lambda: self._molt_count,
+            cache_miss_budget_fn=lambda: getattr(
+                self, "resolve_cache_miss_budget"
+            )(),
         )
 
         # Boot ordinary intrinsics first. Official-intrinsic shims retain the
@@ -1080,7 +1053,7 @@ class BaseAgent:
         """Resolve a kernel-facing hook function from an injected intrinsic.
 
         The kernel used to reach into intrinsic modules by import (e.g.
-        ``from ..intrinsics.soul.flow import _start_soul_timer``). After the
+        ``from ..intrinsics.context import context_forget``). After the
         tools consolidation the kernel cannot import ``tools``, so every such
         touchpoint resolves through the injected registry instead: the
         intrinsic package re-exports its kernel-facing functions from its
@@ -1255,22 +1228,20 @@ class BaseAgent:
     def _close_agent_owned_services_after_quiescence(self) -> None:
         """Subclass hook run only after run-loop/provider quiescence is proven."""
 
-    def _request_turn_cancel(self) -> None:
+    def _request_turn_cancel(self, *, self_sleep: bool = False) -> None:
         """Latch cooperative cancellation for the current logical turn."""
-        self._cancel_event.set()
+        from ..turns import request_cooperative_cancel
+
+        request_cooperative_cancel(self, self_sleep=self_sleep)
 
     def _set_state(self, new_state: AgentState, reason: str = "") -> None:
         """Transition to a new state.
 
-        Drives the soul cadence timer: the timer runs only while the
-        agent is IDLE.  Entering IDLE starts a fresh ``soul_delay``-second
-        timer; leaving IDLE (to ACTIVE, STUCK, ASLEEP, or SUSPENDED)
-        cancels it.  The timer does NOT reschedule itself after firing —
-        the next IDLE transition starts a fresh countdown.
+        Owns the hidden idle-timeout bookkeeping: entering IDLE stamps
+        ``_idle_since_monotonic``; leaving IDLE (to ACTIVE, STUCK, ASLEEP,
+        or SUSPENDED) records monotonic ``idle_elapsed_s`` on the existing
+        state event before clearing it. Missing anchors stay unknown.
         """
-        _start_soul_timer = self._intrinsic_hook("soul", "_start_soul_timer")
-        _cancel_soul_timer = self._intrinsic_hook("soul", "_cancel_soul_timer")
-
         old = self._state
         if old == new_state:
             return
@@ -1280,16 +1251,19 @@ class BaseAgent:
         else:
             self._idle.set()
 
-        # Soul timer + hidden idle-timeout bookkeeping: IDLE-only.  Start on
-        # entering IDLE, cancel/clear on leaving. No-op when soul is absent.
+        # Hidden idle-timeout bookkeeping: IDLE-only.  Stamp on entering
+        # IDLE, clear on leaving.
+        idle_fields = {}
+        if old == AgentState.IDLE and self._idle_since_monotonic is not None:
+            elapsed = (
+                self._lifecycle_clock.monotonic_seconds() - self._idle_since_monotonic
+            )
+            if math.isfinite(elapsed) and elapsed >= 0:
+                idle_fields["idle_elapsed_s"] = elapsed
         if new_state == AgentState.IDLE:
             self._idle_since_monotonic = self._lifecycle_clock.monotonic_seconds()
-            if _start_soul_timer is not None:
-                _start_soul_timer(self)
         elif old == AgentState.IDLE:
             self._idle_since_monotonic = None
-            if _cancel_soul_timer is not None:
-                _cancel_soul_timer(self)
 
         # Issue #164 — watchdog bookkeeping. A state transition is itself
         # forward progress, so reset the no-progress clock. The
@@ -1314,7 +1288,9 @@ class BaseAgent:
             self._active_turn_id = None
             self._active_stuck_logged = False
 
-        self._log("agent_state", old=old.value, new=new_state.value, reason=reason)
+        self._log(
+            "agent_state", old=old.value, new=new_state.value, reason=reason, **idle_fields,
+        )
         self._workdir.write_manifest(self._build_manifest())
 
     def _wake_nap(self, reason: str) -> None:
@@ -1457,25 +1433,6 @@ class BaseAgent:
         from .messaging import _rescan_large_tool_results
         return _rescan_large_tool_results(self)
 
-    # ------------------------------------------------------------------
-    # Soul (pass-throughs to soul_flow.py)
-    # ------------------------------------------------------------------
-
-    def _start_soul_timer(self) -> None:
-        fn = self._intrinsic_hook("soul", "_start_soul_timer")
-        if fn is not None:
-            fn(self)
-
-    def _cancel_soul_timer(self) -> None:
-        fn = self._intrinsic_hook("soul", "_cancel_soul_timer")
-        if fn is not None:
-            fn(self)
-
-    def _soul_whisper(self) -> None:
-        fn = self._intrinsic_hook("soul", "_soul_whisper")
-        if fn is not None:
-            fn(self)
-
     def _drain_tc_inbox(self) -> None:
         """Splice queued involuntary tool-call pairs at a safe boundary.
 
@@ -1485,7 +1442,7 @@ class BaseAgent:
         (``base_agent/turn.py:_handle_request``) and the dedicated TC
         wake handler (``_handle_tc_wake``). The pre-request hook itself
         adds a third path: drain fires once per LLM round-trip inside
-        the tool-call loop, so mail notifications and soul.flow voices
+        the tool-call loop, so mail notifications and other involuntary pairs
         splice into the wire mid-task instead of waiting for the outer
         turn to end.
         """
@@ -1525,39 +1482,34 @@ class BaseAgent:
 
         Wire-state semantic, in two regimes:
 
-        * **Canonical-interface adapters** (anthropic, openai-CC,
-          codex-Responses, deepseek): the hook splices into the same
-          interface the adapter is about to serialize for the wire, so
-          the spliced pair appears in the *current* API request.
-          Mail notifications enqueued during a long bash chain reach
-          the LLM within one tool round.
+        * **Canonical-interface sessions** (anthropic, openai Chat
+          Completions, the stateless openai Responses replay, and
+          codex-Responses): the hook splices into the same interface the
+          adapter is about to serialize for the wire, so the spliced pair
+          appears in the *current* API request. Mail notifications enqueued
+          during a long bash chain reach the LLM within one tool round.
 
-        * **Server-state adapters** (OpenAIResponsesSession, both
-          GeminiChatSession and InteractionsChatSession): the hook
-          splices into the canonical interface, but the wire payload
-          for the current request is built from server-side state
-          (``previous_response_id`` / ``previous_interaction_id``) or
-          the genai SDK's own chat history. The spliced pair is only
-          visible to the LLM on the *next* turn after the agent
+        * **Server-state sessions** (an ``OpenAIResponsesSession`` in its
+          non-replay mode, which no production adapter builds for a plain
+          ``openai`` provider): the hook splices into the canonical
+          interface, but the wire payload for the current request is built
+          from server-side state (``previous_response_id``). The spliced
+          pair is only visible to the LLM on the *next* turn after the agent
           re-syncs. The agent-side persistence and inspection paths
           (chat_history.jsonl, .status.json, /codex view) update
           immediately either way.
 
-        Subtle semantic for ``replace_in_history=True`` (soul.flow):
-        when the hook fires mid-turn, splicing in a replacement pair
-        removes the prior pair of the same source from the interface.
-        This is *almost* identical to the turn-boundary behavior that
-        already exists today, with one nuance: the LLM's reasoning in
-        the *current* turn was conditioned on a wire that contained
-        the prior pair, but its next API call (or its in-flight
-        reasoning continuation) may serialize a wire that doesn't.
-        For soul.flow's reflective voices this is harmless — they
-        don't drive tool calls and the model isn't building a chain
-        of reasoning that depends on the prior voice's exact text.
-        For any future producer that uses ``replace_in_history=True``
-        with content the agent might cite mid-turn, this is a
-        consideration; flagged here rather than buried in commit
-        history.
+        Subtle semantic for ``replace_in_history=True``: when the hook
+        fires mid-turn, splicing in a replacement pair removes the prior
+        pair of the same source from the interface. This is *almost*
+        identical to the turn-boundary behavior that already exists
+        today, with one nuance: the LLM's reasoning in the *current*
+        turn was conditioned on a wire that contained the prior pair,
+        but its next API call (or its in-flight reasoning continuation)
+        may serialize a wire that doesn't. No in-tree producer uses
+        ``replace_in_history=True`` today; for any future producer whose
+        content the agent might cite mid-turn, this is a consideration;
+        flagged here rather than buried in commit history.
 
         Idempotent: re-assigning the same callable to the same session
         attribute is a no-op. Called from :meth:`_drain_tc_inbox` so
@@ -1905,10 +1857,35 @@ class BaseAgent:
             # stale notification state.  Synthesized pairs remain in
             # history as placeholders; they are never deleted.
             skeletonize_notification_holder(self)
+            reset_delivered_notification_sources(self)
             self._notification_fp = fp
             self._notification_raw_fp = raw_fp
             self._notification_deferred_log_fp = ()
             return
+
+        # One-shot delivery: the ACTIVE tool-result path and this synthesized
+        # pair share one delivered identity, so only channels/events not yet
+        # delivered are injected or wake the agent. The fingerprint moved, but
+        # when nothing is pending it moved only because a delivered channel or
+        # event disappeared (or was rewritten identically): commit the observed
+        # state without injecting, waking, or touching producer files.
+        pending = pending_notification_payloads(self, notifications)
+        if not pending:
+            if _skip_poisoned_sync(phase="before_delivered_commit"):
+                return
+            previously_delivered = getattr(
+                self, "_notification_delivered_source_signatures", {}
+            )
+            if isinstance(previously_delivered, Mapping) and (
+                set(previously_delivered) - set(source_signatures)
+            ):
+                skeletonize_notification_holder(self)
+            commit_delivered_notification_sources(self, notifications)
+            self._notification_fp = fp
+            self._notification_raw_fp = raw_fp
+            self._notification_deferred_log_fp = ()
+            return
+        notifications = pending
 
         # --- Inject new block based on current state ---
         from ..state import AgentState
@@ -2063,7 +2040,7 @@ class BaseAgent:
             self._notification_deferred_log_fp = ()
             # Provenance compares against the last notification snapshot the
             # model actually received, never against a deferred ACTIVE read.
-            self._notification_delivered_source_signatures = source_signatures
+            commit_delivered_notification_sources(self, observed.payloads)
             self._notification_delivered_daemon_summary = daemon_summary
         elif self._state in (AgentState.STUCK, AgentState.SUSPENDED):
             self._notification_fp = fp
@@ -2146,6 +2123,7 @@ class BaseAgent:
                 self._notification_fp = ()
                 self._notification_raw_fp = ()
                 self._notification_deferred_log_fp = ()
+                # Keep already delivered identities across same-process resync.
                 self._log(
                     "notification_redacted_replay_resync",
                     tool_call_id=tool_call.id,
@@ -2296,7 +2274,7 @@ class BaseAgent:
         # Build the canonical two-axis sidecar. The handler-shaped body remains
         # independent; adapters project this sidecar into model-visible _meta.
         notification_persistent_payload = build_notification_persistent_payload(
-            self, notifications_with_guidance
+            self, notifications_with_guidance, event_records=True
         )
         # Delivery accounting and the model-visible envelope must describe the
         # same persistent lane.  Merge the separately built durable snapshot
@@ -2330,7 +2308,7 @@ class BaseAgent:
         # interface_converters.py and anthropic/adapter.py.
         content_dict = body
 
-        # Build a per-source summary: "3 email, 1 soul, 0 system".
+        # Build a per-source summary: "3 email, 1 daemon, 0 system".
         # Counts come from data.count / len(data.events) / len(data.voices)
         # depending on the producer; fall back to "?" if unparseable.
         summary_parts = []
@@ -2548,37 +2526,6 @@ class BaseAgent:
         except Exception:
             pass
 
-    def _persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:
-        fn = self._intrinsic_hook("soul", "_persist_soul_entry")
-        if fn is not None:
-            fn(self, result, mode=mode, source=source)
-
-    def _append_soul_flow_record(self, record: dict) -> None:
-        fn = self._intrinsic_hook("soul", "_append_soul_flow_record")
-        if fn is not None:
-            fn(self, record)
-
-    def _run_inquiry(self, question: str, source: str = "agent") -> None:
-        fn = self._intrinsic_hook("soul", "_run_inquiry")
-        if fn is not None:
-            fn(self, question, source=source)
-
-    def _flatten_v3_for_pair(self, voice: dict) -> dict:
-        fn = self._intrinsic_hook("soul", "_flatten_v3_for_pair")
-        if fn is None:
-            return voice
-        return fn(self, voice)
-
-    def _run_consultation_fire(self) -> None:
-        fn = self._intrinsic_hook("soul", "_run_consultation_fire")
-        if fn is not None:
-            fn(self)
-
-    def _rehydrate_appendix_tracking(self) -> None:
-        fn = self._intrinsic_hook("soul", "_rehydrate_appendix_tracking")
-        if fn is not None:
-            fn(self)
-
     # ------------------------------------------------------------------
     # Heartbeat (pass-throughs to lifecycle.py)
     # ------------------------------------------------------------------
@@ -2794,10 +2741,6 @@ class BaseAgent:
         from .prompt import _update_system_prompt
         _update_system_prompt(self, section, content, protected=protected)
 
-    def _check_rules_file(self) -> None:
-        from .lifecycle import _check_rules_file
-        _check_rules_file(self)
-
     # ------------------------------------------------------------------
     # Identity / status (pass-throughs to identity.py)
     # ------------------------------------------------------------------
@@ -2841,38 +2784,52 @@ class BaseAgent:
         logged and never interrupts the turn.
         """
         from ..session_stats import (
-            RecentDaemonSnapshot,
+            RecentAsyncWorkSnapshot,
             build_agent_record,
             session_stats_refresh_seconds,
             should_refresh_agent_record,
             write_agent_record,
         )
 
-        try:
-            wall_now = self._lifecycle_clock.wall_seconds()
-            if not should_refresh_agent_record(
-                self._session_stats_last_written_at,
-                wall_now,
-                session_stats_refresh_seconds(),
-            ):
-                return
-            snapshot_owner = getattr(self, "_daemon_stats_snapshot", None)
-            if snapshot_owner is None:
-                snapshot_owner = RecentDaemonSnapshot(self._working_dir)
-                self._daemon_stats_snapshot = snapshot_owner
-            # Never wait for the newest-1000 daemon reads: a blocked storage
-            # read must not delay the heartbeat's liveness publication.
-            snapshot_owner.schedule()
-            self._session_stats_sequence += 1
-            record = build_agent_record(
-                self,
-                sequence=self._session_stats_sequence,
-                daemon_summary=snapshot_owner.snapshot(),
-            )
-            write_agent_record(self._working_dir, record)
-            self._session_stats_last_written_at = wall_now
-        except Exception as e:
-            logger.warning(f"[{self.agent_name}] Failed to write agent record: {e}")
+        session_stats_write_lock = getattr(self, "_session_stats_write_lock", None)
+        if session_stats_write_lock is None:
+            session_stats_write_lock = threading.Lock()
+            self._session_stats_write_lock = session_stats_write_lock
+        with session_stats_write_lock:
+            try:
+                wall_now = self._lifecycle_clock.wall_seconds()
+                snapshot_owner = getattr(self, "_async_work_snapshot", None)
+                if snapshot_owner is None:
+                    snapshot_owner = RecentAsyncWorkSnapshot(self._working_dir)
+                    self._async_work_snapshot = snapshot_owner
+
+                snapshot, generation, dirty = snapshot_owner.publication_snapshot()
+                if not dirty:
+                    if not should_refresh_agent_record(
+                        self._session_stats_last_written_at,
+                        wall_now,
+                        session_stats_refresh_seconds(),
+                    ):
+                        return
+                    # Never wait for daemon ledger or Shell job reads: blocked
+                    # storage must not delay heartbeat liveness publication.  A
+                    # dirty completion bypass never schedules here, preventing a
+                    # completion/write/refresh loop.
+                    snapshot_owner.schedule()
+                    snapshot, generation, _dirty = snapshot_owner.publication_snapshot()
+
+                self._session_stats_sequence += 1
+                record = build_agent_record(
+                    self,
+                    sequence=self._session_stats_sequence,
+                    daemon_summary=snapshot["daemons"],
+                    async_work_snapshot=snapshot["async_work"],
+                )
+                write_agent_record(self._working_dir, record)
+                snapshot_owner.mark_published(generation)
+                self._session_stats_last_written_at = wall_now
+            except Exception as e:
+                logger.warning(f"[{self.agent_name}] Failed to write agent record: {e}")
 
     # ------------------------------------------------------------------
     # Messaging (pass-throughs)
@@ -2896,6 +2853,9 @@ class BaseAgent:
         tool_observer: TurnToolObserver | None = None,
         permission_broker: TurnPermissionBroker | None = None,
         origin: TurnOrigin = TurnOrigin.LEGACY,
+        connection_provider_port=None,
+        connection_derived_port=None,
+        connection_tool_overlay=None,
     ) -> TurnHandle:
         """Queue one text turn and return its protocol-neutral terminal handle."""
         from ..turns import submit_turn
@@ -2908,6 +2868,9 @@ class BaseAgent:
             tool_observer=tool_observer,
             permission_broker=permission_broker,
             origin=origin,
+            connection_provider_port=connection_provider_port,
+            connection_derived_port=connection_derived_port,
+            connection_tool_overlay=connection_tool_overlay,
         )
 
     def cancel_turn(self, correlation_id: str) -> bool:
@@ -3048,7 +3011,7 @@ class BaseAgent:
         ``ledger_source`` tags any token-ledger entry written for the
         most recent LLM round-trip. Default ``"main"`` covers the bulk
         of callers. Set to ``"tc_wake"`` from involuntary splice paths
-        so consultation cadence does not double-count splices as main turns.
+        so usage accounting and history distinguish involuntary splices from main turns.
         """
         history_dir = self._working_dir / "history"
         history_dir.mkdir(exist_ok=True)

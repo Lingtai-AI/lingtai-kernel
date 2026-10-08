@@ -1,8 +1,9 @@
 """Psyche's declared official host-plugin slice.
 
 ``psyche`` is the mandatory model-visible LTP v2 root for the four durable
-self-domains: ``pad + lingtai + knowledge + skills = psyche``. Its six actions
-are four manual routes, redacted ``settings``, and the ``manual`` router; every
+self-domains: ``pad + lingtai + knowledge + skills = psyche``. Its seven actions
+are four domain manuals, the effective ``covenant`` body, redacted ``settings``,
+and the ``manual`` router; every
 child uses the canonical strict-empty input and is read-only. The declaration
 binds only ``workdir`` and the applied Psyche settings snapshot.
 
@@ -43,24 +44,27 @@ DOMAIN_MANUALS: tuple[tuple[str, str], ...] = (
 #: The psyche routing-table manual: its own installed skill bundle.
 _ROUTER_MANUAL = "psyche-manual"
 _DROPPED_ENVELOPE_KEYS = ("_tc_id",)
-_DECLARED_ACTIONS = tuple(action for action, _manual in DOMAIN_MANUALS)
+_DECLARED_ACTIONS = tuple(action for action, _manual in DOMAIN_MANUALS) + ("instructions", "covenant",)
 _DECLARED_INPUT_SCHEMAS = {
     action: dict(MANUAL_INPUT_SCHEMA) for action in _DECLARED_ACTIONS
 }
 
 _ACTION_ENUM_DESCRIPTION = (
-    "Choose one Psyche operation. Every action takes strict input={} and is "
-    "read-only; load the returned manual before acting on an unfamiliar domain.\n"
-    "pad: return pad-manual for system/pad.md and pinned Pad references.\n"
-    "lingtai: return lingtai-manual for system/lingtai.md (灵台 / character).\n"
-    "knowledge: return the knowledge manual for durable KNOWLEDGE.md entries.\n"
-    "skills: return the skills manual for the configured .library catalog.\n"
-    "settings: show Psyche's fully redacted settings view.\n"
-    "manual: return the psyche routing table."
+    "Choose one read-only Psyche route; every child takes strict input={}. "
+    "Routine inspection needs no manual reload; read the matching domain manual first "
+    "for unfamiliar or consequential work.\n"
+    "pad: Pad manual for system/pad.md and pinned references.\n"
+    "lingtai: identity manual for system/lingtai.md (灵台 / character).\n"
+    "knowledge: private KNOWLEDGE.md memory manual.\n"
+    "skills: .library catalog and configured-roots manual.\n"
+    "instructions: current loaded fixed instructions, including runtime and adapter rules; read on first orientation and before unfamiliar/consequential work, not routinely.\n"
+    "covenant: current effective Covenant body (not a manual or source reread).\n"
+    "settings: fully redacted applied-settings SHOW.\n"
+    "manual: Psyche routing table and shared mutation/rebuild model."
 )
 
 
-def _build_children(workdir: Any) -> list[ChildTool]:
+def _build_children(workdir: Any, covenant_reader: Any = None, instructions_reader: Any = None) -> list[ChildTool]:
     """Build the fixed manual-child registry for schema or bound dispatch."""
     children = [
         ChildTool(
@@ -71,7 +75,29 @@ def _build_children(workdir: Any) -> list[ChildTool]:
         )
         for action, manual_name in DOMAIN_MANUALS
     ]
-    return children + [build_manual_child(workdir, _ROUTER_MANUAL)]
+    def read_covenant(_args: dict[str, Any]) -> dict[str, Any]:
+        body = covenant_reader()
+        if not isinstance(body, str):
+            raise TypeError("Covenant body must be text")
+        return {"status": "ok", "covenant": body}
+
+    def read_instructions(_args: dict[str, Any]) -> dict[str, Any]:
+        body = instructions_reader()
+        if not isinstance(body, str):
+            raise TypeError("Instructions body must be text")
+        return {"status": "ok", "instructions": body}
+
+    return children + [
+        ChildTool(
+            name="instructions", input_schema=dict(MANUAL_INPUT_SCHEMA),
+            handler=read_instructions, title="instructions input",
+        ),
+        ChildTool(
+            name="covenant", input_schema=dict(MANUAL_INPUT_SCHEMA),
+            handler=read_covenant, title="covenant input",
+        ),
+        build_manual_child(workdir, _ROUTER_MANUAL),
+    ]
 
 
 def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
@@ -80,7 +106,7 @@ def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
         return ToolFamily("psyche", _build_children(None), settings_provider=tuple)
     return ToolFamily(
         "psyche",
-        _build_children(host.workdir),
+        _build_children(host.workdir, host.psyche_settings.read_covenant, host.psyche_settings.read_instructions),
         settings_provider=build_settings_provider(host.psyche_settings),
     )
 
@@ -91,15 +117,15 @@ _FAMILY = _build_family(None)
 
 def get_description(lang: str = "en") -> str:
     return (
-        "SIGNPOST ONLY: psyche routes four durable domains — pad, lingtai "
-        "(灵台), knowledge, and skills. Every action takes strict input={} and is "
-        "read-only; it never authors, edits, pins, installs, rescans, or loads "
-        "anything. Call manual first for an unfamiliar domain. Durable changes "
-        "use file.write for a full rewrite or file.edit for an exact replacement, "
-        "then one explicit context.rebuild (or passive refresh/molt); file "
-        "mutation never hot-loads the prompt. Psyche owns no lifecycle action: "
-        "context owns rebuild/molt and system owns identity. Results are exact; "
-        "leave root summarize false."
+        "Read-only: routes pad, lingtai (灵台), knowledge, and skills manuals, "
+        "returns the current effective Covenant body, with redacted settings "
+        "and manual guidance. Every action is read-only with strict input={}; it "
+        "never authors, edits, pins, installs, rescans, or reloads prompt state. "
+        "routine schema-sufficient calls need no manual reload, while unfamiliar "
+        "or consequential domain work should call the matching manual first. "
+        "Change durable sources with shell (verified exact edits), then one "
+        "context.rebuild (or refresh/molt); edits never hot-load. context owns "
+        "rebuild/molt and system owns lifecycle/names; leave root summarize false."
     )
 
 

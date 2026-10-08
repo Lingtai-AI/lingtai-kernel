@@ -30,7 +30,7 @@ project's Python.
 - **id**: AV001
 - **title**: spawn enforces the name grammar and the mission-quality gate; `action="rules"` and its automatic post-spawn fan-out are removed, not admin-gated
 - **guards**: `avatar-contract` § Tool surface
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch parent agent directory `<scratch>`; no live avatar of the probe name
 - **estimate**: ≈ 25 minutes
 
@@ -52,7 +52,7 @@ Pass when the suites pass and the gate observations hold. Fail on a malformed na
 - **id**: AV002
 - **title**: settings shows only immutable Avatar owner policy
 - **guards**: `avatar-contract` § `avatar` — `action="settings"`
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>` and no live avatar spawned by the probe
 - **estimate**: ≈ 10 minutes
 

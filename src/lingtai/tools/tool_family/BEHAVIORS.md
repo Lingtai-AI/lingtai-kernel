@@ -11,13 +11,11 @@ related_files:
   - src/lingtai/tools/tool_family/settings.py
   - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/intrinsic_skills/system-manual/reference/tool-plugin-settings/SKILL.md
-  - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/tools/avatar/settings.py
   - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/mcp/CONTRACT.md
   - src/lingtai/tools/email/CONTRACT.md
-  - tests/test_file_tool_family.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_tool_family_manual_contract.py
   - tests/test_tool_settings_contract.py
@@ -28,7 +26,8 @@ maintenance: |
   Written by the tool-family CONVERT_BEHAVIOR migration (2026-08). Keep in
   sync with the CONTRACT.md clauses this file guards and the ANATOMY.md entries
   for the generic ChildTool/ToolFamily infrastructure and the migrating
-  families (file, avatar, psyche, mcp, email). When a guarded contract changes
+  families (avatar, psyche, mcp, email; the former file family and its
+  T001-T003 LABTs were removed with it). When a guarded contract changes
   in a way that affects agent-observable behavior (envelope errors, receipts,
   settings SHOW inventory, manual result shape, identity projection, reply
   routing), update the matching LABT here in the same change. Each LABT is self-contained: an agent executes
@@ -39,173 +38,15 @@ maintenance: |
 LABT v1. These are self-contained agent-executable behavioral tests for the
 families built on the generic `src/lingtai/tools/tool_family/` infrastructure.
 They prove the *observable* promises of the family contracts this package
-serves: the `file` read/write/edit surface and its fail-closed envelope, the
-`avatar` spawn/settings/manual envelope (and the absence of the retired
+serves: the `avatar` spawn/settings/manual envelope (and the absence of the retired
 `rules` action), the reserved `manual` child's
 canonical result contract (no double wrap), the `psyche` five-manual router
 plus redacted Pad settings (pad + lingtai + knowledge + skills = psyche), `mcp` identity
 discovery with secret-safe projection, and `email` abs-mode reply routing with
 the #145 ambiguity guard. Low-level mechanics stay in pytest; each LABT below
-is executable verbatim by an agent with the tools it names.
-
-## Behavior T001 — file write/edit receipts are verbatim and mutating
-
-- **id**: T001
-- **title**: `file` write and edit return their own canonical receipts, apply
-  real mutations, and refuse ambiguous or absent edits without touching the file
-- **guards**: `file-contract` § Per-action behavior — write/edit
-  ([CONTRACT.md](../file/CONTRACT.md#per-action-behavior))
-- **supersedes**: `tests/test_file_tool_family.py` (write/edit receipt,
-  replace_all, and per-action error tests)
-- **runner**: any LingTai agent with the `file` tool
-- **prerequisites**: a scratch dir under your working dir (`<wd>`); no other
-  setup needed
-- **estimate**: 2 min
-
-### Steps
-1. Call `file(action="write", input={"file_path": "<wd>/scratch/a.txt",
-   "content": "one\ntwo\n"}, reasoning="...")`. Record the returned receipt.
-2. Call `file(action="read", input={"file_path": "<wd>/scratch/a.txt"},
-   reasoning="...")` and compare the file content with the written text.
-3. Call `file(action="edit", input={"file_path": "<wd>/scratch/a.txt",
-   "old_string": "two", "new_string": "2", "replace_all": null},
-   reasoning="...")`, then read the file back.
-4. Write `"x x x\n"` to `<wd>/scratch/many.txt`, then edit with
-   `old_string: "x"`, `new_string: "y"`, `replace_all: true`, and read back.
-5. Write `"dup dup\n"` to `<wd>/scratch/ambig.txt`, then edit
-   `old_string: "dup"`, `new_string: "x"` WITHOUT `replace_all`. Read the
-   returned result and then read the file back.
-6. On the same file, edit `old_string: "absent"`, `new_string: "x"` and read
-   the result.
-
-### Expected evidence
-- [ ] Step 1 returns exactly `{"status": "ok", "path": "<abs path of
-      scratch/a.txt>", "bytes": 8}` (bytes = UTF-8 length of `"one\ntwo\n"`).
-- [ ] Step 2 shows the file content is exactly `one\ntwo\n` (parent dirs were
-      created by write; the write mutated the tree).
-- [ ] Step 3 returns `{"status": "ok", "replacements": 1}` and the file now
-      reads `one\n2\n`.
-- [ ] Step 4 returns `{"status": "ok", "replacements": 3}` and the file now
-      reads `y y y\n` (replace_all counts every replacement).
-- [ ] Step 5 returns `{"status": "error", "message": "old_string found 2
-      times — use replace_all=true or provide more context"}` and the file
-      still reads `dup dup\n` (ambiguous edit mutates nothing).
-- [ ] Step 6 returns `{"status": "error", "message": "old_string not found in
-      <wd>/scratch/ambig.txt"}` and the file is still unchanged.
-- [ ] `file(action="read", input={})` and `file(action="write",
-      input={"file_path": "x"})` report `file_path is required` / `content is
-      required`; reading a missing path reports `File not found: <path>`.
-
-### Pass / Fail
-Pass when every evidence item holds. Fail if a receipt is wrapped in an extra
-envelope, a mutating call reports ok without changing the file, or an
-ambiguous/zero-match edit modifies the file. Forbidden side effect: a failed
-edit must never partially apply.
-
-## Behavior T002 — file read returns a numbered window with truthful truncation
-
-- **id**: T002
-- **title**: `file` read returns `cat -n`-style numbered lines and honest
-  continuation/line-truncation facts so a caller can page to the end
-- **guards**: `file-contract` § Per-action behavior — read
-  ([CONTRACT.md](../file/CONTRACT.md#per-action-behavior))
-- **supersedes**: `tests/test_file_tool_family.py` (read continuation and
-  line-truncation tests)
-- **runner**: any LingTai agent with the `file` tool
-- **prerequisites**: a scratch dir under `<wd>`
-- **estimate**: 2 min
-
-### Steps
-1. Write `<wd>/scratch/n.txt` with content `alpha\nbeta\n`, then call
-   `file(action="read", input={"file_path": "<wd>/scratch/n.txt"},
-   reasoning="...")`.
-2. Write `<wd>/scratch/big.txt` containing 20 lines `line0\n` .. `line19\n`,
-   then call read with `input={"file_path": "<wd>/scratch/big.txt",
-   "max_chars": 30}`. Record `next_offset` from the result, then call read
-   again with `input={"file_path": "<wd>/scratch/big.txt", "offset":
-   <next_offset>}`.
-3. Write `<wd>/scratch/long.txt` with content `"z" * 500 + "\nnext\n"`, then
-   call read with `max_chars: 50`.
-4. Write `<wd>/scratch/win.txt` with `L0\n` .. `L9\n`, then call read with
-   `input={"file_path": "<wd>/scratch/win.txt", "offset": 3, "limit": 2}`.
-
-### Expected evidence
-- [ ] Step 1: `content == "1\talpha\n2\tbeta\n"`, `total_lines == 2`,
-      `lines_shown == 2`, and no `truncated` key (defaults: offset 1, limit
-      2000, max_chars 100 000).
-- [ ] Step 2 first call: `truncated == true`, `cap_chars == 30`,
-      `requested_offset == 1`, `remaining_lines_estimate > 0`, no
-      `line_truncated`, and `next_offset` present; the resumed call's `content`
-      starts with `"<next_offset>\t"` and carries no `truncated` key.
-- [ ] Step 3: `truncated == true`, `line_truncated == true`, the returned
-      `content` is exactly 50 chars (a bounded prefix), and `next_offset == 2`
-      (the hidden tail of the over-cap line is NOT recoverable; the next page
-      starts at the next physical line).
-- [ ] Step 4: `content == "3\tL2\n4\tL3\n"` and `total_lines == 10` (offset
-      and limit select the window).
-
-### Pass / Fail
-Pass when every evidence item holds. Fail if line numbers are wrong, a
-mid-file cap omits the continuation fields, or a page falsely claims to be
-complete when it is truncated. Forbidden side effect: read must never mutate
-the file or any state.
-
-## Behavior T003 — file envelope is fail-closed before I/O; manual is no-I/O
-
-- **id**: T003
-- **title**: `file` rejects unknown actions, cross-action input, malformed
-  envelope fields, and non-empty manual input before any handler I/O, and
-  `manual` returns the canonical body+path with no side effects
-- **guards**: `file-contract` § Tool surface / § Manual / § Risk posture
-  ([CONTRACT.md](../file/CONTRACT.md#tool-surface))
-- **supersedes**: `tests/test_file_tool_family.py` (envelope, rejection, and
-  manual tests)
-- **runner**: any LingTai agent with the `file` tool
-- **prerequisites**: a scratch dir under `<wd>`
-- **estimate**: 2 min
-
-### Steps
-1. List every file under `<wd>` with `file(action="glob", input={"pattern":
-   "**/*", "path": "<wd>"}, reasoning="...")` and record the match set.
-2. Call `file(action="delete", input={}, reasoning="...")` (unknown action).
-3. Call `file(action="read", input={"file_path": "x", "offset": null,
-   "limit": null, "max_chars": null, "content": "smuggled"},
-   reasoning="...")` (a key from another action's branch).
-4. Call `file(action="read", input="not-an-object", reasoning="...")`, then
-   `file(action="manual", input={}, reasoning="...", parameters={})`, then
-   `file(action="manual", input={}, reasoning="...", summarize="yes")`.
-5. Call `file(action="manual", input={}, reasoning="...")`. From the result,
-   record `structuredContent.manual_path`, then read that exact path with the
-   `file` tool and compare it with `content[0].text`.
-6. Call `file(action="manual", input={"file_path": "/etc/passwd"},
-   reasoning="...")`, then list every file under `<wd>` again.
-
-### Expected evidence
-- [ ] Step 2 returns `{"status": "failed", "error_code": "ACTION_REQUIRED",
-      "message": "action must be one of read, write, edit, glob, grep,
-      manual"}`.
-- [ ] Step 3 returns `{"status": "failed", "error_code": "INVALID_ARGUMENT",
-      "message": "unsupported file input field"}` and no read/write/glob/grep
-      I/O ran (the smuggled `content` never reached a handler).
-- [ ] Step 4: non-object `input` and the unknown root field `parameters` fail
-      with `error_code: "INVALID_ARGUMENT"`; `summarize: "yes"` fails with
-      `error_code: "INVALID_ARGUMENT"` and `message: "summarize must be a
-      boolean"`.
-- [ ] Step 5: the manual result has exactly the keys `status`, `content`,
-      `structuredContent`; `status == "ok"`; `content[0].text` is the full
-      body and starts with `name: file-manual`; `structuredContent.manual_path`
-      ends with `capabilities/file/SKILL.md`; the file at that path
-      equals the body (the dispatched result is the canonical child result,
-      verbatim, no double wrap).
-- [ ] Step 6: any non-empty manual `input` fails with
-      `error_code: "INVALID_ARGUMENT"` (strict empty input), and the glob
-      match set is identical to step 1 (manual performed no target I/O).
-
-### Pass / Fail
-Pass when every evidence item holds. Fail if an envelope error is missing, a
-cross-action key reaches a handler, or `manual` reads/writes any file other
-than its own manual. Forbidden side effect: any rejected call must leave the
-tree untouched.
+is executable verbatim by an agent with the tools it names. T001-T003 guarded
+the former `file` family and were deleted with it; the ids are retired, not
+reused.
 
 ## Behavior T004 — avatar spawn envelope: dry-run, mission gate, receipts
 
@@ -341,28 +182,28 @@ a result of an `avatar` call.
 - **guards**: `tool-family` § Contract rules — `build_manual_child`
   ([CONTRACT.md](CONTRACT.md#contract-rules))
 - **supersedes**: `tests/test_tool_family_manual_contract.py`
-- **runner**: any LingTai agent with the `file` and `avatar` tools
-- **prerequisites**: `<wd>` and the `file`/`avatar` capabilities; no other
-  setup (the generic manual child is exercised through `file`, the
-  self-owned manual child through `avatar`)
+- **runner**: any LingTai agent with the `daemon`, `shell`, and `avatar` tools
+- **prerequisites**: `<wd>` and the `daemon`/`avatar` capabilities; no other
+  setup (the generic manual child is exercised through `daemon`, which
+  registers `build_manual_child` directly and returns its canonical result
+  verbatim; the self-owned manual child through `avatar`)
 - **estimate**: 1 min
 
 ### Steps
-1. Call `file(action="manual", input={}, reasoning="...")`; record `status`,
+1. Call `daemon(action="manual", input={}, reasoning="...")`; record `status`,
    `content[0].text`, and `structuredContent.manual_path`; read the path with
-   `file(action="read", ...)`.
-2. Call `file(action="manual", input={"file_path": "/etc/passwd"},
-   reasoning="...")` and `avatar(action="manual", input={"name": "x"},
-   reasoning="...")`.
+   `shell` (for example `cat -- "<manual_path>"`, output bounded as needed).
+2. Call `daemon(action="manual", input={"id": "x"}, reasoning="...")` and
+   `avatar(action="manual", input={"name": "x"}, reasoning="...")`.
 3. Call `avatar(action="manual", input={}, reasoning="...")` and compare its
    `manual` field with the packaged `src/lingtai/tools/avatar/manual/SKILL.md`.
 
 ### Expected evidence
 - [ ] Step 1: `status == "ok"`; the result keys are exactly `status`,
-      `content`, `structuredContent`; `content[0].text` is the full
-      `file-manual` body (`name: file-manual` frontmatter) and equals the file
-      read from `structuredContent.manual_path`; the path ends with
-      `capabilities/file/SKILL.md`.
+      `content`, `structuredContent`; `content[0].text` is the full installed
+      daemon manual body and equals the file read from
+      `structuredContent.manual_path`; the path ends with
+      `capabilities/daemon/SKILL.md`.
 - [ ] Step 2: every non-empty `input` on a strict-empty manual child fails
       with `error_code: "INVALID_ARGUMENT"` before the manual is loaded.
 - [ ] Step 3: avatar's manual returns its own flat shape `{status, action,
@@ -389,7 +230,7 @@ second time, or a manual call performs any target I/O.
   ([CONTRACT.md](../psyche/CONTRACT.md#port))
 - **supersedes**: `tests/test_psyche_family.py` (inventory, routing,
   read-only, and retired-root tests)
-- **runner**: any LingTai agent (the `psyche` intrinsic is mandatory)
+- **runner**: any LingTai agent with `shell` (the `psyche` intrinsic is mandatory)
 - **prerequisites**: a fresh `<wd>` whose `.library/intrinsic/capabilities/`
   holds the installed manuals `pad-manual`, `lingtai-manual`, `knowledge`,
   `skills`, and `psyche-manual` (installed by the agent initializer)
@@ -397,7 +238,7 @@ second time, or a manual call performs any target I/O.
 
 ### Steps
 1. Record a baseline listing of every file under `<wd>` with
-   `file(action="glob", input={"pattern": "**/*", "path": "<wd>"},
+   `shell(action="run", input={"command": "find <wd> -type f | sort"},
    reasoning="...")`.
 2. For each action `a` in `["pad", "lingtai", "knowledge", "skills",
    "manual"]`, call `psyche(action="<a>", input={}, reasoning="...")` and
@@ -411,7 +252,8 @@ second time, or a manual call performs any target I/O.
 6. Call `psyche(action="pad_edit", input={}, reasoning="...")`, then
    `psyche(action="", input={}, reasoning="...")`, then `psyche(action=
    "manual", input={"files": ["x"]}, reasoning="...")`.
-7. Glob `<wd>` again and compare with the step 1 baseline.
+7. List `<wd>` again with the same `shell` command and compare with the step 1
+   baseline.
 
 ### Expected evidence
 - [ ] Step 2: every action returns `{"status": "ok", "manual": <non-empty
@@ -422,15 +264,16 @@ second time, or a manual call performs any target I/O.
       repeated calls return byte-identical bodies (no stateful side effect).
 - [ ] Step 3: the `manual` body is the routing table — it contains
       `action="pad"`, `action="lingtai"`, `action="knowledge"`,
-      `action="skills"`, plus `file.write`, `file.edit`, and
-      `context(action="rebuild"`.
+      `action="skills"`, plus `shell` as the durable-mutation route and
+      `context(action="rebuild"`; it teaches no `file.write`/`file.edit`.
 - [ ] Step 4: the `knowledge` body contains `psyche(action="knowledge"`,
-      `file(action="write"`, and `context(action="rebuild"`; the `skills`
+      `shell(action="run"`, and `context(action="rebuild"`; the `skills`
       body contains `psyche(action="skills"`, `context(action="rebuild"`,
-      `shell(action="run"`, `file(action="read"`, `system(action="refresh"`,
+      `shell(action="run"`, `system(action="refresh"`,
       and `"revert_preset": null`. Neither body teaches a retired public root
       (`pad(action=`, `lingtai(action=`, `knowledge(action=`, `skills(action=`,
-      `substrate(action=`) nor `pad.append` / `knowledge.info` / `skills.info`.
+      `substrate(action=`, `file(action=`) nor `pad.append` / `knowledge.info`
+      / `skills.info`.
 - [ ] Step 5: success is exactly `pad`, then `pad_file`; each row contains
       exactly `key`, `current`, `default`, `configurable`, `comment` in that
       order, both values are `<redacted>`, both rows are configurable, and the
@@ -444,7 +287,7 @@ second time, or a manual call performs any target I/O.
       `Unknown psyche action: ...` shape; any `input` key fails with
       `{"error_code": "INVALID_ARGUMENT", "message": "unsupported psyche
       input field"}` before the selected child runs.
-- [ ] Step 7: the glob match set is identical to the baseline — no `psyche`
+- [ ] Step 7: the file listing is identical to the baseline — no `psyche`
       action created, edited, or deleted any file (every action is read-only).
 
 ### Pass / Fail
@@ -465,17 +308,18 @@ state.
   (identity attached only when present; secrets stripped)
   ([CONTRACT.md](../mcp/CONTRACT.md#tool-surface))
 - **supersedes**: `tests/test_mcp_identity_discovery.py`
-- **runner**: any LingTai agent with the `mcp` capability and the `file` tool
+- **runner**: any LingTai agent with the `mcp` capability and the `shell` tool
 - **prerequisites**: `<wd>` is the agent working dir; the per-agent registry
   `<wd>/mcp_registry.jsonl` already contains a server named `telegram` (e.g.
   via `init.json` `addons: ["telegram"]` boot-time decompression, or an
-  existing registry entry); the `file` tool for writing identity files
+  existing registry entry); the `shell` tool for writing identity files
+  (`mkdir -p` the directory, then write with a quoted heredoc and `cat` the
+  file back to verify)
 - **estimate**: 2 min
 
 ### Steps
-1. Write `<wd>/system/mcp_identities/telegram.json` with
-   `file(action="write", input={"file_path": "<wd>/system/mcp_identities/
-   telegram.json", "content": "<identity JSON>"}, reasoning="...")` where the
+1. Write `<wd>/system/mcp_identities/telegram.json` with `shell` (verify the
+   written bytes by reading the file back) where the
    JSON is `{"schema": "lingtai.mcp.identity.v1", "mcp": "telegram",
    "generated_at": "2026-06-24T10:00:00+00:00", "accounts": [{"alias":
    "main", "bot_username": "my_agent_bot", "bot_id": 123456789,
@@ -525,7 +369,7 @@ Forbidden side effect: `mcp` must never write or modify
   Cross-platform invariants (`mode='abs'` return route)
   ([CONTRACT.md](../email/CONTRACT.md#anchored-claims))
 - **supersedes**: `tests/test_email_abs_reply_route.py`
-- **runner**: any LingTai agent with the `email` and `file` tools
+- **runner**: any LingTai agent with the `email` and `shell` tools
 - **prerequisites**: `<wd>` is the agent working dir; the mailbox dirs
   `mailbox/inbox/`, `mailbox/sent/`, `mailbox/archive/` exist (created by the
   email capability); an original-sender absolute path `<abs-sender>` (e.g. a
@@ -539,9 +383,9 @@ Forbidden side effect: `mcp` must never write or modify
    "abs", "subject": "hi", "message": "ping"}, reasoning="...")` (abs
    mode). For each call, find the newest record under `<wd>/mailbox/sent/` and
    read its `message.json`.
-2. Craft an inbound message: `file(action="write", input={"file_path":
-   "<wd>/mailbox/inbox/<uuid>/message.json", "content": <JSON>},
-   reasoning="...")` where `<uuid>` is a fresh id and the JSON is `{
+2. Craft an inbound message: with `shell`, `mkdir -p
+   <wd>/mailbox/inbox/<uuid>` and write `message.json` there via a quoted
+   heredoc (read it back to verify), where `<uuid>` is a fresh id and the JSON is `{
    "from": "mimo-1", "to": ["mimo-1"], "subject": "cross-project ping",
    "message": "please reply", "received_at": "2026-06-24T10:00:00Z",
    "identity": {"agent_name": "mimo-1", "agent_id": "AGENT-DEV-1",
@@ -639,7 +483,7 @@ new snapshot/summary/session state.
 - **title**: settings SHOW is redaction-safe, bounded, and read-only
 - **guards**: tool-family § [Optional settings provider](CONTRACT.md#optional-settings-provider)
   and § [Contract rules](CONTRACT.md#contract-rules)
-- **runner**: any LingTai agent with shell and file access to a clean checkout
+- **runner**: any LingTai agent with shell access to a clean checkout
 - **prerequisites**: a clean checkout; a working .venv/
 - **estimate**: ≈ 1 minute
 

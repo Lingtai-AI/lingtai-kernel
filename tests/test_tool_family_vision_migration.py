@@ -534,7 +534,7 @@ def test_every_taught_manual_pointer_round_trips_through_the_dispatcher(tmp_path
     # `manual_reason` literal assigned in setup().
     source = Path("src/lingtai/tools/vision/__init__.py").read_text(encoding="utf-8")
     taught = re.findall(r"vision\(action='manual'([^)]*)\)", source)
-    assert len(taught) >= 18, f"expected every guidance string, found {len(taught)}"
+    assert len(taught) >= 17, f"expected every guidance string, found {len(taught)}"
 
     for suffix in taught:
         assert "input={}" in suffix.replace("{{}}", "{}"), (
@@ -755,24 +755,24 @@ def test_root_summarize_reaches_the_single_centralized_summarizer(tmp_path):
 
 
 def _write_preset_borrow_fixture(tmp_path: Path) -> dict:
-    """Write init.json (allowed preset) plus a borrowable codex-pool preset file.
+    """Write init.json (allowed preset) plus a borrowable codex preset file.
 
     Returns the manifest dict mirrored in init.json for assertions.
     """
     preset_dir = tmp_path / "presets"
     preset_dir.mkdir(parents=True, exist_ok=True)
-    (preset_dir / "codex-pool.json").write_text(
+    (preset_dir / "codex.json").write_text(
         """{
-          "name": "codex-pool",
+          "name": "codex",
           "description": {"summary": "fixture preset with gpt-5.6 vision"},
           "manifest": {
             "llm": {
-              "provider": "codex-pool",
+              "provider": "codex",
               "model": "gpt-5.6",
               "base_url": "https://example.test/v1"
             },
             "capabilities": {
-              "vision": {"provider": "codex-pool"}
+              "vision": {"provider": "codex"}
             }
           }
         }
@@ -780,7 +780,7 @@ def _write_preset_borrow_fixture(tmp_path: Path) -> dict:
         encoding="utf-8",
     )
     manifest = {
-        "preset": {"allowed": ["presets/codex-pool.json"]},
+        "preset": {"allowed": ["presets/codex.json"]},
     }
     (tmp_path / "init.json").write_text(
         '{"manifest": ' + __import__("json").dumps(manifest) + "}",
@@ -789,10 +789,38 @@ def _write_preset_borrow_fixture(tmp_path: Path) -> dict:
     return manifest
 
 
+def test_preset_borrow_binds_the_presets_own_codex_auth_path(tmp_path, monkeypatch):
+    """A borrowed ``codex`` preset binds its own ``codex_auth_path`` (trimmed),
+    never the default token file.
+
+    Regression: the preset identity shim carried an empty provider-default
+    bucket, so the preset's own account was ignored.
+    """
+    import json
+
+    monkeypatch.setenv("LINGTAI_TUI_DIR", str(tmp_path / "tui"))
+    _write_preset_borrow_fixture(tmp_path)
+    preset_file = tmp_path / "presets" / "codex.json"
+    preset = json.loads(preset_file.read_text(encoding="utf-8"))
+    preset["manifest"]["llm"]["codex_auth_path"] = "  /tmp/preset-own-account.json  "
+    preset_file.write_text(json.dumps(preset), encoding="utf-8")
+    borrowed = MagicMock(spec=VisionService)
+
+    with patch(
+        "lingtai.services.vision.create_vision_service", return_value=borrowed
+    ) as mock_factory:
+        mgr = _manager(tmp_path, _never_called_service())
+        svc, reason, _identity = mgr._build_service_from_preset("presets/codex.json")
+
+    assert svc is borrowed
+    assert reason == ""
+    assert mock_factory.call_args.kwargs["token_path"] == "/tmp/preset-own-account.json"
+
+
 def test_preset_borrow_rejects_a_preset_not_in_manifest_allowed(tmp_path):
     # No init.json at all -> cannot resolve allowed, borrow fails closed.
     mgr = _manager(tmp_path, _never_called_service())
-    svc, reason, identity = mgr._build_service_from_preset("presets/codex-pool.json")
+    svc, reason, identity = mgr._build_service_from_preset("presets/codex.json")
     assert svc is None
     assert identity == {}
     assert "manifest.preset.allowed" in reason
@@ -809,7 +837,7 @@ def test_preset_borrow_rejects_unlisted_preset_when_init_exists(tmp_path):
 
 def test_preset_borrow_resolves_the_listed_presets_own_identity(tmp_path):
     """The borrowed preset's llm/capabilities feed an identity shim, so the
-    codex-pool preset selects its own route instead of the active provider's."""
+    codex preset selects its own route instead of the active provider's."""
     _write_preset_borrow_fixture(tmp_path)
 
     borrowed = MagicMock(spec=VisionService)
@@ -817,22 +845,22 @@ def test_preset_borrow_resolves_the_listed_presets_own_identity(tmp_path):
 
     with patch(
         "lingtai.tools.vision._resolve_direct_service",
-        return_value=(borrowed, "", vision_tool._VisionRouteProvenance()),
+        return_value=(borrowed, ""),
     ) as mock_resolve:
         mgr = _manager(tmp_path, _never_called_service())
-        svc, reason, identity = mgr._build_service_from_preset("presets/codex-pool.json")
+        svc, reason, identity = mgr._build_service_from_preset("presets/codex.json")
 
     assert svc is borrowed
     assert reason == ""
-    assert identity == {"provider": "codex-pool", "model": "gpt-5.6", "base_url": "https://example.test/v1"}
+    assert identity == {"provider": "codex", "model": "gpt-5.6", "base_url": "https://example.test/v1"}
     mock_resolve.assert_called_once()
     kwargs = mock_resolve.call_args.kwargs
     identity = kwargs["identity_service"]
     # ``provider`` is consumed positionally; the capability's provider copy is
     # dropped before the call (regression: duplicate keyword -> TypeError).
-    assert mock_resolve.call_args.args[2] == "codex-pool"
+    assert mock_resolve.call_args.args[2] == "codex"
     assert "provider" not in kwargs
-    assert identity.provider == "codex-pool"
+    assert identity.provider == "codex"
     assert identity._model == "gpt-5.6"
     assert identity._base_url == "https://example.test/v1"
 
@@ -848,7 +876,7 @@ def test_analyze_with_preset_option_uses_the_borrowed_service(tmp_path):
 
     with patch(
         "lingtai.tools.vision._resolve_direct_service",
-        return_value=(borrowed, "", vision_tool._VisionRouteProvenance()),
+        return_value=(borrowed, ""),
     ):
         mgr = _manager(tmp_path, _never_called_service())
         result = mgr.handle(
@@ -857,9 +885,9 @@ def test_analyze_with_preset_option_uses_the_borrowed_service(tmp_path):
                 "input": {
                     "image_path": str(img),
                     "question": "What color?",
-                    "preset": "presets/codex-pool.json",
+                    "preset": "presets/codex.json",
                 },
-                "reasoning": "borrow codex-pool vision",
+                "reasoning": "borrow codex vision",
             }
         )
     assert result == {"status": "ok", "analysis": "borrowed answer"}
@@ -917,7 +945,7 @@ def test_check_default_route_reports_ok_without_image(tmp_path):
     svc.analyze_image.side_effect = AssertionError("check must not call analyze_image")
     agent = _StubAgent(tmp_path)
     agent.service = MagicMock()
-    agent.service.provider = "codex-pool"
+    agent.service.provider = "codex"
     agent.service.model = "gpt-5.6"
     mgr = _bound_manager(agent, service=svc)
 
@@ -927,7 +955,7 @@ def test_check_default_route_reports_ok_without_image(tmp_path):
     assert result == {
         "status": "ok",
         "route": "default",
-        "provider": "codex-pool",
+        "provider": "codex",
         "model": "gpt-5.6",
     }
     svc.analyze_image.assert_not_called()
@@ -954,19 +982,19 @@ def test_check_preset_reports_identity_without_image(tmp_path):
 
     with patch(
         "lingtai.tools.vision._resolve_direct_service",
-        return_value=(borrowed, "", vision_tool._VisionRouteProvenance()),
+        return_value=(borrowed, ""),
     ):
         mgr = _manager(tmp_path, _never_called_service())
         result = mgr.handle(
             {
                 "action": "check",
-                "input": {"preset": "presets/codex-pool.json"},
-                "reasoning": "check codex-pool vision",
+                "input": {"preset": "presets/codex.json"},
+                "reasoning": "check codex vision",
             }
         )
     assert result["status"] == "ok"
-    assert result["route"] == "preset:presets/codex-pool.json"
-    assert result["provider"] == "codex-pool"
+    assert result["route"] == "preset:presets/codex.json"
+    assert result["provider"] == "codex"
     assert result["model"] == "gpt-5.6"
     borrowed.analyze_image.assert_not_called()
 
@@ -988,50 +1016,44 @@ def test_check_unlisted_preset_fails_sanitized(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# borrow regression: capabilities.vision declares provider (real codex-pool
+# borrow regression: capabilities.vision declares provider (real codex
 # preset shape) and list action: mechanical route enumeration
 # ---------------------------------------------------------------------------
 
 
 def test_preset_borrow_with_vision_capability_provider_does_not_raise_type_error(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
     """A preset whose ``capabilities.vision`` declares ``provider`` (the real
-    codex-pool preset shape) must be borrowable without a TypeError.
+    codex preset shape) must be borrowable without a TypeError.
 
     Regression: ``_build_service_from_preset`` copied ``vision_cap`` into
     ``kwargs`` and then called ``_resolve_direct_service(provider, ...,
     **kwargs)``, so ``provider`` was bound twice and every borrow of such a
     preset raised ``TypeError: _resolve_direct_service() got multiple values
     for argument 'provider'``. The real resolver must run here (only the
-    low-level factory and pool selector are stubbed), proving the fix inside
+    low-level factory is stubbed), proving the fix inside
     ``_build_service_from_preset`` is exercised end to end.
     """
-    from lingtai.auth.codex_account_source import AccountCandidate
+    from lingtai.auth.codex import default_codex_token_path
 
+    # The borrowed codex preset configures no ``codex_auth_path``, so it binds
+    # the default Codex token file; keep that under a disposable TUI dir.
+    monkeypatch.setenv("LINGTAI_TUI_DIR", str(tmp_path / "tui"))
     _write_preset_borrow_fixture(tmp_path)
     borrowed = MagicMock(spec=VisionService)
     borrowed.analyze_image.return_value = "borrowed gpt-5.6 answer"
-    selected = AccountCandidate(
-        auth_ref="/tmp/borrow-pool.json",
-        source_ref="pool.json",
-        source_index=0,
-        weight=1,
-    )
 
     with patch(
         "lingtai.services.vision.create_vision_service", return_value=borrowed
-    ) as mock_factory, patch(
-        "lingtai.auth.codex_account_source.WeightedAccountSource.select",
-        return_value=selected,
-    ):
+    ) as mock_factory:
         mgr = _manager(tmp_path, _never_called_service())
-        svc, reason, identity = mgr._build_service_from_preset("presets/codex-pool.json")
+        svc, reason, identity = mgr._build_service_from_preset("presets/codex.json")
 
         assert svc is borrowed
         assert reason == ""
         assert identity == {
-            "provider": "codex-pool",
+            "provider": "codex",
             "model": "gpt-5.6",
             "base_url": "https://example.test/v1",
         }
@@ -1039,19 +1061,21 @@ def test_preset_borrow_with_vision_capability_provider_does_not_raise_type_error
         # consumed positionally by ``_resolve_direct_service``.
         assert mock_factory.call_args.args == ("codex",)
         assert "provider" not in mock_factory.call_args.kwargs
+        assert mock_factory.call_args.kwargs["token_path"] == str(default_codex_token_path())
+        assert mock_factory.call_args.kwargs["token_path"].startswith(str(tmp_path / "tui"))
 
         # check through the public dispatcher resolves the borrowed route.
         check_result = mgr.handle(
             {
                 "action": "check",
-                "input": {"preset": "presets/codex-pool.json"},
+                "input": {"preset": "presets/codex.json"},
                 "reasoning": "verify the borrowed route",
             }
         )
         assert check_result == {
             "status": "ok",
-            "route": "preset:presets/codex-pool.json",
-            "provider": "codex-pool",
+            "route": "preset:presets/codex.json",
+            "provider": "codex",
             "model": "gpt-5.6",
         }
         borrowed.analyze_image.assert_not_called()
@@ -1066,9 +1090,9 @@ def test_preset_borrow_with_vision_capability_provider_does_not_raise_type_error
                 "input": {
                     "image_path": str(img),
                     "question": None,
-                    "preset": "presets/codex-pool.json",
+                    "preset": "presets/codex.json",
                 },
-                "reasoning": "borrow codex-pool vision",
+                "reasoning": "borrow codex vision",
             }
         )
         assert analyze_result == {"status": "ok", "analysis": "borrowed gpt-5.6 answer"}
@@ -1079,22 +1103,22 @@ def test_preset_borrow_with_vision_capability_provider_does_not_raise_type_error
 
 def _write_list_fixture(tmp_path: Path) -> None:
     """Write init.json (one absolute allowed ref) plus two presets on disk: a
-    vision-capable codex-pool preset that is allowed, and a text-only preset
+    vision-capable codex preset that is allowed, and a text-only preset
     that is NOT in manifest.preset.allowed and must never be enumerated (the
     mechanical ``list`` never reaches past the authorization boundary)."""
-    vision_preset = tmp_path / "presets" / "codex-pool.json"
+    vision_preset = tmp_path / "presets" / "codex.json"
     vision_preset.parent.mkdir(parents=True, exist_ok=True)
     vision_preset.write_text(
         """{
-          "name": "codex-pool",
+          "name": "codex",
           "description": {"summary": "fixture preset with gpt-5.6 vision"},
           "manifest": {
             "llm": {
-              "provider": "codex-pool",
+              "provider": "codex",
               "model": "gpt-5.6"
             },
             "capabilities": {
-              "vision": {"provider": "codex-pool"}
+              "vision": {"provider": "codex"}
             }
           }
         }
@@ -1108,8 +1132,8 @@ def _write_list_fixture(tmp_path: Path) -> None:
           "description": {"summary": "fixture preset without vision"},
           "manifest": {
             "llm": {
-              "provider": "gemini",
-              "model": "gemini-2.5-pro"
+              "provider": "anthropic",
+              "model": "claude-opus-4.1"
             }
           }
         }
@@ -1153,8 +1177,8 @@ def test_list_action_enumerates_default_route_and_vision_capable_presets(tmp_pat
     # preset on disk is not in manifest.preset.allowed and never appears.
     assert len(result["presets"]) == 1
     entry = result["presets"][0]
-    assert entry["preset"].endswith("presets/codex-pool.json")
-    assert entry["provider"] == "codex-pool"
+    assert entry["preset"].endswith("presets/codex.json")
+    assert entry["provider"] == "codex"
     assert entry["model"] == "gpt-5.6"
     assert entry["endpoint"] == "responses"
     assert entry["responses_vision"] is True
@@ -1173,15 +1197,15 @@ def test_list_action_dedupes_tilde_and_absolute_aliases_of_one_preset(
     manifest spelling, which is exactly what ``analyze``/``check`` accept.
     """
     home = tmp_path / "home"
-    preset = home / "presets" / "codex-pool.json"
+    preset = home / "presets" / "codex.json"
     preset.parent.mkdir(parents=True)
     preset.write_text(
         """{
-          "name": "codex-pool",
+          "name": "codex",
           "description": {"summary": "fixture preset with gpt-5.6 vision"},
           "manifest": {
-            "llm": {"provider": "codex-pool", "model": "gpt-5.6"},
-            "capabilities": {"vision": {"provider": "codex-pool"}}
+            "llm": {"provider": "codex", "model": "gpt-5.6"},
+            "capabilities": {"vision": {"provider": "codex"}}
           }
         }
         """,
@@ -1190,7 +1214,7 @@ def test_list_action_dedupes_tilde_and_absolute_aliases_of_one_preset(
     # ``Path.expanduser`` reads HOME on POSIX and USERPROFILE on Windows.
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
-    tilde_ref = "~/presets/codex-pool.json"
+    tilde_ref = "~/presets/codex.json"
     assert Path(tilde_ref).expanduser() == preset
     manifest = {"preset": {"allowed": [tilde_ref, str(preset)]}}
     (tmp_path / "init.json").write_text(
@@ -1215,7 +1239,7 @@ def test_list_action_dedupes_tilde_and_absolute_aliases_of_one_preset(
     entry = result["presets"][0]
     # The surviving row is the first declared spelling of that physical file.
     assert entry["preset"] == tilde_ref
-    assert entry["provider"] == "codex-pool"
+    assert entry["provider"] == "codex"
     assert entry["model"] == "gpt-5.6"
     assert entry["endpoint"] == "responses"
 
@@ -1224,15 +1248,19 @@ def test_list_action_dedupes_tilde_and_absolute_aliases_of_one_preset(
     ("provider", "expected_endpoint", "expected_responses"),
     [
         ("codex", "responses", True),
-        ("codex-pool", "responses", True),
-        ("codex_pool", "responses", True),
+        # The removed in-kernel pool spellings are no longer Codex vision routes.
+        ("codex-pool", "unknown", False),
+        ("codex_pool", "unknown", False),
         ("claude-code", "claude-cli", False),
         ("claude-p", "claude-cli", False),
         ("local", "openai-compatible-local", False),
         ("mlx", "mlx-on-device", False),
         ("openai", "provider-service", False),
-        ("gemini", "provider-service", False),
-        ("GEMINI", "provider-service", False),
+        ("anthropic", "provider-service", False),
+        ("ANTHROPIC", "provider-service", False),
+        # Removed LLM providers have no vision route.
+        ("gemini", "unknown", False),
+        ("claude_code", "unknown", False),
         (None, "unknown", False),
         ("", "unknown", False),
     ],

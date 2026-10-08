@@ -20,13 +20,16 @@ related_files:
   - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md
   - src/lingtai/intrinsic_skills/pad-manual/SKILL.md
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/read-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/goal-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/project-move/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/agent-name-move/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/move_project.py
   - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/subs-pool/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/refresh-precheck/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
@@ -36,6 +39,7 @@ related_files:
   - src/lingtai/intrinsic_skills/system-manual/reference/trajectory-mining/SKILL.md
   - tests/test_intrinsic_manual_actions.py
   - tests/test_lingtai_doctor.py
+  - tests/test_move_project.py
   - tests/test_override_intrinsic.py
   - src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/scripts/external_attach_diagnostic.py
@@ -64,13 +68,24 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
 
 - `__init__.py` — the package marker that states the contract above: one
   subdirectory per bundle, copied verbatim, for skills without companion code.
-- `system-manual/` — the largest bundle: the `system` family manual plus ten
+- `system-manual/` — the largest bundle: the `system` family manual plus
   `reference/` sub-skills (`environment-variables`, `goal-manual`,
-  `how-to-change-name`, `llm-adapters`, `procedures-manual`,
+  `migration-guide`, `llm-adapters`, `procedures-manual`,
   `refresh-precheck`, `runtime-update-checks`, `sqlite-log-query`,
-  `substrate-manual`, `trajectory-mining`). Two of them
-  ship executable helpers — `how-to-change-name/scripts/change_name.py` and
-  `sqlite-log-query/scripts/event_summary.py`. This bundle remains the
+  `subs-pool`, `substrate-manual`, `trajectory-mining`). `subs-pool` is a
+  pointer to the external Codex account pool (LingTai has none built in). Migration-guide is a short common
+  router; its nested `agent-name-move` and `project-move` references own the
+  separate helper contracts. The Agent-name helper owns one planned,
+  fenced same-parent cutover
+  (`src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py:563-974`);
+  `src/lingtai/cli.py:242-266` owns
+  its early incomplete-target launch gate, with unit/CLI/real-process evidence
+  in `tests/test_how_to_change_name.py:501-579`, `tests/test_cli.py:843-876`, and
+  `tests/test_how_to_change_name_e2e.py:88-224`. The migration guide owns the
+  procedure and acceptance boundary. The Project-root helper retains
+  its root lifecycle and temporary-process proofs in
+  `src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/move_project.py:1-704`
+  and `tests/test_move_project.py:1-864`; sqlite-log-query ships `scripts/event_summary.py`. This bundle remains the
   canonical System operational manual: the declared official `system` family
   derives its reserved `manual` child from `DECLARATION.manual ==
   "system-manual"` (`src/lingtai/tools/system/__init__.py`), and no second
@@ -82,8 +97,8 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   `scripts/bench_agent_session_rebuild.py`.
 - `lingtai-doctor/` — read-only health diagnostics for agents and bots, with a
   bundled `scripts/doctor.py` for layered local checks that expose no secrets.
-- Single-file bundles — `lingtai-manual/`, `pad-manual/`, `psyche-manual/`, and
-  `read-manual/`, each one `SKILL.md` documenting its namesake surface.
+- Single-file bundles — `lingtai-manual/`, `pad-manual/`, and `psyche-manual/`,
+  each one `SKILL.md` documenting its namesake surface.
 
 ## Connections
 

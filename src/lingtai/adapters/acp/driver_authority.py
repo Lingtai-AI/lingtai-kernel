@@ -74,6 +74,7 @@ class DriverAuthorityIdentity:
     role: str
     launch_id: str
     capability: str | None
+    runtime_id: str | None = None
 
 
 class DriverChildEndpointLease:
@@ -477,13 +478,16 @@ class DriverAuthorityClient(ProviderCallAdmissionPort):
         if not DriverAuthorityClient._has_protocol_version(response):
             raise DriverAuthorityTransportError("authority protocol version mismatch")
         role, launch_id, capability = response.get("role"), response.get("launch_id"), response.get("capability")
+        runtime_id = response.get("runtime_id")
         if role not in {"root", "derived"} or not isinstance(launch_id, str) or not launch_id:
             raise DriverAuthorityTransportError("authority hello identity is invalid")
         if capability is not None and capability not in {item.value for item in DerivedLaunchCapability}:
             raise DriverAuthorityTransportError("authority hello capability is invalid")
         if (role == "root") != (capability is None):
             raise DriverAuthorityTransportError("authority hello role/capability mismatch")
-        return DriverAuthorityIdentity(role, launch_id, capability)
+        if runtime_id is not None and (not isinstance(runtime_id, str) or not runtime_id):
+            raise DriverAuthorityTransportError("authority hello runtime identity is invalid")
+        return DriverAuthorityIdentity(role, launch_id, capability, runtime_id)
 
     @staticmethod
     def _decision(response: dict[str, Any]) -> tuple[ProviderAdmissionState, str, str | None]:

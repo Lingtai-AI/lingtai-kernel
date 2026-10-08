@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 8
+contract_version: 15
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/mcp_servers/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/mcp_servers/task_card/event_projection.py
+  - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/service.py
   - src/lingtai/mcp_servers/telegram/server.py
@@ -17,7 +18,11 @@ related_files:
   - tests/test_telegram_task_card_programmable.py
   - tests/test_telegram_task_card_toggle.py
   - tests/test_telegram_task_card_event_tail.py
+  - tests/test_task_card_event_projection_shared.py
+  - tests/test_telegram_task_card_rows.py
   - tests/test_telegram_task_card_display_expression.py
+  - src/lingtai/mcp_servers/telegram/task_card/api_cost.py
+  - tests/test_telegram_task_card_api_cost.py
   - tests/test_mcp_skill_manuals.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md. Keep related
@@ -28,7 +33,7 @@ maintenance: |
 # Telegram Task Card Projection
 
 ## Purpose
-Guarded by: [TT001](BEHAVIORS.md#behavior-tt001), [TT002](BEHAVIORS.md#behavior-tt002), [TT003](BEHAVIORS.md#behavior-tt003)
+Guarded by: [TT001](BEHAVIORS.md#behavior-tt001), [TT002](BEHAVIORS.md#behavior-tt002), [TT003](BEHAVIORS.md#behavior-tt003), [TT004](BEHAVIORS.md#behavior-tt004)
 
 
 Own Telegram's provider adapter and read-only projection of the intrinsic
@@ -95,6 +100,74 @@ semantics live here. The public producer contract lives in
    `thinking_tokens` fallback produce the same representation. A missing,
    malformed, or output-less count is omitted without a dangling parenthesis,
    preserving old-event rendering and never exposing reasoning text.
+    Telegram opts into two metrics lines: time and speed first
+    (`↻12.4s · ⚡1.2s · 45 tok/s`), tokens next (existing
+    output/thinking/cache/context symbols). `⚡` is seconds from actual dispatch to first nonempty text or
+    tool name/argument payload, excluding ids, reasoning, lifecycle, heartbeat,
+    usage and empty events. Speed is final provider non-reasoning output tokens
+    (including tools) / measured first-output-to-final-usage seconds, only with
+    explicit compatible counts and a finite positive interval. Text, tool-only
+    and mixed rounds use the same formula. Estimated, missing-usage and
+    untimed/nonstream rounds omit speed; unknown first output is omitted, never
+    shown as inferred zero. Total API delay and its `↻` symbol remain unchanged.
+    `☕X.Ys` on that first time line sums fully witnessed true IDLE intervals
+    contained between the same progress rows that establish the gap. The
+    `agent_state.idle_elapsed_s` producer uses monotonic seconds, never
+    gap-minus-API latency. Missing/partial entry or exit evidence and lifecycle
+    restart boundaries omit coffee, not fabricate zero; zero requires a
+    witnessed zero-length interval. Tools, prompt build, queue/network wait,
+    ASLEEP and STUCK are not counted. Existing gap, stream timing and speed
+    numerator remain unchanged (guarded by [TT002](BEHAVIORS.md#behavior-tt002)).
+    `⏱` subtracts the same API first-output wait, generation duration and
+    any measured same-gap `☕` IDLE from the unrounded progress gap. Negative
+    or incomplete timing omits the residual; unobserved IDLE retains the
+    prior inclusive residual, without claiming zero idle. Coffee is unchanged.
+    Other channels keep their existing layout. Telegram alone also opts into
+    one extra plain price line immediately after the token metrics line per API call, compact on one line and mirroring that row's
+    symbols: `$<total>[+] · ↓<$> ↑<$> | <$>[ priority est.][ stale prices]` (no tokens/second figure) where
+    `↓` prices the billable output, `↑` the cache-miss input (uncached input
+    plus any cache writes: at the catalog's cache-write rate when it prices
+    writes separately and the wire reports the write count, else — when the
+    catalog has no cache-write price — at the input rate), and `|` the
+    cache-hit (cache-read) input (or `cost n/a (<reason>)` / `cost loading` /
+    `cost ?`). The line is a public per-token list-price (LiteLLM) estimate at
+    STANDARD rates, or at the catalog's `*_priority` rates when that round
+    REQUESTED the `priority` wire tier (authored `fast`), labelled `priority est.`
+    on the line; the SESSION row prices each round the same way and appends
+    `requested-tier est.` when any counted round requested `priority`
+    (standard-only output is unchanged). The tier is the one the adapter dispatched for that
+    round (`UsageMetadata.requested_service_tier` →
+    `llm_response.usage_billing.service_tier`), a request and not proof the
+    provider applied it. A round with no recorded tier (legacy, or none
+    requested) or `default` stays STANDARD and is never refilled from current
+    config; `auto`/`flex`/invalid tiers and a missing or malformed priority
+    rate (including an absent priority above-threshold or cache-write rate
+    where the standard fields exist) are `?` (no guessed multiplier, no
+    fallback to standard or a cheaper base tier).
+    It is a public per-token list-price
+    estimate as of the catalog fetch — not an invoice, not the actual
+    subscription/Codex-pool bill, no routed-tier/discount claim, and `total`
+    excludes search/grounding/image fixed fees — from that exact round's own
+    model (a plain name, exact catalog key, no fuzzy alias) and
+    adapter-established counts (`llm_response.usage_billing`; a wire field the
+    provider did not state stays unknown, never `0`). Unknown counts, rates,
+    incoherent splits (1h cache-write larger than total write, malformed TTL
+    count), invalid above-threshold tier rates (never a silent fallback to the
+    base rate) and non-finite/overflowing products are `?`; `n/a` notes cover
+    model-unknown/unlisted/catalog-unavailable/estimated rounds. When any
+    part is unknown the line shows the known subtotal with a trailing `+`
+    (every part is non-negative, so the subtotal is a lower bound) and the
+    unknown parts as `?`; when writes are priced separately but a round has no
+    recorded write count, `↑` is instead a lower bound `$x+` (all cache-miss
+    tokens at the cheapest applicable rate) and the total also ends in `+`; with no known bucket it shows `cost ?`. The catalog
+    date is not rendered; `stale prices` is appended once the snapshot is stale.
+    Prices come from a process-local
+    background-refreshed LiteLLM snapshot fetched from one fixed URL with an
+    8 MiB cap, chunked reads and a monotonic total deadline (each blocking read
+    bounded by the socket timeout); a failed fetch or failed thread start
+    releases the single in-flight slot and retries no faster than the pacing
+    interval. Rendering never waits on the network, and other channels' frames
+    are byte-identical.
 10. When an existing `apriori_summary_generated` event, its preceding successful
     `tool_result`, and the already-recorded `source=summarize_apriori` main-ledger
     row correlate by `tool_call_id`, the automatic card appends
@@ -103,15 +176,105 @@ semantics live here. The public producer contract lives in
     counts come from a bounded recent read of `logs/token_ledger.jsonl`. Missing,
     malformed, unsuccessful, unmatched, or out-of-bound data preserves the old
     output. Generated summary text and provider metadata are never projected.
+11. Async Work metadata comes only from the strict kernel-owned
+    `agent_record.async_work` v1 consumer. Telegram performs no daemon ledger or
+    Shell job scan and has no legacy fallback. Missing, malformed, future-dated,
+    or stale snapshots render no Async Work rows. Valid snapshots retain the
+    aggregate and separate daemon/Shell lanes; usage/backend/model detail stays
+    daemon-scoped. Telegram's HTML adapter presents this block as its own
+    icon-free Async Work section rather than folding it into Session.
+    The metadata block has no whole-block character budget: every Session,
+    Cost, Identity, and Async Work row is kept, each field individually bounded
+    and sanitized. Only the overall `TEXT_LIMIT` frame limit applies; reasoning
+    and preview excerpts shrink first, and only if the block still cannot fit
+    is the tail of the unbounded Daemons/Backends lists replaced by a visible
+    `+N omitted` count (never silently, and never the Scope, stats, or Cost
+    rows). Whenever any Async Work status is non-empty, a `Scope · recorded
+    running/queued + finished in last 10m` row (the snapshot's `window_seconds`, 600) states
+    which recorded jobs are counted, for daemon and Shell lanes alike. The
+    kernel selection is bounded by its record-tail limits, not a whole-ledger
+    census; a truly empty,
+    all-zero, or stale snapshot renders no Async rows and no Scope. The Daemon
+    compact stats row (`Daemon stats`) sums
+    those daemon runs' reported lifetime `in`/`out`/`cache`/`api` — not tokens
+    from the last window and not the whole batch. Selected daemon runs with no
+    positive reported usage show `usage n/a (no positive usage reported)` instead
+    of zeros. The card omits the explanatory lifetime parenthetical and the
+    unavailable-cost suffix; this manual retains their meaning. The snapshot
+    carries no daemon cost: none is priced, shown as `$0`, or folded into
+    Session's Cost row. Shell rows make no usage or billing claim.
+12. A pending canonical `shell.run` automatic row reads only the literal safe
+    `input.async` boolean. Sync/default mode renders `foreground`; literal
+    `async=true` renders `dispatching async job`. The row retains redacted
+    reasoning but never projects command, working directory, environment,
+    credentials, or any other raw argument. Completed rows keep normal result
+    wording.
+13. Telegram sends and edits the one composed resident with the original Bot API
+    `parse_mode=HTML`. The automatic renderer HTML-escapes every dynamic
+    shared automatic frame before replacing only exact static lines with
+    Telegram-supported bold, italic, and code markup; when the shared source
+    frame is within its budget, only escaped dynamic content may be shortened
+    to account for that fixed presentation overhead. The static Telegram
+    hierarchy keeps the existing Session and Identity section icons, renders the
+    since-molt `token_usage.session.output_tokens` count as compact `out <count>`
+    under Session's Context row, gives Async Work its own icon-free section, and
+    leaves the per-call `↻ … ↓ … ↑ …` metrics line plain. At the Telegram resident
+    transport boundary, only the programmable section after Telegram's injected
+    header is interpreted as Markdown: ATX headings/subheadings become bold
+    headings, `**strong**` becomes bold, inline backtick spans become code, and
+    unordered, ordered, and task-list items receive visible list markers. Raw
+    HTML and every dynamic character are escaped before the adapter adds only
+    its closed Telegram-supported tags. Unsupported or unmatched Markdown stays
+    escaped literal text rather than forming malformed provider markup. The
+    shared resident retains the authored programmable bytes, so diff-only,
+    slot composition, commit timing, and retry behavior do not change. Feishu
+    and other consumers keep their own rendering mode. Telegram appends a concise
+    `/taskcard on|off` and `/taskcard N (1-10)` settings hint immediately after
+    the existing ask-agent line.
+14. Every new kernel `llm_response` may carry the additive child schema
+    `lingtai.token_usage.session/v1`. It is the authoritative since-molt SESSION
+    source for both live append and bounded rehydrate; legacy
+    `notification_block_injected` session metadata is fallback only until a valid
+    v1 snapshot is observed. A newer legacy carrier-less `llm_response`
+    invalidates stale legacy SESSION, and `psyche_molt` clears the old generation.
+    The shared reducer validates same-generation API ordering, cumulative/current
+    relationships, exact cache miss, cache/context rates and budget remaining,
+    monotonic counters, and generation reset. Malformed or incoherent current
+    snapshots render no SESSION; lower generation/index snapshots cannot replace
+    a newer accepted state. Per-call dividers and all non-token metadata retain
+    their existing sources and rendering.
+15. Telegram alone adds one SESSION row directly after Session's existing rows:
+    `Cost · total ~$<total> · in $<input> · write $<write> · read $<read> · out $<output>` (HTML `<b>Cost</b> · …`). It
+    sums, over the since-molt main `llm_response` rounds whose v1 snapshot the
+    shared reducer accepted, the same `estimate_parts` list-price estimate as
+    rule 9, each round priced at its own recorded billing model (never the
+    current model over aggregate tokens). Each `(molt_count, api_call_index)`
+    counts once across multi-tool groups, replays, re-broadcasts, `/taskcard N`
+    and resident rotation; `psyche_molt` starts a new total. It is complete only
+    when every index `1..N` of the current generation was observed with fully
+    priced facts. An unseen response (restart/refresh rehydrate beyond the
+    bounded window) or rejected one, missing usage/billing/model/price, or an
+    unknown or lower-bound total part renders
+    `total ≥$<known> · [per-bucket amounts or ?] · partial`, and nothing known renders
+    `total ? · in ? · write ? · read ? · out ? · partial` — never `$0` or a fake complete total.
+    `stale prices` is appended when any priced round used a stale snapshot. No
+    v1 generation (legacy history, unknown-generation molt) renders no row.
+    Rendering never waits on the catalog; daemon/other-Agent costs never enter.
+    Per-call lines and non-Telegram frames are unchanged.
+    Ordinary input and writes are disjoint allocations of cache-miss cost;
+    absent write counts leave both allocations `?` even if the total is known.
 
 ## Port
 
 Internal `TaskCardResidentTransport` boundary implemented by `TelegramManager`.
-There is no public MCP `task_card` family in this component.
+The automatic metadata path consumes `kernel.session_stats.query_published_async_work`
+as a read-only safe projection. There is no public MCP `task_card` family in
+this component.
 
 ## Adapters
 
 - Filesystem reader for `<workdir>/taskcard/status` and `taskcard/taskcard.md`
+- Strict read-only consumer of `<workdir>/system/agent_record.json.async_work`
 - Telegram transport adapter in `TelegramManager`
 - Durable Telegram account state for tracked resident message ids
 - Shared in-memory route locks and automatic/programmable slot frames
@@ -157,20 +320,69 @@ There is no public MCP `task_card` family in this component.
     require a new kernel event/accounting path, may read at most
     `_TASK_CARD_TOKEN_LEDGER_TAIL_BYTES` recent ledger bytes per correlation
     attempt, and must expose only validated elapsed/input/output integers.
+12. Async Work rendering must use only the kernel's validated versioned Agent
+    Record child and must not read daemon or Shell stores directly or invent a
+    fallback count.
+13. Pending Shell wording may branch only on canonical tool/action names and the
+    literal nested `input.async` boolean. No other Shell input field enters the
+    projected row.
+14. Telegram Task Card transport must pass `parse_mode=HTML` on both send and
+    edit. The adapter escapes the whole shared automatic frame before adding its
+    exact static HTML lines, and escape-first renders only the composed
+    programmable suffix from Task Card Markdown to its closed supported HTML
+    subset. Raw authored HTML never enters Telegram as markup. Non-Telegram
+    consumers and the shared resident's stored programmable frame remain
+    unchanged.
+15. Automatic Task Card transport must remain diff-only on meaningful content.
+    Its stable fingerprint excludes only the renderer-owned wall-clock
+    `Last Updated` field (whether raw or wrapped in Telegram's exact static
+    presentation prefix) and the numeric seconds in the canonical active-session
+    field; lifecycle and every other row, footer, and metadata change remain
+    transport-visible. Renderer HTML or emoji decoration must never turn those
+    volatile-only ticks back into edits. This is rate-limit-critical behavior:
+    regressing it produces no-op Bot API writes on every projection poll and can
+    trigger Telegram `429 Too Many Requests` throttling.
+16. Telegram must not derive SESSION totals by summing its bounded event window,
+    scanning the token ledger, or reading Agent Session state directly. It may
+    only reduce versioned `llm_response` snapshots and legacy carriers already in
+    its bounded event tail through the shared pure projector. Restart rehydrate
+    applies the existing event window to SESSION events even when the recent tail
+    has no projectable activity rows; it must not retain or scan the full history
+    merely to recover an older visible row. The behavior 15 Cost row is the only
+    Telegram-side sum: per-round bill facts fold beside the same reducer over the
+    same live-append and bounded-rehydrate inputs, are priced in memory at
+    render, and any coverage it cannot prove is shown as partial instead of being
+    repaired by a wider scan or a new store.
 
 ## Tests
 
 - `tests/test_telegram_task_card_programmable.py` covers active projection,
-  diff-only updates, exact-`inactive` frame exclusion (idempotent, resident/
-  automatic/body preserved), reactivation, and last-good preservation for
-  missing/blank producer state.
+  screenshot-shaped Markdown rendering (headings/subheadings, bold, inline code,
+  and list items), raw HTML/special-character escaping, malformed-delimiter safe
+  fallback, unchanged HTML parse mode and raw slot bytes, diff-only updates,
+  exact-`inactive` frame exclusion (idempotent, resident/automatic/body
+  preserved), reactivation, and last-good preservation for missing/blank
+  producer state.
 - `tests/test_telegram_task_card_toggle.py` covers toggle suppression and the
   hidden-finalize clear semantics.
 - `tests/test_telegram_task_card_event_tail.py` continues to cover the automatic
   channel independently, including identical parenthesized reasoning-token
-  rendering from current-call carriers and `llm_response` fallbacks, plus
-  correlated a-priori summary time/input/output rendering from existing events
-  and a bounded ledger tail with fail-closed legacy/malformed cases.
+  rendering from current-call carriers and `llm_response` fallbacks, authoritative
+  v1 SESSION updates (including the 93.8k-to-150.3k stale regression),
+  carrier-less invalidation, molt clearing, live/rehydrate parity, plus correlated
+  a-priori summary time/input/output rendering from existing events and a bounded
+  ledger tail with fail-closed legacy/malformed cases. It also covers the
+  SESSION Cost row: once-per-response live sums with mixed models, row-window
+  and re-broadcast stability, complete versus bounded-partial rehydrate, molt
+  reset, legacy absence, and HTML escaping.
+- `tests/test_telegram_task_card_api_cost.py` covers per-call estimation and
+  catalog behavior plus the Cost row fold/format: replay/carrier dedupe, gaps
+  and rejected snapshots, missing model/price/usage/billing as partial, n/a
+  without blocking, and the opt-in shared `session_cost` metadata row without a standalone
+  metadata budget, with byte-identical output when that optional row is absent.
+- `tests/test_telegram_task_card_rows.py` proves strict common `async_work`
+  consumption, missing/malformed/stale omission, mixed-lane rendering, and
+  pending sync-versus-async Shell wording without raw-argument leakage.
 - `tests/test_task_card_event_projection_shared.py` pins shared-core safety and
   byte compatibility with Telegram's established render surface.
 - `tests/test_task_card_resident_shared.py` pins provider-neutral route/slot,
@@ -186,3 +398,5 @@ There is no public MCP `task_card` family in this component.
   `normal_rows`/`locale`/`display_expression`/`max_refreshes` siblings in both
   the persisted file and the next manager projection tick.
 - `tests/test_mcp_skill_manuals.py` covers packaged docs for this subpackage.
+
+The SESSION line splits ordinary input, cache writes, cache reads and output without double charging. Unknown write counts keep input/write allocation unknown even when the combined total is known.

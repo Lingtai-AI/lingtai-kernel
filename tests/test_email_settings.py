@@ -9,7 +9,6 @@ from lingtai.tools.email import manager, primitives
 from lingtai.tools.email.settings import (
     EMAIL_BODY_CHAR_LIMIT,
     EMAIL_CHECK_RESULT_TOKEN_LIMIT,
-    EMAIL_DUPLICATE_FREE_PASSES,
     EMAIL_UNREAD_MAX_ENTRIES,
 )
 
@@ -63,13 +62,6 @@ def test_inventory_is_exact_source_backed_and_fully_redacts_path_lists():
                 "comment": "email-manual#send-body-character-limit",
             },
             {
-                "key": "send.duplicate_free_passes",
-                "current": EMAIL_DUPLICATE_FREE_PASSES,
-                "default": EMAIL_DUPLICATE_FREE_PASSES,
-                "configurable": False,
-                "comment": "email-manual#duplicate-send-loop-guard",
-            },
-            {
                 "key": "check.result_token_limit",
                 "current": EMAIL_CHECK_RESULT_TOKEN_LIMIT,
                 "default": EMAIL_CHECK_RESULT_TOKEN_LIMIT,
@@ -107,7 +99,6 @@ def test_every_comment_targets_its_exact_manual_heading():
     )
     expected = {
         "email-manual#send-body-character-limit": "Send body character limit",
-        "email-manual#duplicate-send-loop-guard": "Duplicate send loop guard",
         "email-manual#check-result-token-limit": "Check result token limit",
         "email-manual#unread-notification-entry-limit": (
             "Unread notification entry limit"
@@ -175,5 +166,36 @@ def test_operational_constants_are_the_inventory_constants():
     assert primitives.EMAIL_BODY_CHAR_LIMIT == EMAIL_BODY_CHAR_LIMIT
     assert primitives.EMAIL_UNREAD_MAX_ENTRIES == EMAIL_UNREAD_MAX_ENTRIES
     assert manager.EMAIL_BODY_CHAR_LIMIT == EMAIL_BODY_CHAR_LIMIT
-    assert manager.EMAIL_DUPLICATE_FREE_PASSES == EMAIL_DUPLICATE_FREE_PASSES
     assert manager.EMAIL_CHECK_RESULT_TOKEN_LIMIT == EMAIL_CHECK_RESULT_TOKEN_LIMIT
+
+def test_manual_routes_each_show_anchor_without_repeating_action_schema():
+    root = Path(email_tool.__file__).with_name('manual')
+    text = (root / 'SKILL.md').read_text()
+    assert '## Nested reference catalog' in text
+    assert '| Action | Input' not in text
+    for heading in ('Send body character limit',
+                    'Check result token limit', 'Unread notification entry limit',
+                    'Pseudo-agent subscriptions'):
+        section = text.split(f'### {heading}\n', 1)[1].split('\n### ', 1)[0]
+        assert 'reference/settings-reference/SKILL.md#' in section
+    for topic in ('addressing-and-replies', 'actions-and-storage',
+                  'notifications-and-delivery', 'settings-reference'):
+        assert f'location: reference/{topic}/SKILL.md' in text
+
+
+def test_manual_preserves_observed_delivery_limits_and_explicit_dismiss():
+    root = Path(email_tool.__file__).with_name('manual')
+    routing = (root / 'reference/addressing-and-replies/SKILL.md').read_text()
+    delivery = (root / 'reference/notifications-and-delivery/SKILL.md').read_text()
+    actions = (root / 'reference/actions-and-storage/SKILL.md').read_text()
+    settings = (root / 'reference/settings-reference/SKILL.md').read_text()
+    assert 'do not mark the source inbox ID read' in routing
+    assert 'Contract discrepancy' in routing
+    assert '`dismiss`' in routing
+    assert 'not a restart-resilient queue' in delivery
+    assert 'under two' not in delivery
+    assert 'before that call\'s unified sent record' in delivery
+    assert 'self-send bypasses this adapter' in actions
+    assert 'does not validate or copy attachments' in actions
+    assert 'no recipient/body repetition heuristic' in settings
+    assert 'in-process `_setup_from_init()`' in settings

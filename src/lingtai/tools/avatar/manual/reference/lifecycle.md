@@ -1,13 +1,13 @@
 ---
 name: avatar-lifecycle-reference
 description: |
-  Avatar-manual reference for detached lifecycle, ledger/state, derived-child
-  authority markers, boot verification, escalation, platform boundaries, and
-  footprint safety.
-version: 1.0.0
-last_changed_at: 2026-09-06T00:00:00Z
+  Avatar lifecycle reference: detached life, ledger/state, derived-child
+  authority, boot verification, platform launch, escalation, and footprint.
+version: 1.1.0
+last_changed_at: 2026-09-09T11:24:00Z
 related_files:
 - src/lingtai/tools/avatar/manual/SKILL.md
+- src/lingtai/tools/avatar/manual/reference/spawn.md
 - src/lingtai/tools/avatar/__init__.py
 - src/lingtai/tools/avatar/_launcher.py
 - src/lingtai/tools/avatar/CONTRACT.md
@@ -19,113 +19,90 @@ related_files:
 - src/lingtai/tools/skills/manual/reference/cleanup-footprint-contract.md
 - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
 maintenance: |
-  Tracks Avatar's detached-process and care boundaries. Keep it aligned with
-  launcher/CLI authority behavior and the router; do not turn lifecycle details
-  into schema prose or add a cleanup command here.
+  Keep this reference aligned with launcher/CLI authority, boot observation,
+  ledger, and cleanup behavior. Keep the parent router concise; do not add an
+  Avatar cleanup command or turn lifecycle facts into schema prose.
 ---
 
 # Avatar lifecycle and authority
 
-Nested reference for the Avatar Manual. This page covers what happens after the
-spawn request passes the identity and mission gates.
+The [Avatar Manual](../SKILL.md) owns the direct call, SHOW and footprint route;
+[spawn and identity](spawn.md) owns copy/mission/preview rules.
 
-## Independent life, not disposable work
+## Independent life and state
 
-An avatar is a fully detached agent process with its own directory, history,
-molts, and lifecycle. Its existence does not depend on the parent's context
-window. Use `daemon` for an ephemeral emanation that shares the task workdir
-and returns a conclusion; use `shell` for a one-off command. After a successful
-spawn, communicate through the normal mail/email channels rather than expecting
-an in-process handle.
-
-The parent does not manage ongoing sleep, suspend, or retirement through Avatar.
-A quiet avatar is not proof of completion: do not send probe mails. Report the
-silence to your own parent, who can decide whether to use lifecycle controls or
-accept the loss.
-
-## State and ledger
-
-Paths are relative to the parent working directory and its network root:
+An avatar is a detached process with its own directory, history, molts and
+lifecycle; it outlives the parent's context. Communicate by mail/email, not an
+in-process handle. Quiet is not completion: do not send probe mail or retry
+forever. Report blockers and the decision needed before handing off or molting.
 
 ```text
-<parent>/delegates/ledger.jsonl       # append-only spawn audit
-<network-root>/<name>/                 # sibling child directory
-  init.json
-  settings/psyche.json
-  .prompt                              # one-time first-turn signal
-  logs/spawn.stderr                    # early-boot stderr
-  logs/agent.log                       # child runtime log
-  .lingtai-derived-child.json         # Driver-derived state, when granted
-  system/ knowledge/ exports/ combo.json  # deep payload where applicable
+<parent>/delegates/ledger.jsonl        # append-only audit
+<network-root>/<name>/                # direct sibling
+  init.json  settings/psyche.json  .prompt
+  logs/spawn.stderr  logs/agent.log
+  .lingtai-derived-child.json         # only when Driver-granted
+  system/ knowledge/ exports/ combo.json  # deep payload as applicable
 ```
 
-A call that reaches provider admission appends an
-`avatar_admission_decision` record. A separate full `avatar` record is appended
-only after the process launches; it carries the canonical name, sibling-directory
-basename, mission, type, pid, boot status, and any bounded boot error. Earlier
-validation/gate returns and dry-run have no full spawn record. The ledger is
-append-only. Matching-name records are consulted for liveness through their
-stored `working_dir` value, while an existing sibling target directory is
-separately refused before child creation.
+Provider admission records `avatar_admission_decision` **before** real path /
+existing-directory checks, so a rejected spawn can leave an admission audit.
+The full `avatar` record follows launch and boot observation: name/basename,
+mission, type, PID, boot status/error. Dry-run and mission-gate returns write
+no record. Ledger liveness consults the stored `working_dir`; do not treat a
+ledger line as current health evidence. Exceptions can leave a partial child
+directory/init/`.prompt`; there is no atomic rollback promise. Preserve evidence
+and inspect before retrying or cleaning; do not retry under a different name
+to evade a refusal.
 
-## Derived-child authority boundary
+## Derived-child authority
 
-Only a Driver-approved child-endpoint lease permits Avatar to write
-`.lingtai-derived-child.json` before launch. The marker is outside the child's
-managed `system/` namespace. A legacy `system/derived_child.json` is also
-restrictive for upgrade compatibility. Missing both markers is the only relaxed
-case; malformed or unexpected state remains restrictive.
+Only a Driver-approved child-endpoint lease permits writing
+`.lingtai-derived-child.json` before launch, outside managed `system/`.
+Presence is restrictive—including malformed contents, directory or symlink;
+legacy `system/derived_child.json` is restrictive too. Only both missing
+relaxes the requirement. Unknown/I/O-error state is not absence.
 
-The marker is not a credential, parent identity, or authorization bearer. It
-protects against accidental launch-path/configuration loss in the trusted
-same-user model, not a child that can edit its own directory. The one-use opaque
-lease is handed only to the POSIX launcher and is closed if launch does not
-reach that port. The launch environment marker is redundant immediate defense,
-not authority.
-
-At child boot, `cli.run()` reads the durable marker and turns it into the
-restrictive nested-launch requirement. Authority is not smuggled through the
-environment, parent prompt, or a public Avatar input. Windows closes and rejects
-a supplied child-endpoint lease rather than launching without its approved
-endpoint.
+Markers are not credentials or parent identity. They protect trusted same-user
+launch/config continuity, not against a child editing its own directory. The
+one-use opaque POSIX lease is consumed at launch; the inherited descriptor's
+environment locator is not itself authority. CLI boot reads durable/environment
+markers and requires real authority for nested daemon/avatar launches. Public
+input, prompt and marker edits cannot grant it. Windows closes/rejects a POSIX
+lease rather than silently dropping the restriction.
 
 ## Launch and boot observation
 
-Avatar resolves the interpreter from `init.json` and submits the exact detached
-argv `[python, "-m", "lingtai", "run", <dir>]` to the launcher Port. Standard
-input/output are disconnected; stderr is captured at `logs/spawn.stderr`.
-The production Port returns a positive PID and opaque adapter handle. Polling is
-nonblocking and returns the exact child exit code or `None`.
+The selected child-init Python launches `[python, "-m", "lingtai", "run", <dir>]`.
+stdin/stdout are disconnected; stderr goes to `logs/spawn.stderr`. A positive
+PID and opaque handle permit nonblocking poll/release, not continuing ownership
+of the peer. Launcher environment is inherited; newborn admin is cleared.
 
-The manager waits up to 5.0 seconds, checking `.agent.heartbeat` every 0.1
-seconds. Heartbeat-first precedence wins; if the child exits first, spawn is
-`failed` with a bounded final 2,000-byte stderr tail. If neither handshake nor
-exit occurs within the window, spawn is `slow` with a warning. Releasing the
-parent-side handle after a slow observation never terminates the child.
+The manager checks `.agent.heartbeat` as a file every 0.1 seconds for up to
+5.0 seconds **before** checking process exit. It does not verify freshness or
+heartbeat contents. Boot `ok` therefore is not a live capability or human
+receipt. Early process exit yields boot `failed` and an outer `error` response;
+neither event within the window yields boot `slow` in a top-level `status=ok`
+response with a warning. Handle release after slow does not terminate the child.
 
-POSIX uses a new session; `terminate` and `force_terminate` affect exactly the
-owned process, never its tree. Windows uses detached creation flags and
-`close_fds`; both termination methods are forceful `TerminateProcess` calls.
-Unsupported platforms fail loudly rather than silently selecting an adapter.
+For an early-exit diagnostic the manager reads the entire stderr file, then
+keeps the last 2,000 bytes plus a truncation prefix when needed, decodes with
+replacement and includes exit code/path context. This is not a 2,000-byte total
+response or a bounded file read. The returned stderr/path is **not redacted**;
+it can contain private data. Inspect locally and sanitize before forwarding.
 
-## Care, escalation, and footprint
+The selector uses POSIX when `os.name == "posix"`, otherwise Windows when
+`sys.platform == "win32"`; unsupported hosts fail without a fallback. POSIX
+starts a new session and termination targets only its owned process, not its
+tree. Windows uses detached creation flags/`close_fds`; both termination methods
+are forceful `TerminateProcess`. No parent-side handle release kills the child.
 
-After a spawn, record the address, mission, and delegation reason in pad. If an
-avatar encounters a blocker, scope ambiguity, broken peer, budget pressure, or
-security concern, it must report concretely to its parent: what it tried, what
-failed, and what decision is needed. Do not silently retry forever or molt with
-an unreported blocker.
+## Care and retirement
 
-Avatar directories and ledger records are lives, not cache files. Never delete
-an avatar directory or ledger entry without explicit retirement approval and a
-captured handoff. For inspection, use the [shared footprint recipe](../../../skills/manual/reference/cleanup-footprint-contract.md#shared-footprint-check-recipe);
-inspection writes nothing. Prefer authorized lifecycle controls such as sleep,
-suspend, or nirvana over filesystem deletion.
-
-## Rules route
-
-Avatar does not own rules distribution. `.rules` is an unchanged kernel/Psyche
-signal consumed into `system/rules.md` and the protected prompt section. An
-agent may explicitly target a `.rules` path with its own permitted tool, but a
-spawn does not broadcast it. Read the [Psyche manual](../../../../intrinsic_skills/psyche-manual/SKILL.md)
-for replacement, empty/no-op, flush, and canonical/effective verification.
+Record address, mission and delegation reason in Pad. Report scope ambiguity,
+silence, budget or security concerns with evidence and an actionable decision.
+For retirement follow the root footprint route: capture a handoff, check
+liveness, report bytes, and get exact approval. Sleep, suspend and nirvana are
+not interchangeable; nirvana is **permanent destruction** requiring its own
+privileges and explicit owner authorization. Do not substitute filesystem
+deletion. When the user is unavailable, stop after the report.

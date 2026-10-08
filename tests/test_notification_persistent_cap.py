@@ -42,8 +42,8 @@ def _spill_files(tmp_path):
     return sorted((tmp_path / "logs").glob("notification-overflow-*.json"))
 
 
-def _telegram_message(message_id: int, *, text: str) -> dict:
-    return {
+def _telegram_message(message_id: int, *, text: str, is_current: bool = False) -> dict:
+    message = {
         "id": f"main:123:{message_id}",
         "direction": "incoming",
         "sender": "Jason",
@@ -52,6 +52,9 @@ def _telegram_message(message_id: int, *, text: str) -> dict:
         "text": text,
         "text_truncated": False,
     }
+    if is_current:
+        message["is_current"] = True
+    return message
 
 
 def _telegram_payload(messages: list[dict]) -> dict:
@@ -400,3 +403,215 @@ def test_persistent_terminal_marker_only_envelope_is_capped_by_construction(
     # If the path was omitted, the exact spill basename is the locator.
     if capped["overflow"].get("path_omitted"):
         assert capped["overflow"].get("spill_file") or capped["overflow"]["spill_failed"]
+
+
+def test_compacted_im_messages_get_truthful_truncated_flag_and_comment(tmp_path):
+    """The cap must never blank a heavy field while leaving a stale
+    ``text_truncated: false`` — a shortened record has to say so."""
+    agent = _cap_agent(tmp_path)
+    messages = [_telegram_message(i, text="T" * 2000) for i in range(1, 41)]
+
+    payload = meta_block.build_notification_persistent_payload(
+        agent, _telegram_payload(messages)
+    )
+
+    telegram = payload["notification_persistent"]["mcp"]["telegram"]
+    shortened = [m for m in telegram["messages"] if len(m["text"]) < 2000]
+    assert shortened, "sanity: the cap must have actually shortened something"
+    for message in shortened:
+        assert message["text_truncated"] is True
+        assert (
+            meta_block.NOTIFICATION_PERSISTENT_TELEGRAM_TRUNCATED_COMMENT
+            in message.get("comment", "")
+        )
+
+
+def test_compacted_emails_get_truthful_message_truncated_flag(tmp_path):
+    """Mirrors the IM truthfulness fix for the email lane's own flag."""
+    agent = _cap_agent(tmp_path)
+    emails = [_email(i, message="E" * 3000) for i in range(1, 26)]
+
+    payload = meta_block.build_notification_persistent_payload(
+        agent, _email_payload(emails)
+    )
+
+    email_lane = payload["notification_persistent"]["email"]
+    dropped_ids = set(email_lane.get("dropped_ids", []))
+    for email in email_lane["emails"]:
+        if email["id"] in dropped_ids:
+            continue
+        if len(email["message"]) < 3000:
+            assert email["message_truncated"] is True
+
+
+def test_compact_im_record_recovery_is_conditional_even_with_raw_envelope():
+    """A shorter copy keeps a truthful flag, not an unconditional read command.
+
+    Keep raw data untouched; do not infer completeness from a channel key.
+    """
+    lane = meta_block._TELEGRAM_PERSISTENT_LANE
+    record_with_envelope = {
+        "id": "main:1:1",
+        "text": "T" * 500,
+        "telegram": {"update_id": 1, "message": {"text": "T" * 500}},
+    }
+    record_without_envelope = {"id": "main:1:2", "text": "T" * 500}
+
+    compacted_with = meta_block._compact_im_persistent_record(
+        record_with_envelope, 50, lane, protect_current=False
+    )
+    compacted_without = meta_block._compact_im_persistent_record(
+        record_without_envelope, 50, lane, protect_current=False
+    )
+
+    assert compacted_with["text_truncated"] is True
+    assert "Only if required content is absent" in compacted_with["comment"]
+    assert "do not reread a complete alternate/raw current copy" in compacted_with["comment"]
+    # The raw envelope itself is untouched — it is outside the heavy fields.
+    assert compacted_with["telegram"] == {
+        "update_id": 1,
+        "message": {"text": "T" * 500},
+    }
+
+    assert compacted_without["text_truncated"] is True
+    assert lane.truncated_comment in compacted_without["comment"]
+
+
+def test_current_message_protected_over_obsolete_history_before_truncation(tmp_path):
+    """Common-contract priority: the cap exhausts obsolete history before it
+    ever shortens the current/new message that the producer flagged
+    ``is_current``."""
+    agent = _cap_agent(tmp_path)
+    messages = [_telegram_message(i, text="T" * 2000) for i in range(1, 26)]
+    messages[-1] = _telegram_message(25, text="T" * 2000, is_current=True)
+
+    payload = meta_block.build_notification_persistent_payload(
+        agent, _telegram_payload(messages)
+    )
+
+    assert _envelope_chars(payload) <= MAX
+    telegram = payload["notification_persistent"]["mcp"]["telegram"]
+    current = next(m for m in telegram["messages"] if m.get("is_current"))
+    # Fully intact: never touched by the cap, even though history around it was.
+    assert current["text"] == "T" * 2000
+    assert current["text_truncated"] is False
+    assert "comment" not in current
+
+    history = [m for m in telegram["messages"] if not m.get("is_current")]
+    assert history
+    for message in history:
+        if "text" in message:
+            assert len(message["text"]) < 2000
+        else:
+            assert message["id"] in telegram["dropped_ids"]
+
+
+def test_drop_stage_protects_current_message_first(tmp_path):
+    """Direct unit test on the pathological id-only-stub fallback: obsolete
+    history is stubbed before the current message is even considered."""
+    records = [
+        {"id": f"main:1:{i}", "event_id": f"evt-{i}", "text": "H" * 200}
+        for i in range(1, 20)
+    ]
+    records.append(
+        {
+            "id": "main:1:current",
+            "event_id": "evt-current",
+            "text": "C" * 200,
+            "is_current": True,
+        }
+    )
+    persistent = {"mcp": {"telegram": {"messages": records}}}
+
+    dropped = meta_block._drop_notification_persistent_records(
+        copy.deepcopy(persistent), max_chars=3000
+    )
+
+    telegram = dropped["mcp"]["telegram"]
+    current = next(m for m in telegram["messages"] if m.get("is_current"))
+    assert current["text"] == "C" * 200
+    assert "main:1:current" not in telegram.get("dropped_ids", [])
+    assert any(
+        set(m) == {"id", "event_id"}
+        for m in telegram["messages"]
+        if not m.get("is_current")
+    )
+    assert meta_block._notification_persistent_envelope_chars(dropped) <= 3000
+
+
+def test_bulky_non_text_history_is_stubbed_before_current_is_touched(tmp_path):
+    """Regression for the compact/stub ordering defect: obsolete history that
+    carries a heavy NON-text field (outside ``NOTIFICATION_PERSISTENT_IM_HEAVY_FIELDS``,
+    so per-field compaction cannot shrink it) must still be fully stubbed
+    before the current/new message is compacted or stubbed at all, as long as
+    stubbing history alone makes the envelope fit. Before the fix, the second
+    (unprotected) compact pass ran through every budget tier — touching the
+    current message — before stubbing was ever tried on this history."""
+    records = [
+        {
+            "id": f"main:1:{i}",
+            "event_id": f"evt-{i}",
+            "text": "short",
+            "reply_context": "M" * 400,  # bulky, but not a compacted field
+        }
+        for i in range(1, 30)
+    ]
+    records.append(
+        {
+            "id": "main:1:current",
+            "event_id": "evt-current",
+            "text": "C" * 300,
+            "is_current": True,
+        }
+    )
+    persistent = {"mcp": {"telegram": {"messages": records}}}
+
+    capped = meta_block._cap_notification_persistent(
+        _cap_agent(tmp_path), copy.deepcopy(persistent)
+    )
+
+    assert (
+        meta_block._notification_persistent_envelope_chars(capped)
+        <= meta_block.NOTIFICATION_PERSISTENT_MAX_CHARS
+    )
+    telegram = capped["mcp"]["telegram"]
+    current = next(m for m in telegram["messages"] if m.get("is_current"))
+    # Current is completely untouched: stubbing obsolete history's bulky
+    # non-text field alone made the envelope fit, so compaction/stubbing
+    # never had to reach the current message.
+    assert current["text"] == "C" * 300
+    assert "text_truncated" not in current
+    assert "comment" not in current
+    assert telegram.get("dropped_ids")
+    assert any(
+        set(m) == {"id", "event_id"}
+        for m in telegram["messages"]
+        if not m.get("is_current")
+    )
+
+
+def test_drop_stage_stubs_current_message_only_as_last_resort(tmp_path):
+    """Once every other record is already an id-only stub and the envelope
+    still does not fit, the current message may finally be stubbed too."""
+    records = [
+        {"id": f"main:1:{i}", "event_id": f"evt-{i}", "text": "H" * 200}
+        for i in range(1, 20)
+    ]
+    records.append(
+        {
+            "id": "main:1:current",
+            "event_id": "evt-current",
+            "text": "C" * 200,
+            "is_current": True,
+        }
+    )
+    persistent = {"mcp": {"telegram": {"messages": records}}}
+
+    dropped = meta_block._drop_notification_persistent_records(
+        copy.deepcopy(persistent), max_chars=300
+    )
+
+    telegram = dropped["mcp"]["telegram"]
+    current = next(m for m in telegram["messages"] if m.get("id") == "main:1:current")
+    assert set(current) == {"id", "event_id"}
+    assert "main:1:current" in telegram["dropped_ids"]

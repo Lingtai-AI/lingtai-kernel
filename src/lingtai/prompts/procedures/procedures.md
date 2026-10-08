@@ -59,7 +59,7 @@ reliable completion notifications; do not poll just to stay active.
 
 ### Keep context and learning useful
 
-Avoid unnecessary raw bulk; follow `meta_guidance` for result compression and
+Avoid unnecessary raw bulk; read `psyche.instructions` and its `meta_guidance` for result compression and
 current context-pressure guidance. Before molt, read `context-manual` and tend
 the durable stores; do not reset merely because a task ended. Preserve private
 facts as knowledge and reusable procedures as skills. At meaningful real-use
@@ -85,7 +85,7 @@ authority. Do not duplicate adjustable numbers here. Load only relevant detail;
 | Before doing this | Read |
 |---|---|
 | Runtime updates, preset/configuration changes, Nudge controls, or lifecycle recovery | `system-manual` and its matching reference |
-| Context summarize/rebuild/molt or a consequential handoff | `context-manual` |
+| Before molt, or for unfamiliar/consequential Context work or context-loss recovery | `context-manual` |
 | Delegation, long-running host work, or progress-watch management | The matching `daemon`, `avatar`, `shell`, or `task_card` manual |
 | Integration setup, debugging, or ownership changes | `mcp-manual` / `plugin-manual`, then that integration's docs |
 | Durable-store or skill authoring | The relevant `psyche` domain manual |

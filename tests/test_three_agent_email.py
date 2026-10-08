@@ -22,7 +22,7 @@ from unittest.mock import MagicMock
 from lingtai.agent import Agent
 from lingtai.kernel.config import AgentConfig
 from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
-from tests._service_helpers import make_gemini_mock_service as _make_mock_service
+from tests._service_helpers import make_mock_llm_service as _make_mock_service
 
 
 

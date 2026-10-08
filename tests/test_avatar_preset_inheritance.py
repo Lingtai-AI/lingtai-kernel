@@ -107,9 +107,10 @@ def test_avatar_spawns_with_parent_default_when_active_differs(tmp_path):
                 "default": "deepseek", # but default is deepseek
                 "path": "/abs/preset/dir",
             },
-            "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
+            "llm": {"provider": "anthropic", "model": "MiniMax-M2.7-highspeed",
+                    "base_url": "https://api.minimax.io/anthropic",
                     "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
-            "capabilities": {"file": {}, "vision": {"provider": "minimax"}},
+            "capabilities": {"shell": {}, "vision": {"provider": "anthropic"}},
             "soul": {"delay": 120}, "stamina": 3600,
             "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
             "admin": {}, "streaming": False,
@@ -139,7 +140,7 @@ def test_avatar_no_preset_block_inherits_flat_config(tmp_path):
             "agent_name": "parent", "language": "en",
             "llm": {"provider": "x", "model": "y",
                     "api_key": None, "api_key_env": "X"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
             "soul": {"delay": 120}, "stamina": 3600,
             "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
             "admin": {}, "streaming": False,
@@ -153,7 +154,7 @@ def test_avatar_no_preset_block_inherits_flat_config(tmp_path):
     # No preset block, no stripping
     assert "preset" not in avatar_init["manifest"]
     assert avatar_init["manifest"]["llm"]["provider"] == "x"
-    assert avatar_init["manifest"]["capabilities"] == {"file": {}}
+    assert avatar_init["manifest"]["capabilities"] == {"shell": {}}
 
 
 def test_avatar_strips_materialized_when_active_equals_default(tmp_path):
@@ -164,9 +165,10 @@ def test_avatar_strips_materialized_when_active_equals_default(tmp_path):
             "agent_name": "parent", "language": "en",
             "preset": {"active": "deepseek", "default": "deepseek",
                        "path": "/abs/path"},
-            "llm": {"provider": "deepseek", "model": "v4",
+            "llm": {"provider": "openai", "model": "v4",
+                    "base_url": "https://api.deepseek.com",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
             "soul": {"delay": 120}, "stamina": 3600,
             "molt_pressure": 0.8, "molt_prompt": "", "max_turns": 50,
             "admin": {}, "streaming": False,
@@ -226,10 +228,7 @@ def test_avatar_prompt_owner_document_inherits_only_base_and_covenant(tmp_path):
             "base_prompt_file": str(tmp_path / "parent-base.md"),
             "covenant": "parent covenant",
             "covenant_file": str(tmp_path / "parent-covenant.md"),
-            "comment": "parent comment",
-            "comment_file": str(tmp_path / "parent-comment.md"),
         },
-        comment="child spawn comment",
     )
     from lingtai.tools.psyche.settings import serialize_prompt_owner_document
 
@@ -238,5 +237,4 @@ def test_avatar_prompt_owner_document_inherits_only_base_and_covenant(tmp_path):
         base_prompt_file=str(tmp_path / "parent-base.md"),
         covenant="parent covenant",
         covenant_file=str(tmp_path / "parent-covenant.md"),
-        comment="child spawn comment",
     )

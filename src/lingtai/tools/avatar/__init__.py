@@ -1,40 +1,14 @@
-"""Avatar capability — spawn independent peer agents (分身).
+"""Avatar capability: spawn independent peer agents (分身) as detached processes.
 
-Shallow (初生): Copy init.json to a new working dir, strip name, launch.
-    The avatar gets the same LLM config + capabilities but no identity,
-    no pad, no history.  A fresh life — but its own, not yours.
+Shallow copies ``init.json`` plus narrow Psyche owner inputs; deep additionally
+copies durable identity/knowledge state. Both start a fresh conversation, use
+an append-only spawn ledger, and outlive the parent's context.
 
-Deep (二重身): Copy identity files (system/), knowledge/, and exports/
-    plus init.json to a new dir, strip name + history, launch.
-    The avatar is a doppelgänger — same character, pad, knowledge —
-    but starts a fresh conversation.
-
-Both modes launch `lingtai-agent run <dir>` as a fully detached process.
-The avatar is an independent life — its existence does not depend on yours.
-
-Maintains an append-only ledger (delegates/ledger.jsonl) that records
-every spawn event.
-
-Usage (LTP v2 envelope — one action, one strict child input):
-    Agent(capabilities=["avatar"])
-    # avatar(action="spawn", input={"name": "researcher"}, reasoning="...")
-    # avatar(action="spawn", input={"name": "clone", "type": "deep"}, reasoning="...")
-    # avatar(action="settings", input={}, reasoning="...")
-    # avatar(action="manual", input={}, reasoning="...")
-
-Avatar no longer owns a rules-distribution action or an automatic post-spawn
-rules fan-out; the shared `.rules` heartbeat signal/consumer described in
-`src/lingtai/kernel/base_agent/lifecycle.py` is unchanged, and any agent may
-still write a `.rules` file to an explicitly targeted path (e.g. via `shell`).
-See `psyche-manual` for that protocol.
-
-The spawn mission brief is root ``reasoning`` (normalized to ``_reasoning`` by
-ToolExecutor), never an ``input`` property — see ``handle()``.
-
-This module is the static declared official plugin slice: its binder receives
-only the `workdir` and Avatar-specific parent-context ports, while the kernel
-registrar alone reserves and mounts the public `avatar` name. The package-local
-manual child deliberately keeps Avatar's current local-manual behavior.
+The single public ``avatar`` tool exposes strict ``spawn``, read-only ``settings``,
+and package-local ``manual`` actions. Spawn's mission is root ``reasoning``
+(normalized to ``_reasoning``), never nested input. Avatar has no rules action or
+automatic rules fan-out; the kernel ``.rules`` consumer and protected injection are retired
+state. The declared plugin receives only its workdir and Avatar-parent ports.
 """
 from __future__ import annotations
 
@@ -69,7 +43,6 @@ from .settings import (
     BOOT_WAIT_SECONDS,
     MISSION_MIN_CHARACTERS,
     MISSION_PLACEHOLDER_PREFIXES,
-    SPAWN_COMMENT_DEFAULT,
     SPAWN_CONFIRM_DEFAULT,
     SPAWN_DRY_RUN_DEFAULT,
     SPAWN_TYPE_DEFAULT,
@@ -138,42 +111,23 @@ _SPAWN_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "name": {
             "type": "string",
-            "description": (
-                "Avatar name and sibling-directory basename: one segment of "
-                "letters/digits/_/-; 1-64 chars, with no dots or slashes."
-            ),
+            "description": "Canonical sibling basename: 1-64 Unicode letters/digits/_/-; no dots or slashes.",
         },
         "type": {
             "type": ["string", "null"],
             "enum": [*SPAWN_TYPES, None],
-            "description": (
-                "Spawn type: 'shallow' (default) copies init.json plus narrow "
-                "Psyche inputs; 'deep' also copies identity/knowledge. Null uses "
-                "shallow."
-            ),
-        },
-        "comment": {
-            "type": ["string", "null"],
-            "description": (
-                "Persistent child-prompt note; not inherited. Null or empty means "
-                "no note. See avatar-manual for placement and lifetime."
-            ),
+            "description": "'shallow' (default) copies init plus narrow Psyche inputs; 'deep' adds identity/knowledge. Null uses shallow.",
         },
         "dry_run": {
             "type": ["boolean", "null"],
-            "description": (
-                "Preview with no files or process created; null defaults to false."
-            ),
+            "description": "Preview without writes/process, not launch admission; null is false.",
         },
         "confirm": {
             "type": ["boolean", "null"],
-            "description": (
-                "Acknowledge the mission review; required for empty/short/"
-                "placeholder reasoning. Null defaults to false."
-            ),
+            "description": "Acknowledge reviewed empty/short/placeholder reasoning; null is false.",
         },
     },
-    "required": ["name", "type", "comment", "dry_run", "confirm"],
+    "required": ["name", "type", "dry_run", "confirm"],
     "additionalProperties": False,
 }
 
@@ -184,14 +138,13 @@ _DECLARED_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
 )
 
 _DESCRIPTION = (
-    "Spawn an independent, detached avatar, show its fixed settings, or read "
-    "the manual. Use an explicit action and strict input; there is no default. "
-    "Read avatar-manual first. Before the first spawn, call "
-    "avatar(action='manual', input={}, "
-    "reasoning='...'). For spawn, input.name is the canonical sibling-directory "
-    "basename, input.type is shallow (default) or deep, and root reasoning is "
-    "the required mission/first prompt. Use dry_run to preview and confirm only "
-    "after reviewing the mission. settings and manual are read-only."
+    "Spawn an independent detached avatar or inspect its fixed settings/manual. "
+    "Use explicit action and strict input; there is no default. For spawn, "
+    "input.name is the canonical sibling basename, input.type is shallow "
+    "(default) or deep, and root reasoning is the mission/first prompt. "
+    "Use dry_run to preview; confirm acknowledges only mission review. "
+    "settings and manual are read-only. Read avatar-manual for unfamiliar or "
+    "consequential lifecycle, authority, recovery, or footprint decisions."
 )
 
 
@@ -522,7 +475,6 @@ class AvatarManager:
                     "mission_chars": len(preview_mission),
                     "mission_unsafe": unsafe,
                     "mission_reason": reason if unsafe else "",
-                    "comment": args.get("comment", SPAWN_COMMENT_DEFAULT),
                 },
                 "message": "Dry run — no process spawned, no files written.",
             }
@@ -597,9 +549,8 @@ class AvatarManager:
                 first_prompt = f"{parent_prompt}\n\n{reasoning.strip()}"
 
         # Write avatar's init.json (modified copy of parent's).
-            avatar_comment = args.get("comment", SPAWN_COMMENT_DEFAULT)
             avatar_init = self._make_avatar_init(
-                parent_init, peer_name, comment=avatar_comment,
+                parent_init, peer_name,
                 parent_working_dir=parent_working_dir,
             )
             (avatar_working_dir / "init.json").write_text(
@@ -608,7 +559,6 @@ class AvatarManager:
             )
             avatar_psyche = self._make_avatar_psyche_settings(
                 parent_psyche,
-                comment=avatar_comment,
             )
             (avatar_working_dir / "settings").mkdir(exist_ok=True)
             (avatar_working_dir / "settings" / "psyche.json").write_text(
@@ -742,7 +692,6 @@ class AvatarManager:
     @staticmethod
     def _make_avatar_init(
         parent_init: dict, name: str, *,
-        comment: str = "",
         parent_working_dir: "Path | None" = None,
     ) -> dict:
         """Build avatar's init.json from parent's, setting name.
@@ -826,15 +775,15 @@ class AvatarManager:
 
     @staticmethod
     def _make_avatar_psyche_settings(
-        parent_values: Mapping[str, str], *, comment: str,
+        parent_values: Mapping[str, str],
     ) -> str:
         """Build the narrow child prompt-owner document.
 
         Only Psyche's base-prompt and covenant pairs carry forward. A parent
         relative pointer has already been anchored by the owner reader, so this
         preserves its source meaning without copying any System runtime policy
-        or another owner's settings document. The child always gets its spawn
-        comment and never inherits a parent comment pointer.
+        or another owner's settings document. Durable child instructions use
+        ordinary authorized Pad edits; no spawn comment is persisted.
         """
         from lingtai.tools.psyche.settings import serialize_prompt_owner_document
 
@@ -843,7 +792,6 @@ class AvatarManager:
             base_prompt_file=parent_values.get("base_prompt_file"),
             covenant=parent_values.get("covenant"),
             covenant_file=parent_values.get("covenant_file"),
-            comment=comment,
         )
 
     # ------------------------------------------------------------------
@@ -868,29 +816,13 @@ class AvatarManager:
             )
         dst.mkdir(parents=True, exist_ok=True)
 
-        # system/ (character, pad, covenant, etc.)
-        src_system = src / "system"
-        if src_system.is_dir():
-            dst_system = dst / "system"
-            if dst_system.exists():
-                shutil.rmtree(dst_system)
-            shutil.copytree(src_system, dst_system)
-
-        # knowledge/
-        src_knowledge = src / "knowledge"
-        if src_knowledge.is_dir():
-            dst_knowledge = dst / "knowledge"
-            if dst_knowledge.exists():
-                shutil.rmtree(dst_knowledge)
-            shutil.copytree(src_knowledge, dst_knowledge)
-
-        # exports/
-        src_exports = src / "exports"
-        if src_exports.is_dir():
-            dst_exports = dst / "exports"
-            if dst_exports.exists():
-                shutil.rmtree(dst_exports)
-            shutil.copytree(src_exports, dst_exports)
+        for directory in ("system", "knowledge", "exports"):
+            src_directory = src / directory
+            if src_directory.is_dir():
+                dst_directory = dst / directory
+                if dst_directory.exists():
+                    shutil.rmtree(dst_directory)
+                shutil.copytree(src_directory, dst_directory)
 
         # combo.json
         src_combo = src / "combo.json"

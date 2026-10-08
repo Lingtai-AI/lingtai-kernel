@@ -6,11 +6,11 @@ files written directly into a recipient's inbox directory and by polling its own
 inbox (plus subscribed pseudo-agent outboxes) on a fixed cadence. It is the only
 production transport adapter; Core never constructs it.
 
-The concrete addressing (working-directory basename addresses, peer/abs
-resolution), storage layout (``mailbox/{inbox,outbox,sent}/<id>/message.json``
-plus ``attachments/``), atomic writes, handshake-before-delivery, optimistic
-pseudo-outbox claim/rollback, and 0.5-second polling all live here — they are
-the POSIX filesystem mechanism, not part of the technology-neutral Port.
+The concrete addressing (absolute agent-workdir paths), storage layout
+(``mailbox/{inbox,outbox,sent}/<id>/message.json`` plus ``attachments/``),
+atomic writes, handshake-before-delivery, optimistic pseudo-outbox
+claim/rollback, and 0.5-second polling all live here — they are the POSIX
+filesystem mechanism, not part of the technology-neutral Port.
 """
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ from lingtai.kernel.agent_presence import (
     is_agent as _presence_is_agent,
     observe_alive as _presence_observe_alive,
 )
-from lingtai.kernel.handshake import resolve_address
 from lingtai.kernel.mail_transport import MailTransportPort
 from lingtai.kernel.services.mail import _new_mailbox_id
 
@@ -56,11 +55,11 @@ class PosixFilesystemMailAdapter(MailTransportPort):
     Delivers messages by writing files directly to the recipient's inbox
     directory.  Monitors its own inbox via polling.
 
-    Address = working directory name (relative basename).  Example::
+    Send addresses are absolute agent-workdir paths.  Example::
 
         svc = PosixFilesystemMailAdapter(Path("/agents/abc123"))
         svc.listen(on_message=lambda msg: print(msg))  # poll own inbox
-        svc.send("def456", {"message": "hello"})  # write to sibling agent
+        svc.send("/agents/def456", {"message": "hello"})  # write to another agent
     """
 
     def __init__(
@@ -124,8 +123,6 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         self,
         address: str,
         message: dict,
-        *,
-        mode: str = "peer",
     ) -> str | None:
         """Deliver *message* to the agent at *address*.
 
@@ -143,15 +140,12 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         sender-owned staging directory and leaves the recipient's inbox
         untouched.
 
-        Modes:
-        - peer: resolve bare name against parent dir (default — sibling agents in same .lingtai/)
-        - abs: use address as a literal absolute path (cross-network, same machine)
+        Addressing: *address* is a literal absolute path to the recipient's
+        agent workdir (cross-network, same machine).
         """
-        base_dir = self._working_dir.parent  # .lingtai/ directory
-        if mode == "abs":
-            recipient_dir = Path(address)
-        else:
-            recipient_dir = resolve_address(address, base_dir)
+        recipient_dir = Path(address)
+        if not recipient_dir.is_absolute():
+            return f"Address must be an absolute agent-workdir path: {address}"
 
         # --- handshake ------------------------------------------------
         # Observe the recipient's presence through a target-bound presence store

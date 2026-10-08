@@ -25,13 +25,11 @@ Routing entry points: [`CLAUDE.md`](CLAUDE.md).
 
 - **What this is**: the LingTai agent kernel — a Python runtime and SDK
   (distribution name `lingtai`) containing the minimal `lingtai.kernel`
-  runtime, the batteries-included `lingtai` package (tools, LLM adapters,
-  curated MCP servers), and a bundled Rust search sidecar
-  (`crates/lingtai-search-sidecar`) that `setup.py` builds into platform
-  wheels.
-- **Layout**: `src/` (packages), `tests/` (pytest suite), `crates/` (Rust
-  sidecar), `docs/` (long-form references), plus root entry points
-  (`ANATOMY.md`, `CONTRACT.md`).
+  runtime and the batteries-included `lingtai` package (tools, LLM adapters,
+  curated MCP servers), shipped as a pure-Python universal wheel plus sdist
+  from `pyproject.toml`.
+- **Layout**: `src/` (packages), `tests/` (pytest suite), `docs/` (long-form
+  references), plus root entry points (`ANATOMY.md`, `CONTRACT.md`).
 - **Python**: requires Python >= 3.11; classifiers cover 3.11/3.12/3.13.
 - **Docs governance**: every Markdown document must carry `related_files` and
   `maintenance` frontmatter per [`docs.yaml`](docs.yaml), validated by
@@ -54,9 +52,6 @@ python scripts/check_docs_governance.py --check             # any Markdown chang
   `testpaths = ["tests"]`, `pythonpath = ["src"]`). Always invoke it as
   `python -m pytest` from the repository venv, and inspect every non-zero
   exit code.
-- Rust: editable installs can set `LINGTAI_SKIP_RUST_BUILD=1` to skip the
-  sidecar build; if `cargo` is not on `PATH`, `setup.py` degrades gracefully
-  (details in `setup.py`).
 - Linting/typing: ruff and mypy are **not configured** in this repository
   today — no `[tool.ruff]`/`[tool.mypy]` in `pyproject.toml`, no standalone
   config, no CI gate. Do not claim or require their output; the enforced
@@ -95,7 +90,7 @@ following must hold:
   shell paths. Before calling a PR done, make sure the change is
   Native-Windows-safe (case sensitivity, path separators, line endings;
   CI sets `PYTHONUTF8=1`).
-- Release-time wheel building (`wheels.yml`) covers **Ubuntu Linux, macOS
-  (Intel + Apple Silicon), and Windows** via cibuildwheel.
+- Release-time packaging (`wheels.yml`) builds the pure-Python universal
+  wheel (`py3-none-any`) and sdist; there is no per-platform native build.
 - A dedicated macOS CI job is being added separately; do not assume PR-level
   macOS coverage yet.

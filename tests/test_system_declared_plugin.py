@@ -17,7 +17,7 @@ from lingtai.kernel.state import AgentState
 from lingtai.kernel.tool_plugin import ToolPluginHost
 from lingtai.tools.system import DECLARATION, get_schema, handle as handle_system
 from lingtai.tools.system import settings as system_settings
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 
 
 _EXPECTED_SYSTEM_SETTING_KEYS = (
@@ -46,17 +46,13 @@ _EXPECTED_SYSTEM_SETTING_KEYS = (
     "llm.api_key",
     "llm.api_key_env",
     "llm.base_url",
-    "llm.compact_threshold",
     "llm.wire_api",
     "llm.inject_reasoning_fallback",
-    "llm.reasoning_effort_vocab",
     "llm.prompt_cache_namespace",
     "llm.service_tier",
     "llm.thinking",
-    "llm.api_compat",
     "llm.codex_session_anchor",
     "llm.codex_auth_path",
-    "llm.codex_auth_pool_path",
     "llm.codex_base_urls",
     "llm.default_headers",
     "nudge.enabled",
@@ -79,7 +75,7 @@ _EXPECTED_SYSTEM_SETTING_KEYS = (
     "llm.read_timeout_seconds",
 )
 
-_EXPECTED_GEMINI_DEFAULTS = {
+_EXPECTED_ANTHROPIC_DEFAULTS = {
     "cache_miss_budget": 2_000_000,
     "env_file": "<redacted>",
     "venv_path": "<redacted>",
@@ -91,7 +87,7 @@ _EXPECTED_GEMINI_DEFAULTS = {
     "max_rpm": 60,
     "max_aed_attempts": 3,
     "aed_timeout": 360.0,
-    "streaming": False,
+    "streaming": True,
     "activeness": "balanced",
     "admin": "<redacted>",
     "time_awareness": True,
@@ -105,17 +101,13 @@ _EXPECTED_GEMINI_DEFAULTS = {
     "llm.api_key": "<redacted>",
     "llm.api_key_env": "<redacted>",
     "llm.base_url": "<redacted>",
-    "llm.compact_threshold": None,
     "llm.wire_api": None,
     "llm.inject_reasoning_fallback": None,
-    "llm.reasoning_effort_vocab": None,
     "llm.prompt_cache_namespace": None,
     "llm.service_tier": None,
     "llm.thinking": "high",
-    "llm.api_compat": None,
     "llm.codex_session_anchor": "<redacted>",
     "llm.codex_auth_path": "<redacted>",
-    "llm.codex_auth_pool_path": "<redacted>",
     "llm.codex_base_urls": "<redacted>",
     "llm.default_headers": "<redacted>",
     "nudge.enabled": True,
@@ -146,7 +138,7 @@ def _write_init(
     root: dict | None = None,
 ) -> Path:
     effective_manifest = {
-        "llm": {"provider": "gemini", "model": "gemini-test"},
+        "llm": {"provider": "anthropic", "model": "claude-test"},
     }
     if manifest:
         effective_manifest.update(manifest)
@@ -164,7 +156,7 @@ def test_system_declaration_is_static_and_the_real_agent_mounts_it_once(tmp_path
     assert DECLARATION.name == "system"
     assert DECLARATION.public_actions == (
         "refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear",
-        "nirvana", "presets", "name_set", "name_nickname", "settings", "manual",
+        "nirvana", "presets", "name_set", "name_nickname", "meta", "settings", "manual",
     )
     assert DECLARATION.requires == ("workdir", "system_runtime", "identity")
     assert get_schema()["properties"]["action"]["enum"] == list(DECLARATION.public_actions)
@@ -172,7 +164,7 @@ def test_system_declaration_is_static_and_the_real_agent_mounts_it_once(tmp_path
     workdir = tmp_path / "agent"
     _write_init(workdir)
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         working_dir=workdir,
         capabilities={},
     )
@@ -210,9 +202,9 @@ def test_system_declaration_is_static_and_the_real_agent_mounts_it_once(tmp_path
         original_request_cancel = agent._request_turn_cancel
         cancel_observations = []
 
-        def request_cancel():
+        def request_cancel(**kwargs):
             cancel_observations.append((agent.state, agent._asleep.is_set()))
-            original_request_cancel()
+            original_request_cancel(**kwargs)
 
         agent._request_turn_cancel = request_cancel
         slept = handler({
@@ -241,7 +233,7 @@ def test_system_sleep_direct_and_mounted_routes_have_refusal_force_parity(
     explicit escape hatch may transition to ASLEEP.
     """
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         working_dir=tmp_path / route,
         capabilities={},
     )
@@ -279,7 +271,7 @@ def test_system_is_remounted_once_on_live_refresh(tmp_path):
     """Refresh clears and rebuilds the official surface with one System mount."""
     workdir = tmp_path / "agent"
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="system-refresh-remount",
         working_dir=workdir,
         capabilities={},
@@ -289,8 +281,8 @@ def test_system_is_remounted_once_on_live_refresh(tmp_path):
             "agent_name": "system-refresh-remount",
             "language": "en",
             "llm": {
-                "provider": "gemini",
-                "model": "gemini-test",
+                "provider": "anthropic",
+                "model": "claude-test",
                 "api_key": "test-key",
                 "base_url": None,
             },
@@ -353,7 +345,7 @@ def _settings_call(workdir: Path, action_input: dict) -> dict:
 def _clear_system_setting_env(monkeypatch) -> None:
     for name in system_settings.SYSTEM_ENVIRONMENT_SETTING_OWNERS:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
 def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_path):
@@ -364,7 +356,7 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
     rows = result["settings"]
     assert system_settings.SYSTEM_SETTING_KEYS == _EXPECTED_SYSTEM_SETTING_KEYS
     assert tuple(row["key"] for row in rows) == _EXPECTED_SYSTEM_SETTING_KEYS
-    assert len(rows) == len({row["key"] for row in rows}) == 56
+    assert len(rows) == len({row["key"] for row in rows}) == 52
     for row in rows:
         assert tuple(row) == (
             "key", "current", "default", "configurable", "comment",
@@ -382,7 +374,7 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
     }
     by_key = {row["key"]: row for row in rows}
     assert {key: row["default"] for key, row in by_key.items()} == (
-        _EXPECTED_GEMINI_DEFAULTS
+        _EXPECTED_ANTHROPIC_DEFAULTS
     )
     assert {
         key: by_key[key]["default"]
@@ -390,9 +382,6 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
             "language",
             "context_limit",
             "summarize_notification_threshold",
-            "llm.compact_threshold",
-            "llm.reasoning_effort_vocab",
-            "llm.api_compat",
             "llm.codex_tui_dir",
             "llm.codex_transport",
         )
@@ -400,13 +389,12 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
         "language": "en",
         "context_limit": 272_000,
         "summarize_notification_threshold": 3_000,
-        "llm.compact_threshold": None,
-        "llm.reasoning_effort_vocab": None,
-        "llm.api_compat": None,
         "llm.codex_tui_dir": "<redacted>",
         "llm.codex_transport": "rest",
     }
     assert "pseudo_agent_subscriptions" not in by_key
+    for retired in ("llm.api_compat", "llm.reasoning_effort_vocab", "llm.use_responses_api"):
+        assert retired not in by_key
     assert tuple(by_key).index("llm.codex_tui_dir") < tuple(by_key).index(
         "llm.codex_transport"
     )
@@ -420,8 +408,8 @@ def test_system_settings_inventory_has_exact_public_contract(monkeypatch, tmp_pa
     assert by_key["language"]["current"] == by_key["language"]["default"] == "en"
     assert by_key["context_limit"]["current"] == 272_000
     assert by_key["max_rpm"]["current"] == by_key["max_rpm"]["default"] == 60
-    assert by_key["llm.provider"]["current"] == "gemini"
-    assert by_key["llm.model"]["current"] == "gemini-test"
+    assert by_key["llm.provider"]["current"] == "anthropic"
+    assert by_key["llm.model"]["current"] == "claude-test"
     assert by_key["llm.thinking"]["current"] == "high"
     assert by_key["nudge.repeat_interval_seconds"]["current"] == 86_400.0
     assert by_key["llm.codex_transport"]["current"] == "rest"
@@ -549,9 +537,9 @@ def test_system_settings_uses_materialized_preset_and_resolved_current_state(
                 "description": {"summary": "selected test route"},
                 "manifest": {
                     "llm": {
-                        "provider": "custom",
+                        "provider": "openai",
                         "model": "preset-model",
-                        "api_compat": "openai",
+                        "base_url": "https://compat.example/v1",
                         "context_limit": 64_000,
                     },
                     "capabilities": {},
@@ -563,7 +551,7 @@ def test_system_settings_uses_materialized_preset_and_resolved_current_state(
     _write_init(
         tmp_path,
         manifest={
-            "llm": {"provider": "gemini", "model": "authored-model"},
+            "llm": {"provider": "anthropic", "model": "authored-model"},
             "preset": {
                 "active": "selected.json",
                 "default": "selected.json",
@@ -573,9 +561,9 @@ def test_system_settings_uses_materialized_preset_and_resolved_current_state(
     )
 
     rows = {row["key"]: row for row in _settings_call(tmp_path, {})["settings"]}
-    assert rows["llm.provider"]["current"] == "custom"
+    assert rows["llm.provider"]["current"] == "openai"
     assert rows["llm.model"]["current"] == "preset-model"
-    assert rows["llm.api_compat"]["current"] == "openai"
+    assert rows["llm.wire_api"]["current"] == "chat_completions"
     # #1549 moved context_limit out of init/preset ownership. The preset value
     # remains compatibility data and the fixed runtime-policy default wins.
     assert rows["context_limit"]["current"] == 272_000
@@ -625,7 +613,7 @@ def test_system_settings_runtime_policy_rows_use_env_v2_default_precedence(
         "max_rpm": (30, 60),
         "max_aed_attempts": (5, 3),
         "aed_timeout": (42.0, 360.0),
-        "streaming": (True, False),
+        "streaming": (True, True),
         "activeness": ("focused", "balanced"),
     }
     for key, values in expected.items():
@@ -637,396 +625,64 @@ def test_system_settings_runtime_policy_rows_use_env_v2_default_precedence(
         )
 
 
-_NULLABLE_LLM_KEYS = (
-    "llm.compact_threshold",
-    "llm.reasoning_effort_vocab",
-    "llm.api_compat",
+@pytest.mark.parametrize("provider", ("openai", "anthropic", "codex", "claude-code"))
+@pytest.mark.parametrize(
+    "authored",
+    (
+        pytest.param({}, id="omitted"),
+        pytest.param(
+            {
+                "compact_threshold": None,
+                "reasoning_effort_vocab": None,
+                "api_compat": None,
+                "use_responses_api": None,
+            },
+            id="null",
+        ),
+        pytest.param(
+            {
+                "compact_threshold": 4_321,
+                "reasoning_effort_vocab": "seven_tier",
+                "api_compat": "anthropic",
+                "use_responses_api": True,
+            },
+            id="authored",
+        ),
+    ),
 )
+def test_system_settings_retired_llm_routing_keys_have_no_rows(
+    monkeypatch, tmp_path, provider, authored
+):
+    """``api_compat``/``reasoning_effort_vocab``/``use_responses_api`` are
+    recognized-and-ignored legacy keys: every family's inventory projects no
+    row for them and they never change another row."""
+    from lingtai.llm.openai.adapter import OpenAIAdapter
 
-
-def _assert_nullable_llm_projection(
-    monkeypatch,
-    tmp_path: Path,
-    *,
-    provider: str,
-    authored: dict,
-    current: tuple,
-    default: tuple,
-) -> dict[str, dict]:
+    adapter_signature = signature(OpenAIAdapter.__init__)
+    for retired in ("compact_threshold", "reasoning_effort_vocab", "use_responses"):
+        assert retired not in adapter_signature.parameters
     _clear_system_setting_env(monkeypatch)
     _write_init(
         tmp_path,
         manifest={"llm": {"provider": provider, "model": "test", **authored}},
     )
     rows = {row["key"]: row for row in _settings_call(tmp_path, {})["settings"]}
-    assert tuple(rows[key]["current"] for key in _NULLABLE_LLM_KEYS) == current
-    assert tuple(rows[key]["default"] for key in _NULLABLE_LLM_KEYS) == default
-    return rows
-
-
-@pytest.mark.parametrize(
-    "authored,current",
-    (
-        ({}, (100_000, "openai", None)),
-        (
-            {
-                "compact_threshold": None,
-                "reasoning_effort_vocab": None,
-                "api_compat": None,
-            },
-            (None, "openai", None),
-        ),
-        (
-            {
-                "compact_threshold": 4_321,
-                "reasoning_effort_vocab": "seven_tier",
-                "api_compat": "anthropic",
-            },
-            (4_321, "seven_tier", None),
-        ),
-    ),
-    ids=("omitted", "null", "authored"),
-)
-def test_system_settings_nullable_llm_openai_route_current_and_default(
-    monkeypatch, tmp_path, authored, current
-):
-    """Official OpenAI follows _openai and the OpenAIAdapter signature."""
-    from lingtai.llm.openai.adapter import OpenAIAdapter
-
-    adapter_signature = signature(OpenAIAdapter.__init__)
-    assert adapter_signature.parameters["compact_threshold"].default == 100_000
-    assert adapter_signature.parameters["reasoning_effort_vocab"].default == "openai"
-    _assert_nullable_llm_projection(
-        monkeypatch,
-        tmp_path,
-        provider="openai",
-        authored=authored,
-        current=current,
-        default=(100_000, "openai", None),
-    )
-
-
-@pytest.mark.parametrize("provider", ("custom", "grok", "qwen", "kimi"))
-@pytest.mark.parametrize(
-    "authored,current",
-    (
-        ({}, (100_000, "openai", "openai")),
-        (
-            {
-                "compact_threshold": None,
-                "reasoning_effort_vocab": None,
-                "api_compat": None,
-            },
-            (None, "openai", "openai"),
-        ),
-        (
-            {
-                "compact_threshold": None,
-                "reasoning_effort_vocab": "seven_tier",
-                "api_compat": None,
-            },
-            (None, "seven_tier", "openai"),
-        ),
-        (
-            {
-                "compact_threshold": 4_321,
-                "reasoning_effort_vocab": "seven_tier",
-                "api_compat": "openai",
-            },
-            (4_321, "seven_tier", "openai"),
-        ),
-    ),
-    ids=("omitted", "all-null", "compat-null-forwarded-axes", "authored"),
-)
-def test_system_settings_nullable_llm_custom_factory_openai_routes(
-    monkeypatch, tmp_path, provider, authored, current
-):
-    """Every name bound to _custom shares its OpenAI-compatible semantics."""
-    from lingtai.llm.custom.adapter import create_custom_adapter
-
-    assert signature(create_custom_adapter).parameters["api_compat"].default == "openai"
-    _assert_nullable_llm_projection(
-        monkeypatch,
-        tmp_path,
-        provider=provider,
-        authored=authored,
-        current=current,
-        default=(100_000, "openai", "openai"),
-    )
-
-
-@pytest.mark.parametrize("provider", ("custom", "grok", "qwen", "kimi"))
-def test_custom_explicit_compat_null_reaches_registered_factory_after_normalization(
-    monkeypatch, tmp_path, provider
-):
-    """Canonical normalization and the real registered factory agree on null."""
-    from lingtai.llm.custom import adapter as custom_adapter
-    from lingtai.llm.service import (
-        LLMService,
-        build_provider_defaults_from_manifest_llm,
-    )
-
-    captured = {}
-
-    def capture_custom_adapter(**kwargs):
-        captured.update(kwargs)
-        return object()
-
-    monkeypatch.setattr(custom_adapter, "create_custom_adapter", capture_custom_adapter)
-    llm = {
-        "provider": provider,
-        "model": "normalized-test",
-        "api_compat": None,
-        "compact_threshold": None,
-        "reasoning_effort_vocab": "seven_tier",
-        "base_url": "https://example.invalid/v1",
-    }
-    provider_defaults = build_provider_defaults_from_manifest_llm(
-        llm, max_rpm=60, working_dir=tmp_path
-    )
-    assert provider_defaults == {
-        provider: {
-            "max_rpm": 60,
-            "reasoning_effort_vocab": "seven_tier",
-            "compact_threshold": None,
-        }
-    }
-
-    service = LLMService(
-        provider=provider,
-        model=llm["model"],
-        api_key="disposable-key",
-        base_url=llm["base_url"],
-        provider_defaults=provider_defaults,
-    )
-    assert service._adapters[(provider, llm["base_url"])] is not None
-    assert captured["api_compat"] == "openai"
-    assert captured["compact_threshold"] is None
-    assert captured["reasoning_effort_vocab"] == "seven_tier"
-
-
-@pytest.mark.parametrize("provider", ("custom", "grok", "qwen", "kimi"))
-@pytest.mark.parametrize(
-    "api_compat",
-    ("OPENAI", "unexpected", 7, 1.5, [], {}),
-    ids=("uppercase", "unknown", "integer", "float", "list", "object"),
-)
-def test_system_settings_nullable_llm_custom_fallback_uses_openai_defaults(
-    monkeypatch, tmp_path, provider, api_compat
-):
-    """Unvalidated custom compat values reach OpenAI without forwarded axes."""
-    rows = _assert_nullable_llm_projection(
-        monkeypatch,
-        tmp_path,
-        provider=provider,
-        authored={
-            "api_compat": api_compat,
-            "compact_threshold": 4_321,
-            "inject_reasoning_fallback": False,
-            "reasoning_effort_vocab": "seven_tier",
-            "prompt_cache_namespace": "ignored-namespace",
-        },
-        current=(100_000, "openai", "openai"),
-        default=(100_000, "openai", "openai"),
-    )
-    assert (
-        rows["llm.inject_reasoning_fallback"]["current"],
-        rows["llm.inject_reasoning_fallback"]["default"],
-    ) == (True, True)
-    assert (
-        rows["llm.prompt_cache_namespace"]["current"],
-        rows["llm.prompt_cache_namespace"]["default"],
-    ) == (None, None)
-
-
-@pytest.mark.parametrize("provider", ("custom", "grok", "qwen", "kimi"))
-@pytest.mark.parametrize("api_compat", ("anthropic", "gemini"))
-def test_system_settings_custom_exact_non_openai_routes_ignore_generic_axes(
-    monkeypatch, tmp_path, provider, api_compat
-):
-    _clear_system_setting_env(monkeypatch)
-    _write_init(
-        tmp_path,
-        manifest={
-            "llm": {
-                "provider": provider,
-                "model": "exact-compat-test",
-                "api_compat": api_compat,
-                "inject_reasoning_fallback": False,
-                "prompt_cache_namespace": "ignored-namespace",
-            }
-        },
-    )
-
-    rows = {row["key"]: row for row in _settings_call(tmp_path, {})["settings"]}
-    assert (
-        rows["llm.api_compat"]["current"],
-        rows["llm.api_compat"]["default"],
-    ) == (api_compat, "openai")
-    for key in (
-        "llm.inject_reasoning_fallback",
-        "llm.prompt_cache_namespace",
-    ):
-        assert (rows[key]["current"], rows[key]["default"]) == (None, None)
-
-
-@pytest.mark.parametrize(
-    "authored",
-    (
-        {"api_compat": "anthropic"},
-        {
-            "api_compat": "anthropic",
-            "compact_threshold": None,
-            "reasoning_effort_vocab": None,
-        },
-        {
-            "api_compat": "anthropic",
-            "compact_threshold": 4_321,
-            "reasoning_effort_vocab": "seven_tier",
-        },
-    ),
-    ids=("omitted", "null", "authored"),
-)
-def test_system_settings_nullable_llm_custom_non_openai_route(
-    monkeypatch, tmp_path, authored
-):
-    _assert_nullable_llm_projection(
-        monkeypatch,
-        tmp_path,
-        provider="custom",
-        authored=authored,
-        current=(None, None, "anthropic"),
-        default=(None, None, "openai"),
-    )
-
-
-@pytest.mark.parametrize(
-    "authored,current",
-    (
-        ({}, (None, None, None)),
-        (
-            {
-                "compact_threshold": None,
-                "reasoning_effort_vocab": None,
-                "api_compat": None,
-            },
-            (None, None, None),
-        ),
-        (
-            {
-                "compact_threshold": 4_321,
-                "reasoning_effort_vocab": "seven_tier",
-                "api_compat": "openai",
-            },
-            (4_321, None, None),
-        ),
-    ),
-    ids=("omitted", "null", "authored"),
-)
-def test_system_settings_nullable_llm_deepseek_route(
-    monkeypatch, tmp_path, authored, current
-):
-    _assert_nullable_llm_projection(
-        monkeypatch,
-        tmp_path,
-        provider="deepseek",
-        authored=authored,
-        current=current,
-        default=(None, None, None),
-    )
-
-
-@pytest.mark.parametrize(
-    "authored",
-    (
-        {},
-        {
-            "compact_threshold": None,
-            "reasoning_effort_vocab": None,
-            "api_compat": None,
-        },
-        {
-            "compact_threshold": 4_321,
-            "reasoning_effort_vocab": "seven_tier",
-            "api_compat": "openai",
-        },
-    ),
-    ids=("omitted", "null", "authored"),
-)
-def test_system_settings_nullable_llm_gemini_ignored_route(
-    monkeypatch, tmp_path, authored
-):
-    _assert_nullable_llm_projection(
-        monkeypatch,
-        tmp_path,
-        provider="gemini",
-        authored=authored,
-        current=(None, None, None),
-        default=(None, None, None),
-    )
-
-
-@pytest.mark.parametrize("provider", ("codex", "codex-pool", "codex_pool"))
-@pytest.mark.parametrize(
-    "authored",
-    (
-        {},
-        {
-            "compact_threshold": None,
-            "reasoning_effort_vocab": None,
-            "api_compat": None,
-        },
-        {
-            "compact_threshold": 4_321,
-            "reasoning_effort_vocab": "seven_tier",
-            "api_compat": "openai",
-        },
-    ),
-    ids=("omitted", "null", "authored"),
-)
-def test_system_settings_nullable_llm_native_codex_routes_ignore_generic_axes(
-    monkeypatch, tmp_path, provider, authored
-):
-    _assert_nullable_llm_projection(
-        monkeypatch,
-        tmp_path,
-        provider=provider,
-        authored=authored,
-        current=(None, None, None),
-        default=(None, None, None),
-    )
+    for retired in ("llm.api_compat", "llm.reasoning_effort_vocab", "llm.use_responses_api"):
+        assert retired not in rows
+    expected_wire = {
+        "openai": "chat_completions",
+        "codex": "responses",
+    }.get(provider)
+    assert rows["llm.wire_api"]["current"] == expected_wire
 
 
 _BUILT_IN_SELECTED_FACTORY_AXES = {
     # provider: (canonical factory spelling, wire default, fallback default,
     #            namespace default, authored fallback, authored namespace)
-    "gemini": ("gemini", None, None, None, None, None),
     "anthropic": ("anthropic", None, None, None, None, None),
     "openai": ("openai", "chat_completions", True, None, False, "authored-ns"),
-    "minimax": ("minimax", None, None, None, None, None),
-    "openrouter": ("openrouter", None, None, None, None, None),
-    "custom": ("custom", "chat_completions", True, None, False, "authored-ns"),
     "codex": ("codex", "responses", None, None, None, None),
-    "codex-pool": ("codex", "responses", None, None, None, None),
-    "codex_pool": ("codex", "responses", None, None, None, None),
     "claude-code": ("claude-code", None, None, None, None, None),
-    "claude_code": ("claude-code", None, None, None, None, None),
-    "kimi-code": ("kimi-code", None, None, None, None, None),
-    "kimi_code": ("kimi-code", None, None, None, None, None),
-    "deepseek": (
-        "deepseek",
-        "chat_completions",
-        True,
-        "deepseek",
-        False,
-        "authored-ns",
-    ),
-    "glm": ("zhipu", None, None, None, None, None),
-    "zhipu": ("zhipu", None, None, None, None, None),
-    "mimo": ("mimo", "responses", None, None, None, None),
-    "grok": ("custom", "chat_completions", True, None, False, "authored-ns"),
-    "qwen": ("custom", "chat_completions", True, None, False, "authored-ns"),
-    "kimi": ("custom", "chat_completions", True, None, False, "authored-ns"),
 }
 
 
@@ -1101,9 +757,9 @@ def test_system_settings_selected_axes_cover_every_registered_builtin_factory(
     "provider,expected",
     (
         ("openai", (False, True)),
-        ("custom", (False, True)),
-        ("deepseek", (True, True)),
-        ("gemini", (None, None)),
+        ("anthropic", (None, None)),
+        ("codex", (None, None)),
+        ("claude-code", (None, None)),
     ),
 )
 def test_system_settings_reasoning_fallback_env_applies_only_to_consuming_route(
@@ -1125,20 +781,13 @@ def test_system_settings_reasoning_fallback_env_applies_only_to_consuming_route(
 @pytest.mark.parametrize(
     "provider,llm_extra,expected",
     (
-        ("mimo", {"wire_api": "auto"}, ("auto", "responses")),
         ("codex", {"wire_api": "auto"}, ("responses", "responses")),
         ("openai", {"wire_api": "responses"}, ("responses", "chat_completions")),
-        ("deepseek", {"wire_api": "auto"}, ("auto", "chat_completions")),
-        (
-            "custom",
-            {"api_compat": "openai", "wire_api": "responses"},
-            ("responses", "chat_completions"),
-        ),
-        (
-            "custom",
-            {"api_compat": "anthropic", "wire_api": "auto"},
-            (None, None),
-        ),
+        ("openai", {"wire_api": "chat_completions"}, ("chat_completions", "chat_completions")),
+        ("openai", {"wire_api": "auto"}, ("chat_completions", "chat_completions")),
+        ("openai", {}, ("chat_completions", "chat_completions")),
+        ("anthropic", {"wire_api": "auto"}, (None, None)),
+        ("claude-code", {}, (None, None)),
     ),
 )
 def test_system_settings_wire_api_preserves_only_selected_factory_semantics(
@@ -1158,29 +807,25 @@ def test_system_settings_wire_api_preserves_only_selected_factory_semantics(
 
 
 @pytest.mark.parametrize(
-    "provider,internal_selector,effective_wire",
+    "defaults,internal_selector,effective_wire",
     (
-        ("openai", "auto", "chat_completions"),
-        ("custom", "auto", "chat_completions"),
-        ("grok", "auto", "chat_completions"),
-        ("qwen", "auto", "chat_completions"),
-        ("kimi", "auto", "chat_completions"),
-        ("deepseek", "auto", "chat_completions"),
-        ("mimo", "responses", "responses"),
+        ({}, "chat_completions", "chat_completions"),
+        ({"wire_api": "auto"}, "chat_completions", "chat_completions"),
+        ({"wire_api": "chat_completions"}, "chat_completions", "chat_completions"),
+        ({"wire_api": "responses"}, "responses", "responses"),
     ),
 )
+@pytest.mark.parametrize("base_url", (None, "https://example.invalid/v1"))
 def test_openai_compatible_wire_defaults_match_real_registered_factories(
-    provider, internal_selector, effective_wire
+    defaults, internal_selector, effective_wire, base_url
 ):
     """Independent constructors catch drift in the pure SHOW projection."""
     from lingtai.llm.service import LLMService
 
-    factory_kwargs = {}
-    if provider in {"custom", "grok", "qwen", "kimi"}:
-        factory_kwargs["base_url"] = "https://example.invalid/v1"
-    adapter = LLMService._adapter_registry[provider](
-        model=f"{provider}-test",
-        defaults={},
+    factory_kwargs = {"base_url": base_url} if base_url else {}
+    adapter = LLMService._adapter_registry["openai"](
+        model="openai-test",
+        defaults=dict(defaults),
         api_key="disposable-key",
         **factory_kwargs,
     )
@@ -1192,23 +837,24 @@ def test_openai_compatible_wire_defaults_match_real_registered_factories(
 
 
 def test_ignoring_factory_does_not_forward_wire_api(monkeypatch):
-    """Gemini is an independent oracle for routes that ignore the selector."""
-    from lingtai.llm.gemini import adapter as gemini_adapter
+    """Anthropic is an independent oracle for routes that ignore the selector."""
+    from lingtai.llm.anthropic import adapter as anthropic_adapter
     from lingtai.llm.service import LLMService
 
     captured = {}
 
-    def capture_gemini_adapter(**kwargs):
+    def capture_anthropic_adapter(**kwargs):
         captured.update(kwargs)
         return object()
 
-    monkeypatch.setattr(gemini_adapter, "GeminiAdapter", capture_gemini_adapter)
-    LLMService._adapter_registry["gemini"](
-        model="gemini-test",
+    monkeypatch.setattr(anthropic_adapter, "AnthropicAdapter", capture_anthropic_adapter)
+    LLMService._adapter_registry["anthropic"](
+        model="claude-test",
         defaults={
             "wire_api": "responses",
             "inject_reasoning_fallback": False,
             "prompt_cache_namespace": "ignored-namespace",
+            "service_tier": "fast",
         },
         api_key="disposable-key",
     )
@@ -1216,6 +862,7 @@ def test_ignoring_factory_does_not_forward_wire_api(monkeypatch):
         "wire_api",
         "inject_reasoning_fallback",
         "prompt_cache_namespace",
+        "service_tier",
     }.isdisjoint(captured)
 
 
@@ -1223,100 +870,71 @@ def test_registered_factories_capture_reasoning_and_cache_projection_oracle(
     monkeypatch
 ):
     """Hermetic constructor capture pins the real factory forwarding/defaults."""
-    from lingtai.llm.custom import adapter as custom_adapter
     from lingtai.llm.openai import adapter as openai_adapter
     from lingtai.llm.service import LLMService
 
     captured = []
 
     def capture_openai_adapter(**kwargs):
-        captured.append(("openai", kwargs))
-        return object()
-
-    def capture_custom_adapter(**kwargs):
-        captured.append(("custom", kwargs))
+        captured.append(kwargs)
         return object()
 
     monkeypatch.setattr(openai_adapter, "OpenAIAdapter", capture_openai_adapter)
-    monkeypatch.setattr(custom_adapter, "create_custom_adapter", capture_custom_adapter)
 
     LLMService._adapter_registry["openai"](
         model="openai-test",
         defaults={
             "inject_reasoning_fallback": False,
             "prompt_cache_namespace": "authored-ns",
+            "service_tier": "fast",
+            "wire_api": "auto",
         },
         api_key="disposable-key",
     )
-    LLMService._adapter_registry["custom"](
-        model="custom-test",
-        defaults={
-            "api_compat": "openai",
-            "inject_reasoning_fallback": False,
-            "prompt_cache_namespace": "authored-ns",
-        },
-        api_key="disposable-key",
-        base_url="https://example.invalid/v1",
-    )
-    LLMService._adapter_registry["deepseek"](
-        model="deepseek-test",
+    LLMService._adapter_registry["openai"](
+        model="openai-test",
         defaults={},
         api_key="disposable-key",
-    )
-
-    assert captured[0][0] == "openai"
-    assert captured[0][1]["inject_reasoning_fallback"] is False
-    assert captured[0][1]["prompt_cache_namespace"] == "authored-ns"
-    assert captured[1][0] == "custom"
-    assert captured[1][1]["api_compat"] == "openai"
-    assert captured[1][1]["inject_reasoning_fallback"] is False
-    assert captured[1][1]["prompt_cache_namespace"] == "authored-ns"
-    assert captured[2][0] == "openai"
-    assert captured[2][1]["inject_reasoning_fallback"] is True
-    assert captured[2][1]["prompt_cache_namespace"] == "deepseek"
-
-
-@pytest.mark.parametrize("api_compat", ("OPENAI", "unexpected", 7, [], {}))
-def test_custom_adapter_finite_fallback_selects_openai_without_client(
-    monkeypatch, api_compat
-):
-    from lingtai.llm.custom import adapter as custom_adapter
-    from lingtai.llm.openai import adapter as openai_adapter
-
-    captured = {}
-
-    def capture_openai_adapter(**kwargs):
-        captured.update(kwargs)
-        return object()
-
-    monkeypatch.setattr(openai_adapter, "OpenAIAdapter", capture_openai_adapter)
-    result = custom_adapter.create_custom_adapter(
-        api_key="disposable-key",
-        api_compat=api_compat,
         base_url="https://example.invalid/v1",
     )
 
-    assert result is not None
-    assert captured["api_key"] == "disposable-key"
-    assert captured["base_url"] == "https://example.invalid/v1"
+    assert captured[0]["inject_reasoning_fallback"] is False
+    assert captured[0]["prompt_cache_namespace"] == "authored-ns"
+    assert captured[0]["service_tier"] == "priority"
+    assert captured[0]["wire_api"] == "auto"
+    assert "inject_reasoning_fallback" not in captured[1]
+    assert "prompt_cache_namespace" not in captured[1]
+    assert "service_tier" not in captured[1]
+    assert captured[1]["base_url"] == "https://example.invalid/v1"
 
 
 def test_codex_wire_default_matches_real_shared_registered_factory():
-    """All Codex spellings share one constructor that forces Responses."""
+    """The one registered Codex constructor forces Responses; the removed
+    in-kernel pool spellings are no longer registered aliases."""
     from lingtai.llm.service import LLMService
 
     codex_factory = LLMService._adapter_registry["codex"]
-    assert codex_factory is LLMService._adapter_registry["codex-pool"]
-    assert codex_factory is LLMService._adapter_registry["codex_pool"]
+    assert "codex-pool" not in LLMService._adapter_registry
+    assert "codex_pool" not in LLMService._adapter_registry
     codex = codex_factory(
         model="codex-test", defaults={}, api_key="ignored-disposable-key"
     )
     assert codex._should_use_responses() is True
 
 
-@pytest.mark.parametrize("provider", ("codex", "codex-pool", "codex_pool"))
-def test_system_settings_service_tier_is_codex_only(
-    monkeypatch, tmp_path, provider
+@pytest.mark.parametrize("provider", ("codex", "openai"))
+@pytest.mark.parametrize(
+    "authored,expected",
+    (
+        (" fast ", "fast"),
+        ("priority", "priority"),
+        ("flex", "flex"),
+        ("auto", "auto"),
+        ("default", "default"),
+    ),
+)
+def test_system_settings_service_tier_reports_standard_values_on_forwarding_routes(
+    monkeypatch, tmp_path, provider, authored, expected
 ):
     from lingtai.llm._register import _normalize_service_tier
 
@@ -1328,18 +946,18 @@ def test_system_settings_service_tier_is_codex_only(
             "llm": {
                 "provider": provider,
                 "model": "tier-test",
-                "service_tier": " fast ",
+                "service_tier": authored,
             }
         },
     )
     row = {row["key"]: row for row in _settings_call(tmp_path, {})["settings"]}[
         "llm.service_tier"
     ]
-    assert (row["current"], row["default"]) == ("fast", None)
+    assert (row["current"], row["default"]) == (expected, None)
 
 
-@pytest.mark.parametrize("provider", ("openai", "custom", "mimo", "gemini"))
-def test_system_settings_service_tier_is_null_for_ignoring_routes(
+@pytest.mark.parametrize("provider", ("anthropic", "claude-code"))
+def test_system_settings_service_tier_is_null_for_non_forwarding_routes(
     monkeypatch, tmp_path, provider
 ):
     _clear_system_setting_env(monkeypatch)
@@ -1349,7 +967,7 @@ def test_system_settings_service_tier_is_null_for_ignoring_routes(
             "llm": {
                 "provider": provider,
                 "model": "tier-test",
-                "service_tier": "unsupported-but-ignored",
+                "service_tier": "fast",
             }
         },
     )
@@ -1359,15 +977,16 @@ def test_system_settings_service_tier_is_null_for_ignoring_routes(
     assert (row["current"], row["default"]) == (None, None)
 
 
+@pytest.mark.parametrize("provider", ("codex", "openai"))
 def test_system_settings_invalid_codex_service_tier_fails_complete_inventory(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, provider
 ):
     _clear_system_setting_env(monkeypatch)
     _write_init(
         tmp_path,
         manifest={
             "llm": {
-                "provider": "codex",
+                "provider": provider,
                 "model": "tier-test",
                 "service_tier": "unsupported",
             }
@@ -1381,18 +1000,33 @@ def test_system_settings_invalid_codex_service_tier_fails_complete_inventory(
 
 
 @pytest.mark.parametrize(
+    "provider",
+    ("codex-pool", "codex_pool", "deepseek", "gemini", "custom", "mimo", "claude_code"),
+)
+def test_system_settings_removed_provider_fails_complete_inventory(
+    monkeypatch, tmp_path, provider
+):
+    """A removed provider name is an invalid init, so the settings inventory
+    fails closed instead of projecting a route for it."""
+    _clear_system_setting_env(monkeypatch)
+    _write_init(
+        tmp_path,
+        manifest={"llm": {"provider": provider, "model": "pool-test"}},
+    )
+    assert _settings_call(tmp_path, {}) == {
+        "status": "failed",
+        "error_code": "SETTINGS_UNAVAILABLE",
+        "message": "settings inventory is unavailable",
+    }
+
+
+@pytest.mark.parametrize(
     "provider,expected_default",
     (
         ("codex", "default"),
-        ("codex-pool", "default"),
-        ("codex_pool", "default"),
-        ("deepseek", "default"),
-        ("openai", "high"),
-        ("custom", "high"),
-        ("grok", "high"),
-        ("qwen", "high"),
-        ("kimi", "high"),
-        ("gemini", "high"),
+        ("openai", "default"),
+        ("anthropic", "high"),
+        ("claude-code", "high"),
     ),
 )
 def test_system_settings_thinking_default_uses_selected_route_hydration(
@@ -1432,7 +1066,7 @@ def test_system_settings_thinking_current_is_authored_but_default_stays_omitted_
     row = {row["key"]: row for row in _settings_call(tmp_path, {})["settings"]}[
         "llm.thinking"
     ]
-    assert (row["current"], row["default"]) == ("low", "high")
+    assert (row["current"], row["default"]) == ("low", "default")
 
 
 def test_system_selected_provider_api_key_matches_boot_authored_sources_only(
@@ -1490,12 +1124,12 @@ def test_system_settings_redacts_sensitive_effective_values(monkeypatch, tmp_pat
         tmp_path,
         manifest={
             "llm": {
-                "provider": "custom",
+                "provider": "openai",
                 "model": "redaction-model",
                 "api_key": credential_secret,
                 "base_url": f"https://user:{credential_secret}@example.invalid/v1",
-                "api_compat": "openai",
                 "codex_auth_path": f"secrets/{path_secret}.json",
+                # Retired and legacy-ignored: no row, and never echoed.
                 "codex_auth_pool_path": f"secrets/{path_secret}-pool.json",
                 "codex_base_urls": [f"https://{credential_secret}@example.invalid"],
                 "default_headers": {"Authorization": header_secret},
@@ -1530,12 +1164,12 @@ def test_system_settings_redacts_sensitive_effective_values(monkeypatch, tmp_pat
         "llm.api_key",
         "llm.base_url",
         "llm.codex_auth_path",
-        "llm.codex_auth_pool_path",
         "llm.codex_base_urls",
         "llm.default_headers",
     ):
         assert rows[key]["current"] == "<redacted>"
         assert rows[key]["default"] == "<redacted>"
+    assert "llm.codex_auth_pool_path" not in rows
     assert "pseudo_agent_subscriptions" not in rows
 
 
@@ -1661,36 +1295,6 @@ def test_system_settings_ignores_retired_non_finite_init_runtime_policy(
     "manifest_patch",
     (
         pytest.param({"disable": [float("nan")]}, id="disable-nan"),
-        pytest.param(
-            {
-                "llm": {
-                    "provider": "custom",
-                    "model": "nonfinite-test",
-                    "api_compat": float("nan"),
-                }
-            },
-            id="api-compat-scalar-nan",
-        ),
-        pytest.param(
-            {
-                "llm": {
-                    "provider": "custom",
-                    "model": "nonfinite-test",
-                    "api_compat": ["nested", float("inf")],
-                }
-            },
-            id="api-compat-nested-positive-infinity",
-        ),
-        pytest.param(
-            {
-                "llm": {
-                    "provider": "custom",
-                    "model": "nonfinite-test",
-                    "api_compat": {"nested": [float("-inf")]},
-                }
-            },
-            id="api-compat-nested-negative-infinity",
-        ),
     ),
 )
 def test_system_settings_rejects_non_json_finite_canonical_inputs(
@@ -1706,28 +1310,35 @@ def test_system_settings_rejects_non_json_finite_canonical_inputs(
     }
 
 
-def test_system_settings_preserves_valid_disable_and_finite_structured_compat(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    "api_compat",
+    (
+        pytest.param(float("nan"), id="scalar-nan"),
+        pytest.param(["nested", float("inf")], id="nested-positive-infinity"),
+        pytest.param({"finite": [1.5, {"flag": True}]}, id="finite-structured"),
+    ),
+)
+def test_system_settings_ignores_retired_api_compat_of_any_shape(
+    monkeypatch, tmp_path, api_compat
 ):
+    """The retired ``api_compat`` key is recognized-and-ignored: never
+    type-checked, never a row, and it never breaks the inventory."""
     _clear_system_setting_env(monkeypatch)
     _write_init(
         tmp_path,
         manifest={
             "disable": ["shell", "web"],
             "llm": {
-                "provider": "custom",
-                "model": "finite-structured-test",
-                "api_compat": {"finite": [1.5, {"flag": True}]},
+                "provider": "openai",
+                "model": "retired-compat-test",
+                "api_compat": api_compat,
             },
         },
     )
 
     rows = {row["key"]: row for row in _settings_call(tmp_path, {})["settings"]}
     assert rows["disable"]["current"] == ["shell", "web"]
-    assert (
-        rows["llm.api_compat"]["current"],
-        rows["llm.api_compat"]["default"],
-    ) == ("openai", "openai")
+    assert "llm.api_compat" not in rows
 
 
 def test_system_settings_unknown_provider_fails_complete_inventory(
@@ -1880,8 +1491,12 @@ def test_system_settings_classification_covers_init_and_environment_registries()
         "/manifest/context_serialization_enabled",
         "/manifest/llm/codex_thread_salt",
         "/manifest/llm/context_limit",
+        "/manifest/llm/codex_auth_pool_path",
     ):
         assert required_non_setting in init_excluded
+    assert "/manifest/llm/codex_auth_pool_path" in (
+        system_settings.SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS
+    )
 
     classification = system_settings.SYSTEM_ENVIRONMENT_CLASSIFICATION
     assert classification["system"] == set(
@@ -1925,6 +1540,7 @@ def test_system_settings_classification_covers_init_and_environment_registries()
         "LINGTAI_TUI_DIR"
     ] == "llm.codex_tui_dir"
     assert "llm.codex_thread_salt" not in system_settings.SYSTEM_SETTING_KEYS
+    assert "llm.codex_auth_pool_path" not in system_settings.SYSTEM_SETTING_KEYS
     assert "pseudo_agent_subscriptions" not in system_settings.SYSTEM_SETTING_KEYS
     assert not any(
         key.startswith(("soul.", "shell.", "daemon.", "notification."))
@@ -2003,10 +1619,11 @@ def test_system_manual_routes_declared_ltp_and_settings_owners():
         "reference/settings-inventory/SKILL.md",
         "reference/environment-variables/SKILL.md",
         "reference/llm-adapters/SKILL.md",
+        "reference/subs-pool/SKILL.md",
         "reference/sqlite-log-query/SKILL.md",
         "reference/trajectory-mining/SKILL.md",
         "reference/goal-manual/SKILL.md",
-        "reference/how-to-change-name/SKILL.md",
+        "reference/migration-guide/SKILL.md",
         "reference/external-attach-diagnostic/SKILL.md",
         "reference/tool-plugin-settings/SKILL.md",
     )

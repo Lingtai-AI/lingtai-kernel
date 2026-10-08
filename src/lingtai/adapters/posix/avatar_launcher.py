@@ -22,6 +22,10 @@ class PosixAvatarLauncherAdapter:
                 "close_fds": True,
             }
             environment = dict(request.environment or {})
+            # A resident ACP endpoint is an opt-in for the parent Agent only.
+            # Never pass its refresh marker to an independently launched Avatar.
+            acp_marker = "LINGTAI_ACP_SOCKET_AGENT_DIR"
+            has_acp_marker = acp_marker in os.environ or acp_marker in environment
             if request.authority_lease is not None:
                 from lingtai.adapters.acp.driver_authority import (
                     DRIVER_AUTHORITY_FD_ENV,
@@ -31,8 +35,10 @@ class PosixAvatarLauncherAdapter:
                 authority_fd = consume_posix_child_endpoint_lease(request.authority_lease)
                 environment[DRIVER_AUTHORITY_FD_ENV] = str(authority_fd)
                 kwargs["pass_fds"] = (authority_fd,)
-            if environment:
-                kwargs["env"] = {**os.environ, **environment}
+            if environment or has_acp_marker:
+                child_environment = {**os.environ, **environment}
+                child_environment.pop(acp_marker, None)
+                kwargs["env"] = child_environment
             process = subprocess.Popen(list(request.argv), **kwargs)
         finally:
             if authority_fd is not None:

@@ -22,7 +22,7 @@ def _write_preset(tmp_path: Path) -> Path:
                         "api_key": "preset-key",
                         "base_url": None,
                     },
-                    "capabilities": {"file": {}},
+                    "capabilities": {"shell": {}},
                 },
             }
         ),
@@ -74,7 +74,7 @@ def test_standalone_direct_preset_dispatch_and_readback(
 
     monkeypatch.setattr(DaemonManager, "_spawn_detached_lingtai_run", capture_spawn)
 
-    missing = [{"task": "missing preset must fail", "tools": ["file"]}]
+    missing = [{"task": "missing preset must fail", "tools": ["shell"]}]
     if driver == "service":
         service = DaemonService(state_root)
         refusal = service.emanate(missing)
@@ -97,7 +97,7 @@ def test_standalone_direct_preset_dispatch_and_readback(
 
     task = {
         "task": "prove standalone direct-preset dispatch",
-        "tools": ["file"],
+        "tools": ["shell"],
         "preset": str(preset),
     }
     if driver == "service":
@@ -113,7 +113,7 @@ def test_standalone_direct_preset_dispatch_and_readback(
         )
         result = json.loads(capsys.readouterr().out)
 
-    assert result["status"] == "dispatched"
+    assert result["status"] == "dispatched", result
     daemon_id = result["ids"][0]
     run_dir = state_root / "daemons" / daemon_id
     state = json.loads((run_dir / "daemon.json").read_text(encoding="utf-8"))

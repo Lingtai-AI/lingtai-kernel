@@ -61,6 +61,10 @@ class _FakeAgent:
         self.send_calls: list[tuple[str, str | None]] = []
         self.logs: list[tuple[str, dict]] = []
 
+    def _publish_memory_length_warning(self, lifecycle_id):
+        assert self.started
+        self.logs.append(("memory_warning", {"lifecycle_id": lifecycle_id}))
+
     def start(self):
         self.started = True
 
@@ -247,3 +251,28 @@ def test_non_refresh_boot_with_pending_recovery_never_sends(tmp_path, monkeypatc
 
     assert agent.send_calls == []
     assert not any(evt == "refresh_kickstart_deferred" for evt, _ in agent.logs)
+
+
+@pytest.mark.parametrize("refresh", [False, True])
+def test_memory_warning_only_after_successful_refresh_start(tmp_path, monkeypatch, refresh):
+    agent = _FakeAgent(poisoned=False, working_dir=tmp_path)
+    _patch_run_dependencies(monkeypatch, tmp_path, agent)
+    if refresh:
+        (tmp_path / ".refresh.taken").touch()
+    cli.run(tmp_path)
+    warnings = [fields for name, fields in agent.logs if name == "memory_warning"]
+    assert len(warnings) == int(refresh)
+    if refresh:
+        assert warnings[0]["lifecycle_id"].startswith("refresh-")
+
+
+def test_failed_refresh_start_does_not_warn(tmp_path, monkeypatch):
+    agent = _FakeAgent(poisoned=False, working_dir=tmp_path)
+    _patch_run_dependencies(monkeypatch, tmp_path, agent)
+    (tmp_path / ".refresh.taken").touch()
+    def fail():
+        raise RuntimeError("start failed")
+    monkeypatch.setattr(agent, "start", fail)
+    with pytest.raises(RuntimeError, match="start failed"):
+        cli.run(tmp_path)
+    assert not any(name == "memory_warning" for name, _ in agent.logs)

@@ -40,6 +40,13 @@ derived adapter as `derived_admission_port_unconnected`; do not install a
 permissive fallback or reuse a root decision. A retry requests a new admission
 at the next real provider call.
 
+For a resident ACP attach, the Agent's service uses the connection-scoped
+router. The correlated attach turn binds its own provider and derived-launch
+Ports; ordinary local turns retain their existing path. The router must never
+substitute the resident's local grant for an attached turn: missing or denied
+connection authority fails before model I/O. The authority is closed when the
+ACP connection closes; no turn-start grant is cached.
+
 ## Verifying a change
 
 Run:

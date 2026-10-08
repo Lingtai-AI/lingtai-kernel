@@ -284,14 +284,15 @@ _DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 _DESCRIPTION = (
-    "Maintain one channel-neutral Task Card per agent. start runs an existing "
-    "Python renderer inside the working directory; non-empty stdout is the full "
-    "body written atomically to taskcard/taskcard.md, then exact active is written "
-    "to taskcard/status. One watch only. Keep output truthful for meaningful "
-    "long-running, multi-step, or parallel work, not quick ritual updates. stop "
-    "pauses/preserves; remove retires then deletes, so use it only after completion, "
-    "cancellation, or abandonment. Consumers project state independently. Restart "
-    "after expiry by starting a new watch if work continues. Use settings and manual for detail."
+    "One channel-neutral Task Card per agent. For meaningful long-running, "
+    "multi-step, or parallel work, start an existing Python renderer inside the "
+    "working directory: successful non-empty stdout is the full body written to "
+    "taskcard/taskcard.md, then taskcard/status becomes exact active. One watch; "
+    "keep output truthful and skip quick ritual updates. inspect/retry use "
+    "watch_id. stop pauses and preserves; remove retires then deletes after "
+    "completion, cancellation, or abandonment. If expiry meets continuing work, "
+    "start a new watch. Consumers project independently; manual and settings route "
+    "detail."
 )
 
 _ACTION_DESCRIPTION = (

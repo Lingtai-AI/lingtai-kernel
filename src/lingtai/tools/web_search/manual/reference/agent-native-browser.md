@@ -1,151 +1,51 @@
 ---
 name: web-manual-agent-native-browser
 description: >
-  Agent-native browser automation with chrome-devtools-mcp: real Chrome over
-  CDP, dedicated lightweight profile, snapshot-first workflow, SPA form
-  filling (fill_form + JS native setter for Angular), receipt uploads, and
-  when to choose it over static browse.
-version: 1.0.1
-last_changed_at: "2026-09-04T00:00:00Z"
+  Separate interactive Chrome DevTools MCP route for forms, login, SPA pages,
+  uploads, and human verification that static Web browse intentionally cannot do.
+version: 2.0.0
+last_changed_at: "2026-09-09T10:53:00Z"
 related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/tools/web_search/manual/reference/tier-3-playwright.md
 maintenance: |
-  Keep this bundled web-search reference synchronized with chrome-devtools-mcp
-  releases and with LingTai MCP registration mechanics (mcp-manual).
+  Keep this separate-channel route aligned with the current Chrome DevTools MCP
+  and mcp-manual guidance. It is not a Web action; preserve human consent,
+  profile isolation, and no-password-in-chat boundaries.
 ---
+# Interactive browser route
 
-# Agent-native browser automation (chrome-devtools-mcp)
+Use this instead of `web browse` for forms, login/SSO, JavaScript-heavy SPAs,
+uploads, submission verification, or any task requiring a real browser. `web`
+browse is static read-only HTTP GET and does not execute JavaScript, use cookies,
+log in, or submit forms.
 
-> Part of the [web-manual](../SKILL.md) skill.
+Use the authorized Chrome DevTools MCP registration and a dedicated lightweight
+profile, never the user's real heavy profile. A human must type passwords and
+complete SSO/CAPTCHA directly; do not request or store credentials in chat.
+Check the current `mcp-manual` for registration and installation procedure;
+this page grants neither.
 
-**When it applies:** forms, logins, JS-heavy SPAs (Angular/React), uploads, or
-anything that needs real interaction — the `web` browse action is static,
-read-only HTTP GET and explicitly does **not** handle JavaScript, PDF, login,
-cookies, or forms. When a task needs an actual browser session, use
-chrome-devtools-mcp (Google's official Chrome DevTools MCP) instead of
-browser automation from scratch.
+## Safe interaction loop
 
-**Why agent-native:** chrome-devtools-mcp drives **real Chrome** over CDP
-against a dedicated lightweight profile (see §2 below — not the user's actual
-heavy default profile, which cold-starts too slowly for the MCP tool
-timeout). Cookies and SSO sessions still survive between turns within that
-dedicated profile, so a human can log in once there (SSO/Duo) and the agent
-continues. It is the tested
-first choice over playwright-mcp / browser-use / stagehand / steel for
-interactive work; playwright scripts remain the fallback for pure headless
-scraping (see [tier-3-playwright.md](./tier-3-playwright.md)).
+`list_pages` → `navigate_page` → fresh `take_snapshot` → `fill_form`/`click` →
+new snapshot or `evaluate_script` to verify → screenshot only when proof is
+needed. Tools in this channel use their own flat arguments, not Web's
+`action`/`input` envelope. Use the latest snapshot; never trust a click blindly.
 
-## 1. Setup
+For SPA forms, prefer `fill_form` for new forms. If editing an existing
+Angular/React field leaves derived values unchanged, use the native prototype value setter through `evaluate_script`, then dispatch
+bubbling `input` and `change` events and blur the field. Re-read derived values
+after saving; never treat DOM text alone as application-state proof. Uploads require a readable path in the explicitly authorized location;
+never move or expose a private file merely to make an upload work.
 
-```bash
-npm i -g chrome-devtools-mcp
-```
+Keep the profile/session and uploads within that authorized location. Stop and
+ask the human when access, consent, payment, CAPTCHA, or a protected resource
+is required. Do not bypass login, paywall, robots, or access control. For pure
+headless public scraping, use the [Tier 3](tier-3-playwright.md) procedure
+instead.
 
-Then register it as a LingTai MCP server (three pieces):
-
-1. `mcp_registry.jsonl` — the registry entry (name, transport `stdio`,
-   source, homepage).
-2. `init.json` — an `mcp.<name>` activation entry pointing at the server
-   (see mcp-manual for exact field names).
-3. `system(action="refresh")` — load the new MCP surface.
-
-## 2. The dedicated-profile fix (CRITICAL)
-
-Launch chrome-devtools-mcp against a **dedicated lightweight profile**, not the
-user's real Chrome profile:
-
-- Real profile (often GBs) cold-starts slower than the MCP tool timeout
-  (>120s), which leaves Chrome in a stuck `browser already running` state.
-- A dedicated profile at e.g. `~/.lingtai/chrome-agent-profile` launches in
-  ~500ms and is stable.
-
-Set `--user-data-dir` (or the MCP config equivalent) to the dedicated path.
-This profile can still be the one where the human performs SSO login once;
-the session persists across navigations.
-
-## 3. Core workflow (snapshot-first)
-
-1. `list_pages` — see what tabs exist (pages have numeric ids).
-2. `navigate_page` (type `url`, url) — go to the target.
-3. `take_snapshot` — get the accessibility tree with `uid`s for every
-   element. Always use the latest snapshot; prefer snapshot over screenshot
-   for reading structure.
-4. Act: `click` (uid), `fill_form` (uid+value list for new forms), `fill`
-   (uid, value for simple inputs), `type_text`, `press_key`, `select_page`.
-5. Verify: `evaluate_script` or another `take_snapshot`; never trust a click
-   blindly.
-6. `take_screenshot` (filePath) — save a visual when a human needs to see it.
-
-```text
-list_pages -> navigate_page(url) -> take_snapshot -> fill_form/click ->
-evaluate_script(verify) -> take_screenshot(filePath)
-```
-
-## 4. SPA form filling (Angular/React — the #1 gotcha)
-
-- **`fill` does NOT dispatch the events an Angular model needs.** On Angular
-  (e.g. Concur Expense), a `fill` that types a value leaves the form model
-  unchanged and the readonly derived fields (amount, totals) never update.
-- **New forms:** use `fill_form` (it drives native events correctly).
-- **Editing existing fields:** use `evaluate_script` with the native setter +
-  input/change/blur event dispatch:
-
-```js
-() => {
-  const setVal = (el, v) => {
-    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v);
-    el.dispatchEvent(new Event('input', {bubbles: true}));
-    el.dispatchEvent(new Event('change', {bubbles: true}));
-    el.dispatchEvent(new Event('blur', {bubbles: true}));
-  };
-  const input = /* find by label text / name / current value */;
-  setVal(input, 'new value');
-  return input.value;
-}
-```
-
-- Readonly derived fields (e.g. mileage amount = distance x rate) often
-  recalculate **on save** — change the input, click Save, then verify the
-  derived value in the returned page.
-
-## 5. Uploads and file paths
-
-- `upload_file` needs a path the agent can read; `/tmp/...` works reliably.
-  Paths under the agent workspace root or OneDrive-style paths may be
-  rejected — copy the file to `/tmp` first.
-- To upload a receipt that only exists as an email confirmation, generate a
-  PDF from the email text with headless Chrome:
-
-```bash
-chrome --headless --disable-gpu --print-to-pdf=/tmp/receipt.pdf file:///tmp/receipt.html
-```
-
-## 6. Tool argument discipline
-
-- Chrome MCP tools are **flat** — they reject the LingTai
-  `action/input/reasoning` envelope. Pass only the tool's own arguments
-  (e.g. `navigate_page` takes `type`+`url`; `take_snapshot` takes nothing).
-- Prefer `take_snapshot` with a `filePath` for large pages so the a11y tree is
-  not dumped inline.
-- A click can fail with "not interactive" when the element is covered or the
-  snapshot is stale — take a fresh snapshot, or fall back to
-  `evaluate_script` clicking the DOM button directly.
-
-## 7. Human-in-the-loop logins
-
-For SSO sites (Duo, Google SSO, university portals): navigate to the login
-page in the agent Chrome, tell the human it is ready, let them log in once,
-then continue the workflow. Do not ask for passwords in chat; the human types
-into the browser directly.
-
-## 8. Choosing between web browse and chrome-devtools-mcp
-
-| Need | Use |
-|---|---|
-| Read a static article/page | `web(action="browse")` |
-| Search first, then read a result | `web(action="search")` + browse |
-| JS-only page, PDF extraction (scrape) | extract_page.py / playwright refs |
-| Forms, login, SPA interaction, uploads | chrome-devtools-mcp |
-| Verify a submission / capture proof | chrome-devtools-mcp + screenshot |
+Use the [Chrome DevTools MCP upstream guide](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+for current `--user-data-dir`/profile and tool schemas. For a large accessibility
+snapshot, use `take_snapshot`'s supported `filePath` output instead of repeatedly
+injecting the whole tree. These are MCP operations, not new Web inputs.

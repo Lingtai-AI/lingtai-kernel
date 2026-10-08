@@ -1,7 +1,7 @@
 """Involuntary tool-call inbox — queue of synthetic (call, result) pairs.
 
 The agent's wire chat normally only contains tool calls the agent itself made.
-Some events fire mechanically — soul flow on a cadence, scheduled wakeups,
+Some events fire mechanically — scheduled wakeups,
 periodic system pings — and the cleanest way to surface them in the agent's
 history is as synthetic ``(ToolCallBlock, ToolResultBlock)`` pairs that look
 like real tool calls the agent didn't initiate.
@@ -12,10 +12,10 @@ boundaries — when the chat tail has no unanswered tool_calls and no other
 turn is mid-flight — and splices each pair into the wire chat.
 
 Coalescing: producers can mark items ``coalesce=True`` and supply a ``source``
-key. On enqueue, any existing item with the same source is replaced. Used by
-soul flow so multiple firings during a busy stretch collapse to one
-reflection (the latest voice wins) rather than spamming the agent with stale
-back-to-back pairs when it next reaches a safe boundary.
+key. On enqueue, any existing item with the same source is replaced, so
+multiple firings during a busy stretch collapse to one pair (the latest
+wins) rather than spamming the agent with stale back-to-back pairs when it
+next reaches a safe boundary.
 
 Thread safety: the queue is a list guarded by a single Lock. Producers run
 on background timer threads; the drain runs on the main agent thread. The
@@ -51,13 +51,13 @@ class InvoluntaryToolCall:
 
     call: "ToolCallBlock"
     result: "ToolResultBlock"
-    source: str               # e.g. "soul.flow", "system.wakeup"
+    source: str               # e.g. "system.wakeup"
     enqueued_at: float        # time.time() at enqueue
     coalesce: bool = False    # if True, replace prior item with same source
     # If True, the drain side also enforces a single-slot invariant in the
     # wire chat itself: any prior pair of the same source already spliced
-    # into ChatInterface.entries is removed before this item is appended.
-    # Used by soul flow to keep at most one consultation pair in history.
+    # into ChatInterface.entries is removed before this item is appended,
+    # keeping at most one pair of that source in history.
     replace_in_history: bool = False
 
 
@@ -145,7 +145,7 @@ class TCInbox:
 
         Only matches items whose call has ``args.get("action") ==
         "notification"`` to avoid false matches against unrelated synthetic
-        pairs (e.g. soul flow).
+        pairs.
         """
         with self._lock:
             for i, item in enumerate(self._items):

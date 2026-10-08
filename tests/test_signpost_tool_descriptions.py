@@ -13,7 +13,9 @@ def test_psyche_description_is_an_explicit_signpost() -> None:
         assert domain in desc
     # Every action returns a manual and nothing else.
     assert "never authors, edits, pins, installs, rescans, or loads anything" in desc
-    assert "file.write" in desc and "file.edit" in desc
+    # Durable filesystem work goes through ``shell``; there is no file tool.
+    assert "Change durable sources with shell" in desc
+    assert "file.write" not in desc and "file.edit" not in desc
     assert "context.rebuild" in desc
 
 

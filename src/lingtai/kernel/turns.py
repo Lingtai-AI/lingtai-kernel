@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 from uuid import uuid4
 
-from .message import MSG_CORRELATED_TURN, Message, _make_message
+from .message import MSG_CORRELATED_TURN, MSG_REQUEST, Message, _make_message
 from .execution_workspace import ExecutionWorkspace
 from .turn_events import TurnToolObserver
 from .turn_permissions import TurnPermissionBroker
@@ -85,10 +85,15 @@ class _TurnControl:
     execution_workspace: ExecutionWorkspace | None = None
     tool_observer: TurnToolObserver | None = None
     permission_broker: TurnPermissionBroker | None = None
+    connection_provider_port: object | None = None
+    connection_derived_port: object | None = None
+    connection_tool_overlay: object | None = None
     cancel_requested: threading.Event = field(default_factory=threading.Event)
     future: Future[TurnResult] = field(default_factory=Future)
     cancel_callback: Callable[[str], bool] | None = None
     settlement_claimed: bool = False
+    self_sleep_completed: bool = False
+    external_cancel_requested: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +136,8 @@ def _ensure_turn_state(agent) -> tuple[threading.Lock, dict[str, _TurnControl]]:
 
     lock = getattr(agent, "_turn_controls_lock", None)
     if lock is None:
-        lock = threading.Lock()
+        # cancel_turn requests the cooperative latch while holding this lock.
+        lock = threading.RLock()
         agent._turn_controls_lock = lock
     controls = getattr(agent, "_turn_controls", None)
     if controls is None:
@@ -140,6 +146,34 @@ def _ensure_turn_state(agent) -> tuple[threading.Lock, dict[str, _TurnControl]]:
     if not hasattr(agent, "_current_turn_control"):
         agent._current_turn_control = None
     return lock, controls
+
+
+def request_cooperative_cancel(agent, *, self_sleep: bool = False) -> None:
+    """Latch cancellation and record whether the active turn ended itself.
+
+    Only a root tool running in this correlated turn can claim self-sleep.
+    External cancellation wins regardless of whether it precedes or follows
+    self-sleep, until settlement claims the turn.
+    """
+
+    from .provider_admission import RootProviderAdmission, current_provider_admission
+
+    parent = current_provider_admission() if self_sleep else None
+    lock, _ = _ensure_turn_state(agent)
+    with lock:
+        control = agent._current_turn_control
+        if control is not None and not control.settlement_claimed:
+            if self_sleep:
+                if (
+                    not control.external_cancel_requested
+                    and isinstance(parent, RootProviderAdmission)
+                    and parent.correlation_id == control.correlation_id
+                ):
+                    control.self_sleep_completed = True
+            else:
+                control.external_cancel_requested = True
+                control.self_sleep_completed = False
+        agent._cancel_event.set()
 
 
 def admit_turn_origin(agent, origin: TurnOrigin) -> TurnAdmissionDecision:
@@ -204,6 +238,9 @@ def submit_turn(
     tool_observer: TurnToolObserver | None = None,
     permission_broker: TurnPermissionBroker | None = None,
     origin: TurnOrigin = TurnOrigin.LEGACY,
+    connection_provider_port=None,
+    connection_derived_port=None,
+    connection_tool_overlay=None,
 ) -> TurnHandle:
     """Queue one text turn and return its correlated terminal handle."""
 
@@ -225,6 +262,19 @@ def submit_turn(
         getattr(permission_broker, "request_permission", None)
     ):
         raise TypeError("permission_broker must define request_permission(request)")
+    if (connection_provider_port is None) != (connection_derived_port is None):
+        raise ValueError("connection admission requires both ports")
+    if connection_provider_port is not None and (
+        not callable(getattr(connection_provider_port, "authorize_provider_call", None))
+        or not callable(getattr(connection_derived_port, "authorize_derived_launch", None))
+    ):
+        raise TypeError("connection admission ports are invalid")
+    if connection_tool_overlay is not None and (
+        connection_provider_port is None
+        or connection_tool_overlay.owner is not agent
+        or connection_tool_overlay.closed
+    ):
+        raise ValueError("connection tool overlay requires live connection authority")
 
     shutdown = getattr(agent, "_shutdown", None)
     if shutdown is not None and shutdown.is_set():
@@ -245,6 +295,9 @@ def submit_turn(
         execution_workspace=execution_workspace,
         tool_observer=tool_observer,
         permission_broker=permission_broker,
+        connection_provider_port=connection_provider_port,
+        connection_derived_port=connection_derived_port,
+        connection_tool_overlay=connection_tool_overlay,
     )
     control.cancel_callback = lambda requested_id: cancel_turn(agent, requested_id)
     with lock:
@@ -343,6 +396,37 @@ def correlated_message_text(msg: Message) -> Message:
     return _make_message(MSG_CORRELATED_TURN, control.sender, control.content)
 
 
+def correlated_retry_message(agent, control, msg: Message) -> Message | None:
+    """Keep an internal retry inside its still-current, admitted logical turn.
+
+    Only the serialized run loop supplies the original control object. Message
+    ids, sender strings and correlated type labels cannot supply this authority.
+    This translates an in-loop retry; it neither queues nor registers a turn.
+    """
+    if (
+        not isinstance(control, _TurnControl)
+        or msg.type != MSG_REQUEST
+        or not isinstance(msg.content, str)
+    ):
+        return None
+    try:
+        admit_turn_origin(agent, control.origin)
+    except TurnAdmissionError:
+        return None
+    lock, controls = _ensure_turn_state(agent)
+    with lock:
+        if (
+            controls.get(control.correlation_id) is not control
+            or agent._current_turn_control is not control
+            or control.settlement_claimed
+            or control.cancel_requested.is_set()
+            or agent._cancel_event.is_set()
+            or agent._shutdown.is_set()
+        ):
+            return None
+        return _make_message(MSG_CORRELATED_TURN, msg.sender, msg.content)
+
+
 def settle_turn(
     agent,
     control: _TurnControl,
@@ -361,7 +445,17 @@ def settle_turn(
             return False
         control.settlement_claimed = True
         control.cancel_callback = None
-        cancelled = control.cancel_requested.is_set() or cooperative_cancelled
+        # The cooperative latch is sampled by the run loop before this lock.
+        # Recheck the per-turn external request here so a cancellation that
+        # wins the lock in that gap still wins terminal settlement.
+        cancelled = (
+            control.cancel_requested.is_set()
+            or control.external_cancel_requested
+            or (
+                cooperative_cancelled
+                and not (outcome is TurnOutcome.NORMAL and control.self_sleep_completed)
+            )
+        )
         if controls.get(control.correlation_id) is control:
             controls.pop(control.correlation_id, None)
         if getattr(agent, "_current_turn_control", None) is control:

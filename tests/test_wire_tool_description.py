@@ -247,7 +247,7 @@ def test_web_final_agent_schema_root_is_exactly_action_input_reasoning_summarize
     """
     from lingtai.agent import Agent
     from lingtai.kernel.base_agent.tools import _build_tool_schemas
-    from tests._service_helpers import make_gemini_mock_service as make_mock_service
+    from tests._service_helpers import make_mock_llm_service as make_mock_service
 
     agent = Agent(
         service=make_mock_service(),
@@ -454,37 +454,6 @@ def test_anthropic_wire_description_and_cache_control():
     assert schemas[0].description == FULL_DESCRIPTION
 
 
-def test_gemini_wire_descriptions():
-    pytest.importorskip("google.genai")
-    from lingtai.llm.gemini.adapter import (
-        _build_function_declarations,
-        _build_interactions_tools,
-    )
-
-    schemas = _schemas()
-    declarations = _build_function_declarations(schemas)
-    for decl in declarations:
-        assert decl.description == WIRE_TOOL_DESCRIPTION
-    assert declarations[0].name == "email"
-    # The SDK normalizes JSON Schema types into its enum-backed Schema model;
-    # verify the nested descriptions, required fields, and enum survive intact.
-    native_parameters = declarations[0].parameters
-    assert native_parameters.required == PARAMETERS["required"]
-    assert native_parameters.properties["to"].description == "Recipient address."
-    assert native_parameters.properties["body"].description == "Plain-text body."
-    assert native_parameters.properties["priority"].description == "Delivery priority."
-    assert native_parameters.properties["priority"].enum == ["low", "normal", "high"]
-
-    interactions = _build_interactions_tools(schemas)
-    for tool in interactions:
-        assert tool["type"] == "function"
-        assert tool["description"] == WIRE_TOOL_DESCRIPTION
-    assert json.dumps(interactions[0]["parameters"], sort_keys=True) == json.dumps(
-        PARAMETERS, sort_keys=True
-    )
-    assert schemas[0].description == FULL_DESCRIPTION
-
-
 # ---------------------------------------------------------------------------
 # Default state — the switch is OFF unless explicitly opted in
 # ---------------------------------------------------------------------------
@@ -499,7 +468,6 @@ def test_default_off_moves_prose_from_section_to_every_wire(monkeypatch):
     _default_off(monkeypatch)
 
     from lingtai.llm.anthropic.adapter import _build_tools as anthropic_tools
-    from lingtai.llm.gemini.adapter import _build_function_declarations
     from lingtai.llm.openai.adapter import _build_responses_tools
     from lingtai.llm.openai.adapter import _build_tools as openai_tools
 
@@ -524,7 +492,6 @@ def test_default_off_moves_prose_from_section_to_every_wire(monkeypatch):
         openai_tools(schemas)[0]["function"]["description"],
         _build_responses_tools(schemas)[0]["description"],
         anthropic_tools(schemas, cache_tools=False)[0]["description"],
-        _build_function_declarations(schemas)[0].description,
     ]
     for description in wires:
         assert description == FULL_DESCRIPTION

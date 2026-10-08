@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lingtai.kernel.llm.base import UsageMetadata
+from lingtai.kernel.llm.base import FunctionSchema, UsageMetadata
 
 from lingtai.llm.openai.codex_ws import SyncCodexWebsocketTransport
 
@@ -876,6 +876,50 @@ def test_rest_prefix_mismatch_falls_back_to_full():
     assert "previous_response_id" not in client.responses.kwargs[1]
 
 
+def test_rest_dynamic_tools_reach_provider_and_can_be_removed():
+    client = RealisticRestClient()
+    session = _make_rest_session(client)
+    inbox = FunctionSchema(
+        name="read_inbox",
+        description="Read pending messages",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    session.send("before overlay")
+    session.update_tools([inbox])
+    added = session.send("with overlay")
+    assert [tool["name"] for tool in client.responses.kwargs[1]["tools"]] == ["read_inbox"]
+    assert [tool["name"] for tool in session._interface.current_tools] == ["read_inbox"]
+    assert added.usage.extra["codex_request_mode"] == "rest_full"
+
+    session.update_tools(None)
+    removed = session.send("after overlay")
+    assert "tools" not in client.responses.kwargs[2]
+    assert session._interface.current_tools is None
+    assert removed.usage.extra["codex_request_mode"] == "rest_full"
+
+
+def test_ws_dynamic_tools_reach_provider_and_force_full_frame():
+    transport = RealisticWsTransport()
+    session = _make_session(transport)
+    inbox = FunctionSchema(
+        name="read_inbox",
+        description="Read pending messages",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    session.send("before overlay")
+    session.update_tools([inbox])
+    added = session.send("with overlay")
+    assert [tool["name"] for tool in transport.sent_frames[1]["tools"]] == ["read_inbox"]
+    assert added.usage.extra["codex_request_mode"] == "ws_full"
+
+    session.update_tools(None)
+    removed = session.send("after overlay")
+    assert "tools" not in transport.sent_frames[2]
+    assert removed.usage.extra["codex_request_mode"] == "ws_full"
+
+
 def test_rest_incremental_never_sends_previous_response_id():
     """REST incremental remains self-contained and therefore never triggers a
     backend rejection for `previous_response_id`; WS is the only transport that
@@ -1521,7 +1565,7 @@ def test_codex_adapter_create_chat_carries_context_window_to_responses_session()
     OpenAIAdapter.create_chat dropped context_window before `_create_responses_session`,
     leaving CodexResponsesSession.context_window() at ChatSession's 0 default.
     """
-    adapter = CodexOpenAIAdapter(api_key="test", use_responses=True, force_responses=True)
+    adapter = CodexOpenAIAdapter(api_key="test", wire_api="responses")
 
     session = adapter.create_chat(
         "gpt-5.5",
@@ -1535,7 +1579,7 @@ def test_codex_adapter_create_chat_carries_context_window_to_responses_session()
 
 
 def test_codex_adapter_static_comment_disabled_before_chat_creation():
-    adapter = CodexOpenAIAdapter(api_key="test", use_responses=True, force_responses=True)
+    adapter = CodexOpenAIAdapter(api_key="test", wire_api="responses")
 
     assert adapter.static_adapter_comment() is None
 

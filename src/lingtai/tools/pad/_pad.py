@@ -2,8 +2,8 @@
 
 Everything here is internal. There is no public ``pad`` tool root and no
 ``append`` action; the pinned reference list is a durable *source* that this
-module reads and composes, and that the agent edits with ``file.write`` /
-``file.edit`` like any other durable text.
+module reads and composes, and that the agent edits through ``shell`` like any
+other durable text.
 """
 from __future__ import annotations
 

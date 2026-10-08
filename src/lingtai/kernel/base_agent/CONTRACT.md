@@ -3,7 +3,10 @@ name: agent-runtime
 contract_version: 1
 root_contract: CONTRACT.md
 related_files:
+  - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
+  - tests/test_lifecycle_clock.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/tools/system/CONTRACT.md
   - src/lingtai/kernel/base_agent/BEHAVIORS.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/config.py
@@ -25,6 +28,8 @@ related_files:
   - src/lingtai/tools/system/karma.py
   - tests/test_aed_recovery.py
   - tests/test_notification_sync.py
+  - src/lingtai/tools/notification/CONTRACT.md
+  - tests/test_notification_one_shot.py
   - tests/test_cli_worker_poison_recovery.py
   - tests/test_worker_hang_aed_redo.py
   - tests/test_silence_kill.py
@@ -194,13 +199,30 @@ Platform profiles are selector-composed at the composition roots
 
 ## Contract rules
 
+Covenant construction retains the complete effective constructor/mirror body
+outside resident prompt state. Its protected slot carries only the discovery
+route and immediate pre-action gates; the existing read-only Psyche host Port
+returns the loaded body. Agent reconstruction preserves source precedence and
+rolls the body back with the applied generation. The detailed disclosure promise
+is owned by [Psyche](../../tools/psyche/CONTRACT.md).
+
+`agent_state.idle_elapsed_s` is optional finite nonnegative monotonic seconds
+from true IDLE entry to exit, emitted only when leaving IDLE with an anchor.
+ACTIVE/tools, prompt build, queue/network wait, ASLEEP and STUCK are not IDLE.
+Missing anchors omit the field; it is not recovered across process restart.
+State ordering and wall-domain event `ts` are unchanged. Guarded by
+[BA008](BEHAVIORS.md#behavior-ba008); the consumer procedure is in the
+[Telegram Task Card manual](../../../mcp_servers/telegram/task_card/SKILL.md).
+
 Clause IDs are stable; each rule composes the linked normative source.
+
+Automatic notification delivery composes the [Notification contract](../../tools/notification/CONTRACT.md): ACTIVE and IDLE share event/message identity from the exact delivered observation. Ordinary same-process molt/rebuild/redacted resync retain that identity; a new Agent/process restart does not persist it. Delivery is not business completion, and earlier delivered messages remain usable subject to newer instructions and producer safeguards.
 
 1. `agent-runtime.paths.v1` — One working directory owns one agent. The
    runtime artifacts are `.agent.json` (manifest), `.agent.heartbeat`
    (liveness), `.agent.lock` (lease), the signal files
    (`.suspend`/`.sleep`/`.interrupt`/`.refresh`/`.refresh.taken`/`.prompt`/
-   `.clear`/`.inquiry`/`.rules`), `.alarm` (the one self-sleep absolute
+   `.clear`), `.alarm` (the one self-sleep absolute
    deadline), `.notification/`, `logs/`, and `history/`. Artifact names and
    meanings are frozen; observers may read,
    only the owning agent/watcher mutates.
@@ -384,10 +406,16 @@ Clause IDs are stable; each rule composes the linked normative source.
    exits, response/tool consumers may observe the latch but MUST NOT clear it;
    an ASLEEP notification synchronization wake likewise MUST NOT clear it. The
    latch suppresses undispatched tool calls and post-tool continuation while
-   preserving existing tool-result/history commits. It does not hard-abort a
+   preserving existing tool-result/history commits. When cancellation arrives
+   after a model proposes tool calls but before dispatch, the turn MUST persist
+   a paired synthetic result that states dispatch did not occur; a later turn
+   may retry only if the request remains active. It does not hard-abort a
    provider, preempt a running tool, or by itself identify a request or create a
-   terminal result. The correlated inbound-turn boundary in rule 12 composes on
-   this unchanged cooperative mechanism rather than strengthening it. See the
+   terminal result. A successful System self-sleep marks only its own current
+   correlated turn as completed while still setting this latch; a later external
+   cancellation before or after self-sleep supersedes that mark. The
+   correlated inbound-turn boundary in rule 12 composes on this cooperative
+   mechanism. See the
    paired [`ANATOMY.md`](ANATOMY.md) for ownership and code routes.
 12. `agent-runtime.correlated-turn.v1` — Guarded by
    [BA004](BEHAVIORS.md#behavior-ba004). `BaseAgent.submit_turn` accepts one text
@@ -398,12 +426,24 @@ Clause IDs are stable; each rule composes the linked normative source.
    settles exactly once as `normal`, `cancelled`, or `failed`, with completed
    response text only on normal settlement. Correlated envelopes are distinct
    from mergeable fire-and-forget text messages and retain inbox serialization.
+   Internal transient, rate-limit, and AED retries retain the original live
+   control and its admitted origin. Before retry dispatch, Core rechecks origin
+   policy and the registered/current control's object identity and cancellation
+   state. A copied id, forged message type, ended control, or another turn's
+   control MUST NOT authorize a retry. The provider-call gate still runs for
+   every actual request; this does not grant independent internal-event turns.
    Cancelling a pending handle marks only that control; it MUST NOT set the
    process-global latch for the turn ahead. When the matching handle becomes
    current, or is cancelled while current, it composes onto
    `_request_turn_cancel`. Cancellation linearized before settlement wins over a
    concurrently completing normal/failure candidate; after settlement it returns
-   false and cannot affect a later turn. Run-loop exit and Agent stop settle all
+   false and cannot affect a later turn. A successful System self-sleep that
+   completes the current correlated turn's tool results settles `normal` despite its cooperative
+   stop-continuation latch; explicit handle cancellation, later external
+   cancellation before or after self-sleep, failure, and shutdown retain their
+   terminal outcomes. A sleep from another execution context cannot claim the
+   current turn's completion.
+   Run-loop exit and Agent stop settle all
    live handles so waiters cannot hang across teardown. An unexpected run-loop
    exception after current ownership is published settles that exact control
    `failed` with bounded rendered error detail and is re-raised for supervision;
@@ -434,7 +474,15 @@ Clause IDs are stable; each rule composes the linked normative source.
    `GRANTED`, `DENIED`, or `INDETERMINATE`; only `GRANTED` may reach the
    provider. No bound parent, a malformed Port response, a Port exception, an
    explicit denial, or indeterminate authority MUST prevent the underlying
-   provider request. The parent is a Core-private in-memory object;
+   provider request.
+   a resident ACP composition may instead inject a connection-scoped router:
+   ordinary local ingress retains historical provider behavior, while a
+   correlated attach turn binds its connection Ports for the whole logical
+   turn and must ask that Port for each provider call. A marked attach parent
+   without a bound connection Port fails closed; the resident local grant must
+   never substitute for it. This route is also guarded by
+   [ACP004](../../adapters/acp/BEHAVIORS.md#behavior-acp004).
+   The parent is a Core-private in-memory object;
    correlation ids, paths, registry digests, prompt content, and tool output
    are not credentials. A derived daemon/avatar call uses a typed parent with
    an internal non-serializable handle and crosses the Port again for each
@@ -544,8 +592,13 @@ Clause IDs are stable; each rule composes the linked normative source.
    session into the session timeout worker under a copy of the submitting
    context. Main-turn retries, recovery, tool-result continuation, and stream
    continuation all return through one of those two `SessionManager` paths.
-   Soul consultation/inquiry creates an independently timed daemon thread and
-   likewise copies the submitting context before its wrapped `session.send()`.
+   Optional adapter-measured streaming evidence passes through the existing
+   `llm_response.stream_timing` event: monotonic seconds to first nonempty
+   text or tool name/argument payload (`first_token_s`), first-output-to-final-usage
+   seconds (`generation_s`), and final provider output tokens excluding reasoning
+   (`generation_tokens`). Missing evidence stays absent/unknown; nonstream
+   latency and estimated tokens MUST NOT establish stream speed. This additive
+   projection does not change retry or partial-stream terminal boundaries.
    If provider RPM gating is configured, `APICallGate` runs *after* the outer
    admitted-session proxy has made its Port decision; it never performs an
    additional admission lookup. `ProviderAdmittedLLMService.generate()` makes
@@ -557,8 +610,8 @@ Clause IDs are stable; each rule composes the linked normative source.
    at that concrete boundary; no inferred coverage is sufficient. The source
    creation-point inventory in `tests/test_provider_admission.py` independently
    enumerates direct `Thread`, executor, `to_thread`, and `run_in_executor`
-   calls under `src/lingtai/**`. It classifies the session timeout pool and
-   Soul worker as context-propagation boundaries, `APICallGate` as
+   calls under `src/lingtai/**`. It classifies the session timeout pool as a context-propagation boundary,
+   `APICallGate` as
    post-admission dispatch, and every other current point as outside root
    provider dispatch. A new direct creation point therefore fails until it is
    classified; this structural tripwire is not a whole-program proof over
@@ -576,6 +629,19 @@ Clause IDs are stable; each rule composes the linked normative source.
    the private correlated-turn envelope is rejected before downstream request,
    continuation, state, or notice handlers execute. The envelope still needs
    its independent typed-origin check at the final inbox-to-provider boundary.
+
+14. `agent-runtime.puffo-post-send-completion.v1` — A semantically empty
+   provider continuation after a tool batch ends the turn normally only when
+   that batch contains exactly one successful Puffo `send_message` or
+   `send_message_with_attachments` receipt in `sent` state, with every
+   requested cover recorded, human-visible routing, and a Puffo turn-bound
+   coverage attestation reporting zero uncovered active human messages.
+   A held send, missing cover or attestation, positive uncovered count,
+   concurrent tool call, explicitly hidden send, or any tool error retains the ordinary
+   `EmptyLLMResponseError` recovery path. The exception is scoped to the
+   immediately preceding batch; an empty response at turn start or after a
+   later unrelated batch remains a recovery event. Guarded by
+   [BA007](BEHAVIORS.md#behavior-ba007).
 
 ## Contract tests
 

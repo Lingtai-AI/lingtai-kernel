@@ -149,6 +149,14 @@ def _synthesized_abort_message(
     context = _tool_call_context(tool_call)
     context_block = f"\n\nRecovery metadata:\n{context}" if context else ""
     if tool_not_dispatched:
+        next_step = (
+            "If the request is still active on a later turn, retry this "
+            "tool call then. Do not retry during the cancelled turn."
+            if reason.startswith("cancel_event")
+            else "Do not retry the same blocked call unchanged. "
+            "Summarize the blocked/completed work and either switch strategy "
+            "or ask the human for direction."
+        )
         return (
             f"[kernel notice — tool call NOT dispatched]\n"
             f"\n"
@@ -160,9 +168,7 @@ def _synthesized_abort_message(
             f"files, send messages, start processes, or mutate agent state.\n"
             f"\n"
             f"This synthetic tool result is now visible in the conversation "
-            f"transcript. Do not retry the same blocked call unchanged. "
-            f"Summarize the blocked/completed work and either switch strategy "
-            f"or ask the human for direction.\n"
+            f"transcript. {next_step}\n"
             f"\n"
             f"Reason recorded by the kernel: {reason}"
             f"{context_block}"
@@ -694,7 +700,7 @@ class ChatInterface:
 
         The removable-shape requirement is intentional: this helper exists
         to maintain the single-slot invariant for synthesized appendix
-        pairs (soul flow), which always have exactly that shape. Refusing
+        pairs, which always have exactly that shape. Refusing
         to operate on mixed-content entries protects regular tool-call
         history from being corrupted by accidental id collisions.
 

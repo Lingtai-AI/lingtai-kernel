@@ -20,6 +20,8 @@ no live agent is slept, suspended, cleared, or destroyed.
 """
 from __future__ import annotations
 
+from lingtai.tools.tool_family import _without_descriptions
+
 import json
 import threading
 from pathlib import Path
@@ -42,7 +44,7 @@ from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 # ``context`` and the two name actions arrived from ``psyche``.
 _LEGACY_ACTIONS = (
     "refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear",
-    "nirvana", "presets", "name_set", "name_nickname", "manual",
+    "nirvana", "presets", "name_set", "name_nickname", "meta", "manual",
 )
 _PUBLIC_ACTIONS = (*_LEGACY_ACTIONS[:-1], "settings", "manual")
 
@@ -120,7 +122,7 @@ def test_root_allof_correlates_each_action_with_its_own_input() -> None:
     for action, condition in zip(_PUBLIC_ACTIONS, conditions):
         assert condition["if"]["properties"]["action"]["const"] == action
         assert condition["if"]["required"] == ["action"]
-        assert condition["then"]["properties"]["input"] == public_schemas[action]
+        assert condition["then"]["properties"]["input"] == _without_descriptions(public_schemas[action])
 
 
 def test_children_consume_no_model_tool_slots() -> None:
@@ -156,6 +158,7 @@ def test_children_consume_no_model_tool_slots() -> None:
         ("presets", set()),
         ("name_set", {"content"}),
         ("name_nickname", {"content"}),
+        ("meta", set()),
         ("manual", set()),
     ],
 )
@@ -261,10 +264,10 @@ def test_name_actions_preserve_identity_semantics(tmp_path: Path) -> None:
     migration entirely.
     """
     from lingtai.agent import Agent
-    from tests._service_helpers import make_gemini_mock_service
+    from tests._service_helpers import make_mock_llm_service
 
     workdir = tmp_path / "named"
-    agent = Agent(service=make_gemini_mock_service(), working_dir=workdir)
+    agent = Agent(service=make_mock_llm_service(), working_dir=workdir)
     try:
         before_dir = agent._working_dir
 
@@ -442,7 +445,7 @@ def test_self_actions_need_no_karma(tmp_path: Path) -> None:
 
     gated = _KARMA_ACTIONS | _NIRVANA_ACTIONS
     self_actions = {
-        "sleep", "refresh", "presets", "name_set", "name_nickname", "settings", "manual",
+        "sleep", "refresh", "presets", "name_set", "name_nickname", "meta", "settings", "manual",
     }
     assert self_actions.isdisjoint(gated)
     assert gated == {"lull", "interrupt", "suspend", "cpr", "clear", "nirvana"}

@@ -586,10 +586,10 @@ def test_all_four_notification_managers_preserve_exact_runtime_body():
     from lingtai.mcp_servers.whatsapp import manager as m4
 
     expected = {
-        m1.__name__: "515a2472ee8dbf47480f6dfe77f3ca7b55f1558a429b630282c109f3bf9828ff",
-        m2.__name__: "17c7e5086686354379cc6bf22d8cedf7d97863a04702af9928d187180877fff5",
-        m3.__name__: "8065f55c16561adedf8b71d788efa29d80ff1b9a1196ffab38f239bf06302364",
-        m4.__name__: "e671f269c783a6a68b9d2294f0de1eb8e397ce22e13cd73b6cd9426453b8cb9e",
+        m1.__name__: "d94fd01db9c628b56f41e46e364c6c35ae7811d67fd6c31d670c449c0a942361",
+        m2.__name__: "a87a522d9d5684b4591bd33e23a05812ee294a7d4f4e4ae5699f975ca9d94c99",
+        m3.__name__: "cdfb2d6c420880eafbd69ae92cfbabb17b1cfe35c20320d039459f6475c95ae9",
+        m4.__name__: "ae176cd42178fd1cd9cf743cc1960ade62b94c66cad48d8e9822c91110aad62f",
     }
     for mod in (m1, m2, m3, m4):
         template = mod._NOTIFICATION_HEADER_TEMPLATE
@@ -608,7 +608,7 @@ def test_glossary_owner_preserves_rendered_body_without_metadata():
     sys.path.insert(0, str(ROOT / "src"))
     from lingtai.kernel import tool_glossary
 
-    before = tool_glossary.load_tool_glossary("lingtai.tools.file", "zh")
+    before = tool_glossary.load_tool_glossary("lingtai.tools.bash", "zh")
     assert before.strip()
     assert "kind:" not in before
     assert "related_files:" not in before

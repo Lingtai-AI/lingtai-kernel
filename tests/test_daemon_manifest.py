@@ -22,7 +22,7 @@ def _make_run_dir(tmp_path: Path, **overrides) -> DaemonRunDir:
         parent_working_dir=parent_wd,
         handle="em-3",
         task="find todos",
-        tools=["file"],
+        tools=["shell"],
         model="mock-model",
         max_turns=30,
         timeout_s=300.0,
@@ -206,7 +206,7 @@ def test_check_surfaces_manifest_for_done_run(tmp_path):
     mgr = agent.get_capability("daemon")
     rd = DaemonRunDir(
         parent_working_dir=agent._working_dir,
-        handle="em-1", task="t", tools=["file"], model="mock-model",
+        handle="em-1", task="t", tools=["shell"], model="mock-model",
         max_turns=30, timeout_s=300.0, parent_addr="parent",
         parent_pid=1, system_prompt="p",
     )
@@ -228,7 +228,7 @@ def test_check_computes_fallback_manifest_for_running_run(tmp_path):
     mgr = agent.get_capability("daemon")
     rd = DaemonRunDir(
         parent_working_dir=agent._working_dir,
-        handle="em-2", task="t", tools=["file"], model="mock-model",
+        handle="em-2", task="t", tools=["shell"], model="mock-model",
         max_turns=30, timeout_s=300.0, parent_addr="parent",
         parent_pid=1, system_prompt="p",
     )
@@ -250,7 +250,7 @@ def test_check_historical_run_without_manifest_falls_back(tmp_path):
     mgr = agent.get_capability("daemon")
     rd = DaemonRunDir(
         parent_working_dir=agent._working_dir,
-        handle="em-9", task="t", tools=["file"], model="mock-model",
+        handle="em-9", task="t", tools=["shell"], model="mock-model",
         max_turns=30, timeout_s=300.0, parent_addr="parent",
         parent_pid=1, system_prompt="p",
     )

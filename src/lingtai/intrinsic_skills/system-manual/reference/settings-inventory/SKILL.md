@@ -5,13 +5,12 @@ description: >
   sources, defaults, accepted values, invalid behavior, redaction, timing,
   authorized change procedures, and explicit non-settings.
 tags: [lingtai, system, settings, init, llm, environment, read-only]
-version: 1.2.1
-last_changed_at: "2026-09-08T00:00:00Z"
+version: 1.3.0
+last_changed_at: "2026-09-29T00:00:00Z"
 related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/adapters/posix/mail.py
   - src/lingtai/auth/codex.py
-  - src/lingtai/auth/codex_pool.py
   - src/lingtai/cli.py
   - src/lingtai/init_reader.py
   - src/lingtai/init_schema.py
@@ -87,7 +86,7 @@ from valid `LINGTAI_<FIELD>` environment values, then a valid closed-v2
 | `max_rpm` | `60` | integer `>= 0`; `0` disables the request gate | boot and System refresh before rebuilding the LLM service |
 | `max_aed_attempts` | `3` | integer `>= 1` | boot and System refresh |
 | `aed_timeout` | `360.0` seconds | finite positive number | boot and System refresh |
-| `streaming` | `false` | canonical boolean words in the environment / JSON boolean in v2 | boot and System refresh, including the live SessionManager flag |
+| `streaming` | `true` (on; explicit OFF retained) | canonical boolean words in the environment / JSON boolean in v2 | boot and System refresh, including the live SessionManager flag |
 | `activeness` | `balanced` | non-blank environment string / non-blank string or `null` in v2 | boot and System refresh; compatibility posture only |
 
 The corresponding environment names are `LINGTAI_CONTEXT_LIMIT`,
@@ -128,7 +127,7 @@ repository first; if that fails, snapshots stay off for the process and
 `snapshot_initialize_failed` is logged.
 
 After explicit owner/human authorization, edit the intended environment value
-at its launcher owner or the corresponding v2 field with File/Shell, preserving
+at its launcher owner or the corresponding v2 field with Shell, preserving
 unrelated fields. Follow `refresh-precheck` before applying a change at the
 boot/refresh timing in the table, then query System settings again. An
 invalid owner document applies no partial subset; this does not authorize
@@ -172,7 +171,7 @@ the budget must be positive, and no other or duplicate keys are accepted.
 Authorized change procedure: after explicit owner/human authorization, set
 `LINGTAI_CACHE_MISS_BUDGET` in the launcher or the agent's configured
 `env_file` (an `env_file` edit needs refresh before the running agent sees
-it), or use the existing File/Shell capability to write one of the two
+it), or use the existing Shell capability to write one of the two
 document shapes above to `settings/system.json` (remove the file through the
 same capability to return to the default), then call
 `system(action="settings", input={})` again and verify `current`. If the
@@ -195,7 +194,7 @@ uses the generic sensitive-value seam to fully redact both current and default p
 System neither duplicates that row nor exposes the paths.
 
 Authorized change procedure: after explicit owner/human authorization, edit
-the exact `init.json` field with the existing File or Shell capability. For a
+the exact `init.json` field with the existing Shell capability. For a
 preset-owned LLM/context value, edit the authorized preset outside SHOW or use
 the existing `system(action="refresh", input={"preset": ...})` workflow; never
 edit the derived resolved manifest or widen `preset.allowed` as a shortcut.
@@ -209,7 +208,8 @@ not a supported rename procedure.
 ## LLM and provider inputs
 
 Every effective `manifest.llm` axis is System-owned because no LLM ToolPlugin
-exists. Precedence is active preset over authored init for the whole block.
+exists. Selected-factory rows are classified by registered factory identity
+across the four families `openai`, `anthropic`, `codex`, and `claude-code`. Precedence is active preset over authored init for the whole block.
 The credential path is the exception inside the materialized block: a named
 non-empty `api_key_env` value wins inline `api_key`. Initial boot uses only
 those two authored sources through `resolve_env_checked`; it does not consult
@@ -218,22 +218,18 @@ path, endpoint pool, or credential-bearing URL is ever projected.
 
 | Key | Default and accepted value | Invalid behavior | Projection | Timing |
 |---|---|---|---|---|
-| `llm.provider` | no default; required string supported by the adapter registry | Missing/wrong type fails init; unknown provider fails adapter construction | literal | LLM rebuild on refresh |
+| `llm.provider` | no default; required string naming one of the four registered families `openai`, `anthropic`, `codex`, `claude-code` | Missing/wrong type fails init. A removed provider name (`deepseek`, `zhipu`/`glm`, `mimo`, `minimax`, `openrouter`, `grok`, `qwen`, `kimi`, `gemini`, `kimi-code`/`kimi_code`, `custom`, `claude_code`, `codex-pool`/`codex_pool`) fails init and preset validation with a pointer to `openai`/`anthropic` or an external pool; any other unknown name fails adapter construction | literal | LLM rebuild on refresh |
 | `llm.model` | no default; required string | Missing/wrong type fails init/provider construction | literal | LLM rebuild on refresh |
 | `llm.api_key` | no universal default; string/null plus the credential precedence above | Missing required credentials fail initial adapter construction; a missing named alias uses an authored inline key when present and otherwise remains absent | `<redacted>` | LLM rebuild on refresh |
 | `llm.api_key_env` | absent; environment-variable name | Wrong type, or alias without inline key and without `env_file`, fails canonical validation | `<redacted>` | Resolved at boot/refresh |
-| `llm.base_url` | provider-owned when omitted; string/null | Provider validation owns unsupported endpoints | `<redacted>` because URLs may embed credentials | LLM rebuild on refresh |
-| `llm.compact_threshold` | no universal owner default; positive integer or null. Official OpenAI and `_custom` names (`custom`, `grok`, `qwen`, `kimi`) on effective `openai` compatibility have selected-route default `100000`; omission consumes it and explicit compact null is forwarded as disabled. Canonical provider-default normalization filters authored `api_compat: null`, so `_custom` still defaults to OpenAI and forwards that compact null. Exact `anthropic`/`gemini` compatibility ignores it. Other admitted non-null compatibility values fall through to `OpenAIAdapter` without forwarding this axis, so current/default are both `100000`. DeepSeek current is an authored positive value or null and default is null. Gemini/other ignored factories and native `codex`/`codex-pool`/`codex_pool` current/default are null; native Codex uses separate `codex_compact_token_limit` | Non-positive integer or wrong type fails validation | selected-adapter current and default | Adapter rebuild on refresh |
-| `llm.wire_api` | Selected-route truth, not one universal default. Omitted official OpenAI, DeepSeek, and `_custom` OpenAI/fallback routes select `chat_completions`; omitted MiMo selects `responses`; an explicit selector that canonical init admits is forwarded and preserved on those factories (notably MiMo preserves explicit `auto`). Codex aliases ignore the generic selector and always report forced `responses`. `_custom` Anthropic/Gemini routes and every other factory that ignores this axis report null current/default | Unknown values fail init validation. Canonical init admits non-`auto` only for official OpenAI, DeepSeek, and exact `custom`+OpenAI compatibility; `auto` is admitted everywhere but ignored routes still report null | selected-factory current and omitted default | Adapter rebuild on refresh |
-| `llm.inject_reasoning_fallback` | Selected-factory truth. Official OpenAI and `_custom` aliases on exact/default OpenAI compatibility forward an authored boolean; omission/null consults `LINGTAI_INJECT_REASONING_FALLBACK`, whose invalid/unset default is `true`. A malformed finite `_custom` selector still chooses OpenAI but `_custom` does not forward the authored axis, so the adapter consults that environment resolver. DeepSeek forwards an authored boolean and otherwise pins `true`, independent of that environment variable. Every ignoring factory reports null current/default | Wrong init type fails canonical validation; ignored factories add no provider-specific validation | selected-factory boolean/default or null | Adapter construction on refresh |
-| `llm.reasoning_effort_vocab` | official OpenAI and `_custom` names (`custom`, `grok`, `qwen`, `kimi`) on effective `openai` compatibility have selected-route default `openai`; string/null (`seven_tier` selects retained alternate mapping), with omitted and explicit vocabulary null consuming `openai`. Canonical normalization filters authored compat null but retains a non-null authored vocabulary, so `_custom` forwards (for example) `seven_tier`. Exact `anthropic`/`gemini` compatibility ignores the axis. Other admitted non-null compatibility values fall through to `OpenAIAdapter` without forwarding the axis, so current/default remain `openai`. DeepSeek's provider policy, Gemini/other ignored factories, and all native Codex spellings ignore this generic axis, so current/default are null | Wrong type fails validation; other strings retain the OpenAI behavior only when the effective OpenAI route forwards them | selected-adapter current and default | Adapter rebuild on refresh |
-| `llm.prompt_cache_namespace` | Official OpenAI and `_custom` aliases on exact/default OpenAI compatibility forward an authored string and otherwise use null. A malformed finite `_custom` selector chooses OpenAI without forwarding this axis, so it remains null. DeepSeek forwards an authored string and otherwise uses `deepseek`. Every ignoring factory reports null current/default | Wrong init type fails canonical validation; ignored factories add no provider-specific validation | selected-factory namespace/default only, never prompt/cache content | Adapter rebuild on refresh |
-| `llm.service_tier` | Codex aliases only: absent is null; authored `fast` is reported as `fast` and the factory normalizes it to private wire `priority`. Every non-Codex route ignores the axis and reports null current/default | Wrong type fails init. An unsupported Codex value fails canonical factory validation and SHOW; unsupported OpenAI/custom/other values are ignored and are not predicted to fail | selected-factory canonical authored value | Adapter rebuild on refresh |
-| `llm.thinking` | selected-route default comes from canonical `build_agent_config` hydration with thinking omitted: provider-owned `default` for Codex aliases/DeepSeek and legacy `high` otherwise | Unsupported provider/model/wire or effort fails canonical/provider validation | literal hydrated effort only | Session rebuild on refresh |
-| `llm.api_compat` | Every name bound to `_custom` (`custom`, `grok`, `qwen`, `kimi`) has factory default `openai`; omission and explicit null both select/report `openai`. Exact `anthropic` and `gemini` report those adapter routes. Every other finite accepted value—including case variants, unknown strings, numbers, lists, and objects—selects and reports canonical public `openai`, because that is the custom adapter's fallback. Other registered factories ignore this axis and report null current/default | Any non-finite float at any nesting depth fails canonical init validation; other finite compatibility values remain deliberately tolerant and select the fallback above | effective selected adapter route and default, never malformed authored syntax | Adapter rebuild on refresh |
+| `llm.base_url` | provider-owned when omitted (the official OpenAI, Anthropic, or Codex endpoint; `claude-code` ignores it); string/null — point `openai`/`anthropic` at any compatible endpoint | Provider validation owns unsupported endpoints | `<redacted>` because URLs may embed credentials | LLM rebuild on refresh |
+| `llm.wire_api` | Selected-route truth, not one universal default. `openai`: omitted, legacy `auto`, and `chat_completions` report `chat_completions`; `responses` reports `responses` (always stateless full-history replay). `codex` ignores the generic selector and always reports forced `responses`. `anthropic` and `claude-code` report null current/default | Unknown values fail init validation; a non-`auto` value on any provider other than `openai` fails init validation | selected-factory effective selector and omitted default | Adapter rebuild on refresh |
+| `llm.inject_reasoning_fallback` | Selected-factory truth. `openai` forwards an authored boolean; omission/null consults `LINGTAI_INJECT_REASONING_FALLBACK`, whose invalid/unset default is `true`. `anthropic`, `codex`, and `claude-code` ignore the axis and report null current/default | Wrong init type fails canonical validation | selected-factory boolean/default or null | Adapter construction on refresh |
+| `llm.prompt_cache_namespace` | `openai` forwards an authored string and otherwise uses null (the auto-derived key then namespaces by endpoint). `anthropic`, `codex`, and `claude-code` ignore the axis and report null current/default | Wrong init type fails canonical validation | selected-factory namespace/default only, never prompt/cache content | Adapter rebuild on refresh |
+| `llm.service_tier` | `openai` and `codex` share one normalizer: absent is null; authored `fast` is reported as `fast` and sent as the standard wire `priority`; `auto`, `default`, `flex`, and `priority` are reported and sent verbatim. `anthropic` and `claude-code` do not forward it and report null current/default | Wrong type or any other value fails init and preset validation (every provider) | selected-factory canonical authored value | Adapter rebuild on refresh |
+| `llm.thinking` | Accepted on every family: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The selected-route default comes from canonical `build_agent_config` hydration with thinking omitted: the `default` sentinel for `openai` (no reasoning field is sent) and `codex` (the adapter sends explicit `xhigh`), legacy `high` for `anthropic` and `claude-code`. Sent verbatim as Responses `reasoning.effort` / Chat Completions `reasoning_effort`; `anthropic` maps it to a thinking budget and `claude-code` to `--effort` | Any other value fails init/preset validation | literal hydrated effort only | Session rebuild on refresh |
 | `llm.codex_session_anchor` | derived from the resolved agent `init.json` path for Codex | Explicit value is an internal/testing escape, not an authorized production setting | `<redacted>` | Adapter rebuild; `configurable` is false |
 | `llm.codex_auth_path` | provider-owned legacy auth path when absent; path-like override | Missing/unreadable/invalid auth fails the request/provider path closed | `<redacted>` | Adapter rebuild/request-owned reread |
-| `llm.codex_auth_pool_path` | provider/TUI pool resolution when absent; path-like override | Invalid pool fails the provider account-source path closed | `<redacted>` | Adapter rebuild and request-bound account selection |
 | `llm.codex_base_urls` | absent means single `base_url`; string or list accepted by the Codex adapter | Invalid/empty entries follow the adapter's pool validation/fallback | `<redacted>` | Adapter rebuild; selection rotates only at the documented molt boundary |
 | `llm.default_headers` | `{}` user headers; JSON object in normal use | Non-object values are not forwarded as user headers; provider construction owns final validation | `<redacted>` including names and values | Adapter rebuild on refresh |
 
@@ -284,7 +280,7 @@ cleans files, resets counters, or authorizes a risky operation.
 For `LINGTAI_TUI_DIR`, use that launcher procedure and a full relaunch. The
 kernel does not create or validate the directory eagerly: an unexpandable `~`
 can fail adapter construction, while a missing directory or unreadable/invalid
-`codex-auth.json` / `codex-auth-pool.json` fails the later Codex account or
+`codex-auth.json` fails the later Codex account or
 request path closed. Never print the resolved directory or credential paths;
 SHOW fully redacts the env-selected and fallback paths.
 
@@ -293,8 +289,8 @@ SHOW fully redacts the env-selected and fallback paths.
 These classifications are tested against the canonical schemas/registry so
 future fields cannot vanish silently:
 
-- Concrete ToolPlugin owners stay out of System: Soul; Shell; Daemon;
-  Notification; File/search sidecars; Vision; Web; Task Card; Plugin/Psyche;
+- Concrete ToolPlugin owners stay out of System: Shell; Daemon;
+  Notification; Vision; Web; Task Card; Plugin/Psyche;
   Skills; LingTai character; MCP, curated addons, and their config/session
   paths. Psyche owns the live Pad prompt inputs at root `pad`/`pad_file` and
   the six configurable system-prompt inputs in `settings/psyche.json`.
@@ -305,7 +301,14 @@ future fields cannot vanish silently:
   `manifest.max_aed_attempts`, `manifest.aed_timeout`, `manifest.streaming`,
   `manifest.activeness`, `manifest.llm.codex_thread_salt`, and nested init
   `manifest.llm.context_limit`, `manifest.max_turns`, context-serialization
-  template fields, retired molt/stamina fields, and retired prompt/soul fields.
+  template fields, retired molt/stamina fields, retired prompt fields, and the
+  retired `manifest.soul` block of the removed Soul subsystem.
+- Retired LLM keys are recognized-and-ignored, never rows:
+  `manifest.llm.compact_threshold`, `manifest.llm.codex_auth_pool_path`, and
+  the per-vendor wire-routing keys retired with the four-family collapse —
+  `manifest.llm.api_compat`, `manifest.llm.reasoning_effort_vocab`, and
+  `manifest.llm.use_responses_api` (`thinking` is sent verbatim and `wire_api`
+  alone selects the `openai` wire).
 - Kernel-fixed context-pressure thresholds, the hidden idle-sleep timeout, and
   fixed tool-loop safety limits are code policy rather than settings.
 
@@ -324,14 +327,11 @@ not System:
 - `LINGTAI_DAEMON_MAX_TURNS`
 - `LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS`
 - `LINGTAI_FEISHU_CONFIG`
-- `LINGTAI_FILE_IO_BACKEND`
-- `LINGTAI_FILE_IO_SIDECAR`
 - `LINGTAI_IMAP_CONFIG`
 - `LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS`
 - `LINGTAI_NOTIFICATION_MAX_CHARS`
-- `LINGTAI_SEARCH_SIDECAR`
+- `LINGTAI_PUFFO_V0_REGISTRY`
 - `LINGTAI_SHELL`
-- `LINGTAI_SOUL_FLOW_ENABLED`
 - `LINGTAI_TASKCARD_POLL_INTERVAL`
 - `LINGTAI_TELEGRAM_CONFIG`
 - `LINGTAI_TOOL_TIMEOUT_MAX_SECONDS`
@@ -360,11 +360,6 @@ not an adjustable kernel policy:
 - `LINGTAI_RUNTIME_PYTHON`
 - `LINGTAI_RUNTIME_VENV`
 
-### Build-only environment exclusions
-
-- `LINGTAI_REQUIRE_RUST_BUILD`
-- `LINGTAI_SKIP_RUST_BUILD`
-
 ### Test-only environment exclusions
 
 - `LINGTAI_AVATAR_BOOT_WAIT_SECONDS`
@@ -374,6 +369,5 @@ not an adjustable kernel policy:
 - `LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SLEEP`
 - `LINGTAI_FAKE_APP_SERVER_MODE`
 - `LINGTAI_FAKE_CLI_REPORT`
-- `LINGTAI_RUN_LIVE_KIMI_CODE`
 - `LINGTAI_TEST_CONFIG`
 - `LINGTAI_TEST_FAKE_CLAUDE_SIGNAL_RECORD`

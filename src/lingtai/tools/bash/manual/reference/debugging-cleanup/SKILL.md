@@ -2,124 +2,66 @@
 name: bash-debugging-cleanup
 description: >
   Nested shell-manual reference for debugging silent scheduled jobs and retiring
-  cron jobs safely: scheduler fired, script ran, work landed, agent saw mail,
-  worked launchd diagnosis, cleanup, and bash work footprint hygiene.
-version: 1.0.1
-last_changed_at: 2026-07-19T00:00:00Z
+  schedulers safely: scheduler, script, work, wake, launchd, cleanup, and shell
+  work-footprint checks.
+version: 1.1.0
+last_changed_at: 2026-09-09T00:00:00Z
 related_files:
 - src/lingtai/tools/skills/manual/reference/cleanup-footprint-contract.md
 - src/lingtai/tools/bash/manual/SKILL.md
 - src/lingtai/tools/bash/manual/reference/scheduled-work/SKILL.md
 maintenance: |
-  Tracks the scheduled-job debugging/cleanup topic it documents; update when that integration changes.
+  Tracks scheduled-job debugging and cleanup; update when that integration or
+  the shared footprint recipe changes.
 ---
 
-# Debugging and Cleanup Reference
+# Debugging and cleanup
 
-Nested shell-manual reference. Open this when a scheduled job goes silent, fires
-incorrectly, or needs to be retired or cleaned up.
+Open this when a scheduler is silent, fires twice, exits early, or must be
+retired. Diagnose in order; do not assume that a successful scheduler exit means
+that the work or wake reached the agent.
 
-## Debugging cron — when things go silent
+## Silent scheduled work
 
-When a scheduled job stops working, the failure is almost always in one of these places. Walk the list in order.
+1. **Did the scheduler fire?** macOS: `launchctl list <label>` and inspect
+   `PID`/`LastExitStatus`; Linux: `systemctl --user list-timers`; cron: inspect
+   `/var/log/cron` or `journalctl -u cron` for `CMD`. Check unit syntax
+   (`plutil -lint` or `systemctl --user status`), loaded/disabled state, sleep
+   catch-up behavior, and clock time.
+2. **Did the script run?** Read its own append-only log, not only scheduler
+   stdout/stderr. A missing `[fire]` means an early launch failure; a `[fire]`
+   without completion means an in-script failure. Keep `set -euo pipefail` and
+   log the command boundary that failed.
+3. **Did work land?** Compare the script's audit evidence with the expected
+   artifact/commit/message. A logged success with no artifact is script logic,
+   not a scheduler mystery.
+4. **Did the agent see the wake?** For mailbox work, inspect human
+   `mailbox/outbox/<uuid>`, then `mailbox/sent/<uuid>`, then the recipient's
+   `mailbox/inbox/<uuid>`. Validate malformed JSON and confirm the recipient.
+   A queued mail waits for the next turn; use the scheduler reference's
+   `.refresh` rule only when prompt pickup is required.
 
-### 1. Did the scheduler fire?
+## Retire without a janitor race
 
-- macOS: `launchctl list <label>` — check `LastExitStatus` and the `PID` field. If `PID = -` and `LastExitStatus = 0` and you expect a recent fire, the schedule didn't trigger.
-- Linux systemd: `systemctl --user list-timers` — shows last and next fire times. If "last" is older than expected, the timer didn't fire.
-- crontab: check `/var/log/cron` (or `journalctl -u cron`) for "CMD" lines.
+First obtain explicit authority for stopping/removing the named scheduler and
+review a dry-run. Then:
 
-If the scheduler didn't fire, the culprit is usually:
+1. Unload the unit (`launchctl unload <plist>` or
+   `systemctl --user disable --now <timer>`), and verify it is gone.
+2. Only then remove the unit and script; archive logs if history matters.
+3. Record the unit name and retained evidence. Never delete the script first,
+   remove `.agent.lock`, or launch a parallel relaunch: the kernel owns its
+   flock and refresh watcher. On macOS, a scheduler may reap descendants when
+   its process exits; read the scheduled-work process-tree warning before
+   intentionally launching a long-lived child.
 
-- **Plist/timer file is wrong** — XML/INI parse error means the unit silently didn't load. macOS: `plutil -lint <plist>`. systemd: `systemctl --user status <timer>`.
-- **Job was unloaded** — somebody (you, an installer, an OS update) called `launchctl unload` or `systemctl disable`.
-- **Sleep/standby** — laptop was closed during the schedule. launchd handles this for `StartCalendarInterval` (catches up on wake) but not for `StartInterval`. systemd needs `Persistent=true`.
-- **Clock skew** — system time was wrong at fire time, now correct. Look at `date` output and compare to expected fire time.
+## Shell footprint
 
-### 2. Did the script run?
-
-- Check the script's own log file (the `LOG_FILE` you write to, not just stdout/stderr).
-- If `LOG_FILE` has no entry from the expected time, but the scheduler claims it fired: the script crashed before its first `log` call. Check the launchd `.err` file or systemd journal for the bash error.
-- If `LOG_FILE` has a `[fire]` entry but no completion entry: the script started but exited mid-way. `set -euo pipefail` should have made the failure visible — re-check that line is at the top.
-
-### 3. Did the work land?
-
-This is what audit blocks are for. If the script ran and logged success but the downstream artifact (commit, file, message) isn't there, the failure is in the script's logic, not in cron. Read the script's audit lines and the commands they wrap.
-
-### 4. Did the agent see the mail?
-
-If the cron drops mail and you (the agent) are debugging "why didn't I act":
-
-- Is the message in `human/mailbox/sent/<uuid>/`? If yes: the kernel claimed it; you should have seen it in your inbox.
-- Is it still in `human/mailbox/outbox/<uuid>/`? Then the kernel never claimed it. Check that you (the recipient) are running and your `to` address matches.
-- Is the file there but malformed JSON? `python3 -c "import json; json.load(open('<path>'))"` — a JSON parse error means the kernel rejected it.
-
-## Debugging session for a "silent hourly cron" (worked example)
-
-Symptom: cron is supposed to fire hourly. Last poem on the website is from 5 hours ago. Nothing in the cron log between 5h ago and now.
-
-```bash
-# Step 1: did the scheduler fire?
-launchctl list | grep ai.lingtai
-# ai.lingtai.libai-hourly  -  0
-# PID is "-" (not running) and LastExitStatus is 0 — so it's loaded but
-# either never fired or fired and exited cleanly each time.
-
-# Step 2: launchd's own logs
-log show --predicate 'process == "launchd"' --last 6h | grep libai-hourly
-# (no output) → launchd never fired the job in the last 6 hours.
-
-# Step 3: did the plist get unloaded?
-ls -la ~/Library/LaunchAgents/ai.lingtai.libai-hourly.plist
-# (file exists)
-plutil -lint ~/Library/LaunchAgents/ai.lingtai.libai-hourly.plist
-# OK → plist parses fine
-
-# Step 4: was the laptop asleep?
-pmset -g log | grep -i 'sleep\|wake' | tail -20
-# Sleep ... 5h ago, Wake ... just now → mystery solved.
-# The Mac was asleep for the missed hours. launchd catches up at most one
-# missed StartCalendarInterval fire on wake; longer outages drop the
-# missed fires entirely.
-```
-
-Fix in this case: not a code fix — a "this is how launchd works, bring the machine out of sleep at the relevant times" fact. Document the limitation, optionally add a wake-from-sleep schedule via `pmset` if hourly accuracy across closed-laptop hours matters.
-
-## Cleanup — when retiring a cron job
-
-Reverse of setup, in this order:
-
-1. `launchctl unload <plist>` (or `systemctl --user disable --now <timer>`).
-2. Verify it's gone: `launchctl list | grep <prefix>` (or `systemctl --user list-timers`).
-3. Delete the plist/unit files.
-4. Delete the script and its log files (or archive them if the human wants the history).
-5. Remove any `~/Library/LaunchAgents/<label>.plist` entry that wasn't caught above.
-
-Don't delete the script first — if the unit is still loaded and tries to fire a missing executable, you get noisy error logs.
-
-## Cleanup / Footprint for bash work
-
-`bash` can create anything the command creates: scripts, logs, downloads,
-virtualenvs, cron/launchd/systemd units, and arbitrary build artifacts. Because
-ownership is command-specific, every non-trivial bash workflow should document
-its own cleanup path near the script it creates. Never run a destructive shell
-cleanup from a manual without first showing a dry-run and getting explicit user
-consent.
-
-Footprint check: load the [shared inspection recipe](../../../../skills/manual/reference/cleanup-footprint-contract.md#shared-footprint-check-recipe)
-through `skills-manual` → `reference/cleanup-footprint-contract.md`. Combine
-its definitions with this tool-specific selection in one task-owned script;
-the selection is not a standalone executable. Inspection writes nothing.
-Appending `logs/cleanup.jsonl` is the separate, explicitly selected audit step
-in that recipe; retain this manual's cleanup/approval rules below.
-
-```python
-agent = Path.cwd()  # the relevant agent directory, not a repository root
-items = [p for p in (agent / "tmp", agent / "logs", agent / "scripts") if p.exists()]
-rows, total = footprint_check(items, tool="bash", top_n=None)
-```
-
-Recommended cadence: when retiring cron jobs, after large downloads/builds, and
-whenever a shell workflow writes outside a short-lived temp directory. Cleanup
-records belong in `logs/cleanup.jsonl`; cron/launchd/systemd retirement should
-also record the scheduler unit name that was unloaded.
+Shell may create scripts, logs, downloads, virtualenvs, scheduler units, and
+build artifacts. Retain artifacts by default. Cleanup is command-specific: show
+a dry-run and obtain explicit human authorization before destructive removal.
+For inspection, call `psyche(action="skills", input={})`, then follow
+`skills-manual` to `reference/cleanup-footprint-contract.md` and its shared
+footprint recipe. Combine it with this task's selected paths in one
+script. Inspection writes nothing. If the human selected an audit, append to
+`logs/cleanup.jsonl` and record retired scheduler units.

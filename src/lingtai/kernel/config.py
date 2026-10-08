@@ -7,56 +7,12 @@ from dataclasses import dataclass
 
 
 # Accepted manifest.llm.thinking values, mirroring the upstream Responses
-# ``reasoning.effort`` payload values in ascending effort order. Explicit
-# ``"none"`` is a real payload value (effort none), distinct from an *omitted*
-# field — omitted stays the internal ``"default"`` sentinel and adapters that
-# own a default map it to ``"xhigh"``.
+# ``reasoning.effort`` payload values in ascending effort order. Every
+# provider accepts them. Explicit ``"none"`` is a real payload value (effort
+# none), distinct from an *omitted* field — omitted stays the internal
+# ``"default"`` sentinel, which each adapter maps to its own default.
 THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
-# Codex-family providers that accept manifest.llm.thinking. ``codex-pool``
-# reuses the Codex adapter (both dash/underscore spellings). This list stays
-# Codex-only; the complete acceptance rule (Anthropic and every
-# OpenAI-compatible block too) lives in ``llm_supports_thinking`` so validators
-# share it.
-THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
-
-# Non-Codex providers whose adapter is thinking-capable on its own, even when
-# the manifest omits ``api_compat``: the Anthropic adapter maps thinking to an
-# extended-thinking budget, and the openai/deepseek factories always pin an
-# OpenAI-compatible adapter, so their blocks carry an implicit
-# ``api_compat="openai"``.
-THINKING_NATIVE_PROVIDERS = ("anthropic", "openai", "deepseek", "claude-code", "claude_code")
-
-# Providers that own their reasoning-effort contract in their own module: the
-# accepted vocabulary is per model and per wire, and so is what an OMITTED
-# value means. This is a coarse SCOPE name only — the kernel deliberately holds
-# no level vocabulary, model list, alias table, or default for these routes,
-# and cannot import them (see tests/test_kernel_isolation.py). The exact
-# validation is applied by the lingtai-layer ingress (``lingtai/init_schema.py``
-# and ``lingtai/agent.py``) against the provider's own module.
-THINKING_OWNED_PROVIDERS = ("deepseek",)
-
-
-def llm_supports_thinking(llm: dict) -> bool:
-    """Return whether a manifest LLM block accepts explicit thinking effort.
-
-    Every thinking-capable wire is accepted:
-
-    * the Codex family (``THINKING_PROVIDERS``) — it owns its own wire/backend;
-    * ``THINKING_NATIVE_PROVIDERS`` — ``anthropic`` (thinking budget),
-      Claude Code's provider-local CLI effort route, plus the OpenAI-wire
-      natives whose ``api_compat`` may be left implicit;
-    * any OpenAI-compatible block (``api_compat == "openai"``) regardless of
-      ``wire_api`` — Responses sends ``reasoning.effort`` and Chat Completions
-      sends ``reasoning_effort``, so both wires carry the effort.
-
-    Everything else (Gemini, MiniMax, a custom Gemini/Anthropic-compat block)
-    is rejected so a knob the wire would silently drop fails loudly.
-    """
-    provider = str(llm.get("provider") or "").lower()
-    if provider in THINKING_PROVIDERS or provider in THINKING_NATIVE_PROVIDERS:
-        return True
-    return str(llm.get("api_compat") or "").lower() == "openai"
 
 # Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
 # agent-configurable. An agent must not be able to raise its own molt
@@ -111,13 +67,25 @@ CONTEXT_PRESSURE_RECOVERY_TARGET = MOLT_NOTICE_THRESHOLD  # 0.75
 
 MOLT_PRESSURE_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 MOLT_URGENCY_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
-DEFAULT_SOUL_DELAY_SECONDS = 999999999.0
 
 # Rendered system-prompt size pressure — distinct from the CONTEXT_PRESSURE_*
 # family above (which measures system + tools + history against the window).
 # This ratio gates a warning on the rendered system prompt ALONE against the
 # effective context window. It is deliberately read at snapshot-render time so
 # the main agent and daemon share live process-environment behavior.
+MEMORY_LENGTH_WARNING_CHARS_ENV = "LINGTAI_MEMORY_LENGTH_WARNING_CHARS"
+DEFAULT_MEMORY_LENGTH_WARNING_CHARS = 50000
+
+
+def memory_length_warning_chars() -> int:
+    """Positive character threshold, read only at successful lifecycle boundaries."""
+    try:
+        value = int(os.environ.get(MEMORY_LENGTH_WARNING_CHARS_ENV, ""))
+    except (TypeError, ValueError):
+        return DEFAULT_MEMORY_LENGTH_WARNING_CHARS
+    return value if value > 0 else DEFAULT_MEMORY_LENGTH_WARNING_CHARS
+
+
 DEFAULT_SYSTEM_PROMPT_PRESSURE_RATIO = 0.4
 SYSTEM_PROMPT_PRESSURE_RATIO_ENV = "LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO"
 
@@ -146,7 +114,7 @@ def system_prompt_pressure_ratio() -> float:
 # ``_refresh_tool_inventory_section``) and once as the tool-calling schema's
 # top-level ``description``. For API providers the wire copy is the generic
 # ``WIRE_TOOL_DESCRIPTION`` pointer, so only the section carried the prose; for
-# the CLI-backed adapters (``claude_code``, ``kimi_code``) the full prose is
+# the CLI-backed adapter (``claude-code``) the full prose is
 # serialised verbatim into the ``# AVAILABLE TOOLS`` block *next to* the very
 # same text inside ``# AGENT SYSTEM INSTRUCTIONS`` — literal byte-identical
 # duplication of ~1.1 KB per registered tool, every turn.
@@ -162,7 +130,7 @@ def system_prompt_pressure_ratio() -> float:
 # Nested parameter/property descriptions are never affected either way.
 TOOL_PROSE_SECTION_ENABLED_ENV = "LINGTAI_TOOL_PROSE_SECTION_ENABLED"
 # Case-insensitive truthy set, matching the other kernel opt-in gates
-# (``LINGTAI_RISKY_ACTION_GATE``, ``LINGTAI_SOUL_FLOW_ENABLED``). Anything else
+# (``LINGTAI_RISKY_ACTION_GATE``). Anything else
 # — including unset and "" — is off.
 _TOOL_PROSE_SECTION_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -235,7 +203,6 @@ class AgentConfig:
     thinking_budget: int | None = None
     thinking: str = "high"  # reasoning/thinking tier passed to the main persistent LLM session
     data_dir: str | None = None  # for cache files (e.g., model context windows)
-    soul_delay: float = DEFAULT_SOUL_DELAY_SECONDS  # seconds idle before soul whispers; large value = effectively off
     language: str = "en"  # legacy language field retained for compatibility; prompt.py no longer injects prose from it
     activeness: str | None = "balanced"  # legacy responsiveness posture field; prompt.py no longer injects text from it
     stamina: float = IDLE_SLEEP_TIMEOUT_SECONDS  # legacy ignored constructor field; hidden idle timeout uses the kernel constant above
@@ -255,10 +222,6 @@ class AgentConfig:
     molt_pressure: float = MOLT_PRESSURE_THRESHOLD  # legacy alias; unused by the warning path
     molt_urgency: float = MOLT_URGENCY_THRESHOLD  # legacy alias; unused by the warning path
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes
-    insights_interval: int = 0  # turns between auto-insights; 0 = off
-    consultation_past_count: int = 0  # K random past-snapshot consultations per fire; default 0 = current-context soul flow only
-    soul_voice: str = "inner"  # consultation prompt profile — "inner" (terse, "you are the soul, speak as inner voice"), "observer" (structured stepped-back hook framing), or "custom" (use soul_voice_prompt). One unified prompt per profile; the per-fire cue text differentiates insights (current diary) vs past (future-self diary).
-    soul_voice_prompt: str = ""  # custom voice prompt — only used when soul_voice == "custom". Set/cleared by the agent via soul(action="voice", set="custom", prompt="..."). Length-capped at SOUL_VOICE_PROMPT_MAX in soul.py.
     snapshot_interval: float | None = None  # seconds between git snapshots; None = off
 
     def __post_init__(self):

@@ -403,7 +403,11 @@ def test_summarize_only_pending_positive_offers_forced_boundary_and_proactive():
     assert "context(action='rebuild', input={}, reasoning='...')" in recon
     assert "no new items" in recon
     assert "system(action='summarize'" not in recon
-    assert "Proactive is better" in recon
+    # Molt is preferred; the manual rebuild is a rare, discouraged exception.
+    assert "Proactive is better" not in recon
+    assert "rare exception" in recon
+    assert "strongly discouraged as routine compaction" in recon
+    assert "prefer a deliberate molt" in recon
 
 
 def test_summarize_only_wording_conditional_pending_zero():
@@ -802,8 +806,8 @@ def test_handle_dispatches_summarize(tmp_path):
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
@@ -830,8 +834,8 @@ def _make_base_agent_for_notification(tmp_path):
     from lingtai.kernel.base_agent import BaseAgent
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
     return agent
 
@@ -1054,8 +1058,8 @@ def test_base_agent_threshold_init_from_config(tmp_path):
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
     assert agent._summarize_notification_threshold == 3000  # default
@@ -1063,7 +1067,7 @@ def test_base_agent_threshold_init_from_config(tmp_path):
     # Simulate what _setup_from_init does after reading manifest.  An explicit
     # manifest value must override the default (config override preserved).
     manifest = {
-        "llm": {"provider": "gemini", "model": "gemini-test"},
+        "llm": {"provider": "anthropic", "model": "claude-test"},
         "summarize_notification_threshold": 1500,
     }
     raw_threshold = manifest.get("summarize_notification_threshold")
@@ -1084,13 +1088,13 @@ def test_base_agent_threshold_config_accepts_zero(tmp_path):
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-zero", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
     manifest = {
-        "llm": {"provider": "gemini", "model": "gemini-test"},
+        "llm": {"provider": "anthropic", "model": "claude-test"},
         "summarize_notification_threshold": 0,
     }
     raw_threshold = manifest.get("summarize_notification_threshold")
@@ -1109,13 +1113,13 @@ def test_base_agent_threshold_config_rejects_bool(tmp_path):
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="cfg-bool", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
     manifest = {
-        "llm": {"provider": "gemini", "model": "gemini-test"},
+        "llm": {"provider": "anthropic", "model": "claude-test"},
         "summarize_notification_threshold": True,  # bool should be rejected
     }
     raw_threshold = manifest.get("summarize_notification_threshold")
@@ -1302,8 +1306,7 @@ def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
     """End-to-end: notification dismiss now succeeds as an escape hatch (issue #425),
     and system summarize also clears the reminder. Dismissal is an alternative
     to summarize, not blocked. Summarize stays on the system tool."""
-    from tests._tool_plugin_helpers import dispatch_declared_tool
-    from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
+    from lingtai.kernel.notifications import dismiss_channel
     from tests._notification_store_helpers import snapshot_notifications, fingerprint_notifications
 
     iface = ChatInterface()
@@ -1312,14 +1315,10 @@ def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
     _publish_large_result_event(agent._working_dir, "toolu_big")
     agent._notification_fp = fingerprint_notifications(agent._working_dir)
 
-    # Dismiss now succeeds — large_tool_result reminders are dismissable as escape hatch.
-    dismissed = dispatch_declared_tool(NOTIFICATION_DECLARATION,
-        agent,
-        {
-            "action": "dismiss_channel",
-            "input": {"channel": "system", "force": True},
-            "reasoning": "test",
-        },
+    # The private Core dismiss helper still clears legacy large_tool_result
+    # reminders (no public action reaches it any more).
+    dismissed = dismiss_channel(
+        agent, "system", invoked_by="notification", force=True
     )
     assert dismissed["status"] == "ok"
     assert "acked_large_result_refs" in dismissed

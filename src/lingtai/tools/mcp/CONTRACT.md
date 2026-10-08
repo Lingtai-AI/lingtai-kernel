@@ -44,7 +44,7 @@ maintenance: |
 into the protected `mcp` system-prompt section, reports registry health, and
 SHOWs the two MCP-owned top-level init settings. It does NOT register, activate,
 configure, or troubleshoot MCP servers —
-all mutations happen by editing `mcp_registry.jsonl` with `write`/`edit`. The tool
+all mutations happen by editing `mcp_registry.jsonl` through `shell`. The tool
 slice lives in `src/lingtai/tools/mcp/__init__.py`; the registry machinery it renders
 lives in `src/lingtai/services/mcp_registry.py` (imported lazily). The code is the
 source of truth.
@@ -64,7 +64,7 @@ Guarded by: [MC001](BEHAVIORS.md#behavior-mc001)
   decompression: those are the service at
   `src/lingtai/services/mcp_registry.py`.
 - Code navigation only: read `src/lingtai/tools/mcp/ANATOMY.md`.
-- Actually registering an MCP: edit `mcp_registry.jsonl` with `write`/`edit`,
+- Actually registering an MCP: edit `mcp_registry.jsonl` through `shell`,
   then call `system(action="refresh")`.
 
 **Fast paths:** tool schema and the LTP v2 envelope -> §Tool surface; registry
@@ -209,7 +209,7 @@ The capability reads (never writes) the per-agent registry:
 <agent>/init.json               # canonical source for init.addons/init.mcp SHOW
 ```
 
-Writers of this file are OUTSIDE this tool: the agent (`write`/`edit`) and the
+Writers of this file are OUTSIDE this tool: the agent (through `shell`) and the
 boot-time addon decompression (`decompress_addons`, run by the Agent initializer,
 which appends catalog entries named in init.json's `addons: [...]`, append-only
 and idempotent). Identity records are read separately via `read_identities`. `mcp`

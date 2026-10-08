@@ -46,7 +46,6 @@ FOOTPRINT_PORTAL_TOPOLOGY = "portal_topology_replay"
 FOOTPRINT_LOG_SQLITE = "agent_log_index"
 FOOTPRINT_EVENTS = "agent_authoritative_events_log"
 FOOTPRINT_TOKEN_LEDGER = "agent_authoritative_token_ledger"
-FOOTPRINT_SOUL_FLOW = "agent_authoritative_soul_flow"
 FOOTPRINT_REFRESH_RELAUNCH = "agent_refresh_relaunch_log"
 FOOTPRINT_HISTORY_ARCHIVE = "agent_history_archive"
 FOOTPRINT_HISTORY_SNAPSHOTS = "agent_history_snapshots"
@@ -56,7 +55,6 @@ FOOTPRINT_CATEGORIES = (
     FOOTPRINT_LOG_SQLITE,
     FOOTPRINT_EVENTS,
     FOOTPRINT_TOKEN_LEDGER,
-    FOOTPRINT_SOUL_FLOW,
     FOOTPRINT_REFRESH_RELAUNCH,
     FOOTPRINT_HISTORY_ARCHIVE,
     FOOTPRINT_HISTORY_SNAPSHOTS,
@@ -435,13 +433,6 @@ def _scan_agent_footprints(
                 "authoritative_do_not_delete",
                 "Preserve token-accounting rows; consider compression or rollup "
                 "only with an accounting contract.",
-            ),
-            (
-                "soul_flow.jsonl",
-                FOOTPRINT_SOUL_FLOW,
-                "authoritative_do_not_delete",
-                "Preserve the soul-flow record; consider compression or archive "
-                "policy, not blind deletion.",
             ),
             (
                 "refresh_relaunch.log",

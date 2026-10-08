@@ -1,5 +1,6 @@
 ---
 related_files:
+  - tests/test_unified_instructions.py
   - ENVIRONMENT_VARIABLES.md
   - ANATOMY.md
   - CONTRACT.md
@@ -37,10 +38,10 @@ related_files:
   - tests/contracts/llm_conversation_input/test_send_str.py
   - tests/contracts/llm_conversation_input/test_send_tool_results.py
   - tests/integration_test_claude_code.py
-  - tests/integration_test_kimi_code.py
   - tests/opencode
   - tests/test_activate_preset.py
   - tests/test_acp_stdio.py
+  - tests/test_resident_acp_socket.py
   - tests/test_puffo_v0_profile.py
   - tests/test_provider_admission.py
   - tests/test_execution_workspace.py
@@ -91,14 +92,13 @@ related_files:
   - tests/test_cli_runtime_env.py
   - tests/test_cli_worker_poison_recovery.py
   - tests/test_cloud_mail_addon.py
+  - tests/test_cloud_mail_notification_no_reread.py
   - tests/test_cloud_mail_toolfamily_ltpv2.py
   - tests/test_codex_account_source.py
   - tests/test_codex_endpoint_override.py
   - tests/test_codex_endpoint_pool.py
   - tests/test_codex_native_multiaccount.py
-  - tests/test_codex_pool.py
   - tests/test_codex_prompt_cache_key.py
-  - tests/test_codex_quota.py
   - tests/test_codex_raw_reasoning_replay.py
   - tests/test_codex_standalone_compaction.py
   - tests/test_codex_ws_delta.py
@@ -111,8 +111,8 @@ related_files:
   - tests/test_context_ownership_redesign.py
   - tests/test_context_pressure_reminder.py
   - tests/test_context_pressure_streak.py
-  - tests/test_custom_responses_stateless.py
   - tests/test_daemon.py
+  - tests/test_daemon_llm_defaults_forwarding.py
   - tests/test_daemon_attention_delay.py
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_check.py
@@ -152,8 +152,6 @@ related_files:
   - tests/test_daemon_windows_process_port.py
   - tests/test_daemon_windows_supervisor.py
   - tests/test_deep_refresh.py
-  - tests/test_deepseek_adapter.py
-  - tests/test_deepseek_reasoning_effort.py
   - tests/test_docs_governance.py
   - tests/test_eigen.py
   - tests/test_email_abs_reply_route.py
@@ -170,15 +168,13 @@ related_files:
   - tests/test_feishu_interactive_cards.py
   - tests/test_feishu_native_progress.py
   - tests/test_feishu_notification_metadata.py
+  - tests/test_feishu_notification_no_reread.py
   - tests/test_feishu_programmable_task_cards.py
   - tests/test_feishu_reactions_errors.py
   - tests/test_feishu_rich_outbound.py
   - tests/test_feishu_rich_outbound_media.py
   - tests/test_feishu_stdio_logging.py
   - tests/test_feishu_toolfamily_ltpv2.py
-  - tests/test_file_io_sidecar.py
-  - tests/test_file_tool_family.py
-  - tests/test_file_tool_plugin_package.py
   - tests/test_filesystem_mail.py
   - tests/test_event_journal_count_nudge.py
   - tests/test_folder_size_nudge.py
@@ -197,6 +193,7 @@ related_files:
   - tests/test_imap_read_attachment_sanitization.py
   - tests/test_imap_reply_attachments.py
   - tests/test_imap_toolfamily_ltpv2.py
+  - tests/test_imap_notification_no_reread.py
   - tests/test_inherit_fallback.py
   - tests/test_init_reader.py
   - tests/test_init_schema.py
@@ -212,7 +209,6 @@ related_files:
   - tests/test_kernel_migrate.py
   - tests/test_kernel_update_contract.py
   - tests/test_kernel_version_nudge.py
-  - tests/test_kimi_code_adapter.py
   - tests/test_knowledge.py
   - tests/test_labt_validation.py
   - tests/test_large_result_no_notification.py
@@ -220,7 +216,6 @@ related_files:
   - tests/test_layers_avatar.py
   - tests/test_layers_bash.py
   - tests/test_layers_email.py
-  - tests/test_layers_file.py
   - tests/test_licc_notification_contract_doc.py
   - tests/test_lifecycle_clock.py
   - tests/test_lifecycle_daemon_shutdown.py
@@ -255,8 +250,6 @@ related_files:
   - tests/test_mcp_v2_adapter_metadata.py
   - tests/test_messaging_notification_format.py
   - tests/test_meta_block.py
-  - tests/test_mimo_adapter.py
-  - tests/test_mimo_responses_compaction.py
   - tests/test_molt_notification_persistence.py
   - tests/test_molt_task_persistence.py
   - tests/test_network.py
@@ -267,13 +260,18 @@ related_files:
   - tests/test_notification_schema_wire_scrub.py
   - tests/test_notification_settings.py
   - tests/test_notification_store.py
+  - tests/test_notification_one_shot.py
   - tests/test_notification_sync.py
   - tests/test_notification_tool.py
   - tests/test_nudge_inline_cap.py
   - tests/test_nudge_policy.py
   - tests/test_nudge_prompts.py
-  - tests/test_openai_compact_threshold.py
+  - tests/test_responses_no_context_management.py
   - tests/test_openai_overflow_recovery.py
+  - tests/test_openai_compatible_service_tier.py
+  - tests/test_openai_reasoning_fallback.py
+  - tests/test_openai_responses_stateless.py
+  - tests/test_openai_cache_write_usage.py
   - tests/test_openai_prompt_cache_key.py
   - tests/test_openai_responses_streaming.py
   - tests/test_outbound_file_containment.py
@@ -303,7 +301,6 @@ related_files:
   - tests/test_psyche_family.py
   - tests/test_publish_release_assets.py
   - tests/test_python_support_matrix.py
-  - tests/test_read_continuation.py
   - tests/test_refresh_watcher_process.py
   - tests/test_refresh_watcher_windows.py
   - tests/test_release_manifest.py
@@ -317,7 +314,6 @@ related_files:
   - tests/test_runtime_identity.py
   - tests/test_secondary_schema.py
   - tests/test_sent_message_tracker.py
-  - tests/test_services_file_io.py
   - tests/test_services_integration.py
   - tests/test_services_logging.py
   - tests/test_services_mail.py
@@ -337,9 +333,7 @@ related_files:
   - tests/test_skills.py
   - tests/test_manual_cleanup_routes.py
   - tests/test_snapshot.py
-  - tests/test_soul.py
-  - tests/test_soul_consultation.py
-  - tests/test_soul_settings.py
+  - tests/test_soul_removed.py
   - tests/test_source_drift.py
   - tests/test_status_snapshot.py
   - tests/test_streaming.py
@@ -363,6 +357,7 @@ related_files:
   - tests/test_telegram_inbound_media_download_failure.py
   - tests/test_telegram_lossless_envelope.py
   - tests/test_telegram_notification_read_state.py
+  - tests/test_telegram_notification_no_reread.py
   - tests/test_telegram_rate_limit.py
   - tests/test_telegram_reaction_states.py
   - tests/test_telegram_rich_formatting.py
@@ -370,6 +365,7 @@ related_files:
   - tests/test_telegram_slash_commands.py
   - tests/test_telegram_task_card.py
   - tests/test_telegram_task_card_blockers.py
+  - tests/test_telegram_task_card_api_cost.py
   - tests/test_telegram_task_card_event_tail.py
   - tests/test_telegram_task_card_in_place.py
   - tests/test_telegram_task_card_last_message.py
@@ -406,7 +402,6 @@ related_files:
   - tests/test_tool_family_knowledge_migration_parity.py
   - tests/test_tool_family_manual_contract.py
   - tests/test_tool_family_mcp_migration_parity.py
-  - tests/test_tool_family_soul_migration.py
   - tests/test_tool_family_system_migration.py
   - tests/test_tool_family_vision_migration.py
   - tests/test_tool_family_wire_parity.py
@@ -440,16 +435,16 @@ related_files:
   - tests/test_wechat_media_validation.py
   - tests/test_wechat_media_warning_integration.py
   - tests/test_wechat_notification_metadata.py
+  - tests/test_wechat_notification_no_reread.py
   - tests/test_wechat_reply_read_state.py
   - tests/test_wechat_settings.py
   - tests/test_wechat_toolfamily_ltpv2.py
   - tests/test_whatsapp_inbound_replay.py
   - tests/test_whatsapp_notification_metadata.py
+  - tests/test_whatsapp_notification_no_reread.py
   - tests/test_whatsapp_personal_bridge.py
   - tests/test_whatsapp_settings.py
   - tests/test_whatsapp_toolfamily_ltpv2.py
-  - tests/test_wheel_platlib_layout.py
-  - tests/test_wheel_sidecar_smoke.py
   - tests/test_wheels_workflow_publish_gating.py
   - tests/test_win32_job.py
   - tests/test_windows_cmd_shim.py
@@ -463,7 +458,6 @@ related_files:
   - tests/test_workdir.py
   - tests/test_workdir_lease.py
   - tests/test_workdir_lease_posix_only.py
-  - tests/test_zhipu_merge_consecutive.py
   - tests/unit/__init__.py
   - tests/unit/auth/__init__.py
   - tests/unit/auth/test_codex_auth.py
@@ -528,15 +522,17 @@ complete, not to pair with a governed contract.
   exports `FAKE_DAEMON_CLI=opencode` so one fake CLI serves both daemon
   backends. They are tracked, mode-`+x`, extension-less files — not scripts to
   run by hand.
-- `integration_test_*.py` — `integration_test_claude_code.py` and
-  `integration_test_kimi_code.py`, named off the `test_*` collection pattern so
-  the default run does not drive a real local CLI.
+- `integration_test_*.py` — `integration_test_claude_code.py`, named off the
+  `test_*` collection pattern so the default run does not drive a real local
+  CLI.
 - `contracts/llm_conversation_input/` — the contract-conformance sub-package for
   provider conversation input. `tests/contracts/llm_conversation_input/regimes.py` holds the executable
   session-return matrix (`REGISTRY_EDGES`) that builds every registered
-  provider through the real `LLMService`, and `tests/contracts/llm_conversation_input/test_regime_inventory.py` asserts
-  that matrix equals the live registry key set, so adding a provider or
-  rebinding a factory fails here rather than silently.
+  provider (exactly the four families `openai`, `anthropic`, `codex`,
+  `claude-code`) through the real `LLMService`, and `tests/contracts/llm_conversation_input/test_regime_inventory.py` asserts
+  that matrix equals the live registry key set and that every removed provider
+  name fails `validate_init`, so adding a provider or rebinding a factory fails
+  here rather than silently.
 - `unit/` and `unit/auth/` — the one explicitly-layered unit sub-package,
   currently holding `tests/unit/auth/test_codex_auth.py`.
 - `test_*.py` (~380 modules at the top level) — the bulk of the suite, named
@@ -592,4 +588,4 @@ autouse fixtures rather than by per-test cleanup.
   repository. A tooling change that filters files by suffix will silently drop
   them.
 - `integration_test_*.py` files are invisible to a default `pytest` run by
-  design; they require a real `claude` or `kimi` CLI and are invoked explicitly.
+  design; they require a real `claude` CLI and are invoked explicitly.

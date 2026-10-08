@@ -228,6 +228,19 @@ def test_current_molt_context_prose_from_third_round():
     assert "context-manual" in molt
 
 
+def test_pressure_reminders_prepare_molt_instead_of_rebuild_only():
+    sustained = render_current_molt_context(streak=3, usage=0.90)
+    assert "rebuild-only" not in sustained
+    assert "strongly discouraged" in sustained
+    assert "session journal" in sustained
+    assert "molt deliberately" in sustained
+    above_ratio = render_reconstruction_molt(after_usage=0.90)
+    assert "rebuild-only" not in above_ratio
+    assert "at most one" not in above_ratio
+    assert "do not rebuild again" in above_ratio
+    assert "molt deliberately" in above_ratio
+
+
 def test_render_current_molt_context_is_pure_and_natural_language():
     molt = render_current_molt_context(streak=3, usage=0.90)
     assert "stage" not in molt

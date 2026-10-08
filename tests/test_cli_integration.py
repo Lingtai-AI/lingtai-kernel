@@ -19,7 +19,7 @@ def _write_init(tmp_path: Path) -> None:
             "agent_name": "integration-test",
             "language": "en",
             "llm": {
-                "provider": "gemini",
+                "provider": "anthropic",
                 "model": "test-model",
                 "api_key": "fake-key",
                 "base_url": None,
@@ -45,7 +45,7 @@ def _write_init(tmp_path: Path) -> None:
 def _make_mock_service():
     """Build a deterministic mock LLMService that satisfies BaseAgent's contract."""
     svc = MagicMock()
-    svc.provider = "gemini"
+    svc.provider = "anthropic"
     svc.model = "test-model"
     svc._base_url = None
     svc._provider_defaults = {}

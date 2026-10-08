@@ -101,7 +101,7 @@ def _reminder_delay(agent, goal: dict[str, Any]) -> float:
     data = goal.get("data") if isinstance(goal.get("data"), dict) else {}
     raw = goal.get("reminder_delay_seconds", data.get("reminder_delay_seconds"))
     if raw is None:
-        raw = getattr(agent, "_soul_delay", _DEFAULT_DELAY_SECONDS)
+        raw = _DEFAULT_DELAY_SECONDS
     try:
         delay = float(raw)
     except (TypeError, ValueError):

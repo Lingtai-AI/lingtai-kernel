@@ -27,7 +27,7 @@ Pinned pytest commands must run from the repo root with the project's Python.
 - **id**: EJ001
 - **title**: a successful append returns the exact JSONL file and byte offset, with every durable copy redacted before storage
 - **guards**: `structured-event-journal` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch working directory `<scratch>`
 - **estimate**: ≈ 15 minutes
 

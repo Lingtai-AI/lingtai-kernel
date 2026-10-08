@@ -207,7 +207,7 @@ def test_daemon_system_prompt_exposes_shell_local_delivery_only_when_selected():
     from lingtai.tools.daemon.system_prompt import build_daemon_system_prompt
 
     shell_prompt = build_daemon_system_prompt(task="x", tool_names=["shell"])
-    plain_prompt = build_daemon_system_prompt(task="x", tool_names=["file"])
+    plain_prompt = build_daemon_system_prompt(task="x", tool_names=["web_search"])
     assert "Detached Shell async events" in shell_prompt
     assert "call shell.poll for exact output" in shell_prompt
     assert "Detached Shell async events" not in plain_prompt

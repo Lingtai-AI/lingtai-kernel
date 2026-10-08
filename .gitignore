@@ -18,12 +18,6 @@ htmlcov/
 build/
 dist/
 
-# Rust sidecar — cargo build artifacts and the binary that setup.py drops
-# into the package tree at build time. Both are reproducible from the
-# crate sources under crates/lingtai-search-sidecar/.
-crates/lingtai-search-sidecar/target/
-src/lingtai/bin/
-
 # Editor / OS
 .DS_Store
 .idea/

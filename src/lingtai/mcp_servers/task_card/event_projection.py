@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from lingtai.kernel.llm.base import checked_count, safe_billing_model, safe_billing_tier
+from lingtai.kernel.session_stats import ASYNC_WORK_STATUS_KEYS, ASYNC_WORK_WINDOW_SECONDS
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.trace_redaction import redact_text
 
 
-_ASYNC_STATUS_KEYS = ("running", "done", "failed", "cancelled", "timeout", "unknown")
+_ASYNC_STATUS_KEYS = ASYNC_WORK_STATUS_KEYS
+_ASYNC_WINDOW_MINUTES = ASYNC_WORK_WINDOW_SECONDS // 60
 
 
 class TaskCardEventProjection:
@@ -30,7 +34,6 @@ class TaskCardEventProjection:
         "/taskcard N sets normal rows (1-10"
     )
     DEFAULT_NORMAL_ROWS = 1
-    METADATA_MAX_CHARS = 500
     TIME_PREFIX = "Last Updated: "
     AGENT_STATES = frozenset(state.value for state in AgentState)
 
@@ -57,7 +60,11 @@ class TaskCardEventProjection:
             "daemons": "Daemons",
             "backends": "Backends",
             "shell": "Shell",
+            "scope": "Scope",
+            "scope_text": "recorded running/queued + finished in last {minutes}m",
             "daemon_stats": "Daemon stats",
+            "daemon_usage_na": "usage n/a (no positive usage reported)",
+            "omitted": "+{n} omitted",
         },
         "zh": {
             "header": "📋 活动",
@@ -80,9 +87,23 @@ class TaskCardEventProjection:
             "daemons": "守护进程",
             "backends": "后端",
             "shell": "Shell",
+            "scope": "范围",
+            "scope_text": "已记录的运行中/排队 + 最近 {minutes} 分钟内结束",
             "daemon_stats": "守护进程统计",
+            "daemon_usage_na": "用量 不可用（未上报正值）",
+            "omitted": "另有 {n} 项省略",
         },
     }
+
+    @classmethod
+    def daemon_stats_label(cls, locale: str = "en") -> str:
+        """Compact row label; accounting scope is documented in the manual."""
+        return cls._locale_text("daemon_stats", locale)
+
+    @classmethod
+    def scope_label(cls, locale: str = "en") -> str:
+        """Async Work row label for the running/queued + recent-finished scope."""
+        return cls._locale_text("scope", locale)
 
     @classmethod
     def normalize_locale(cls, locale: object) -> str:
@@ -378,12 +399,53 @@ class TaskCardEventProjection:
                 if last_tool_ts is None:
                     row["api_delay_s"] = 0.0
                 else:
-                    row["api_delay_s"] = max(0.0, round(ts - last_tool_ts, 2))
+                    row["api_delay_s"] = max(0.0, ts - last_tool_ts)
                 last_tool_ts = ts
             if len(events) < limit:
                 events.append(row)
         count = cls.EVENT_WINDOW if window is None else window
         return groups[-count:]
+
+    @classmethod
+    def reduce_idle_event(
+        cls, state: dict[str, Any] | None, event: dict[str, Any],
+        row: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Sum fully witnessed IDLE intervals between existing progress rows.
+
+        Journal order establishes containment, never wall-clock subtraction.
+        A partial interval or lifecycle restart invalidates that gap. No idle
+        observation is not proof of zero, so it stays absent.
+        """
+        current = dict(state or {})
+        kind = event.get("type")
+        if kind in {"heartbeat_start", "heartbeat_stop", "agent_stop"}:
+            current = {}
+        elif kind == "agent_state":
+            old, new = event.get("old"), event.get("new")
+            if old == "idle":
+                elapsed = cls._finite_number(event.get("idle_elapsed_s"))
+                if not current.get("pending") or elapsed is None or elapsed < 0:
+                    current["invalid"] = True
+                else:
+                    current["total"] = current.get("total", 0.0) + elapsed
+                    current["observed"] = True
+                current["pending"] = False
+            elif current.get("pending"):
+                current["invalid"] = True
+                current["pending"] = False
+            if new == "idle":
+                current["pending"] = bool(current.get("anchor"))
+                if not current.get("anchor"):
+                    current["invalid"] = True
+        if row is not None and "_ts" in row:
+            if (current.get("anchor") and current.get("observed")
+                    and not current.get("invalid") and not current.get("pending")):
+                total = current.get("total", 0.0)
+                if math.isfinite(total):
+                    row["idle_s"] = total
+            current = {"anchor": True}
+        return current
 
     @staticmethod
     def flatten_groups(
@@ -435,15 +497,351 @@ class TaskCardEventProjection:
             return {}
         supported = (
             "input_tokens",
+            "output_tokens",
+            "cached_tokens",
             "session_cache_rate",
             "cache_miss_tokens",
             "cache_miss_budget",
+            "cache_miss_remaining_tokens",
             "api_calls",
+            "avg_input_tokens_per_api_call",
             "context_tokens",
             "context_window",
             "context_usage",
         )
         return {key: session[key] for key in supported if key in session}
+
+    SESSION_USAGE_SCHEMA = "lingtai.token_usage.session/v1"
+    _SESSION_METADATA_FIELDS = (
+        "input_tokens",
+        "output_tokens",
+        "cached_tokens",
+        "session_cache_rate",
+        "cache_miss_tokens",
+        "cache_miss_budget",
+        "cache_miss_remaining_tokens",
+        "api_calls",
+        "avg_input_tokens_per_api_call",
+        "context_tokens",
+        "context_window",
+        "context_usage",
+    )
+
+    @staticmethod
+    def _exact_non_negative_int(value: Any) -> int | None:
+        return value if type(value) is int and value >= 0 else None
+
+    @staticmethod
+    def _finite_number(value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        number = float(value)
+        return number if math.isfinite(number) else None
+
+    @classmethod
+    def project_llm_response_session_usage(
+        cls, event: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Validate and project authoritative v1 SESSION telemetry.
+
+        ``None`` means the event is not an ``llm_response``.  ``{}`` means it is
+        an ``llm_response`` but its snapshot is absent or incoherent; consumers
+        must fail closed instead of retaining a stale SESSION footer.
+        """
+        if event.get("type") != "llm_response":
+            return None
+        raw = event.get("session_usage")
+        if not isinstance(raw, dict) or raw.get("schema") != cls.SESSION_USAGE_SCHEMA:
+            return {}
+
+        int_fields = (
+            "molt_count",
+            "api_call_index",
+            "api_calls",
+            "input_tokens",
+            "output_tokens",
+            "cached_tokens",
+            "avg_input_tokens_per_api_call",
+            "cache_miss_tokens",
+            "cache_miss_budget",
+            "cache_miss_remaining_tokens",
+            "context_tokens",
+        )
+        values: dict[str, Any] = {}
+        for key in int_fields:
+            value = cls._exact_non_negative_int(raw.get(key))
+            if value is None:
+                return {}
+            values[key] = value
+        for key in ("session_cache_rate",):
+            value = cls._finite_number(raw.get(key))
+            if value is None:
+                return {}
+            values[key] = value
+
+        current_input = cls._exact_non_negative_int(event.get("input_tokens"))
+        current_output = cls._exact_non_negative_int(event.get("output_tokens"))
+        current_cached = cls._exact_non_negative_int(event.get("cached_tokens"))
+        if current_input is None or current_output is None or current_cached is None:
+            return {}
+        if (
+            values["api_call_index"] < 1
+            or values["api_calls"] != values["api_call_index"]
+            or values["input_tokens"] < current_input
+            or values["output_tokens"] < current_output
+            or current_cached > current_input
+            or values["cached_tokens"] < current_cached
+            or values["cached_tokens"] > values["input_tokens"]
+            or values["cache_miss_tokens"]
+            != values["input_tokens"] - values["cached_tokens"]
+            or values["avg_input_tokens_per_api_call"]
+            != int(round(values["input_tokens"] / values["api_calls"]))
+            or values["context_tokens"] != current_input
+            or values["cache_miss_budget"] <= 0
+            or values["cache_miss_remaining_tokens"]
+            != max(values["cache_miss_budget"] - values["cache_miss_tokens"], 0)
+        ):
+            return {}
+        expected_cache_rate = (
+            round(values["cached_tokens"] / values["input_tokens"], 5)
+            if values["input_tokens"] > 0
+            else 0.0
+        )
+        if (
+            not 0.0 <= values["session_cache_rate"] <= 1.0
+            or values["session_cache_rate"] != expected_cache_rate
+        ):
+            return {}
+        raw_context_window = raw.get("context_window")
+        raw_context_usage = raw.get("context_usage")
+        if raw_context_window is not None or raw_context_usage is not None:
+            context_window = cls._exact_non_negative_int(raw_context_window)
+            context_usage = cls._finite_number(raw_context_usage)
+            if context_window is None or context_window <= 0 or context_usage is None:
+                return {}
+            expected_context_usage = round(values["context_tokens"] / context_window, 5)
+            if context_usage < 0.0 or context_usage != expected_context_usage:
+                return {}
+            values["context_window"] = context_window
+            values["context_usage"] = context_usage
+        return {
+            "molt_count": values["molt_count"],
+            "api_call_index": values["api_call_index"],
+            "metadata": {
+                key: values[key]
+                for key in cls._SESSION_METADATA_FIELDS
+                if key in values
+            },
+        }
+
+    @classmethod
+    def _project_legacy_session_usage(
+        cls, event: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        projected = cls.project_final_carrier_metadata(event)
+        if projected is None:
+            return None
+        if not projected:
+            return {}
+        int_fields = {
+            "input_tokens",
+            "output_tokens",
+            "cached_tokens",
+            "cache_miss_tokens",
+            "cache_miss_budget",
+            "cache_miss_remaining_tokens",
+            "api_calls",
+            "avg_input_tokens_per_api_call",
+            "context_tokens",
+            "context_window",
+        }
+        for key, value in projected.items():
+            if key in int_fields and cls._exact_non_negative_int(value) is None:
+                return {}
+            if key == "session_cache_rate":
+                number = cls._finite_number(value)
+                if number is None or not 0.0 <= number <= 1.0:
+                    return {}
+            if key == "context_usage":
+                number = cls._finite_number(value)
+                if number is None or number < 0.0:
+                    return {}
+        if (
+            "cache_miss_budget" in projected
+            and projected["cache_miss_budget"] <= 0
+        ) or ("context_window" in projected and projected["context_window"] <= 0):
+            return {}
+        if (
+            "input_tokens" in projected
+            and "cache_miss_tokens" in projected
+            and projected["cache_miss_tokens"] > projected["input_tokens"]
+        ):
+            return {}
+        return dict(projected)
+
+    @classmethod
+    def reduce_session_usage_event(
+        cls,
+        state: dict[str, Any] | None,
+        event: dict[str, Any],
+        *,
+        event_order: int | None = None,
+    ) -> dict[str, Any]:
+        """Reduce one journal-ordered event into transport-neutral SESSION state."""
+        previous = dict(state or {})
+        order = (
+            event_order
+            if type(event_order) is int and event_order >= 0
+            else int(previous.get("event_order", -1)) + 1
+        )
+        previous.setdefault("source", None)
+        previous.setdefault("metadata", {})
+        previous.setdefault("versioned_seen", False)
+        previous.setdefault("molt_count", None)
+        previous.setdefault("api_call_index", 0)
+        previous.setdefault("invalidated", False)
+        previous.setdefault("awaiting_new_generation", False)
+        previous["event_order"] = order
+
+        if event.get("type") == "psyche_molt":
+            generation = cls._exact_non_negative_int(event.get("molt_count"))
+            known = previous.get("molt_count")
+            if generation is not None and type(known) is int and generation <= known:
+                return previous
+            return {
+                "source": None,
+                "metadata": {},
+                "versioned_seen": True,
+                "molt_count": generation if generation is not None else known,
+                "api_call_index": 0 if generation is not None else previous.get("api_call_index", 0),
+                "snapshot": None,
+                "invalidated": True,
+                "awaiting_new_generation": generation is None,
+                "event_order": order,
+            }
+
+        projected = cls.project_llm_response_session_usage(event)
+        if projected is not None:
+            if projected:
+                generation = projected["molt_count"]
+                index = projected["api_call_index"]
+                known_generation = previous.get("molt_count")
+                known_index = previous.get("api_call_index", 0)
+                if previous.get("awaiting_new_generation") and type(known_generation) is int and generation <= known_generation:
+                    return previous
+                if type(known_generation) is int and (
+                    generation < known_generation
+                    or (generation == known_generation and index < known_index)
+                ):
+                    return previous
+                if (
+                    previous.get("invalidated")
+                    and generation == known_generation
+                    and index <= known_index
+                ):
+                    return previous
+                old_snapshot = previous.get("snapshot")
+                if (
+                    generation == known_generation
+                    and isinstance(old_snapshot, dict)
+                ):
+                    monotonic = ("api_calls", "input_tokens", "output_tokens", "cached_tokens", "cache_miss_tokens")
+                    old_metadata = old_snapshot.get("metadata", {})
+                    new_metadata = projected["metadata"]
+                    if index == known_index:
+                        if projected != old_snapshot:
+                            projected = {}
+                    elif any(new_metadata[key] < old_metadata.get(key, 0) for key in monotonic):
+                        projected = {}
+                if projected:
+                    return {
+                        "source": "v1",
+                        "metadata": dict(projected["metadata"]),
+                        "versioned_seen": True,
+                        "molt_count": generation,
+                        "api_call_index": index,
+                        "snapshot": projected,
+                        "invalidated": False,
+                        "awaiting_new_generation": False,
+                        "event_order": order,
+                    }
+                # A journal-newer, orderable but incoherent snapshot invalidates
+                # the display and advances the cursor so old data cannot revive.
+                return {
+                    **previous,
+                    "source": None,
+                    "metadata": {},
+                    "versioned_seen": True,
+                    "molt_count": generation,
+                    "api_call_index": index,
+                    "snapshot": None,
+                    "invalidated": True,
+                    "awaiting_new_generation": bool(previous.get("awaiting_new_generation")),
+                    "event_order": order,
+                }
+            # A malformed v1 may still have a coherent ordering envelope.  A
+            # proven lower envelope is ignored; a current/newer one clears the
+            # display and advances the fence so old snapshots cannot revive.
+            raw_snapshot = event.get("session_usage")
+            generation = (
+                cls._exact_non_negative_int(raw_snapshot.get("molt_count"))
+                if isinstance(raw_snapshot, dict)
+                and raw_snapshot.get("schema") == cls.SESSION_USAGE_SCHEMA
+                else None
+            )
+            index = (
+                cls._exact_non_negative_int(raw_snapshot.get("api_call_index"))
+                if generation is not None
+                else None
+            )
+            known_generation = previous.get("molt_count")
+            known_index = previous.get("api_call_index", 0)
+            if generation is not None and type(known_generation) is int:
+                if generation < known_generation:
+                    return previous
+                if (
+                    generation == known_generation
+                    and index is not None
+                    and index < known_index
+                ):
+                    return previous
+            return {
+                **previous,
+                "source": None,
+                "metadata": {},
+                "versioned_seen": True,
+                "molt_count": generation if generation is not None else known_generation,
+                "api_call_index": (
+                    index
+                    if index is not None
+                    else 0
+                    if generation is not None
+                    and (type(known_generation) is not int or generation > known_generation)
+                    else known_index
+                ),
+                "snapshot": None,
+                "invalidated": True,
+                "awaiting_new_generation": bool(previous.get("awaiting_new_generation")),
+                "event_order": order,
+            }
+
+        legacy = cls._project_legacy_session_usage(event)
+        if legacy is not None:
+            if previous.get("versioned_seen"):
+                return previous
+            return {
+                **previous,
+                "source": "legacy" if legacy else None,
+                "metadata": legacy,
+                "event_order": order,
+            }
+        return previous
+
+    @staticmethod
+    def session_usage_metadata(state: dict[str, Any] | None) -> dict[str, Any]:
+        """Return a detached safe metadata projection from reducer state."""
+        metadata = (state or {}).get("metadata")
+        return dict(metadata) if isinstance(metadata, dict) else {}
 
     @staticmethod
     def decode_event_line(raw: bytes) -> dict[str, Any] | None:
@@ -537,7 +935,53 @@ class TaskCardEventProjection:
             usage["thinking"] = thinking
         if cached > 0:
             usage["cache_rate"] = min(cached / total, 1.0)
+        bill = TaskCardEventProjection._project_billing_facts(event, total, cached)
+        if bill:
+            usage["bill"] = bill
+        raw_timing = event.get("stream_timing")
+        if isinstance(raw_timing, dict):
+            timing = {}
+            for key in ("first_token_s", "generation_s"):
+                value = raw_timing.get(key)
+                if type(value) in (int, float) and math.isfinite(value) and value >= 0:
+                    timing[key] = float(value)
+            tokens = checked_count(raw_timing.get("generation_tokens"))
+            if tokens is not None and tokens <= output and event.get("estimated") is not True:
+                timing["generation_tokens"] = tokens
+            if timing:
+                usage["stream_timing"] = timing
         return (call_id, usage)
+
+    @staticmethod
+    def _project_billing_facts(
+        event: dict[str, Any], total: int, cached: int,
+    ) -> dict[str, Any]:
+        """Validated per-round pricing facts from one ``llm_response``.
+
+        Only the round's own model, requested service tier and
+        adapter-established counts are kept;
+        anything invalid is dropped (unknown), never coerced to zero. Estimated
+        rounds keep just the flag so no cost is asserted for them.
+        """
+        if event.get("estimated") is True:
+            return {"estimated": True}
+        raw = event.get("usage_billing")
+        if not isinstance(raw, dict):
+            return {}
+        bill: dict[str, Any] = {"input": total, "cached": cached}
+        model = safe_billing_model(raw.get("model"))
+        if model is not None:
+            bill["model"] = model
+        if "service_tier" in raw:
+            # REQUESTED wire tier. A present-but-invalid value stays present
+            # (empty) so it is unknown downstream, never standard; an absent
+            # key is a legacy/untiered round and stays absent.
+            bill["service_tier"] = safe_billing_tier(raw["service_tier"]) or ""
+        for key in ("cache_write_tokens", "cache_write_1h_tokens", "billable_output_tokens"):
+            value = checked_count(raw.get(key))
+            if value is not None:
+                bill[key] = value
+        return bill
 
     @staticmethod
     def apply_tool_usages(
@@ -557,10 +1001,27 @@ class TaskCardEventProjection:
         for group in groups:
             for row in group.get("events", []):
                 usage = usages.get(row.get("_tool_call_id"))
+                by_api = usages.get(row.get("_api_call_id"))
                 if usage is None:
-                    usage = usages.get(row.get("_api_call_id"))
+                    usage = by_api
                 if usage is None:
                     continue
+                if "bill" not in usage:
+                    # Pricing facts ride only llm_response usage; a later
+                    # carrier must not erase them. Match by this row's own ids.
+                    previous = row.get("_usage")
+                    bill = (by_api or {}).get("bill") or (
+                        previous.get("bill") if isinstance(previous, dict) else None
+                    )
+                    if bill:
+                        usage = {**usage, "bill": bill}
+                if "stream_timing" not in usage:
+                    previous = row.get("_usage")
+                    timing = (by_api or {}).get("stream_timing") or (
+                        previous.get("stream_timing") if isinstance(previous, dict) else None
+                    )
+                    if timing:
+                        usage = {**usage, "stream_timing": timing}
                 if row.get("_usage") == usage:
                     continue
                 row["_usage"] = usage
@@ -706,7 +1167,12 @@ class TaskCardEventProjection:
         now: datetime | None = None,
         locale: str = "en",
         display_expression: tuple[str, ...] | None = None,
+        usage_line: Callable[[float | None, dict[str, Any] | None], str] | None = None,
+        stream_metrics: bool = False,
     ) -> str:
+        """Render grouped rows; ``usage_line`` is an opt-in per-group formatter
+        (pure, called once per group with ``(api_delay_s, usage)``) whose
+        non-empty text becomes one extra line right after the metrics row."""
         rows: list[dict[str, Any]] = []
         for group in groups[-normal_rows:]:
             # One wall-clock stamp per API call sits centered in the divider
@@ -743,9 +1209,17 @@ class TaskCardEventProjection:
                     usage = u
                 if api_delay_s is not None and usage is not None:
                     break
-            info = cls.format_divider_info(api_delay_s, usage)
-            if info:
-                rows.append({"kind": "api_info", "text": info})
+            events = group.get("events", [])
+            idle_s = events[0].get("idle_s") if events else None
+            info = cls.format_divider_info(
+                api_delay_s, usage, stream_metrics=stream_metrics, idle_s=idle_s,
+            )
+            for line in info.splitlines():
+                rows.append({"kind": "api_info", "text": line})
+            if usage_line is not None:
+                extra = usage_line(api_delay_s, usage)
+                if extra:
+                    rows.append({"kind": "api_info", "text": extra})
             rows.extend(group.get("events", []))
         text = cls.format_task_card_text(
             "",
@@ -758,13 +1232,18 @@ class TaskCardEventProjection:
             locale=locale,
             display_expression=display_expression,
         )
-        return text[: cls.TEXT_LIMIT] if len(text) > cls.TEXT_LIMIT else text
+        if len(text) > cls.TEXT_LIMIT:
+            # Last-resort ceiling: say the frame was cut instead of ending
+            # silently mid-row.
+            return text[: cls.TEXT_LIMIT - 1] + "…"
+        return text
 
     @classmethod
     def format_divider_info(
         cls,
         api_delay_s: float | None,
         usage: dict[str, Any] | None,
+        *, stream_metrics: bool = False, idle_s: float | None = None,
     ) -> str:
         """Compact divider: `↻ x s ↓out (think) ↑miss ◌ ctx | cache%`.
 
@@ -806,7 +1285,47 @@ class TaskCardEventProjection:
                 parts.append(f"\u25cc {context}")
             elif rate_text is not None:
                 parts.append(rate_text)
-        return " ".join(parts)
+        if not stream_metrics:
+            return " ".join(parts)
+        # Telegram opts into separate time/token lines. Other consumers keep
+        # their existing frame, including every established token symbol.
+        time_parts = []
+        if api_delay_s is not None and api_delay_s > 0:
+            time_parts.append(f"↻{api_delay_s:.1f}s")
+            parts.pop(0)
+        # The same group's observed API wait + generation intervals are
+        # adjacent. Subtract their unrounded sum and any measured same-gap
+        # IDLE. Unobserved IDLE retains the prior inclusive residual; missing
+        # timing or a negative result has no honest residual.
+        timing = usage.get("stream_timing") if isinstance(usage, dict) else None
+        if isinstance(timing, dict):
+            first = cls._finite_number(timing.get("first_token_s"))
+            generation = cls._finite_number(timing.get("generation_s"))
+            gap = cls._finite_number(api_delay_s)
+            if (gap is not None and gap > 0 and first is not None and first >= 0
+                    and generation is not None and generation >= 0):
+                other = gap - (first + generation)
+                if type(idle_s) in (int, float) and math.isfinite(idle_s) and idle_s >= 0:
+                    other -= idle_s
+                if math.isfinite(other) and other >= 0:
+                    time_parts.append(f"⏱{other:.1f}s")
+        if type(idle_s) in (int, float) and math.isfinite(idle_s) and idle_s >= 0:
+            time_parts.append(f"☕{idle_s:.1f}s")
+        if isinstance(timing, dict):
+            first = timing.get("first_token_s")
+            if type(first) in (int, float) and math.isfinite(first) and first >= 0:
+                time_parts.append(f"⚡{first:.1f}s")
+                interval = timing.get("generation_s")
+                tokens = checked_count(timing.get("generation_tokens"))
+                if (tokens is not None and type(interval) in (int, float)
+                        and math.isfinite(interval) and interval > 0):
+                    try:
+                        speed = tokens / interval
+                    except OverflowError:
+                        speed = math.inf
+                    if math.isfinite(speed):
+                        time_parts.append(f"{speed:.0f} tok/s")
+        return "\n".join(line for line in (" · ".join(time_parts), " ".join(parts)) if line)
 
     @classmethod
     def format_task_card_text(
@@ -857,26 +1376,46 @@ class TaskCardEventProjection:
     def format_count(value: object) -> str | None:
         if type(value) is not int or value < 0:
             return None
-        for threshold, suffix in (
+        tiers = (
             (1_000_000_000_000, "T"),
             (1_000_000_000, "B"),
             (1_000_000, "M"),
             (1_000, "k"),
-        ):
-            if value >= threshold:
+        )
+        for index, (threshold, suffix) in enumerate(tiers):
+            if value < threshold:
+                continue
+            tenths = (value * 10 + threshold // 2) // threshold
+            # Half-up rounding can carry 999.95 of a tier to 1000.0. Select
+            # the next tier rather than emitting a value outside X.Y<suffix>.
+            if tenths >= 10_000 and index > 0:
+                threshold, suffix = tiers[index - 1]
                 tenths = (value * 10 + threshold // 2) // threshold
-                if suffix == "T":
-                    tenths = min(tenths, 9_999)
-                return f"{tenths // 10}.{tenths % 10}{suffix}"
+            if suffix == "T":
+                tenths = min(tenths, 9_999)
+            return f"{tenths // 10}.{tenths % 10}{suffix}"
         return str(value)
 
     @classmethod
-    def format_metadata(cls, metadata: object, locale: str = "en") -> list[str]:
+    def format_metadata(
+        cls,
+        metadata: object,
+        locale: str = "en",
+        *,
+        max_chars: int | None = None,
+    ) -> list[str]:
         """Render bounded resident-card metadata as explicit semantic sections.
 
         The manager supplies ``async_work`` as a render-time, read-only snapshot.
         This method deliberately knows nothing about the filesystem or providers;
         it only sanitizes and arranges the already validated payload.
+
+        Every section and row is kept; each field is individually bounded and
+        sanitized, so there is no whole-block character budget. ``max_chars`` is
+        supplied only by the frame renderer when the overall message limit
+        cannot hold the block even after reasoning excerpts are exhausted. It
+        then shortens only the unbounded Daemons/Backends lists, replacing the
+        dropped tail with a visible ``+N omitted`` indicator.
         """
         if not isinstance(metadata, dict):
             return []
@@ -908,7 +1447,7 @@ class TaskCardEventProjection:
             type(usage) in {int, float}
             and not isinstance(usage, bool)
             and math.isfinite(float(usage))
-            and 0 <= usage <= 1
+            and usage >= 0
         ):
             if context is not None:
                 session_parts.append(
@@ -925,6 +1464,9 @@ class TaskCardEventProjection:
         tokens = cls.format_count(metadata.get("input_tokens"))
         if tokens is not None:
             session_parts.append(f"tokens {tokens}")
+        output = cls.format_count(metadata.get("output_tokens"))
+        if output is not None:
+            session_parts.append(f"out {output}")
         cache_rate = metadata.get("session_cache_rate")
         if (
             type(cache_rate) in {int, float}
@@ -970,6 +1512,17 @@ class TaskCardEventProjection:
             if line1_parts
             else None
         )
+        # Optional adapter-preformatted since-molt cost row under Session. Only
+        # Telegram supplies it; without the key every frame is byte-identical.
+        session_cost = metadata.get("session_cost")
+        cost_line = (
+            f"Cost · {session_cost.strip()}"
+            if session_line is not None
+            and isinstance(session_cost, str)
+            and session_cost.strip()
+            and len(session_cost.strip()) <= 192
+            else None
+        )
 
         # Keep all identity values behind the strict machine_identifier allowlist.
         # In particular, working_dir is never rendered from an arbitrary string.
@@ -1009,7 +1562,7 @@ class TaskCardEventProjection:
             return out
 
         async_work = metadata.get("async_work")
-        async_sections: list[tuple[str, str, int]] = []
+        async_rows: list[dict[str, Any]] = []
         if isinstance(async_work, dict):
             daemon = async_work.get("daemon")
             shell = async_work.get("shell")
@@ -1062,10 +1615,18 @@ class TaskCardEventProjection:
 
             stats_parts: list[str] = []
             if isinstance(daemon, dict):
-                input_tokens = count(daemon.get("input_tokens"))
-                output_tokens = count(daemon.get("output_tokens"))
-                cached_tokens = count(daemon.get("cached_tokens"))
-                cli_calls = count(daemon.get("cli_calls"))
+                # v1 scopes all usage explicitly beneath the daemon lane. The
+                # direct-key fallback keeps formatting of already-built legacy
+                # metadata safe while Telegram itself accepts only validated v1.
+                usage_source = daemon.get("usage")
+                if not isinstance(usage_source, dict):
+                    usage_source = daemon
+                input_tokens = count(usage_source.get("input_tokens"))
+                output_tokens = count(usage_source.get("output_tokens"))
+                cached_tokens = count(usage_source.get("cached_tokens"))
+                api_calls = count(usage_source.get("api_calls"))
+                if api_calls is None:
+                    api_calls = count(usage_source.get("cli_calls"))
                 if input_tokens is not None and input_tokens > 0:
                     stats_parts.append(f"in {cls.format_count(input_tokens)}")
                 if output_tokens is not None and output_tokens > 0:
@@ -1079,123 +1640,79 @@ class TaskCardEventProjection:
                     stats_parts.append(
                         f"cache {min(cached_tokens / input_tokens, 1.0):.1%}"
                     )
-                if cli_calls is not None and cli_calls > 0:
-                    stats_parts.append(f"api {cli_calls}")
+                if api_calls is not None and api_calls > 0:
+                    stats_parts.append(f"api {api_calls}")
+                # Selected daemon runs without any reported usage are unknown,
+                # not zero; all-zero lanes get no stats row at all.
+                if not stats_parts and status_parts(daemon):
+                    stats_parts.append(label("daemon_usage_na"))
 
-            # All rows belong to one Async Work section. The priority value is
-            # used only by the whole-line 500-character budget below.
+            # All rows belong to one Async Work section; none is dropped.
             if totals:
-                async_sections.append(("totals", f"{label('async_work')} · {' · '.join(totals)}", 2))
+                async_rows.append({"label": label("async_work"), "parts": totals})
+                scope = label("scope_text").format(minutes=_ASYNC_WINDOW_MINUTES)
+                async_rows.append({"label": label("scope"), "parts": [scope]})
             if daemon_parts:
-                async_sections.append(("daemon", f"{label('daemons')} · {' · '.join(daemon_parts)}", 3))
+                async_rows.append(
+                    {"label": label("daemons"), "parts": daemon_parts, "shrink": True}
+                )
             if backend_parts:
-                async_sections.append(("backend", f"{label('backends')} · {' · '.join(backend_parts)}", 4))
+                async_rows.append(
+                    {"label": label("backends"), "parts": backend_parts, "shrink": True}
+                )
             if shell_parts:
-                async_sections.append(("shell", f"{label('shell')} · {' · '.join(shell_parts)}", 3))
+                async_rows.append({"label": label("shell"), "parts": shell_parts})
             if stats_parts:
-                async_sections.append(("stats", f"{label('daemon_stats')} · {' · '.join(stats_parts)}", 4))
+                async_rows.append(
+                    {"label": cls.daemon_stats_label(locale), "parts": stats_parts}
+                )
 
-        # ``sections`` is intentionally list[list[str]]: a section is either
-        # present or absent, and dividers are inserted only between present
-        # adjacent sections (never after Identity or inside Async Work).
-        sections: list[list[str]] = []
-        priorities: list[list[int]] = []
-        if session_line is not None:
-            sections.append([session_line])
-            priorities.append([0])
-        if identity_line is not None:
-            sections.append([identity_line])
-            priorities.append([1])
-        if async_sections:
-            sections.append([line for _, line, _ in async_sections])
-            priorities.append([priority for _, _, priority in async_sections])
+        def async_line(row: dict[str, Any]) -> str:
+            parts = list(row["parts"])
+            if row.get("omitted"):
+                parts.append(label("omitted").format(n=row["omitted"]))
+            return f"{row['label']} · {' · '.join(parts)}"
 
-        def render_selected(selected: list[list[tuple[str, int]]]) -> list[str]:
+        # A section is either present or absent, and dividers are inserted only
+        # between present adjacent sections (never after Identity or inside
+        # Async Work).
+        def compose() -> list[str]:
+            sections: list[list[str]] = []
+            if session_line is not None:
+                sections.append(
+                    [session_line] if cost_line is None else [session_line, cost_line]
+                )
+            if identity_line is not None:
+                sections.append([identity_line])
+            if async_rows:
+                sections.append([async_line(row) for row in async_rows])
             result: list[str] = []
-            previous = False
-            for section in selected:
-                present = [line for line, _ in section if line]
-                if not present:
-                    continue
-                if previous:
+            for index, section in enumerate(sections):
+                if index:
                     result.append(cls.METADATA_DIVIDER)
-                result.extend(present)
-                previous = True
+                result.extend(section)
             return result
 
-        def total_length(lines: list[str]) -> int:
-            return len("\n".join(lines))
+        def rendered_length(lines: list[str]) -> int:
+            return sum(len(line) + 1 for line in lines)
 
-        selected: list[list[tuple[str, int]]] = [
-            [(line, priority) for line, priority in zip(lines, section_priorities)]
-            for lines, section_priorities in zip(sections, priorities)
-        ]
-
-        # Remove lower-priority complete rows before touching Identity. Session
-        # and Identity are section rows, while Async totals outrank lane detail.
-        for priority_to_drop in (4, 3, 2):
-            if total_length(render_selected(selected)) <= cls.METADATA_MAX_CHARS:
-                break
-            for section in selected:
-                section[:] = [item for item in section if item[1] != priority_to_drop]
-
-        # If necessary, shorten only the Identity payload. The label and its
-        # separator remain atomic, and the ellipsis is added only to a shortened
-        # payload (never to a divider or a partial label).
-        if total_length(render_selected(selected)) > cls.METADATA_MAX_CHARS:
-            identity_location: tuple[int, int] | None = None
-            for section_index, section in enumerate(selected):
-                for item_index, (_, priority) in enumerate(section):
-                    if priority == 1:
-                        identity_location = (section_index, item_index)
-                        break
-                if identity_location is not None:
+        lines = compose()
+        if max_chars is not None:
+            # Only unbounded detail lists (many backends/models) can need this;
+            # drop their tail one item at a time, longest row first, and always
+            # keep one item plus the explicit omitted count.
+            while rendered_length(lines) > max_chars:
+                candidates = [
+                    row for row in async_rows
+                    if row.get("shrink") and len(row["parts"]) > 1
+                ]
+                if not candidates:
                     break
-            if identity_location is not None:
-                section_index, item_index = identity_location
-                original, priority = selected[section_index][item_index]
-                marker = " · "
-                marker_index = original.find(marker)
-                if marker_index >= 0:
-                    prefix = original[: marker_index + len(marker)]
-                    payload = original[marker_index + len(marker) :]
-                    low, high = 0, len(payload)
-                    best: str | None = None
-                    while low <= high:
-                        mid = (low + high) // 2
-                        candidate_payload = payload if mid == len(payload) else (
-                            payload[: max(0, mid - 1)] + "…"
-                        )
-                        candidate = prefix + candidate_payload
-                        trial = [list(section) for section in selected]
-                        trial[section_index][item_index] = (candidate, priority)
-                        if total_length(render_selected(trial)) <= cls.METADATA_MAX_CHARS:
-                            best = candidate
-                            low = mid + 1
-                        else:
-                            high = mid - 1
-                    if best is not None:
-                        selected[section_index][item_index] = (best, priority)
-                    else:
-                        selected[section_index].pop(item_index)
-
-        # A pathological session payload may itself exceed the budget. There is
-        # no safe partial Session representation; retain the higher-priority
-        # whole line and discard lower-priority whole lines rather than splitting
-        # a label/separator. Normal session fields are bounded well below this.
-        while total_length(render_selected(selected)) > cls.METADATA_MAX_CHARS:
-            removable = [
-                (priority, section_index, item_index)
-                for section_index, section in enumerate(selected)
-                for item_index, (_, priority) in enumerate(section)
-                if priority > 0
-            ]
-            if not removable:
-                break
-            _, section_index, item_index = max(removable)
-            selected[section_index].pop(item_index)
-
-        return render_selected(selected)
+                row = max(candidates, key=lambda item: len(async_line(item)))
+                row["parts"].pop()
+                row["omitted"] = row.get("omitted", 0) + 1
+                lines = compose()
+        return lines
 
     @classmethod
     def _short_working_dir(cls, working_dir: str) -> str:
@@ -1261,10 +1778,17 @@ class TaskCardEventProjection:
             # progress is rendered on the group divider, not here.
             elapsed = cls.format_elapsed_ms(cls.row_elapsed_ms(row))
             if status == "???":
-                # A tool call with no result yet is genuinely running; showing
-                # ``???`` wasted the slot without saying anything real.
+                # A tool call with no result yet is foreground activity. Shell
+                # run rows use their safe pre-projected mode so an async launch
+                # is not mistaken for the detached job's lifecycle.
                 status_suffix = ""
-                suffix = f" ({elapsed}, running)" if elapsed else " (running)"
+                pending = row.get("_pending_activity")
+                if not isinstance(pending, str) or pending not in {
+                    "foreground",
+                    "dispatching async job",
+                }:
+                    pending = "running"
+                suffix = f" ({elapsed}, {pending})" if elapsed else f" ({pending})"
             else:
                 status_suffix = f", {status}" if status else ""
                 suffix = f" ({elapsed}{status_suffix})"
@@ -1280,7 +1804,21 @@ class TaskCardEventProjection:
         metadata_lines = cls.format_metadata(metadata, locale)
         time_line = f"{cls.time_prefix(locale)}{cls.render_time(now)}"
         ask_agent_line = cls._locale_text("ask_agent", locale)
+        # Metadata rows are never budgeted on their own. Reasoning/preview
+        # excerpts shrink first (below); only if the overall limit still cannot
+        # hold the block with every excerpt exhausted are the unbounded
+        # Daemons/Backends lists shortened with an explicit omitted count.
+        frame_fixed = (
+            len(cls.header(locale)) + 1 + 1 + len(footer)
+            + len(cls.METADATA_DIVIDER) + 1
+            + len(time_line) + 1 + len(ask_agent_line) + 1
+        )
         if not tool_prepared and not text_prepared and not api_prepared:
+            allowance = cls.TEXT_LIMIT - frame_fixed
+            if sum(len(line) + 1 for line in metadata_lines) > allowance:
+                metadata_lines = cls.format_metadata(
+                    metadata, locale, max_chars=max(0, allowance)
+                )
             slots = {
                 "header": [cls.header(locale)],
                 "rows": [],
@@ -1310,22 +1848,16 @@ class TaskCardEventProjection:
             tool_scaffold += len(prefix) + len(suffix) + 2
             if summary_metrics:
                 tool_scaffold += len(summary_metrics) + 2
-        fixed = (
-            len(cls.header(locale))
-            + 1
-            + 1
-            + len(footer)
-            + len(cls.METADATA_DIVIDER)
-            + 1
-            + sum(len(line) + 1 for line in metadata_lines)
-            + len(time_line)
-            + 1
-            + len(ask_agent_line)
-            + 1
-            + api_scaffold
-            + text_scaffold
-            + tool_scaffold
+        non_metadata_fixed = frame_fixed + api_scaffold + text_scaffold + tool_scaffold
+        # Each shrunken excerpt still carries its one-character ellipsis.
+        allowance = (
+            cls.TEXT_LIMIT - non_metadata_fixed - len(tool_prepared) - len(text_prepared)
         )
+        if sum(len(line) + 1 for line in metadata_lines) > allowance:
+            metadata_lines = cls.format_metadata(
+                metadata, locale, max_chars=max(0, allowance)
+            )
+        fixed = non_metadata_fixed + sum(len(line) + 1 for line in metadata_lines)
         budget = cls.TEXT_LIMIT - fixed
         divisor = max(1, len(tool_prepared) + len(text_prepared))
         per_row_cap = max(0, min(cls.REASONING_CAP, budget // divisor))

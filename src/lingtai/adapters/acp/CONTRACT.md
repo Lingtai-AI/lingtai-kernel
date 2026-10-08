@@ -8,13 +8,17 @@ related_files:
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/__init__.py
   - src/lingtai/adapters/acp/driver_authority.py
+  - src/lingtai/adapters/acp/resident_socket.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
+  - src/lingtai/venv_resolve.py
+  - tests/test_venv_resolve.py
   - src/lingtai/cli_puffo_v0.py
   - src/lingtai/cli.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/turn_tool_overlay.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
@@ -27,6 +31,7 @@ related_files:
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - pyproject.toml
   - tests/test_acp_stdio.py
+  - tests/test_resident_acp_socket.py
   - tests/test_puffo_v0_profile.py
   - tests/test_puffo_admission_witness.py
   - tests/test_driver_authority_adapter.py
@@ -44,16 +49,18 @@ related_files:
 maintenance: |
   Keep this contract reciprocal with its Anatomy and root CONTRACT.md. Update
   ACP translation, the Core turn boundary, composition, manual, and settlement/
-  wire tests together. This is the v1 local-stdio slice only; widening sessions,
+  wire tests together. The resident local-socket slice is generic, not a Puffo
+  profile; widening sessions,
   content, MCP, workspace, permissions, or transport requires an explicit
   contract change rather than an undocumented fallback.
 ---
-# ACP local stdio
+# ACP local driving adapters
 
 ## Purpose
 
-Expose one existing LingTai agent to a local Agent Client Protocol v1 client
-through newline-delimited JSON-RPC on stdio. ACP is a driving Adapter: it
+Expose one LingTai agent to a local Agent Client Protocol v1 client through
+newline-delimited JSON-RPC on either a separate stdio host or an opt-in socket
+owned by the already-running Agent. ACP is a driving Adapter: it
 translates protocol messages into the protocol-neutral correlated inbound-turn
 API owned by Core and never reaches into provider/session/tool internals.
 
@@ -65,18 +72,30 @@ multi-session persistence are not advertised.
 ## Behavior
 
 Guarded by: [ACP001](BEHAVIORS.md#behavior-acp001) and
-[ACP002](BEHAVIORS.md#behavior-acp002).
+[ACP002](BEHAVIORS.md#behavior-acp002); the resident transport is guarded by
+[ACP003](BEHAVIORS.md#behavior-acp003).
 
 A successful process negotiates ACP protocol version `1`, creates exactly one
 opaque session, accepts baseline Text and ResourceLink prompt blocks, emits the
 completed LingTai response as one `agent_message_chunk` session update, and settles the original prompt with
 `end_turn`. `session/cancel` targets only the active handle and the original
 prompt eventually settles `cancelled`; cancellation is cooperative and does not
-claim hard provider abort or running-tool preemption. Each Adapter-authored wire
+claim hard provider abort or running-tool preemption. An Agent-initiated System self-sleep
+after completed tool results settles the original prompt with `end_turn`;
+external cancellation still settles `cancelled`. Each Adapter-authored wire
 line is one compact UTF-8 JSON object. The composition root redirects Python
 `sys.stdout`/`print` diagnostics to stderr; native fd 1 writes, pre-captured stdout
 objects, and child-process stdout are not quarantined in this slice and are
-therefore prohibited while ACP owns the transport.
+therefore prohibited while ACP owns the transport. Runtime bootstrap explicitly
+routes venv/pip subprocess stdout to stderr.
+
+ACP respects an explicit `init.json` `venv_path`; when absent and the ACP process
+is already in a virtualenv, it validates and reuses that environment before the
+managed-runtime fallback. This selection changes only in-memory configuration,
+never the source `init.json`. When managed bootstrap is needed for a published
+kernel version, an unavailable exact version fails; it must not silently install
+a different version. Local/development versions retain unpinned provisioning.
+These startup guarantees are guarded by [ACP001](BEHAVIORS.md#behavior-acp001).
 
 ## Port
 
@@ -107,6 +126,10 @@ operator locally provisions an existing persistent identity and canonical
 execution workspace under an opaque runtime id. The profile data plane receives
 only that id; it never accepts an agent directory, workspace path, executable,
 argv, environment, or MCP command from the remote caller.
+
+`ResidentAcpSocket` is a separate opt-in local transport owned by the existing
+`lingtai-agent run` process. It wraps one ACP server per connection but never
+constructs, starts, stops, or leases another Agent. It is not a Puffo profile.
 
 ## Contract rules
 
@@ -317,13 +340,27 @@ argv, environment, or MCP command from the remote caller.
    The existing risky-action gate remains first and may deny without a request.
 11. `acp-local-stdio.puffo-v0.v1` — `lingtai-agent acp --profile puffo-v0
     --runtime-id <id>` resolves `<id>` only through the local
-    operator-managed registry. The entry must be active, structurally exact,
+    operator-managed registry. The registry *location* is operator launch
+    configuration, not a protocol input: it defaults to the HOME-relative
+    profile path, and an operator MAY select an explicit location — an absolute
+    path with no `..` component whose parent is below the filesystem root (a
+    relative path, a `..` component, `/` itself, or a root-level file is rejected
+    before any filesystem access) — with `--registry <path>` or the
+    `LINGTAI_PUFFO_V0_REGISTRY` environment variable (flag over environment over
+    default). The provision, revoke, and discover control-plane commands and both
+    launch resolves consult the same selected registry, so a launch must name the
+    registry its runtime was provisioned into. This selects only the location: it is supplied by the
+    local spawner (the same trust class as argv/environment), is never settable
+    by the remote caller (the data plane still receives only the id), and the
+    binding and integrity rules below still derive solely from the named registry
+    entry. The entry must be active, structurally exact,
     entry-digest-valid, and bind one initialized agent directory and canonical
     workspace to their provision-time canonical path plus POSIX device/inode/
     owner/group identity. Resolve rejects a symlink retarget, canonical-path
     drift, or replacement at the same path; active runtime bindings are unique
     for both agent directory and workspace. The composition root resolves the
-    runtime again immediately before Agent construction. This narrows ordinary
+    runtime again, against the same selected registry, immediately before Agent
+    construction. This narrows ordinary
     resolve-to-start drift; a same-OS principal that rewrites the filesystem
     after that check remains within the explicit host trust boundary below.
     `entry_digest` protects the exact registry entry only; it is not a digest
@@ -496,9 +533,50 @@ argv, environment, or MCP command from the remote caller.
     snapshot cannot reactivate an id. The versioned registry declares this log
     mandatory: a missing, unreadable, malformed, or mismatched log rejects
     resolve/provision rather than being treated as an empty history. Its POSIX
-    directory is owner-only (`0700`) and its lock, temporary, registry, and
-    tombstone files are owner-only (`0600`), independent of umask; existing
-    registry artifacts are tightened before use. This Phase A registry fails closed on Windows until an
+    directory is a dedicated owner-only (`0700`) directory and its lock,
+    temporary, registry, and tombstone files are owner-only (`0600`), independent
+    of umask. LingTai creates or hardens only a directory it owns and never
+    `chmod`s or creates through an operator-supplied or symlinked directory. Which
+    handling a location gets is decided by **path value, not by how it was
+    configured**: when the resolved location *is* the built-in
+    `~/.lingtai/<profile>` namespace it is created node by node with `O_NOFOLLOW`
+    (`~/.lingtai` then `<profile>`, stopping at `$HOME`); any other location has
+    only its final component created under an already-existing parent, verifying
+    both that final registry directory **and the node directly above it** are
+    non-symlink and owned by this user (`O_NOFOLLOW` + owner check). A *higher*
+    ancestor is followed (the operator's placement choice); consequently, because
+    the direct parent itself is checked, a registry placed one level under a
+    symlinked ancestor is rejected — on macOS this means a location directly under
+    `/tmp` fails, so place the registry at least two levels below any symlinked
+    ancestor. Likewise, because the direct parent must be owned by the running
+    user, a registry directly under a root-owned system directory (`/var/lib/...`,
+    `/opt/...`, run as a normal user) is rejected ("owned by another user"); make
+    that directory user-owned or nest the registry under a subdirectory the user
+    creates and owns. An operator who explicitly names the built-in path therefore gets
+    namespace handling, and the branch is **not a security boundary**: in both
+    branches the registry directory and the node directly above it are verified
+    non-symlink and owned by this user, and the leaf is required to be `0700` — the
+    branch only decides how many nodes are created (so the earlier
+    "operator-supplied ⇒ strict" framing does not hold and is withdrawn). An
+    existing target that is a symlink, is foreign-owned, or is
+    not already `0700` is rejected rather than modified. Only the leaf registry directory (the built-in
+    `<profile>` node or an operator location's final component) is required to be
+    `0700`; the intermediate `~/.lingtai` node need only be a non-symlink
+    directory the user owns, so a pre-existing `~/.lingtai` at another mode
+    (shared with other LingTai data) is accepted while a freshly created one is
+    set to `0700`. Under a shared uid `0700` is not a boundary
+    between sibling agents; these checks defend against accident, external
+    tampering, and confused-deputy symlink redirection, not a co-resident same-uid
+    process. Existing owner-only registry *files* are still tightened to `0600`,
+    but only **after** the target is validated as a well-formed registry:
+    validation precedes every side effect. A control-plane operation whose
+    selected location resolves to an existing file that is not a structurally
+    valid registry (wrong file type, unparseable, or wrong shape/version) is
+    rejected with a typed error **before** any `chmod`, mutation lock
+    (`.<name>.lock`), or revocation-log (`.<name>.revocations.jsonl`) read or
+    creation — so a mis-pointed `--registry` / `LINGTAI_PUFFO_V0_REGISTRY` never
+    changes the mode of, nor creates a sibling beside, an operator file that is
+    not ours. A failed operation therefore has no mutation to roll back. This Phase A registry fails closed on Windows until an
     equivalent owner-only ACL adapter exists. The local control plane is its
     only supported writer: manual or third-party mutation is unsupported and
     malformed/rollback state is rejected rather than treated as authority. A
@@ -536,6 +614,81 @@ argv, environment, or MCP command from the remote caller.
     means *all* tools exported by that one Puffo service are available; it does
     not mean arbitrary MCP ingress. `puffo-v0` remains strictly `mcpServers: []`.
 
+## Resident socket transport
+
+Guarded by [ACP003](BEHAVIORS.md#behavior-acp003).
+
+`lingtai-agent run --acp-socket <dir>` opts a resident POSIX Agent into a
+same-UID, local-only ACP endpoint. The CLI stores the canonical target directory
+in `LINGTAI_ACP_SOCKET_AGENT_DIR`, which survives the refresh watcher's
+environment handoff but enables only that directory and is removed from Avatar
+launches. The read-only
+`lingtai-agent acp-socket-path <dir>` command prints the deterministic short
+path. The endpoint lives in a user-owned `0700` directory beneath `/tmp`, and
+the socket is `0600`. A non-owned, non-socket, or active colliding path is never
+unlinked; a stale refused socket may be replaced only after inode recheck.
+
+Only one client/session is admitted at a time. The server checks peer UID before
+reading ACP frames; an unverified client is closed. A second client arriving
+while the current session is still active is closed. During close, the server
+waits a bounded interval for the previous session's private MCP lease to finish
+teardown before admitting the next client, so immediate close/reopen does not
+lose the attach handshake. A cleanup that exceeds the bound still fails closed.
+Each connection
+receives the existing ACP v1 one-session state machine. Generic local clients
+remain empty-MCP only; authenticated attaches may provide the fixed Puffo Core
+stdio descriptor described below. Disconnect,
+cancel, shutdown, and refresh close only the connection/endpoint; they do not
+call `Agent.stop()` or release `.agent.lock` independently. The `run` host alone
+retains ordinary lifecycle ownership and removes only the socket inode it
+created. Unsupported platforms fail explicitly when opted in.
+
+Without an attach preface this remains generic local ACP and has no Puffo
+authority. An explicit attach preface is governed separately below; same UID
+alone is not proof of Puffo Driver identity.
+
+## Puffo resident attach
+
+The optional connection-first `puffo.attach/1` line carries exactly
+`type`, `runtime_id`, `registry`, and `launch_id`, together with exactly one
+`SCM_RIGHTS` descriptor. The line is bounded to 8192 bytes. Before ACP begins,
+the adapter resolves the runtime through the existing secure operator registry,
+whose path is fixed by the resident server's operator configuration at startup
+(`LINGTAI_PUFFO_V0_REGISTRY` or the profile default). The untrusted preface's
+`registry` must exactly match that path and cannot select a different valid
+registry, including after the authoritative runtime has been revoked. The adapter
+requires its canonical `agent_dir` to equal the resident process's directory,
+fixes ACP `session/new.cwd` to that runtime's provisioned workspace,
+consumes the descriptor as a root `DriverAuthorityClient`, and requires the
+Driver hello's `launch_id` to equal the preface and its `runtime_id` to equal
+both the preface and resolved registry entry. The optional hello `runtime_id`
+remains optional for the older spawn profile, but is mandatory for attach.
+Invalid/missing descriptors,
+unknown/revoked/mismatched bindings, or a wrong Driver role/id produce a
+bounded `{"ok":false,"reason":"attach_rejected"}` line and close. A valid
+preface receives `{"ok":true,"kernel_version":"..."}`; the same socket then
+speaks ordinary ACP v1, including `initialize` and `session/new`. See
+[ACP004](BEHAVIORS.md#behavior-acp004).
+
+The consumed authority and derived-launch adapter belong to that connection,
+not to the resident Agent's global permissive policy. The ACP correlated turn
+binds both Ports to its run-loop context; the resident provider-service wrapper
+asks the connection Port before **each** attached provider call. A missing,
+denied, malformed, or disconnected connection authority cannot reach provider
+I/O. Ordinary local ingress retains its existing behavior. Disconnect closes
+the authority and ACP session, not the Agent or workdir lease. Attach accepts
+`mcpServers: []` for transport tests or exactly the Puffo-v1 fixed Core stdio
+descriptor (name `puffo`, exact module arguments, non-empty local-service token).
+The latter starts a connection-owned MCP lease whose catalog is bound only to
+that connection's correlated turns: it never publishes handlers or schemas to
+the resident Agent's global tool table. A later global name collision fails
+the attached turn closed rather than creating duplicate model-facing tools.
+Lease teardown closes the MCP child without changing ordinary Agent ingress.
+This implementation does not itself establish a production connector: the
+manually constructed cross-repository Driver, real Agent/model, and Puffo Core
+MCP turns have passed, but Puffo RuntimeManager auto-attach wiring is not yet
+included. `session/load` remains unadvertised.
+
 ## Contract tests
 
 `tests/test_acp_stdio.py` pins request-id and error-taxonomy conformance,
@@ -546,6 +699,11 @@ session/busy/unsupported errors, strict JSON line framing, invalid UTF-8, EOF,
 blocked coordinator/prompt output, FIFO/generation/queue-full/write-failure paths,
 Agent-stop-with-open-stdin, Windows duplicate-before-cleanup, typed quiescence,
 and CLI Python-stdout quarantine/hard-exit ownership.
+`tests/test_resident_acp_socket.py` pins owner-only short-path binding,
+same-UID admission, reconnect without Agent shutdown, collision/stale handling,
+empty-only session MCP, read-only endpoint discovery, and Agent-directory-scoped
+refresh opt-in. `tests/test_avatar_launcher.py` pins stripping that marker from
+ordinary and derived Avatar launches.
 `tests/test_puffo_v0_profile.py` pins opaque-id provisioning/resolution,
 tamper/revocation rejection, full-tool composition, fixed-workspace and
 empty-session-MCP rejection, authenticated-adapter admission, profile CLI
@@ -557,7 +715,7 @@ untrusted inbox event cannot reach provider dispatch under this profile policy.
 indeterminate provider admission cannot reach the underlying provider service;
 that each provider request needs a new decision rather than reusing a previous
 grant; that the typed call class is not inferred from request text; and that
-the real non-streaming, streaming, Soul consultation, rate-gated, and reused
+the real non-streaming, streaming, rate-gated, and reused
 worker dispatch boundaries preserve admission rather than treating a direct
 proxy test as production-path proof.
 `tests/test_execution_workspace.py`, `tests/test_turn_events.py`, `tests/test_turn_permissions.py`, `tests/test_tool_executor.py`, `tests/test_session_mcp.py`, and the ACP

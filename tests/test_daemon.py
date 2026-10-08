@@ -508,34 +508,33 @@ def test_daemon_setup_keeps_current_and_live_parent_records(tmp_path, monkeypatc
     assert mgr._emanations == {}
 
 
-def test_build_tool_surface_resolves_file_family(tmp_path):
-    """'file' is one tool whose actions are read/write/edit/glob/grep.
+def test_build_tool_surface_resolves_shell_family(tmp_path):
+    """'shell' is one tool; retired names are gone entirely, not aliased.
 
-    It used to be a capability group expanding to five separate tools. Those
-    per-operation names are now gone entirely — not aliased — so requesting one
-    is an unknown-tool error.
+    The old per-operation file names (read/write/edit/glob/grep) and the
+    removed ``file`` tool itself are unknown-tool errors, so a stale task
+    naming one fails loudly instead of half-working.
     """
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     names = {s.name for s in schemas}
-    assert "file" in names
-    assert "file" in dispatch
-    for retired in ("read", "write", "edit", "glob", "grep"):
+    assert "shell" in names
+    assert "shell" in dispatch
+    for retired in ("file", "read", "write", "edit", "glob", "grep"):
         assert retired not in names
 
-    # The retired per-operation names are not requestable: no alias resolves
-    # them, so a stale task naming them fails loudly instead of half-working.
-    with pytest.raises(ValueError, match="Unknown tools for emanation"):
-        mgr._build_tool_surface(["read", "grep"])
+    for stale in (["read", "grep"], ["file"]):
+        with pytest.raises(ValueError, match="Unknown tools for emanation"):
+            mgr._build_tool_surface(stale)
 
 
 def test_build_tool_surface_blacklist(tmp_path):
     """Blacklisted tools are silently excluded."""
-    agent = _make_agent(tmp_path, ["file", "daemon", "avatar"])
+    agent = _make_agent(tmp_path, ["shell", "daemon", "avatar"])
     mgr = agent.get_capability("daemon")
     schemas, dispatch = mgr._build_tool_surface([
-        "file",
+        "shell",
         "avatar",
         "daemon",
     ])
@@ -543,7 +542,7 @@ def test_build_tool_surface_blacklist(tmp_path):
     assert "daemon" not in names
     assert "avatar" not in names
     assert "avatar" not in dispatch
-    assert "file" in names
+    assert "shell" in names
 
 
 def test_build_tool_surface_unknown_tool(tmp_path):
@@ -613,17 +612,17 @@ def test_build_tool_surface_requires_task_mcp_surface(tmp_path):
 
 def test_build_tool_surface_rejects_task_mcp_name_collision(tmp_path):
     """Task-scoped MCP tools must not shadow parent or daemon tool names."""
-    agent = _make_agent(tmp_path, ["daemon", "file"])
+    agent = _make_agent(tmp_path, ["daemon", "shell"])
     mgr = agent.get_capability("daemon")
-    file_schema = FunctionSchema(
-        name="file",
-        description="Conflicting MCP file",
+    shell_schema = FunctionSchema(
+        name="shell",
+        description="Conflicting MCP shell",
         parameters={"type": "object", "properties": {}},
     )
 
     try:
-        mgr._build_tool_surface([], mcp_surface=({"file": file_schema}, {"file": lambda args: {}}))
-        assert False, "Should reject MCP tool collision with parent file tool"
+        mgr._build_tool_surface([], mcp_surface=({"shell": shell_schema}, {"shell": lambda args: {}}))
+        assert False, "Should reject MCP tool collision with parent shell tool"
     except ValueError as e:
         assert "collide" in str(e)
 
@@ -731,14 +730,17 @@ def test_daemon_schema_context_token_limit_description_matches_contract():
     ]["description"].lower()
 
     assert "does not set daemon context" in desc
-    assert "daemon session's own resolved context window" in desc
     assert "separate provider-compaction threshold" in desc
-    assert "explicit preset" in desc
-    assert "canonical manifest.llm.context_limit" in desc
-    assert "implicit/no-preset" in desc
-    assert "inherited parent effective window" in desc
-    assert "272,000 fallback" in desc
-    assert "parent service's resolved context window" not in desc
+    assert "session's resolved window" in desc
+    assert "built-in lingtai reference" in desc
+    child = Path(__file__).parents[1] / "src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/lingtai/SKILL.md"
+    body = " ".join(child.read_text(encoding="utf-8").split())
+    for phrase in ("manifest.llm.context_limit", "inherited parent effective window",
+                   "non-fatal", "mimocode"):
+        assert phrase in body
+    # Native MiMo compaction was removed with the four-family collapse:
+    # ``context_token_limit`` is Codex-only.
+    assert "hard failure" not in body
 
 
 def test_cli_backend_serializes_task_mcp_context(tmp_path, monkeypatch):
@@ -1269,9 +1271,9 @@ def test_build_tool_surface_preset_requires_explicit_email_tool(tmp_path):
 
 def test_build_emanation_prompt_includes_oneshot_system_prompt(tmp_path):
     """Parent-provided daemon prompt is appended before the task."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
-    schemas, _ = mgr._build_tool_surface(["file"])
+    schemas, _ = mgr._build_tool_surface(["shell"])
 
     prompt = mgr._build_emanation_prompt(
         "Find all TODOs",
@@ -2492,7 +2494,7 @@ def test_task_skills_deduplicates_canonical_paths(tmp_path):
 
 def test_build_emanation_prompt_includes_selected_skills(tmp_path):
     """Selected skills are rendered into the daemon prompt before the task."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     skill_dir = agent._working_dir / "local-skills" / "review"
     skill_dir.mkdir(parents=True)
@@ -2503,7 +2505,7 @@ def test_build_emanation_prompt_includes_selected_skills(tmp_path):
         "---\n",
         encoding="utf-8",
     )
-    schemas, _ = mgr._build_tool_surface(["file"])
+    schemas, _ = mgr._build_tool_surface(["shell"])
     context = mgr._combine_oneshot_context(
         "Stay read-only.",
         mgr._task_skill_catalog({"task": "x", "tools": [], "skills": ["local-skills/review"]}),
@@ -2637,9 +2639,9 @@ def test_task_plugin_context_rejects_non_list(tmp_path):
 
 def test_build_emanation_prompt_includes_selected_mcp_context(tmp_path):
     """Selected MCP registrations are rendered into the daemon prompt before the task."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
-    schemas, _ = mgr._build_tool_surface(["file"])
+    schemas, _ = mgr._build_tool_surface(["shell"])
     context = mgr._combine_oneshot_context(
         "Use the selected external tools only if needed.",
         None,
@@ -2657,9 +2659,9 @@ def test_build_emanation_prompt_includes_selected_mcp_context(tmp_path):
 
 def test_build_emanation_prompt_includes_task(tmp_path):
     """System prompt includes the task description."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
-    schemas, _ = mgr._build_tool_surface(["file"])
+    schemas, _ = mgr._build_tool_surface(["shell"])
     prompt = mgr._build_emanation_prompt("Find all TODOs", schemas)
     assert "Find all TODOs" in prompt
     assert "daemon emanation" in prompt.lower() or "分神" in prompt
@@ -2669,15 +2671,16 @@ def test_build_emanation_prompt_teaches_bounded_tool_use(tmp_path):
     """Daemon prompt teaches manuals, summarized results, compact, and finish."""
     from lingtai.tools.daemon.system_prompt import DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
 
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
-    schemas, _ = mgr._build_tool_surface(["file"])
+    schemas, _ = mgr._build_tool_surface(["shell"])
     schemas[0].description = "FULL TOOL DESCRIPTION MUST NOT BE DUPLICATED"
 
     prompt = mgr._build_emanation_prompt("Inspect one file", schemas)
 
     assert len(prompt) <= DAEMON_SYSTEM_PROMPT_BUDGET_CHARS == 20_000
-    assert "Before first using a tool or workflow that has a manual" in prompt
+    assert "Use visible schemas for routine actions" in prompt
+    assert "For unfamiliar or high-consequence tools/workflows" in prompt
     assert "summary=true" in prompt
     assert "You do not have the parent agent's `system.summarize`" in prompt
     assert 'compact(action="run", _reason="...")' in prompt
@@ -2701,7 +2704,7 @@ def test_build_emanation_prompt_rejects_over_budget_without_truncation(tmp_path)
 
 def test_run_emanation_returns_text(tmp_path, monkeypatch):
     """Emanation runs a tool loop and returns final text."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     _reuse_parent_service(monkeypatch, agent)
     mgr = agent.get_capability("daemon")
 
@@ -2716,7 +2719,7 @@ def test_run_emanation_returns_text(tmp_path, monkeypatch):
 
     cancel = threading.Event()
     em_id = "em-test"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -2731,7 +2734,7 @@ def test_run_emanation_returns_text(tmp_path, monkeypatch):
 
 def test_run_emanation_codex_parent_gets_daemon_cache_anchor(tmp_path, monkeypatch):
     """Builtin Codex daemon runs get a per-run cache anchor, not parent service."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     agent.service.provider = "codex"
     agent.service.model = "gpt-5.5"
     agent.service._base_url = "https://chatgpt.com/backend-api/codex"
@@ -2775,7 +2778,7 @@ def test_run_emanation_codex_parent_gets_daemon_cache_anchor(tmp_path, monkeypat
     mgr = agent.get_capability("daemon")
     cancel = threading.Event()
     em_id = "em-codex"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -2803,7 +2806,7 @@ def test_run_emanation_non_codex_parent_builds_fresh_daemon_service(tmp_path, mo
     key_resolver/context_window) and preserve the parent's provider defaults,
     without any Codex-only cache anchor.
     """
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     agent.service.provider = "anthropic"
     agent.service.model = "claude-opus-4-8"
     agent.service._base_url = "https://api.anthropic.com"
@@ -2847,7 +2850,7 @@ def test_run_emanation_non_codex_parent_builds_fresh_daemon_service(tmp_path, mo
     mgr = agent.get_capability("daemon")
     cancel = threading.Event()
     em_id = "em-anthropic"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -2882,8 +2885,8 @@ def test_run_emanation_inherits_parent_noncanonical_api_key(tmp_path, monkeypatc
     service must still be constructed with a *present* api_key (the inherited
     one), not None.
     """
-    agent = _make_agent(tmp_path, ["file", "daemon"])
-    agent.service.provider = "custom"
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
+    agent.service.provider = "openai"
     agent.service.model = "glm-5.1"
     agent.service._base_url = "https://proxy.example/v1"
     agent.service._context_window = 200000
@@ -2896,7 +2899,7 @@ def test_run_emanation_inherits_parent_noncanonical_api_key(tmp_path, monkeypatc
     # the ``api_key`` property backed by ``_api_key``; the mock models both.
     agent.service._api_key = "sk-from-LLM_API_KEY"
     agent.service.api_key = "sk-from-LLM_API_KEY"
-    agent.service._provider_defaults = {"custom": {"api_compat": "openai"}}
+    agent.service._provider_defaults = {"openai": {"wire_api": "chat_completions"}}
 
     captured = {}
 
@@ -2924,7 +2927,7 @@ def test_run_emanation_inherits_parent_noncanonical_api_key(tmp_path, monkeypatc
     mgr = agent.get_capability("daemon")
     cancel = threading.Event()
     em_id = "em-custom"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -2938,15 +2941,15 @@ def test_run_emanation_inherits_parent_noncanonical_api_key(tmp_path, monkeypatc
     agent.service.create_session.assert_not_called()
     # The whole point: the daemon-scoped service gets a present, correct key.
     assert captured["init"]["api_key"] == "sk-from-LLM_API_KEY"
-    assert captured["init"]["provider"] == "custom"
+    assert captured["init"]["provider"] == "openai"
     assert captured["init"]["base_url"] == "https://proxy.example/v1"
     # Provider defaults still inherited verbatim (no Codex anchor for custom).
-    assert captured["init"]["provider_defaults"] == {"custom": {"api_compat": "openai"}}
+    assert captured["init"]["provider_defaults"] == {"openai": {"wire_api": "chat_completions"}}
 
 
 def test_run_emanation_codex_preset_gets_daemon_cache_anchor(tmp_path, monkeypatch):
     """Codex preset daemons pass daemon-scoped provider defaults too."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     captured = {}
 
@@ -2975,7 +2978,7 @@ def test_run_emanation_codex_preset_gets_daemon_cache_anchor(tmp_path, monkeypat
 
     cancel = threading.Event()
     em_id = "em-preset-codex"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -3006,23 +3009,24 @@ def test_run_emanation_codex_preset_gets_daemon_cache_anchor(tmp_path, monkeypat
     assert captured["init"]["base_url"] == "https://chatgpt.com/backend-api/codex"
     defaults = captured["init"]["provider_defaults"]
     assert defaults["codex"]["max_rpm"] == 11
-    assert defaults["codex"]["compact_threshold"] is None
+    # Retired key on a preset is ignored, never forwarded to the adapter.
+    assert "compact_threshold" not in defaults["codex"]
     assert defaults["codex"]["codex_session_anchor"] == str((run_dir.path / "daemon.json").resolve())
 
 
 def test_run_emanation_dispatches_tools(tmp_path, monkeypatch):
     """Emanation dispatches tool calls and feeds results back."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     _reuse_parent_service(monkeypatch, agent)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
-    mock_handler = MagicMock(return_value={"content": "file text"})
-    agent._tool_handlers["file"] = mock_handler
+    mock_handler = MagicMock(return_value={"stdout": "file text"})
+    agent._tool_handlers["shell"] = mock_handler
 
     tc = ToolCall(
-        name="file",
-        args={"action": "read", "input": {"file_path": "/tmp/x"}, "reasoning": "r"},
+        name="shell",
+        args={"action": "run", "input": {"command": "cat /tmp/x"}, "reasoning": "r"},
         id="tc-1",
     )
     resp1 = MagicMock()
@@ -3043,7 +3047,7 @@ def test_run_emanation_dispatches_tools(tmp_path, monkeypatch):
 
     cancel = threading.Event()
     em_id = "em-test"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -3059,14 +3063,14 @@ def test_run_emanation_dispatches_tools(tmp_path, monkeypatch):
 
 def test_run_emanation_delivers_shell_events_only_at_safe_provider_boundary(tmp_path, monkeypatch):
     """Queued Shell event becomes fixed guidance, never an automatic poll."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     service = _CanonicalFakeService([[
         _resp(tool_calls=[ToolCall(
-            name="file",
-            args={"action": "read", "input": {"file_path": "x"}, "reasoning": "queue event"},
+            name="shell",
+            args={"action": "run", "input": {"command": "cat x"}, "reasoning": "queue event"},
             id="queue-shell-event",
         )]),
-        _resp("file tool finished"),
+        _resp("shell tool finished"),
         _resp("daemon saw trusted Shell guidance"),
     ]])
     import lingtai.llm.service as service_mod
@@ -3088,8 +3092,8 @@ def test_run_emanation_delivers_shell_events_only_at_safe_provider_boundary(tmp_
         )
         return {"status": "ok", "stdout": "UNTRUSTED-SHELL-OUTPUT"}
 
-    schemas, dispatch = mgr._build_tool_surface(["file"])
-    dispatch["file"] = queue_event
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
+    dispatch["shell"] = queue_event
     mgr._emanations[em_id] = {
         "followup_buffer": "",
         "followup_lock": threading.Lock(),
@@ -3326,7 +3330,7 @@ def test_compact_is_repeatable_same_run(tmp_path, monkeypatch):
 
 
 def test_compact_mixed_batch_does_not_dispatch_siblings_and_pairs_all_calls(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     sibling_handler = MagicMock(return_value={"content": "should not run"})
     agent._tool_handlers["read"] = sibling_handler
     calls = [
@@ -3349,7 +3353,7 @@ def test_compact_mixed_batch_does_not_dispatch_siblings_and_pairs_all_calls(tmp_
     }
 
     result = mgr._run_emanation(
-        em_id, run_dir, *mgr._build_tool_surface(["file"]),
+        em_id, run_dir, *mgr._build_tool_surface(["shell"]),
         "task", threading.Event(),
     )
 
@@ -3366,12 +3370,12 @@ def test_compact_mixed_batch_does_not_dispatch_siblings_and_pairs_all_calls(tmp_
 
 def test_run_emanation_uses_tool_call_guard_before_dispatch(tmp_path, monkeypatch):
     """Daemon tool calls go through ToolExecutor/ToolCallGuard before handler dispatch."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     _reuse_parent_service(monkeypatch, agent)
     agent.inbox = queue.Queue()
 
     def deny_read(proposal):
-        if proposal.tool_name == "file":
+        if proposal.tool_name == "shell":
             return GuardDecision.deny(
                 check_name="deny_read",
                 reason="daemon read blocked by policy",
@@ -3381,12 +3385,12 @@ def test_run_emanation_uses_tool_call_guard_before_dispatch(tmp_path, monkeypatc
     agent._tool_call_guard = ToolCallGuard([deny_read])
     mgr = agent.get_capability("daemon")
 
-    mock_handler = MagicMock(return_value={"content": "file text"})
-    agent._tool_handlers["file"] = mock_handler
+    mock_handler = MagicMock(return_value={"stdout": "file text"})
+    agent._tool_handlers["shell"] = mock_handler
 
     tc = ToolCall(
-        name="file",
-        args={"action": "read", "input": {"file_path": "/tmp/x"}, "reasoning": "r"},
+        name="shell",
+        args={"action": "run", "input": {"command": "cat /tmp/x"}, "reasoning": "r"},
         id="tc-guard",
     )
     resp1 = MagicMock()
@@ -3407,7 +3411,7 @@ def test_run_emanation_uses_tool_call_guard_before_dispatch(tmp_path, monkeypatc
 
     cancel = threading.Event()
     em_id = "em-test"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -3427,7 +3431,7 @@ def test_run_emanation_uses_tool_call_guard_before_dispatch(tmp_path, monkeypatc
 
 def test_run_emanation_respects_cancel_before_first_send(tmp_path):
     """Emanation exits immediately if pre-cancelled (before first LLM call)."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
 
     mock_session = MagicMock()
@@ -3436,7 +3440,7 @@ def test_run_emanation_respects_cancel_before_first_send(tmp_path):
     cancel = threading.Event()
     cancel.set()
     em_id = "em-test"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -3451,14 +3455,14 @@ def test_run_emanation_respects_cancel_before_first_send(tmp_path):
 
 def test_handle_emanate_dispatches_and_returns_ids(tmp_path, monkeypatch):
     """emanate dispatches tasks and returns compact unique IDs."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     _enable_detached_fake_llm(agent, monkeypatch)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
     result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "task A", "tools": ["file"]},
-        {"task": "task B", "tools": ["file"]},
+        {"task": "task A", "tools": ["shell"]},
+        {"task": "task B", "tools": ["shell"]},
     ]})
     assert result["status"] == "dispatched"
     # Two tasks is a fleet, and this agent keeps no watch, so the handoff also
@@ -3516,12 +3520,12 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path, monkeypatch):
 
 def test_handle_emanate_allows_concurrent(tmp_path):
     """emanate succeeds even with existing emanations (no limit)."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
 
     mgr._emanations["em-0"] = {"future": MagicMock(done=MagicMock(return_value=False)), "run_dir": None}
     result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "x", "tools": ["file"]},
+        {"task": "x", "tools": ["shell"]},
     ]})
     # No limit enforced — should succeed
     assert result["status"] == "dispatched"
@@ -3603,7 +3607,7 @@ def test_handle_list_defaults_to_newest_1000_and_materializes_only_ledger_page(t
 
 
 def test_handle_list_uses_only_ledger_history_and_explicit_filters(tmp_path):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     alpha = _make_run_dir(agent, em_id="em-alpha", task="alpha task")
     alpha.mark_done("alpha result contains unique-needle")
@@ -3639,7 +3643,7 @@ def test_handle_list_warns_for_selected_missing_state_without_repair(tmp_path):
 
 
 def test_handle_list_never_rebuilds_stale_daemon_json(tmp_path):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     rd = _make_run_dir(agent, em_id="em-stale", task="stale version task")
     rd.mark_done("stale version result")
@@ -3715,7 +3719,7 @@ def test_handle_reclaim_cancels_all(tmp_path):
 
 def test_run_emanation_respects_cancel_mid_loop(tmp_path, monkeypatch):
     """Emanation exits on cancel event between tool-call rounds."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     _reuse_parent_service(monkeypatch, agent)
     mgr = agent.get_capability("daemon")
 
@@ -3741,7 +3745,7 @@ def test_run_emanation_respects_cancel_mid_loop(tmp_path, monkeypatch):
     mock_session.send = send_and_cancel
 
     em_id = "em-test"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -3755,13 +3759,13 @@ def test_run_emanation_respects_cancel_mid_loop(tmp_path, monkeypatch):
 
 def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
     """Detached lifecycle: emanate → durable list/check → terminal reclaim."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     _enable_detached_fake_llm(agent, monkeypatch)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
     result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "summarize architecture", "tools": ["file"]},
+        {"task": "summarize architecture", "tools": ["shell"]},
     ]})
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
@@ -4135,7 +4139,7 @@ def test_terminal_notification_not_blocked_by_prior_followup(tmp_path):
 
 def test_sequential_emanate_increments_ids(tmp_path):
     """Multiple emanate calls produce distinct compact IDs."""
-    agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}, "file": {}})
+    agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}, "shell": {}})
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
@@ -4148,9 +4152,9 @@ def test_sequential_emanate_increments_ids(tmp_path):
     mock_session.send = MagicMock(return_value=mock_resp)
     agent.service.create_session = MagicMock(return_value=mock_session)
 
-    r1 = mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["file"]}]})
+    r1 = mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["shell"]}]})
     time.sleep(0.5)
-    r2 = mgr.handle({"action": "emanate", "tasks": [{"task": "b", "tools": ["file"]}]})
+    r2 = mgr.handle({"action": "emanate", "tasks": [{"task": "b", "tools": ["shell"]}]})
 
     id1 = r1["ids"][0]
     id2 = r2["ids"][0]
@@ -4161,7 +4165,7 @@ def test_sequential_emanate_increments_ids(tmp_path):
 
 def test_emanate_creates_folder_on_disk(tmp_path):
     """_handle_emanate creates daemons/<run_id>/ before the future starts."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
@@ -4182,7 +4186,7 @@ def test_emanate_creates_folder_on_disk(tmp_path):
 
     try:
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "find todos", "tools": ["file"]},
+            {"task": "find todos", "tools": ["shell"]},
         ]})
         assert result["status"] == "dispatched"
         em_id = result["ids"][0]
@@ -4200,7 +4204,7 @@ def test_emanate_creates_folder_on_disk(tmp_path):
         assert data["handle"] == em_id
         assert data["run_id"] == em_id
         assert data["task"] == "find todos"
-        assert data["tools"] == ["file"]
+        assert data["tools"] == ["shell"]
         assert data["state"] == "running"
     finally:
         release_send.set()
@@ -4208,7 +4212,7 @@ def test_emanate_creates_folder_on_disk(tmp_path):
 
 def test_reclaim_preserves_compact_id_uniqueness(tmp_path):
     """After reclaim, new compact ids do not reuse an existing daemon folder."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
@@ -4221,12 +4225,12 @@ def test_reclaim_preserves_compact_id_uniqueness(tmp_path):
     mock_session.send = MagicMock(return_value=mock_resp)
     agent.service.create_session = MagicMock(return_value=mock_session)
 
-    r1 = mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["file"]}]})
+    r1 = mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["shell"]}]})
     id1 = r1["ids"][0]
     _assert_compact_daemon_id(id1)
     time.sleep(0.5)
     mgr.handle({"action": "reclaim"})
-    r2 = mgr.handle({"action": "emanate", "tasks": [{"task": "b", "tools": ["file"]}]})
+    r2 = mgr.handle({"action": "emanate", "tasks": [{"task": "b", "tools": ["shell"]}]})
     id2 = r2["ids"][0]
     _assert_compact_daemon_id(id2)
     assert id2 != id1
@@ -4234,7 +4238,7 @@ def test_reclaim_preserves_compact_id_uniqueness(tmp_path):
 
 def test_reclaim_preserves_folders(tmp_path):
     """reclaim stops processes but leaves daemon folders on disk."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
@@ -4247,7 +4251,7 @@ def test_reclaim_preserves_folders(tmp_path):
     mock_session.send = MagicMock(return_value=mock_resp)
     agent.service.create_session = MagicMock(return_value=mock_session)
 
-    mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["file"]}]})
+    mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["shell"]}]})
     time.sleep(0.5)
     daemons_dir = agent._working_dir / "daemons"
     folders_before = [path for path in daemons_dir.iterdir() if path.is_dir() and not path.name.startswith(".")]
@@ -4260,7 +4264,7 @@ def test_reclaim_preserves_folders(tmp_path):
 
 def test_handle_list_includes_run_id_and_path(tmp_path):
     """list output exposes run_id and path so inspectors know where to read."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
@@ -4273,7 +4277,7 @@ def test_handle_list_includes_run_id_and_path(tmp_path):
     mock_session.send = MagicMock(return_value=mock_resp)
     agent.service.create_session = MagicMock(return_value=mock_session)
 
-    mgr.handle({"action": "emanate", "tasks": [{"task": "x", "tools": ["file"]}]})
+    mgr.handle({"action": "emanate", "tasks": [{"task": "x", "tools": ["shell"]}]})
     time.sleep(0.5)
     listing = mgr._handle_list()
     assert len(listing["emanations"]) >= 1
@@ -4286,13 +4290,13 @@ def test_handle_list_includes_run_id_and_path(tmp_path):
 
 def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
     """Detached lifecycle: tool dispatch → completion → forensic folder."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     _enable_detached_fake_llm(agent, monkeypatch, scenario="artifact")
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
     result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "find TODOs", "tools": ["file"]},
+        {"task": "find TODOs", "tools": ["shell"]},
     ]})
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
@@ -4341,11 +4345,11 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
                      if json.loads(line).get("source") == "daemon"]
     assert len(daemon_tagged) == 2
     assert all(e["em_id"] == em_id for e in daemon_tagged)
-    assert all(e["codex_pool_source_index"] == 1 for e in daemon_tagged)
-    assert all(e["codex_pool_size"] == 2 for e in daemon_tagged)
-    assert all(e["codex_pool_weight"] == 1 for e in daemon_tagged)
-    assert all(e["codex_pool_model_scope"] == "gpt-5.6" for e in daemon_tagged)
-    assert all("codex_pool_source_ref" not in e for e in daemon_tagged)
+    assert all(e["codex_auth_path_sha8"] == "a1b2c3d4" for e in daemon_tagged)
+    # Retired in-kernel pool attribution keys are never mirrored.
+    assert all(
+        not any(key.startswith("codex_pool") for key in e) for e in daemon_tagged
+    )
     assert all("unsafe" not in e for e in daemon_tagged)
 
     # Reclaim does not touch folder
@@ -4359,9 +4363,9 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
 def test_run_emanation_timeout_calls_mark_timeout(tmp_path):
     """When timeout_event is set alongside cancel_event, the run loop calls
     mark_timeout (state=timeout) instead of mark_cancelled (state=cancelled)."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id="em-test")
 
     cancel = threading.Event()
@@ -4387,9 +4391,9 @@ def test_run_emanation_timeout_calls_mark_timeout(tmp_path):
 def test_run_emanation_manual_reclaim_calls_mark_cancelled(tmp_path):
     """When cancel_event is set WITHOUT timeout_event, the run loop calls
     mark_cancelled (the manual-reclaim semantic)."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id="em-test")
 
     cancel = threading.Event()
@@ -4415,8 +4419,8 @@ def test_run_emanation_manual_reclaim_calls_mark_cancelled(tmp_path):
 # Per-emanation preset tests
 # ---------------------------------------------------------------------------
 
-def _write_preset_file(presets_dir, name, provider="deepseek", model="deepseek-v3",
-                        api_key_env="DEEPSEEK_API_KEY", base_url=None):
+def _write_preset_file(presets_dir, name, provider="openai", model="deepseek-v3",
+                        api_key_env="DEEPSEEK_API_KEY", base_url="https://api.deepseek.com"):
     """Write a minimal preset JSON file to the presets directory."""
     import json
     preset = {
@@ -4430,7 +4434,7 @@ def _write_preset_file(presets_dir, name, provider="deepseek", model="deepseek-v
                 "api_key_env": api_key_env,
                 **({"base_url": base_url} if base_url else {}),
             },
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
         },
     }
     (presets_dir / f"{name}.json").write_text(json.dumps(preset))
@@ -4448,7 +4452,7 @@ def _make_agent_with_presets(tmp_path, presets_dir):
     agent = Agent(
         svc,
         working_dir=tmp_path / "daemon-agent",
-        capabilities=["file", "daemon"],
+        capabilities=["shell", "daemon"],
         config=AgentConfig(),
     )
     # Patch _read_init to return a manifest with a preset.path pointing to our dir
@@ -4521,7 +4525,7 @@ def test_emanate_lingtai_valid_but_unallowed_preset_rejected_before_preflight(
          patch.object(ThreadPoolExecutor, "submit") as mock_submit, \
          patch.object(mgr, "_run_emanation") as mock_run:
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "task A", "tools": ["file"], "preset": unlisted_path},
+            {"task": "task A", "tools": ["shell"], "preset": unlisted_path},
         ]})
 
     assert result["status"] == "error"
@@ -4559,7 +4563,7 @@ def test_emanate_lingtai_authorized_equivalent_path_reaches_preflight(
     # Connectivity is mocked so the LingTai preflight completes.
     with patch.object(preset_connectivity, "_probe_host", return_value=10):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "task A", "tools": ["file"], "preset": str(abs_path)},
+            {"task": "task A", "tools": ["shell"], "preset": str(abs_path)},
         ]})
 
     # The gate passed — batch either dispatched or failed later in the
@@ -4572,7 +4576,7 @@ def test_emanate_lingtai_omitted_preset_never_reads_allowlist(tmp_path, monkeypa
     path and must stay unchanged: the new gate must not even call
     `_read_preset_from_init` when no task requests an explicit preset."""
     from unittest.mock import patch
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     _reuse_parent_service(monkeypatch, agent)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
@@ -4586,7 +4590,7 @@ def test_emanate_lingtai_omitted_preset_never_reads_allowlist(tmp_path, monkeypa
 
     with patch.object(agent, "_read_preset_from_init") as mock_read:
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "task A", "tools": ["file"]},
+            {"task": "task A", "tools": ["shell"]},
         ]})
 
     mock_read.assert_not_called()
@@ -4627,7 +4631,7 @@ def test_emanate_cli_backend_unauthorized_preset_string_unaffected(
                        return_value={"status": "dispatched", "count": 1}) as mock_cli:
         result = mgr.handle({
             "action": "emanate", "backend": "codex",
-            "tasks": [{"task": "task A", "tools": ["file"], "preset": unlisted_path}],
+            "tasks": [{"task": "task A", "tools": ["shell"], "preset": unlisted_path}],
         })
 
     spy_read.assert_not_called()
@@ -4649,8 +4653,8 @@ def test_emanate_with_preset_validates_preset_exists(tmp_path, monkeypatch):
     ghost_path = str(presets_dir / "ghost.json")
     # 'ghost' doesn't exist in the library
     result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "task A", "tools": ["file"], "preset": ghost_path},
-        {"task": "task B", "tools": ["file"]},  # valid task, but should be refused too
+        {"task": "task A", "tools": ["shell"], "preset": ghost_path},
+        {"task": "task B", "tools": ["shell"]},  # valid task, but should be refused too
     ]})
     assert result["status"] == "error"
     assert "ghost" in result["message"]
@@ -4678,7 +4682,7 @@ def test_emanate_with_preset_unreachable_refuses(tmp_path, monkeypatch):
     with patch.object(preset_connectivity, "_probe_host",
                       side_effect=OSError("connection refused")):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "task A", "tools": ["file"], "preset": preset_path},
+            {"task": "task A", "tools": ["shell"], "preset": preset_path},
         ]})
     assert result["status"] == "error"
     assert "unreachable" in result["message"]
@@ -4700,7 +4704,7 @@ def test_emanate_with_preset_no_credentials_refuses(tmp_path, monkeypatch):
 
     preset_path = str(presets_dir / "deepseek.json")
     result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "task A", "tools": ["file"], "preset": preset_path},
+        {"task": "task A", "tools": ["shell"], "preset": preset_path},
     ]})
     assert result["status"] == "error"
     assert "no_credentials" in result["message"]
@@ -4715,7 +4719,7 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
-    _write_preset_file(presets_dir, "deepseek", provider="deepseek",
+    _write_preset_file(presets_dir, "deepseek", provider="openai",
                        model="deepseek-v3", api_key_env="DEEPSEEK_API_KEY_TEST")
 
     monkeypatch.setenv("DEEPSEEK_API_KEY_TEST", "sk-test-key")
@@ -4742,7 +4746,7 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
     with patch.object(preset_connectivity, "_probe_host", return_value=42),\
          patch("lingtai.llm.service.LLMService", return_value=preset_svc):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "find todos", "tools": ["file"], "preset": preset_path},
+            {"task": "find todos", "tools": ["shell"], "preset": preset_path},
         ]})
 
     assert result["status"] == "dispatched"
@@ -4757,13 +4761,13 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
     assert len(folders) == 1
     data = json.loads((folders[0] / "daemon.json").read_text())
     assert data.get("preset_name") == preset_path
-    assert data.get("preset_provider") == "deepseek"
+    assert data.get("preset_provider") == "openai"
     assert data.get("preset_model") == "deepseek-v3"
 
 
 def test_emanate_without_preset_persists_the_detached_effective_model(tmp_path, monkeypatch):
     """daemon.json model follows the LLM sent to detached execution, not stale cache."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     stale_model = agent.service.model
     effective_model = "gpt-5.6-daemon"
@@ -4778,7 +4782,7 @@ def test_emanate_without_preset_persists_the_detached_effective_model(tmp_path, 
     monkeypatch.setattr(mgr, "_spawn_detached_lingtai_run", fake_spawn)
 
     result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "task A", "tools": ["file"]},
+        {"task": "task A", "tools": ["shell"]},
     ]})
 
     assert result["status"] == "dispatched"
@@ -4794,7 +4798,7 @@ def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
     # Disable the resident central manager so dispatch goes through the
     # patched supervisor adapter below instead of enqueueing to a real
     # manager process the fake owner would never observe.
-    agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}, "file": {}})
+    agent = _make_agent(tmp_path, {"daemon": {"manager_pool_size": 0}, "shell": {}})
     agent.service.provider = "anthropic"
     agent.service.model = "claude-opus-4-8"
     agent.service._base_url = "https://api.anthropic.com"
@@ -4817,7 +4821,7 @@ def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
     with patch.object(PosixDaemonSupervisorAdapter, "spawn_detached", fake_owner), \
          patch.object(agent, "_read_preset_from_init") as read_allowlist:
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "task A", "tools": ["file"]},
+            {"task": "task A", "tools": ["shell"]},
         ]})
 
     assert result["status"] == "dispatched"
@@ -5514,10 +5518,13 @@ def test_daemon_llm_defaults_carries_codex_auth_path():
             "codex_auth_path": "/secrets/alice/codex-auth.json",
             # An unrelated key must still be dropped (allowlist, not pass-all).
             "api_key": "should-not-survive",
+            # Retired in-kernel pool path: legacy-ignored, never forwarded.
+            "codex_auth_pool_path": "/home/alice/.lingtai-tui/codex-auth-pool.json",
         }
     )
     assert defaults["codex_auth_path"] == "/secrets/alice/codex-auth.json"
     assert "api_key" not in defaults
+    assert "codex_auth_pool_path" not in defaults
 
 
 def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
@@ -5549,14 +5556,13 @@ def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
     )
 
 
-def _assert_codex_pool_daemon_defaults(provider, tmp_path):
-    """codex-pool daemon defaults keep the pool path, re-anchor to daemon.json.
-
-    ``codex-pool`` reuses the Codex adapter and also seeds its sticky auth-pool
-    choice off the anchor, so a daemon run must keep the non-secret
-    ``codex_auth_pool_path`` while getting its own per-run anchor (its own cache
-    slot and an independent pool selection from the parent).
-    """
+@pytest.mark.parametrize("provider", ["codex-pool", "codex_pool"])
+def test_daemon_provider_defaults_removed_codex_pool_spellings_are_not_reanchored(
+    provider, tmp_path
+):
+    """The in-kernel Codex pool was removed: only ``codex`` gets a per-run
+    daemon anchor. The retired pool spellings are ordinary provider keys whose
+    defaults pass through unchanged (no re-anchor, no compaction limit)."""
     from types import SimpleNamespace
 
     from lingtai.tools.daemon import DaemonManager
@@ -5566,27 +5572,11 @@ def _assert_codex_pool_daemon_defaults(provider, tmp_path):
     out = DaemonManager._daemon_provider_defaults(
         mgr,
         provider,
-        {
-            "codex_auth_pool_path": "/home/alice/.lingtai-tui/codex-auth-pool.json",
-            "codex_session_anchor": "/agents/alice/init.json",
-        },
+        {"codex_session_anchor": "/agents/alice/init.json"},
         run_dir,
+        context_token_limit=123_456,
     )
-    assert out[provider]["codex_auth_pool_path"] == (
-        "/home/alice/.lingtai-tui/codex-auth-pool.json"
-    )
-    # The per-run daemon anchor replaces the parent agent's anchor.
-    assert out[provider]["codex_session_anchor"] == str(
-        (run_dir.path / "daemon.json").resolve()
-    )
-
-
-def test_daemon_provider_defaults_codex_pool_dash(tmp_path):
-    _assert_codex_pool_daemon_defaults("codex-pool", tmp_path)
-
-
-def test_daemon_provider_defaults_codex_pool_underscore(tmp_path):
-    _assert_codex_pool_daemon_defaults("codex_pool", tmp_path)
+    assert out == {provider: {"codex_session_anchor": "/agents/alice/init.json"}}
 
 
 def _capturing_fake_service(captured, text="daemon done"):
@@ -5626,8 +5616,8 @@ def test_run_emanation_no_preset_uses_parent_api_key_without_resolver(
     fallback resolver path that this change removes). Make the resolver raise so
     any primary-key resolution attempt fails the test.
     """
-    agent = _make_agent(tmp_path, ["file", "daemon"])
-    agent.service.provider = "custom"
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
+    agent.service.provider = "openai"
     agent.service.model = "glm-5.1"
     agent.service._base_url = "https://proxy.example/v1"
     agent.service._context_window = 200000
@@ -5642,7 +5632,7 @@ def test_run_emanation_no_preset_uses_parent_api_key_without_resolver(
     # fall back to calling the resolver here. The effective-preset path must not.
     agent.service._api_key = None
     agent.service.api_key = None
-    agent.service._provider_defaults = {"custom": {"api_compat": "openai"}}
+    agent.service._provider_defaults = {"openai": {"wire_api": "chat_completions"}}
 
     captured = {}
     import lingtai.llm.service as service_mod
@@ -5651,7 +5641,7 @@ def test_run_emanation_no_preset_uses_parent_api_key_without_resolver(
     mgr = agent.get_capability("daemon")
     cancel = threading.Event()
     em_id = "em-implicit"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -5682,8 +5672,8 @@ def test_run_emanation_no_preset_preserves_parent_provider_defaults(
     prove the implicit path forwards the parent bucket directly rather than
     re-deriving it through ``_llm_defaults_from_manifest``.
     """
-    agent = _make_agent(tmp_path, ["file", "daemon"])
-    agent.service.provider = "custom"
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
+    agent.service.provider = "openai"
     agent.service.model = "glm-5.1"
     agent.service._base_url = "https://proxy.example/v1"
     agent.service._context_window = 200000
@@ -5691,8 +5681,7 @@ def test_run_emanation_no_preset_preserves_parent_provider_defaults(
     agent.service._api_key = "sk-effective"
     agent.service.api_key = "sk-effective"
     agent.service._provider_defaults = {
-        "custom": {
-            "api_compat": "openai",
+        "openai": {
             "max_rpm": 9,
             "default_headers": {"x-test": "1"},
             # Outside the _llm_defaults_from_manifest allowlist on purpose.
@@ -5707,7 +5696,7 @@ def test_run_emanation_no_preset_preserves_parent_provider_defaults(
     mgr = agent.get_capability("daemon")
     cancel = threading.Event()
     em_id = "em-defaults"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -5721,8 +5710,7 @@ def test_run_emanation_no_preset_preserves_parent_provider_defaults(
     # The whole parent bucket survives — including codex_base_urls, which the
     # manifest allowlist would have dropped (no Codex anchor for non-codex).
     assert captured["init"]["provider_defaults"] == {
-        "custom": {
-            "api_compat": "openai",
+        "openai": {
             "max_rpm": 9,
             "default_headers": {"x-test": "1"},
             "codex_base_urls": ["https://a.example", "https://b.example"],
@@ -5743,8 +5731,8 @@ def test_run_emanation_detached_child_merges_public_provider_defaults(
     ``wire_api: responses`` are dropped, the wire degrades to ``auto``, and a
     Responses provider is misrouted to Chat Completions.
     """
-    agent = _make_agent(tmp_path, ["file", "daemon"])
-    agent.service.provider = "custom"
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
+    agent.service.provider = "openai"
     agent.service.model = "glm-5.1"
     agent.service._base_url = "https://proxy.example/v1"
     agent.service._context_window = 200000
@@ -5752,8 +5740,7 @@ def test_run_emanation_detached_child_merges_public_provider_defaults(
     agent.service._api_key = "sk-effective"
     agent.service.api_key = "sk-effective"
     agent.service._provider_defaults = {
-        "custom": {
-            "api_compat": "openai",
+        "openai": {
             "wire_api": "responses",
             "max_rpm": 9,
             "default_headers": {"x-test": "1"},
@@ -5767,7 +5754,7 @@ def test_run_emanation_detached_child_merges_public_provider_defaults(
     mgr = agent.get_capability("daemon")
     cancel = threading.Event()
     em_id = "em-detached-defaults"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -5779,14 +5766,13 @@ def test_run_emanation_detached_child_merges_public_provider_defaults(
     # block whose provider bucket lives under the PUBLIC ``provider_defaults``
     # key (no ``_provider_defaults`` alias survives serialization).
     child_preset_llm = {
-        "provider": "custom",
+        "provider": "openai",
         "model": "glm-5.1",
         "api_key": "sk-effective",
         "base_url": "https://proxy.example/v1",
         "context_window": 200000,
         "provider_defaults": {
-            "custom": {
-                "api_compat": "openai",
+            "openai": {
                 "wire_api": "responses",
                 "max_rpm": 9,
                 "default_headers": {"x-test": "1"},
@@ -5804,8 +5790,7 @@ def test_run_emanation_detached_child_merges_public_provider_defaults(
     # base_url), so the adapter selects OpenAIResponsesSession instead of
     # degrading to auto/Chat Completions.
     assert captured["init"]["provider_defaults"] == {
-        "custom": {
-            "api_compat": "openai",
+        "openai": {
             "base_url": "https://proxy.example/v1",
             "wire_api": "responses",
             "max_rpm": 9,
@@ -5820,7 +5805,7 @@ def test_implicit_parent_preset_llm_does_not_resolve_primary_key(tmp_path):
     It must not invoke the parent ``_key_resolver`` to synthesize the implicit
     preset's primary key — the parent already resolved it at boot.
     """
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     agent.service.provider = "anthropic"
     agent.service.model = "claude-opus-4-8"
     agent.service._base_url = "https://api.anthropic.com"
@@ -5874,7 +5859,7 @@ def test_explicit_manifest_context_limit_reaches_daemon_service_window(tmp_path,
 
     cancel = threading.Event()
     em_id = "em-explicit-context"
-    schemas, dispatch = mgr._build_tool_surface(["file"])
+    schemas, dispatch = mgr._build_tool_surface(["shell"])
     run_dir = _make_run_dir(agent, em_id=em_id)
     mgr._emanations[em_id] = {
         "followup_buffer": "",
@@ -5939,7 +5924,7 @@ def test_daemon_summary_closure_uses_effective_session_and_accounts_usage(tmp_pa
         service, run_dir, provider="mock", model="daemon-model", endpoint="endpoint",
     )
 
-    assert fn("SUMMARY SYSTEM", "SUMMARY USER", "file", "tc-summary") == "LOCAL SUMMARY"
+    assert fn("SUMMARY SYSTEM", "SUMMARY USER", "shell", "tc-summary") == "LOCAL SUMMARY"
     assert service.calls == [{
         "system_prompt": "SUMMARY SYSTEM",
         "tools": None,
@@ -5956,13 +5941,13 @@ def test_daemon_summary_closure_uses_effective_session_and_accounts_usage(tmp_pa
 
 
 def test_daemon_tool_executor_wires_summary_gateway_and_preserves_raw_log(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     raw = {"content": "DAEMON-RAW-MARKER"}
-    agent._tool_handlers["file"] = MagicMock(return_value=raw)
+    agent._tool_handlers["shell"] = MagicMock(return_value=raw)
     first = LLMResponse(
         text="",
-        tool_calls=[ToolCall(name="file", args={"action": "read", "input": {"file_path": "/tmp/x"}, "summarize": True, "reasoning": "retain marker"}, id="tc-daemon-summary")],
+        tool_calls=[ToolCall(name="shell", args={"action": "run", "input": {"command": "cat /tmp/x"}, "summarize": True, "reasoning": "retain marker"}, id="tc-daemon-summary")],
         usage=None,
     )
     final = LLMResponse(text="daemon finished", tool_calls=[], usage=None)
@@ -5981,7 +5966,7 @@ def test_daemon_tool_executor_wires_summary_gateway_and_preserves_raw_log(tmp_pa
     monkeypatch.setattr(agent, "_log", run_dir.append_event)
 
     result = mgr._run_emanation(
-        "em-summary", run_dir, *mgr._build_tool_surface(["file"]),
+        "em-summary", run_dir, *mgr._build_tool_surface(["shell"]),
         "summarize the read result", threading.Event(),
     )
 

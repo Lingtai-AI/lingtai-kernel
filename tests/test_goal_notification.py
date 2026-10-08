@@ -24,7 +24,6 @@ class _GoalAgent:
     _working_dir: Path
     _state: AgentState = AgentState.IDLE
     _state_changed_at: float = field(default_factory=lambda: time.time() - 10)
-    _soul_delay: float = 1.0
     _logs: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     _notification_store: object = field(init=False)
 
@@ -154,14 +153,11 @@ def test_goal_reminder_republishes_after_whole_system_dismiss_and_fresh_delay(tm
     agent._notification_fp = fp
     agent._notification_raw_fp = fp
 
-    result = dispatch_declared_tool(NOTIFICATION_DECLARATION,
-        agent,
-        {
-            "action": "dismiss_channel",
-            "input": {"channel": "system"},
-            "reasoning": "test",
-        },
-    )
+    # No public dismiss action exists any more; the private Core helper is
+    # retained, so exercise the goal-reminder cadence through it directly.
+    from lingtai.kernel.notifications import dismiss_channel
+
+    result = dismiss_channel(agent, "system", invoked_by="notification")
 
     assert result["status"] == "ok"
     assert "system" not in snapshot_notifications(tmp_path)

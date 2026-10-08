@@ -1,120 +1,75 @@
 ---
 name: notification-manual-dismissal-safety
 description: >
-  Nested notification-manual reference for choosing safe atomic notification
-  dismissal, producer-specific verbs, stale-version and force behavior,
-  protected channels, post-molt acknowledgement, and legacy large_tool_result
-  reminder escape hatches. Read after notification-manual before clearing a
-  channel or diagnosing a dismissal refusal; summarization mechanics live in
-  summarize-manual instead.
-version: 0.4.0
-tags: [lingtai, notifications, dismiss, force, stale, safety, hooks]
-last_changed_at: "2026-08-10T00:00:00Z"
+  One-shot notification delivery and producer-state safety reference: there is no
+  public notification dismiss action; delivery never clears producer state; how
+  deliberate check, post-molt, protected channels, hooks, and legacy large-result
+  reminders behave. Read after notification-manual when unsure whether a
+  notification will reappear or how to resolve its producer state.
+version: 0.6.0
+tags: [lingtai, notifications, one-shot, delivery, safety, hooks]
+last_changed_at: "2026-10-02T00:00:00Z"
 related_files:
 - src/lingtai/tools/notification/manual/SKILL.md
 - src/lingtai/tools/notification/__init__.py
 - src/lingtai/tools/notification/schema.py
 maintenance: |
-  Tracks the notification dismissal-safety topic it documents; update when that integration changes.
+  Keep this reference as the sole owner of delivery-versus-producer-state safety;
+  update the parent route when its installed path changes. The directory name is
+  a retained installed route from when notification had public dismiss actions.
 ---
 
-# Notification Dismissal Safety
+# Notification Delivery and Producer-State Safety
 
-## Choose the narrowest owner and target
+## Delivered once; never cleared by delivery
 
-Use a producer-specific verb first when a notification mirrors producer-owned
-state (e.g. `email(action='read'|'dismiss', ...)`) — a generic channel dismissal
-would clear only the high-attention mirror.
+Each notification event is attached to your context automatically once. A new or
+changed event (new mail, a new IM message, a new system event, a daemon
+completion, a delay alarm, a post-molt record) is attached and wakes you again; an
+unchanged one is not re-attached, and later tool results simply carry no
+notification keys for it. An absent notification key means *nothing new*, not
+*resolved*.
 
-For a dismissible notification-owned surface, choose one atomic target:
+Delivery never clears, completes, or acknowledges anything: notification files
+and producer business state (mailbox, IM history, goal, source queues) are left
+exactly as they were. There is no public `dismiss_channel`, `dismiss_event`, or
+`dismiss_ref` action and no alias for them. Do not delete `.notification/` files.
 
-```text
-notification(action='dismiss_channel',
-             input={'channel': 'nudge', 'force': null, 'reason': null},
-             reasoning='...')
-```
+`notification(action='check', input={}, ...)` is a deliberate read: it returns the
+complete current mirrors even if they were already delivered automatically, and
+it clears nothing. It is not an automatic replay.
 
-`dismiss_event` and `dismiss_ref` take the same envelope with `event_id` /
-`ref_id` instead of `channel`; the schema is the exact-shape source of truth.
-What it does not say: those two **default to the `system` channel** and remove
-only matching entries from `system.data.events`, and **removing the final event
-clears the file**.
+Earlier legitimately delivered messages remain usable for active work after later empty tails; do not revive superseded human instructions or older runtime warnings. Ordinary molt/rebuild/resync retains the delivered ledger within this agent process. Carry needed task facts/IDs into the handoff; use a deliberate check/source read only for genuinely missing content or separately requested review. A new Agent/process restart starts fresh delivery bookkeeping; this is not cross-crash exactly-once.
 
-All three actions delegate to the canonical notification Core dismissal helper.
-That one policy path enforces allowlists, producer guards, stale-version checks,
-protected channels, post-molt acknowledgement, and legacy reminder
-acknowledgement. The standalone tool does not reimplement Store or producer
-policy.
+## Owner first
 
-## Stale versions, guards, and force
+Read the delivered payload's `instructions`, then act through the owning producer
+tool, whose state is the source of truth (for example
+`email(action='read'|'reply'|'dismiss', ...)`; those verbs are the producer's own
+business operations and keep working unchanged). The notification record for an
+event may still exist on disk afterward; that does not re-deliver it.
 
-A non-force generic dismiss compares the delivered notification version with the
-current on-disk version. If a producer updated the channel after delivery, the
-call refuses with `reason='stale_channel_version'` rather than erase unseen
-state. Read the newly delivered state first.
+## Protected and special channels
 
-`force=true` (semantics in the schema) is for a confirmed stale mirror — not a
-routine retry, and not a substitute for handling the producer.
+`goal` is protected source of truth: use
+`../../../system-manual/reference/goal-manual/SKILL.md` to cancel or complete goal
+state. `post-molt` is a continuation reminder delivered once per molt: reorient
+(pad, latest summary, session journal, recent human messages), decide to continue,
+defer, or treat as obsolete, and record that decision in your own journal/pad; the
+delivery itself does not mean any human task is completed.
 
-## Protected and acknowledgement-sensitive channels
+## Hooks and legacy reminders
 
-`goal` is protected source of truth. A generic
-`notification(action='dismiss_channel', input={'channel': 'goal', ...})`
-refuses even with `force=true`; use `../../../system-manual/reference/goal-manual/SKILL.md` to cancel or complete active goal
-state correctly.
+A registered hook channel follows the same one-shot delivery. Registration widens
+only this agent's allowlist. `drop` removes the manifest and revokes the channel;
+it does **not** kill the hook process. Stop it using the manifest's
+`how_to_cancel`. If the process keeps publishing after drop, the kernel may emit
+the blocked-channel warning again.
 
-The kernel-owned `post-molt` continuation channel requires a non-empty reason
-recording the decision in `continue|defer|obsolete` form — e.g.
-`reason='continue: recovered the pending work'` on
-`dismiss_channel(channel='post-molt')`.
-
-## Hook channels and producer-guard interplay
-
-A registered hook channel (see the parent manual's `Hooks & whitelist`
-section) is dismissed exactly like any other allowlisted channel: the atomic
-dismiss actions clear only the `.notification/<channel>.json` mirror. Hook
-registration widens the **allowlist** for the registering agent's workdir
-(hook channels are per-agent, not process-global), not the dismissal policy —
-a hook producer whose notification mirrors canonical state should still
-register a generic-dismiss guard and teach its producer-specific verb in
-`instructions`, and the guarded refusal still applies.
-
-`notification(action='drop', input={'name': ...})` removes the hook's manifest
-and revokes its channel from the allowlist; it does **not** kill the hook
-process. Stopping the hook is the owner's job, documented in the manifest's
-`how_to_cancel` field. After a drop, an unregistered channel's notifications
-stop passing through and the kernel's warn-and-flag event may reappear if the
-process keeps publishing — the blocked-channel warning is cleared when a
-channel registers, so a later re-block can warn again. The warn-and-flag scan
-only flags present stems that can become channels (skipping kernel-private
-dotfiles like `.nudge_state.json`, non-`.json` entries, and syntactically
-invalid stems), so an unregistered file that could never be a channel does not
-produce a spurious "register this hook" event.
-
-## Large results and legacy reminder escape hatch
-
-New large tool results are not notification events — they are ranked under
-`_meta.agent_meta.agent_state.current_tool_result_chars`, and
-`../../../context-manual/reference/summarize-manual/SKILL.md` owns the digest,
-`context(action='summarize')`, recovery, and summarize-versus-molt procedure.
-
-A persisted or pre-molt `source='large_tool_result'` system event may still
-exist. A successful summarize of the matching `tool_call_id` clears it. If
-summarization is no longer possible, use
-`dismiss_ref` with `ref_id='large_tool_result:<tool_call_id>'`. Whole-channel
-system dismissal also covers it but may clear unrelated system events, so prefer
-ref/event targeting. Either way the original tool result stays unchanged in chat
-history and `events.jsonl`.
-
-## On a refusal
-
-1. Check whether the channel's `instructions` name a producer action; if so, use
-   it instead of retrying the generic dismiss.
-2. Stale — read the current delivered payload before deciding on `force=true`.
-3. Protected — follow the channel's owning manual; do not retry.
-4. `post-molt` without a reason — record the real continue/defer/obsolete
-   decision.
-5. Targeting one system event — use `dismiss_event`/`dismiss_ref`, not a
-   whole-channel clear.
-
-No dismissal ever removes producer history, mailbox state, or goal semantics.
+New large tool results are not notification events. They belong to
+`current_tool_result_chars` (read via `system(action='meta')`) and
+`context(action='summarize')`; `../../../context-manual/reference/summarize-manual/SKILL.md` owns digest, recovery, and
+summarize-versus-molt procedure. A persisted legacy
+`source='large_tool_result'` event is resolved by successful summarization of the
+matching `tool_call_id`. The original result remains in chat history and
+`events.jsonl`.

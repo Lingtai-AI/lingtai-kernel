@@ -12,8 +12,8 @@ reconstruction path shared by active ``context.rebuild``, refresh, and molt,
 after materializing any configured ``lingtai`` / resolved ``lingtai_file`` value
 into that durable file.
 
-Durable identity mutation is ``file.write`` (full rewrite) and ``file.edit``
-(exact replacement); neither hot-loads the prompt.
+Durable identity mutation happens through ``shell`` (a verified full rewrite or
+exact replacement); nothing hot-loads the prompt.
 """
 from __future__ import annotations
 

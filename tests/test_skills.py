@@ -9,7 +9,7 @@ import sqlite3
 import time
 from pathlib import Path
 from lingtai.agent import Agent
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 
@@ -206,7 +206,7 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert bash_md.is_file()
         bash_body = bash_md.read_text(encoding="utf-8")
         assert "name: shell-manual" in bash_body
-        assert "Nested reference catalog" in bash_body
+        assert "## Route by task" in bash_body
         assert "reference/scheduled-work/SKILL.md" in bash_body
         assert "reference/notification-reminders/SKILL.md" in bash_body
         assert "reference/debugging-cleanup/SKILL.md" in bash_body
@@ -251,14 +251,14 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert daemon_md.is_file()
         daemon_body = daemon_md.read_text(encoding="utf-8")
         assert "name: daemon-manual" in daemon_body
-        assert "Nested reference catalog" in daemon_body
+        assert "## Routing table" in daemon_body
         assert "reference/forensics/SKILL.md" in daemon_body
-        assert "reference/inspection/SKILL.md" in daemon_body
+        assert "reference/dispatch-ledger/SKILL.md" in daemon_body
         assert "reference/cli-backends/SKILL.md" in daemon_body
         assert "reference/cleanup/SKILL.md" in daemon_body
 
         daemon_reference_dir = daemon_md.parent / "reference"
-        for reference_name in ("forensics", "inspection", "cli-backends", "cleanup"):
+        for reference_name in ("forensics", "dispatch-ledger", "cli-backends", "cleanup"):
             daemon_reference = daemon_reference_dir / reference_name / "SKILL.md"
             assert daemon_reference.is_file()
         for backend_name in (
@@ -289,24 +289,59 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         agent.stop(timeout=1.0)
 
 
+def test_context_manual_installed_artifact_preserves_owner_routes(tmp_path):
+    """Installed Context entry/assets retain the proportional recovery path."""
+    agent, workdir = _mk_agent(tmp_path)
+    try:
+        context_manual_md = (
+            workdir
+            / ".library"
+            / "intrinsic"
+            / "capabilities"
+            / "context-manual"
+            / "SKILL.md"
+        )
+        assert context_manual_md.is_file()
+        context_manual_body = context_manual_md.read_text(encoding="utf-8")
+        assert "name: context-manual" in context_manual_body
+        assert "assets/molt-template.md" in context_manual_body
+        assert "shortest sufficient handoff" in context_manual_body
+        assert "do not use this as routine cleanup" in context_manual_body
+        assert "not a command to run blindly" in context_manual_body
+        assert "do not fill absent fields with `None`" not in context_manual_body
+
+        summarize_reference = context_manual_md.parent / "reference" / "summarize-manual" / "SKILL.md"
+        assert summarize_reference.is_file()
+        summarize_body = summarize_reference.read_text(encoding="utf-8")
+        summarize_content = summarize_body.split("\n---\n", 1)[1]
+        assert "current_tool_result_chars.top_results" in summarize_content
+        assert "summary_effect.prev_chars" in summarize_content
+        assert 'system(action="manual", input={}, reasoning="load System routes")' in summarize_content
+        assert "intrinsic_skills/system-manual" not in summarize_content
+
+        molt_template_asset = context_manual_md.parent / "assets" / "molt-template.md"
+        assert molt_template_asset.is_file()
+        assert (context_manual_md.parent / "assets" / "session-journal-entry-template.md").is_file()
+        molt_template_body = molt_template_asset.read_text(encoding="utf-8")
+        assert "# Consequential Molt Handoff Template" in molt_template_body
+        assert "optional scaffold" in molt_template_body
+        assert "do not fill absent fields with `None`" in molt_template_body
+        assert "## Before calling molt" in molt_template_body
+        assert "session_journal_path" in molt_template_body
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
     # Standalone always-included skills live in lingtai.intrinsic_skills and are
     # copied next to capability manuals under .library/intrinsic/capabilities/.
     agent, workdir = _mk_agent(tmp_path)
     try:
-        skill_md = (
-            workdir
-            / ".library"
-            / "intrinsic"
-            / "capabilities"
-            / "file-manual"
-            / "SKILL.md"
-        )
-        assert skill_md.is_file()
-        body = skill_md.read_text(encoding="utf-8")
-        assert "name: file-manual" in body
-        assert "encoding='gbk'" in body
-        assert "iconv -f gbk -t utf-8" in body
+        capabilities_dir = workdir / ".library" / "intrinsic" / "capabilities"
+        # The removed ``file`` family left no manual behind: neither its
+        # ``file-manual`` body nor the nested ``read-manual`` is installed.
+        assert not (capabilities_dir / "file-manual").exists()
+        assert not (capabilities_dir / "read-manual").exists()
 
         system_manual_md = (
             workdir
@@ -351,8 +386,8 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "name: notification-manual" in notification_manual_body
         assert "# Notification Manual" in notification_manual_body
         assert "<agent>/.library/intrinsic/capabilities/notification/SKILL.md" in notification_manual_body
-        assert "location: reference/channel-model/SKILL.md" in notification_manual_body
-        assert "location: reference/dismissal-safety/SKILL.md" in notification_manual_body
+        assert "](reference/channel-model/SKILL.md)" in notification_manual_body
+        assert "](reference/dismissal-safety/SKILL.md)" in notification_manual_body
         assert (
             notification_manual_md.parent / "reference" / "channel-model" / "SKILL.md"
         ).is_file()
@@ -400,37 +435,6 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "editable/source/dev" in runtime_update_body
         assert "receiving explicit confirmation" in runtime_update_body
 
-        context_manual_md = (
-            workdir
-            / ".library"
-            / "intrinsic"
-            / "capabilities"
-            / "context-manual"
-            / "SKILL.md"
-        )
-        assert context_manual_md.is_file()
-        context_manual_body = context_manual_md.read_text(encoding="utf-8")
-        assert "name: context-manual" in context_manual_body
-        assert "## Asset catalog" in context_manual_body
-        assert "assets/molt-template.md" in context_manual_body
-        assert "9-section summary scaffold" in context_manual_body
-        assert "9. **Context Status**" not in context_manual_body
-
-        file_manual_md = (
-            workdir
-            / ".library"
-            / "intrinsic"
-            / "capabilities"
-            / "file-manual"
-            / "SKILL.md"
-        )
-        assert file_manual_md.is_file()
-        file_manual_body = file_manual_md.read_text(encoding="utf-8")
-        package_file_manual = Path("src/lingtai/tools/file/manual/SKILL.md").read_text(
-            encoding="utf-8"
-        )
-        assert file_manual_body == package_file_manual
-        assert "# File Manual" in file_manual_body
         assert not (
             workdir
             / ".library"
@@ -438,25 +442,6 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
             / "capabilities"
             / "file"
         ).exists()
-
-        molt_template_asset = context_manual_md.parent / "assets" / "molt-template.md"
-        assert molt_template_asset.is_file()
-        molt_template_body = molt_template_asset.read_text(encoding="utf-8")
-        assert "# Consequential Molt Summary Template" in molt_template_body
-        assert "## Summary scaffold" in molt_template_body
-        for section in (
-            "1. **Who I Am**",
-            "2. **Accomplishments**",
-            "3. **Outstanding Tasks**",
-            "4. **Action Checklist**",
-            "5. **Collaborators**",
-            "6. **Durable Memory and Execution Notes**",
-            "7. **Key Paths and Artifacts**",
-            "8. **Lessons and Gotchas**",
-            "9. **Context Status**",
-        ):
-            assert section in molt_template_body
-        assert "## Pre-molt verification checklist" in molt_template_body
 
         sqlite_log_query_ref = system_manual_md.parent / "reference" / "sqlite-log-query" / "SKILL.md"
         assert sqlite_log_query_ref.is_file()
@@ -487,9 +472,6 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         refresh_precheck_body = refresh_precheck_ref.read_text(encoding="utf-8")
         assert "name: refresh-precheck" in refresh_precheck_body
         assert "Nested system-manual reference" in refresh_precheck_body
-        assert 'system(action="refresh")' in refresh_precheck_body
-        assert 'system(action="presets")' in refresh_precheck_body
-        assert ".pth" in refresh_precheck_body
 
         # event_summary.py script exists, is referenced, and can summarize
         # a minimal SQLite sidecar using the actual events schema columns.
@@ -909,7 +891,7 @@ def test_catalog_injected_into_skills_section(tmp_path):
     try:
         prompt = agent._prompt_manager.read_section("skills") or ""
         assert "- name: skills-manual" in prompt
-        assert "- name: file-manual" in prompt
+        assert "- name: file-manual" not in prompt
         assert "- name: shared-thing" in prompt
     finally:
         agent.stop(timeout=1.0)
@@ -1139,6 +1121,54 @@ def test_skills_does_not_create_git_repo(tmp_path):
         agent.stop(timeout=1.0)
 
 
+def test_refresh_guidance_owns_three_targeted_modes():
+    root = Path(__file__).resolve().parents[1]
+    manual_root = root / "src/lingtai/intrinsic_skills/system-manual"
+    reference_root = manual_root / "reference"
+    router = (manual_root / "SKILL.md").read_text(encoding="utf-8")
+    refresh = (reference_root / "refresh-precheck/SKILL.md").read_text(encoding="utf-8")
+    update = (reference_root / "runtime-update-checks/SKILL.md").read_text(encoding="utf-8")
+    router_flat = " ".join(router.split())
+    refresh_flat = " ".join(refresh.split())
+    update_flat = " ".join(update.split())
+
+    assert "Any refresh transaction: same-runtime reload" in router_flat
+    assert "Update/source/install/nudge/mismatch diagnosis and cutover handoff" in router_flat
+    assert "select one mode -> one targeted preflight -> exactly one refresh -> one targeted receipt" in refresh_flat
+    for mode in (
+        "A. Same-runtime reload",
+        "B. Source/venv cutover",
+        "C. Failure recovery",
+    ):
+        assert mode in refresh
+    assert "two before and two after" in refresh_flat
+    assert "three before and two after" in refresh_flat
+    assert "first after-check includes changed-MCP health only on that trigger" in refresh_flat
+    assert "Never inspect an unchanged subsystem" in refresh_flat
+    assert "refresh_calls: 1" in refresh
+    assert "originating_channel_round_trip" in refresh
+    for frozen_field in (
+        "runtime_tuple:",
+        "sys_executable:",
+        "lingtai_file:",
+        "lingtai_kernel_file:",
+        "version_or_head:",
+        "selectors:",
+    ):
+        assert frozen_field in update
+    assert "logs/refresh_failed_permanent.json" in refresh
+    assert refresh.count('system(action="presets"') == 1
+    for removed_universal_probe in (
+        'mcp(action="info"',
+        "git -C",
+        ".notification/nudge.json",
+    ):
+        assert removed_universal_probe not in refresh
+    assert "checks are never unconditional refresh ceremony" in refresh_flat
+    assert 'system(action="refresh"' not in update
+    assert "`refresh-precheck` is the single owner" in update_flat
+
+
 def test_resident_prompts_route_to_system_manual_nested_references():
     root = Path(__file__).resolve().parents[1]
 
@@ -1187,13 +1217,15 @@ def test_skills_manual_documents_external_skill_intake_default():
         assert phrase in manual
 
 
-def test_context_manual_routes_skill_sharing_through_custom_by_default():
+def test_context_manual_routes_store_ownership_to_psyche():
     manual = (
         Path(__file__).resolve().parents[1]
         / "src/lingtai/tools/context/manual/SKILL.md"
     ).read_text(encoding="utf-8")
-    assert "peers install it into their own `.library/custom/<name>/`" in manual
-    assert "explicit opt-in local-network shared root" in manual
+    assert 'psyche(action="manual", input={}, reasoning="load durable-store routes")' in manual
+    assert "durable writes go through `shell`" in manual
+    assert "intrinsic_skills/psyche-manual" not in manual
+    assert "peers install it into their own `.library/custom/<name>/`" not in manual
 
 
 def test_resident_layers_query_settings_instead_of_copying_adjustable_defaults():

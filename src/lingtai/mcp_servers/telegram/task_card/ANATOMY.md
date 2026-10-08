@@ -6,6 +6,8 @@ related_files:
   - src/lingtai/mcp_servers/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/mcp_servers/task_card/event_projection.py
+  - src/lingtai/kernel/session_stats/ANATOMY.md
+  - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/service.py
   - src/lingtai/mcp_servers/ANATOMY.md
@@ -14,11 +16,15 @@ related_files:
   - tests/test_telegram_task_card_programmable.py
   - tests/test_telegram_task_card_toggle.py
   - tests/test_telegram_task_card_event_tail.py
+  - tests/test_task_card_event_projection_shared.py
+  - tests/test_telegram_task_card_rows.py
   - tests/test_telegram_task_card_display_expression.py
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
   - src/lingtai/mcp_servers/telegram/task_card/_family.py
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
   - src/lingtai/mcp_servers/telegram/task_card/interface.py
+  - src/lingtai/mcp_servers/telegram/task_card/api_cost.py
+  - tests/test_telegram_task_card_api_cost.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this Anatomy reciprocal with its paired CONTRACT.md and packaged manual.
@@ -46,10 +52,19 @@ onto its one tracked resident Task Card target per account+chat.
   machine, and explicit partial/indeterminate outcomes.
 - `manager.py` — the Telegram adapter that tails `events.jsonl`, reads only a bounded
   recent tail of the existing main `token_ledger.jsonl` when a generated-summary
-  event needs token correlation, and supplies safe facts to the shared projection
-  core. It also implements compound-ID binding, high-water supersession, Telegram
-  API classification, real transport, resident persistence, and programmable
-  file projection callbacks.
+  event needs token correlation, and consumes the kernel-validated
+  `agent_record.async_work` snapshot for daemon+Shell presentation. It performs
+  no daemon/Shell fallback scan. It also implements compound-ID binding,
+  high-water supersession, Telegram API classification, real transport, resident
+  persistence, and programmable file projection callbacks. Representative
+  owning ranges are delivery/deferred coordination
+  (`src/lingtai/mcp_servers/telegram/manager.py:2349-2760`), event and usage
+  projection (`src/lingtai/mcp_servers/telegram/manager.py:2829-3523`), and
+  programmable/resident lifecycle (`src/lingtai/mcp_servers/telegram/manager.py:3526-4375`).
+  Beside the SESSION reducer state it keeps `_task_card_session_cost_state`,
+  folded by `api_cost.fold_session_cost` in both live append and bounded
+  rehydrate, and `_task_card_event_metadata_snapshot()` prices it at render
+  into the `session_cost` metadata value.
   `_taskcard_display_expression()` reads the durable declarative display
   expression from `TelegramService` at each automatic projection tick
   (`_broadcast_task_card_event_window`, `_ensure_task_card_resident`) and
@@ -72,13 +87,84 @@ onto its one tracked resident Task Card target per account+chat.
   rendering, including compact per-call output/thinking/cache metrics from the
   normalized current-call carrier or `llm_response` fallback and the safe
   `(summary, time, input in, output out)` line correlated from already-recorded
-  event/ledger facts. It owns no journal I/O, route, resident, or transport state.
+  event/ledger facts. It also owns strict `lingtai.token_usage.session/v1`
+  validation and the journal-ordered SESSION reducer: fresh `llm_response`
+  snapshots are authoritative, legacy notification carriers are fallback only,
+  carrier-less legacy responses invalidate stale fallback, monotonic generation/
+  API ordering rejects regressions, and `psyche_molt` clears the old generation.
+  Malformed/incoherent values fail closed. It owns no journal I/O, route,
+  resident, or transport state. `llm_response.stream_timing` carries optional
+  adapter-measured first-visible-text seconds and compatible generation speed
+  evidence; `apply_tool_usages` preserves it across current-call carriers.
+  `reduce_idle_event` folds ordered `agent_state` entry/exit evidence and
+  monotonic `idle_elapsed_s` into row `idle_s`; manager reverse-tail replays
+  only the existing bounded window and live append retains ephemeral
+  `_task_card_idle_state`. Lifecycle start/stop fences invalidate coverage.
+  Only fully contained intervals appear as coffee on the first time line.
+  Both Telegram render sites opt into `stream_metrics=True` (time line, then
+  established token symbols plus speed); other channels remain opt-out.
   `DISPLAY_SLOTS`/`DEFAULT_DISPLAY_EXPRESSION`/`validate_display_expression`/
   `compose_display` define and enforce the small declarative display-expression
   grammar: an ordered, allowlisted selection of the fragments
   (`header`/`rows`/`blank`/`footer`/`divider`/`metadata`/`time`/`ask_agent`)
   `format_rows_task_card_text` already renders, never arbitrary interpolated
-  data.
+  data. Telegram's automatic adapter converts this shared Markdown frame to
+  supported HTML by escaping the complete frame before substituting only exact
+  static presentation lines; within the shared source budget it shortens only
+  escaped dynamic content for fixed tag overhead, while Feishu consumes the
+  shared frame unchanged. `format_metadata` renders an adapter-supplied,
+  preformatted `session_cost` metadata string as one `Cost · …` row inside the
+  Session section (absent key means byte-identical output). The metadata block
+  has no whole-block character budget; `format_rows_task_card_text` passes
+  `max_chars` only when the overall `TEXT_LIMIT` cannot hold it after excerpts
+  shrink, and `format_metadata` then shortens only the Daemons/Backends lists
+  tails with a `+N omitted` indicator. Any non-empty Async Work block gains a
+  localized `Scope` row (running/queued + finished in last 10m from
+  `ASYNC_WORK_WINDOW_SECONDS`); `daemon_stats_label` supplies the compact
+  Daemon stats label. The row shows `usage n/a (no positive usage reported)`
+  when selected runs report no positive values, but omits the lifetime
+  parenthetical and unavailable-cost suffix; their caveats live in the manual. In
+  Telegram HTML, `_telegram_task_card_html`
+  (`src/lingtai/mcp_servers/telegram/manager.py:291-421`) gives Session the
+  cumulative compact `out` value and a bold `Cost` row, puts Async Work in a
+  separate icon-free section, and leaves the per-call metrics line as plain
+  text. The separate
+  `_telegram_resident_task_card_html` transport adapter
+  (`src/lingtai/mcp_servers/telegram/manager.py:196-288`) isolates only the
+  programmable suffix after Telegram's injected header and escape-first renders
+  its ATX headings, strong spans, inline code, and list items to the closed
+  Telegram HTML subset; malformed delimiters remain safe literal text. The
+  resident's committed programmable frame remains the authored Markdown bytes.
+  It renders only a pre-projected allowlisted pending-activity label
+  (`src/lingtai/mcp_servers/task_card/event_projection.py:1281-1289`);
+  `TelegramManager` derives that label for canonical `shell.run` from literal
+  `input.async`, so no command/path/environment argument enters the row
+  (`src/lingtai/mcp_servers/telegram/manager.py:2972-2989`).
+- `api_cost.py` — Telegram-owned pure `usage_line` formatter (passed to
+  `render_event_groups(usage_line=...)` by both automatic render sites) and a
+  small process-local `PriceCatalog` of LiteLLM public list prices (standard and
+  `*_priority`; `_requested_tier_entry` picks the round's REQUESTED tier fields
+  for the one estimator, unknown for other tiers or missing priority rates) with
+  one bounded background refresh (`_http_fetch`: fixed URL, `read1` chunks under
+  an 8 MiB cap and a monotonic total deadline; a failed fetch or thread start
+  releases the single in-flight slot and paces the retry). It consumes only
+  `usage["bill"]` facts that `TaskCardEventProjection.project_llm_response_usage`
+  validated from `llm_response.usage_billing` (kernel `session.py`, adapter-set
+  `UsageMetadata.cache_write_*`/`billable_output_tokens`/`requested_service_tier`
+  (OpenAI chat/Responses/Codex sessions stamp the wire `service_tier` they sent),
+  checked with the shared `checked_count`/`safe_billing_model`/`safe_billing_tier`
+  in `kernel/llm/base.py`; absent, negative
+  or bool counts are unknown, never zero) and never blocks rendering on I/O.
+  Catalog entries keep a present-but-invalid tier rate as `None` so a bad tier
+  price cannot fall back to the cheaper base rate; every charge/average is
+  finite-checked and unknown on overflow. Providers that state the counts on
+  their wire: Anthropic (write, 1h TTL, output), Claude Code (write, output),
+  and OpenAI chat/Responses and native Codex (output only) — the four LLM
+  provider families. `fold_session_cost` records each reducer-accepted v1
+  `llm_response`'s bill facts once per since-molt `api_call_index` (molt
+  resets); `session_cost_text` prices them at render with each round's own
+  model through `estimate_parts` and marks gaps or unknown/lower-bound totals `partial`, and unknown
+  allocations `?` (contract behavior 15).
 - `SKILL.md` — packaged Telegram-facing manual/procedure material for this
   component.
 - Retained legacy files in this package (`controller.py`, `_family.py`,
@@ -93,12 +179,23 @@ onto its one tracked resident Task Card target per account+chat.
 - `TelegramManager` alone tails `<workdir>/logs/events.jsonl`; when an existing
   `apriori_summary_generated` event appears, it additionally reads at most 64 KiB
   from the end of `<workdir>/logs/token_ledger.jsonl` to find the existing
-  correlated summary accounting row. It delegates only pure safe-field
-  correlation/projection/grouping/rendering to `TaskCardEventProjection` and
-  keeps the existing private helpers as compatibility wrappers.
+  correlated summary accounting row. It reads Async Work only through
+  `kernel.session_stats.query_published_async_work`; stale/malformed/missing
+  snapshots disappear rather than triggering a private store scan. It delegates
+  pure safe-field correlation/projection/grouping/rendering and SESSION reduction
+  to `TaskCardEventProjection`; both forward append and bounded reverse-tail
+  rehydrate feed that reducer in journal order, producing one in-memory provenance
+  state and the same render metadata. Unrelated private helpers remain
+  compatibility wrappers.
 - `TelegramManager` constructs `TaskCardResidentTransport` with dynamic provider
-  callbacks. The shared core never imports Telegram, reads its state file, or
-  classifies Bot API errors.
+  callbacks and supplies Telegram's HTML programmable-section header. The shared
+  core composes that injected provider label with the raw Markdown frame; it
+  never imports Telegram, reads its state file, or classifies Bot API errors.
+  Telegram send/edit keep `parse_mode=HTML`. Immediately before those provider
+  calls, the Telegram adapter locates only the programmable suffix, escapes its
+  authored text, and converts supported Markdown presentation to generated
+  Telegram HTML. The automatic frame is already independently escaped/rendered,
+  and other channels never enter this adapter.
 - `TelegramManager._broadcast_programmable_task_card_file()` reads
   `taskcard/status` first: exact `active` reads the body and projects it
   (diff-only against the last committed programmable frame); exact `inactive`
@@ -128,8 +225,9 @@ onto its one tracked resident Task Card target per account+chat.
   automatic projection tick. This file is distinct from the bootstrap
   `.secrets/telegram.json` account/token config, which never carries
   presentation settings.
-- No programmable renderer state of its own; producer state lives under
-  `<workdir>/taskcard/`
+- No programmable renderer or Async Work collector state of its own; producer
+  state lives under `<workdir>/taskcard/`; the kernel-owned common snapshot is
+  the `async_work` child inside `<workdir>/system/agent_record.json`
 
 ## Notes
 

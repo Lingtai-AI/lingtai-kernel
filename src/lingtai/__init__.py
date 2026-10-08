@@ -42,23 +42,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     "AvatarManager": ("lingtai.tools.avatar", "AvatarManager"),
     "EmailManager": ("lingtai.tools.email", "EmailManager"),
     # Services
-    "FileIOBackend": ("lingtai.services.file_io", "FileIOBackend"),
-    "FileIOService": ("lingtai.services.file_io", "FileIOService"),
-    "GrepMatch": ("lingtai.services.file_io", "GrepMatch"),
-    "LocalFileIOBackend": ("lingtai.services.file_io", "LocalFileIOBackend"),
-    "LocalFileIOService": ("lingtai.services.file_io", "LocalFileIOService"),
-    "BACKEND_ENV_VAR": ("lingtai.services.file_io_sidecar", "BACKEND_ENV_VAR"),
-    "RustFileIOBackend": ("lingtai.services.file_io_sidecar", "RustFileIOBackend"),
-    "SidecarAdapter": ("lingtai.services.file_io_sidecar", "SidecarAdapter"),
-    "SidecarError": ("lingtai.services.file_io_sidecar", "SidecarError"),
-    "default_file_io_service": (
-        "lingtai.services.file_io_sidecar",
-        "default_file_io_service",
-    ),
-    "resolve_sidecar_binary": (
-        "lingtai.services.file_io_sidecar",
-        "resolve_sidecar_binary",
-    ),
     "MailService": ("lingtai.kernel.mail_transport", "MailTransportPort"),
     "MailTransportPort": ("lingtai.kernel.mail_transport", "MailTransportPort"),
     "FilesystemMailService": (
@@ -91,21 +74,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from lingtai.tools.registry import setup_capability
 
     from .agent import Agent
-    from .services.file_io import (
-        FileIOBackend,
-        FileIOService,
-        GrepMatch,
-        LocalFileIOBackend,
-        LocalFileIOService,
-    )
-    from .services.file_io_sidecar import (
-        BACKEND_ENV_VAR,
-        RustFileIOBackend,
-        SidecarAdapter,
-        SidecarError,
-        default_file_io_service,
-        resolve_sidecar_binary,
-    )
     from .services.vision import VisionService, create_vision_service
     from .services.websearch import SearchResult, SearchService, create_search_service
     from lingtai.kernel.services.logging import JSONLLoggingService, LoggingService
@@ -160,17 +128,6 @@ __all__ = [
     "AvatarManager",
     "EmailManager",
     # Services
-    "FileIOService",
-    "FileIOBackend",
-    "LocalFileIOBackend",
-    "LocalFileIOService",
-    "RustFileIOBackend",
-    "SidecarAdapter",
-    "SidecarError",
-    "BACKEND_ENV_VAR",
-    "default_file_io_service",
-    "resolve_sidecar_binary",
-    "GrepMatch",
     "MailService",
     "MailTransportPort",
     "FilesystemMailService",

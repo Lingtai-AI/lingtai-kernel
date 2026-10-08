@@ -10,7 +10,6 @@ from lingtai.llm.interface_converters import (
     _normalize_runtime_envelope,
     _restore_projected_result,
     to_anthropic,
-    to_gemini,
     to_openai,
     to_responses_input,
 )
@@ -95,7 +94,6 @@ def test_tool_only_sidecar_has_no_invented_agent_axis_on_all_providers():
         to_anthropic(iface)[-1]["content"][0]["content"],
         to_openai(iface)[-1]["content"],
         to_responses_input(iface)[-1]["output"],
-        to_gemini(iface)[-1]["content"][0]["result"],
     ]
     for wire in wires:
         value = json.loads(wire)
@@ -161,7 +159,6 @@ def test_handler_meta_survives_runtime_sidecar_projection_and_restore():
             to_anthropic(interface)[-1]["content"][0]["content"],
             to_openai(interface)[-1]["content"],
             to_responses_input(interface)[-1]["output"],
-            to_gemini(interface)[-1]["content"][0]["result"],
         ]
         for wire in wires:
             projected = json.loads(wire)
@@ -174,7 +171,7 @@ def test_handler_meta_survives_runtime_sidecar_projection_and_restore():
             assert metadata == runtime
 
 
-def test_latest_whole_snapshot_repeats_active_payload_and_explicitly_clears():
+def test_runtime_snapshot_repeats_but_notification_is_one_shot_and_explicitly_clears():
     from lingtai.kernel.meta_block import attach_active_notifications, attach_active_runtime
 
     agent = SimpleNamespace(
@@ -198,7 +195,10 @@ def test_latest_whole_snapshot_repeats_active_payload_and_explicitly_clears():
     first = run("one")
     second = run("two")
     assert second.metadata["agent_meta"]["agent_state"]["session"] == "two"
-    assert "attention" in second.metadata["agent_meta"]["notifications"]
+    # Runtime state is still attached every batch; the unchanged notification
+    # event was delivered once on the first carrier and is not repeated.
+    assert "attention" in first.metadata["agent_meta"]["notifications"]
+    assert "attention" not in second.metadata["agent_meta"].get("notifications", {})
     agent._notification_store.current = {}
     cleared = run("two")
     assert cleared.metadata["agent_meta"]["notifications"] == {}

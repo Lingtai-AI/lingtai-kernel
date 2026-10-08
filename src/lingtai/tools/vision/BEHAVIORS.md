@@ -1,6 +1,6 @@
 ---
 name: vision-behavior-tests
-behavior_version: 3
+behavior_version: 4
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -34,7 +34,7 @@ provider disabled.
 - **id**: VN001
 - **title**: declaration exposes analyze/check/list/settings/manual with strict correlated input branches
 - **guards**: `vision-contract` § Scope and declaration
-- **runner**: any LingTai agent with shell and file access to this repository
+- **runner**: any LingTai agent with shell access to this repository
 - **prerequisites**: a clean checkout of `<repo>`
 - **estimate**: ≈ 15 minutes
 
@@ -63,18 +63,24 @@ and invalid/cross-action calls are rejected before a child runs.
 - **id**: VN002
 - **title**: analyze preserves exact results and never performs an automatic provider or MCP fallback
 - **guards**: `vision-contract` § Routing and preset authorization; § Results, errors, and state
-- **runner**: any LingTai agent with shell and file access to this repository
+- **runner**: any LingTai agent with shell access to this repository
 - **prerequisites**: `<repo>` and a small disposable image `<scratch>/img.png`
 - **estimate**: ≈ 20 minutes
 
 ### Steps
 1. Run:
-   `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q -p no:cacheprovider tests/test_tool_family_vision_migration.py tests/test_vision_capability.py -k 'analyze or fallback or default_vision_failure'`.
+   `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q -p no:cacheprovider tests/test_tool_family_vision_migration.py tests/test_vision_capability.py -k 'analyze or fallback or default_vision_failure or default_route or credential or removed_provider'`.
 2. With a recording service, call `analyze` for an existing image and with
    `question: null`; record the exact success shape and one request.
 3. Make that service raise a provider error and call `analyze` without a
    `preset`; record that only the selected service was called, no borrowed
    service/factory/MCP action was invoked, and the result is sanitized guidance.
+4. Bind the default route over an active `openai` service whose manifest omits
+   `base_url`; record that the vision service targets the active effective
+   endpoint (`https://api.openai.com/v1`), and that a capability naming a
+   different `base_url` without its own key gets no credential (manual-only).
+   Bind a removed provider name (for example `gemini`) and record a manual-only
+   route with no service construction.
 
 ### Expected evidence
 - [ ] Success is exactly `{status: "ok", analysis: text}` and null question uses
@@ -83,6 +89,8 @@ and invalid/cross-action calls are rejected before a child runs.
   accepted full manual envelope pointer.
 - [ ] Alternatives in an error are instructions only: there is no automatic
   provider switch, legacy credential, preset borrow, or MCP invocation.
+- [ ] The default `openai`/`anthropic` route uses the active effective endpoint,
+  and the active credential never reaches a different endpoint.
 
 ### Pass / Fail
 Pass when the direct route is used once, result/error shapes remain exact, and a
@@ -93,7 +101,7 @@ failed route does not cause an implicit fallback.
 - **id**: VN003
 - **title**: check reports default or allowed-preset identity without sending an image
 - **guards**: `vision-contract` § Routing and preset authorization; § Results, errors, and state
-- **runner**: any LingTai agent with shell and file access to this repository
+- **runner**: any LingTai agent with shell access to this repository
 - **prerequisites**: the disposable allowed-preset fixture in the migration test
 - **estimate**: ≈ 10 minutes
 
@@ -119,7 +127,7 @@ never sends an image/provider request after route construction, and authorizatio
 - **id**: VN004
 - **title**: list classifies the active route and only allowed preset declarations without constructing services
 - **guards**: `vision-contract` § Results, errors, and state
-- **runner**: any LingTai agent with shell and file access to this repository
+- **runner**: any LingTai agent with shell access to this repository
 - **prerequisites**: the disposable list fixture with one allowed vision preset and one unlisted text preset
 - **estimate**: ≈ 10 minutes
 
@@ -144,7 +152,7 @@ Pass when enumeration is read-only and stops at the allowed-preset boundary.
 - **id**: VN005
 - **title**: manual returns the installed body/path once without provider or configuration reads
 - **guards**: `vision-contract` § Results, errors, and state
-- **runner**: any LingTai agent with shell and file access to this repository
+- **runner**: any LingTai agent with shell access to this repository
 - **prerequisites**: a disposable workdir containing an installed Vision manual
 - **estimate**: ≈ 10 minutes
 
@@ -172,7 +180,7 @@ has no provider/configuration side effects.
 - **id**: VN006
 - **title**: allowed-preset credential routing uses the requested preset while bind uses live provider plus configuration ports
 - **guards**: `vision-contract` § Ports and composition; § Routing and preset authorization
-- **runner**: any LingTai agent with shell and file access to this repository
+- **runner**: any LingTai agent with shell access to this repository
 - **prerequisites**: a disposable allowed-preset fixture and no real credential values
 - **estimate**: ≈ 15 minutes
 
@@ -202,7 +210,7 @@ gates, not parallel-lane evidence.
 - **id**: VN007
 - **title**: settings shows one exact five-field applied snapshot without exposing private routing
 - **guards**: `vision-contract` § Settings discovery; § Results, errors, and state
-- **runner**: any LingTai agent with shell and file access to this repository
+- **runner**: any LingTai agent with shell access to this repository
 - **prerequisites**: a disposable workdir and clearly fake private sentinels
 - **estimate**: ≈ 15 minutes
 
@@ -210,7 +218,7 @@ gates, not parallel-lane evidence.
 1. Run:
    `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q -p no:cacheprovider tests/test_vision_settings.py tests/test_tool_settings_contract.py`.
 2. Bind a valid local route, change its owner file afterward, and record the
-   exact 13-key order, five-field order, applied current/default values, and
+   exact 12-key order, five-field order, applied current/default values, and
    unchanged second SHOW.
 3. Bind fake OpenAI and Codex routes carrying endpoint, key pointer/value,
    header, token-path, and instructions sentinels; verify none renders.

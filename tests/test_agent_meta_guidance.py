@@ -5,7 +5,7 @@ from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 from types import SimpleNamespace
 
 from lingtai.agent import Agent
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
@@ -248,7 +248,7 @@ def test_base_agent_seeds_body_only_from_frontmatter_mirror(tmp_path):
     """T6 — a `system/*.md` mirror that carries frontmatter must seed a body-only
     section when read directly by the lower-level BaseAgent constructor path."""
     from lingtai.kernel.base_agent import BaseAgent
-    from tests._service_helpers import make_gemini_mock_service as make_mock_service
+    from tests._service_helpers import make_mock_llm_service as make_mock_service
 
     workdir = tmp_path / "ba"
     system_dir = workdir / "system"

@@ -44,7 +44,7 @@ from ..meta_block import (
 )
 from ..sent_message_tracker import SEND_TOOLS, SEND_ACTIONS, CHECK_ACTIONS
 from ..time_veil import now_iso
-from ..token_ledger import append_token_entry, safe_codex_pool_usage_extra
+from ..token_ledger import append_token_entry, safe_codex_usage_extra
 from .worker_recovery import is_worker_interface_poisoned
 
 logger = get_logger()
@@ -524,9 +524,8 @@ def _publish_tool_loop_guard_notification(
                 "from those blocked calls. Do not re-issue the same blocked "
                 "tool call(s) unchanged. Continue with a different approach, "
                 "summarize the blocked/completed work, or ask the human for "
-                "direction, then dismiss with notification(action='dismiss_channel', "
-                "input={'channel': 'tool_loop_guard', 'force': null, "
-                "'reason': 'handled'}, reasoning='...')."
+                "direction. This notice is delivered once and is not re-attached "
+                "automatically."
             ),
             data={
                 "reason": reason,
@@ -839,8 +838,11 @@ def end_admission_witness_scope(agent) -> None:
     worker-hang ``break`` path, and reads ONLY the in-memory outstanding map --
     never the (possibly poisoned) interface -- so it is safe on the hang path
     and its record survives the relaunch. One event per fact keeps the loss
-    rate countable; the wire tool-call id (when known) is the key Puffo
-    correlates on, so both sides' logs join. It fires only on genuine loss: a
+    rate countable; the wire tool-call id (when known) is carried only as a
+    diagnostic field, not a join key -- a lost fact never reached Puffo, and
+    the two sides mint mutually-invisible local turn ids, so no cross-side
+    join key exists today (counting-not-joining; see
+    ``adapters/acp/CONTRACT.md``). It fires only on genuine loss: a
     fact delivered on a later settle point is discarded from the map, so the
     retry path never triggers a (cry-wolf) diagnostic. Narrow uncovered window,
     by construction: a receipt committed but hung before its FIRST settle-point
@@ -1008,8 +1010,8 @@ def scan_and_emit_committed_facts(agent) -> None:
                 # Record it as outstanding so a turn that ends without a later
                 # (successful) settle point reports the permanent loss at scope
                 # close (甲). ``wire_id`` is known here (the namespacer, if any,
-                # returned), so the abandoned event can carry the id Puffo
-                # correlates on.
+                # returned), so the abandoned event carries it as a diagnostic
+                # field -- for counting the loss, not as a cross-side join key.
                 _mark_admission_outstanding(
                     agent, block_id, reason="not_delivered", wire_id=wire_id
                 )
@@ -1194,6 +1196,8 @@ def _run_loop(agent) -> None:
         clear_turn_tool_observer()
         clear_turn_permission_broker()
         clear_current_provider_admission()
+        from ..turn_tool_overlay import clear_turn_tool_overlay
+        clear_turn_tool_overlay()
 
 
 def _run_loop_body(agent) -> None:
@@ -1202,9 +1206,8 @@ def _run_loop_body(agent) -> None:
 
     while True:
         while not agent._shutdown.is_set():
-            # --- Asleep: soul off, wait for inbox message ---
+            # --- Asleep: wait for inbox message ---
             if agent._asleep.is_set():
-                agent._cancel_soul_timer()
                 # Heal any dangling tool_calls on the wire BEFORE going to
                 # sleep. If we sleep with an unanswered tool_call, the next
                 # mail's _inject_notification_pair refuses to append (would
@@ -1292,6 +1295,7 @@ def _run_loop_body(agent) -> None:
                 admit_turn_origin,
                 begin_turn,
                 correlated_message_text,
+                correlated_retry_message,
                 settle_turn,
             )
 
@@ -1300,6 +1304,8 @@ def _run_loop_body(agent) -> None:
             tool_observer_token = None
             permission_broker_token = None
             provider_admission_token = None
+            connection_admission_tokens = None
+            tool_overlay_token = None
             if turn_control is not None:
                 # Admission was checked synchronously before publication. Check
                 # again at the final inbox-to-provider boundary so a forged or
@@ -1353,6 +1359,7 @@ def _run_loop_body(agent) -> None:
                 from ..provider_admission import (
                     RootProviderAdmission,
                     bind_provider_admission,
+                    bind_connection_admission_ports,
                 )
 
                 # The typed origin is checked immediately above.  Keep its
@@ -1363,8 +1370,21 @@ def _run_loop_body(agent) -> None:
                     RootProviderAdmission(
                         correlation_id=turn_control.correlation_id,
                         policy_version=admission_decision.policy_version,
+                        connection_authority_required=(
+                            turn_control.connection_provider_port is not None
+                        ),
                     )
                 )
+                if turn_control.connection_provider_port is not None:
+                    connection_admission_tokens = bind_connection_admission_ports(
+                        turn_control.connection_provider_port,
+                        turn_control.connection_derived_port,
+                    )
+                if turn_control.connection_tool_overlay is not None:
+                    from ..turn_tool_overlay import bind_turn_tool_overlay
+                    tool_overlay_token = bind_turn_tool_overlay(
+                        turn_control.connection_tool_overlay
+                    )
                 msg = correlated_message_text(msg)
             elif msg.type == MSG_CORRELATED_TURN:
                 # Lifecycle stop may claim a control after the post-dequeue
@@ -1417,6 +1437,12 @@ def _run_loop_body(agent) -> None:
                         and turn_control.cancel_requested.is_set()
                     ):
                         break
+                    if turn_control is not None and msg.type != MSG_CORRELATED_TURN:
+                        retry = correlated_retry_message(agent, turn_control, msg)
+                        if retry is None:
+                            terminal_failure = "retry turn is no longer admitted"
+                            break
+                        msg = retry
                     # Fail closed: if a prior turn already poisoned the
                     # interface, do not run another turn against it. Request
                     # refresh and sleep instead.
@@ -1959,8 +1985,8 @@ def _run_loop_body(agent) -> None:
                 except Exception as notif_err:
                     agent._log("idle_notification_check_error",
                                error=str(notif_err))
-            # Issue #655: the post-turn section (chat-history save and
-            # auto-insight) sits outside the AED try/except above, so an
+            # Issue #655: the post-turn chat-history save sits outside the
+            # AED try/except above, so an
             # exception here (e.g. OSError from a full disk during save) would
             # propagate out of _run_loop and silently kill the daemon run-loop
             # thread, leaving the agent unresponsive while status still shows
@@ -1973,17 +1999,6 @@ def _run_loop_body(agent) -> None:
                     )
                 else:
                     agent._save_chat_history()
-
-                # Auto-insight: fire after N turns
-                if not skip_post_turn_save and agent._config.insights_interval > 0:
-                    agent._insight_turn_counter += 1
-                    if agent._insight_turn_counter >= agent._config.insights_interval:
-                        agent._insight_turn_counter = 0
-                        from ..i18n import t as _ti
-                        agent._run_inquiry(
-                            _ti(agent._config.language, "insight.auto_question"),
-                            source="auto",
-                        )
             except Exception as e:  # noqa: BLE001 — post-turn must never kill the loop
                 agent._log(
                     "post_turn_error",
@@ -2011,6 +2026,26 @@ def _run_loop_body(agent) -> None:
             if provider_admission_token is not None:
                 from ..provider_admission import clear_provider_admission
                 clear_provider_admission(provider_admission_token)
+            if connection_admission_tokens is not None:
+                from ..provider_admission import clear_connection_admission_ports
+                clear_connection_admission_ports(connection_admission_tokens)
+            if tool_overlay_token is not None:
+                from ..turn_tool_overlay import reset_turn_tool_overlay
+                reset_turn_tool_overlay(tool_overlay_token)
+                # SessionManager refreshes tools on every send, but its shared
+                # chat object can otherwise retain the attached catalog while
+                # the Agent idles. Restore the ordinary view immediately.
+                chat = getattr(agent, "_chat", None)
+                build_tools = getattr(agent, "_build_tool_schemas", None)
+                if (
+                    chat is not None
+                    and callable(build_tools)
+                    and callable(getattr(chat, "update_tools", None))
+                ):
+                    try:
+                        chat.update_tools(build_tools())
+                    except Exception:
+                        agent._log("connection_tool_overlay_reset_failed")
             _settle_correlated_after_turn(
                 agent,
                 turn_control,
@@ -2465,7 +2500,7 @@ def _handle_tc_wake(agent, msg: Message) -> None:
             _process_response(agent, response, ledger_source="tc_wake")
             # Notification-driven turns also run turn-boundary housekeeping so molt
             # pressure / notification sync / large-result rescan fire even when the
-            # agent is woken by mail/soul (see _turn_boundary_housekeeping).
+            # agent is woken by mail (see _turn_boundary_housekeeping).
             _turn_boundary_housekeeping(agent)
         except Exception as e:
             from ..llm_utils import WorkerStillRunningError
@@ -2525,13 +2560,18 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
     (e.g. ``dup_free_passes`` 3 for fresh requests vs 2 for tc-wake
     continuations), so the caller supplies it.
     """
+    from ..turn_tool_overlay import current_turn_tool_overlay
+    overlay = current_turn_tool_overlay(agent)
     return ToolExecutor(
         dispatch_fn=agent._dispatch_tool,
         make_tool_result_fn=lambda name, result, **kw: agent.service.make_tool_result(
             name, result, provider=agent._config.provider, **kw
         ),
         guard=guard,
-        known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
+        known_tools=(
+            set(agent._intrinsics) | set(agent._tool_handlers)
+            | (set(overlay.handlers) if overlay is not None else set())
+        ),
         parallel_safe_tools=agent._PARALLEL_SAFE_TOOLS,
         logger_fn=agent._log,
         meta_fn=lambda: build_meta(agent),
@@ -2556,14 +2596,13 @@ def _record_apriori_summary_usage(agent, response, tool_name, tool_call_id) -> N
     ``usage`` would otherwise be invisible to the agent's lifetime totals / cost
     analytics. We attribute it with ``source="summarize_apriori"`` (see
     ``APRIORI_SUMMARY_LEDGER_SOURCE``), plus ``tool_name``/``tool_call_id`` so
-    the row is correlatable with the durable tool_result event. This mirrors the
-    soul one-shot accounting in ``intrinsics/soul/consultation._write_soul_tokens``.
+    the row is correlatable with the durable tool_result event.
 
     Fail-open on *accounting*: a ledger write failure must never break the
     summary path (content-side fail-closed is handled by the orchestrator),
     so all of this is wrapped in try/except — mirroring the main-loop hook in
-    ``base_agent/__init__.py``. Only the five safe codex-pool attribution
-    fields are projected from ``usage.extra``; arbitrary provider metadata is
+    ``base_agent/__init__.py``. Only the safe Codex account attribution
+    field is projected from ``usage.extra``; arbitrary provider metadata is
     omitted.
     """
     try:
@@ -2590,7 +2629,7 @@ def _record_apriori_summary_usage(agent, response, tool_name, tool_call_id) -> N
                 "tool_name": tool_name,
                 "tool_call_id": tool_call_id,
                 "apriori_tool_result_summary": True,
-                **safe_codex_pool_usage_extra(getattr(usage, "extra", None)),
+                **safe_codex_usage_extra(getattr(usage, "extra", None)),
             },
         )
     except Exception as e:  # accounting must never break the summary path
@@ -2621,10 +2660,9 @@ def _build_apriori_summarizer_fn(agent):
     (observed live on PR #586). The supported one-shot path on this provider is
     the same Responses session the main agent uses: ``create_session(...)`` (which
     builds a ``CodexResponsesSession``) followed by ``session.send(...)``. This is
-    exactly how the kernel's other internal one-shot calls work — see
-    ``intrinsics/soul/inquiry.soul_inquiry`` and
-    ``intrinsics/soul/consultation``. Using it here makes the a-priori summary
-    work on every provider the main agent itself works on.
+    exactly how the kernel's other internal one-shot calls work. Using it here
+    makes the a-priori summary work on every provider the main agent itself
+    works on.
     """
     service = getattr(agent, "service", None)
     if service is None or not callable(getattr(service, "create_session", None)):
@@ -2784,6 +2822,83 @@ def _check_poll_backoff(agent, tool_calls, tool_results=None) -> bool:
     return should_idle
 
 
+def _settled_visible_puffo_reply(tool_calls, tool_results) -> bool:
+    """Whether one sent reply covers the Puffo runtime's whole human turn."""
+    # A concurrent read_inbox (or other admission tool) could grow the active
+    # cohort after the send receipt was produced.  Only a single-send batch
+    # can use that receipt as a terminal coverage fact.
+    if len(tool_calls) != 1:
+        return False
+    results = {getattr(result, "id", None): result for result in tool_results}
+    for call in tool_calls:
+        if call.name not in {"send_message", "send_message_with_attachments"}:
+            continue
+        args = call.args if isinstance(call.args, dict) else {}
+        requested = args.get("covers")
+        if not isinstance(requested, list) or not requested or not all(
+            isinstance(item, str) and item for item in requested
+        ):
+            continue
+        # Puffo shows default top-level sends, but agent_only opts out of
+        # that safety net. Threaded replies require the explicit human level.
+        if args.get("visibility_level") == "agent_only":
+            continue
+        if args.get("root_id") and args.get("visibility_level") != "human":
+            continue
+        result = results.get(call.id)
+        content = getattr(result, "content", None)
+        if not isinstance(content, dict) or content.get("status") != "success":
+            continue
+        receipt = content.get("text")
+        if not isinstance(receipt, str) or not receipt.startswith(
+            '[send_result context_version=1 state="sent" '
+        ):
+            continue
+        if "sent hidden" in receipt:
+            continue
+        header = receipt.partition("\n")[0]
+        # Puffo must attest coverage over its authoritative active turn after
+        # recording this send's covers.  A covers_recorded list alone proves
+        # only that this call's requested IDs were recorded.
+        coverage_marker = "coverage_turn_id="
+        coverage_start = header.find(coverage_marker)
+        count_marker = "active_human_uncovered_count="
+        count_start = header.find(count_marker)
+        if coverage_start < 0 or count_start < 0:
+            continue
+        try:
+            coverage_turn_id, _ = json.JSONDecoder().raw_decode(
+                header[coverage_start + len(coverage_marker):]
+            )
+            uncovered_count, _ = json.JSONDecoder().raw_decode(
+                header[count_start + len(count_marker):]
+            )
+        except json.JSONDecodeError:
+            continue
+        if (
+            not isinstance(coverage_turn_id, str)
+            or not coverage_turn_id
+            or type(uncovered_count) is not int
+            or uncovered_count != 0
+        ):
+            continue
+        marker = "covers_recorded="
+        start = header.find(marker)
+        if start < 0:
+            continue
+        try:
+            recorded, _ = json.JSONDecoder().raw_decode(header[start + len(marker):])
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(recorded, list)
+            and all(isinstance(item, str) for item in recorded)
+            and set(requested).issubset(recorded)
+        ):
+            return True
+    return False
+
+
 def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
     """Handle tool calls and collect text output.
 
@@ -2796,6 +2911,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
     collected_text_parts: list[str] = []
     collected_errors: list[str] = []
     in_tool_loop = False
+    settled_visible_reply = False
 
     while True:
         # Empty-response guard: text + tool_calls + thoughts all empty means
@@ -2806,6 +2922,16 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # response (often caused by heavy context or mid-loop notification
         # injection confusing the model).
         if is_all_empty_response(response):
+            if in_tool_loop and settled_visible_reply and not collected_errors:
+                usage = getattr(response, "usage", None)
+                agent._log(
+                    "empty_after_settled_puffo_reply",
+                    ledger_source=ledger_source,
+                    output_tokens=getattr(usage, "output_tokens", 0) or 0,
+                    thinking_tokens=getattr(usage, "thinking_tokens", 0) or 0,
+                    api_call_id=getattr(response, "api_call_id", None),
+                )
+                break
             # Extract diagnostic metadata from provider response.
             raw = response.raw
             _diag: dict = {}
@@ -2865,6 +2991,17 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 reason="cancel_event",
                 **tool_call_fields,
             )
+            # The model response is already on the wire, but none of these
+            # calls reached the executor. Close the pair with that certainty
+            # before a restart can heal it as an ambiguous missing result.
+            iface = getattr(getattr(agent, "_chat", None), "interface", None)
+            if iface is not None and iface.has_pending_tool_calls():
+                iface.close_pending_tool_calls(
+                    reason="cancel_event before dispatch",
+                    tool_not_dispatched=True,
+                    tool_result_recovery_lookup=lambda _call: None,
+                )
+                agent._save_chat_history(ledger_source=ledger_source)
             return {"text": "", "failed": False, "errors": []}
 
         stop_reason = guard.check_limit(len(response.tool_calls))
@@ -3052,6 +3189,9 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # Issue #63: dedup check — warn agent if it just re-sent
         # a duplicate message to an external channel.
         _check_external_send(agent, response.tool_calls, tool_results)
+        settled_visible_reply = _settled_visible_puffo_reply(
+            response.tool_calls, tool_results,
+        )
 
         # Issue #63: poll backoff — if the agent is repeatedly checking
         # for new messages without finding any, go IDLE after max retries.

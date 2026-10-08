@@ -133,7 +133,7 @@ class _Agent:
 def _stamped(meta_value: str, *, material: str | None = None) -> ToolResultBlock:
     """A tool-result block carrying a runtime-only sidecar capture.
 
-    ``material`` optionally injects a material ``adapter_comment`` scalar so the
+    ``material`` optionally injects a material ``context.molt`` warning so the
     caller can drive a genuine change in the agent_meta signature between
     batches (``current_time`` and ``echo`` are volatile / non-agent_meta and do
     NOT change the material signature on their own).  Note: the sustained-pressure
@@ -144,7 +144,7 @@ def _stamped(meta_value: str, *, material: str | None = None) -> ToolResultBlock
     content = {"status": "ok", "echo": meta_value}
     meta: dict = {"current_time": meta_value}
     if material is not None:
-        meta["adapter_comment"] = {"note": material}
+        meta["context"] = {"molt": material}
     return ToolResultBlock(
         id="pending",
         name="pending",
@@ -167,9 +167,8 @@ def test_runtime_block_lands_on_latest_result_at_turn_boundary(tmp_path):
     assert holder is not None, "attach_active_runtime was not invoked at the boundary"
     assert holder.metadata["agent_meta"]["agent_state"]["current_time"] == "T1"
     assert holder.content["echo"] == "T1"
-    # The turn records the batch's calls on the guard (2 seeded + 1 this batch),
-    # and the boundary stamps the live total under _meta.agent_meta.
-    assert holder.metadata["agent_meta"]["agent_state"]["active_turn_tool_calls"] == 3
+    # The default tail is slim; the guard counter is on demand via system.meta.
+    assert "active_turn_tool_calls" not in holder.metadata["agent_meta"]["agent_state"]
     # The tail guidance is now a lightweight ref/hook pointing at the resident
     # meta_guidance system-prompt section, not the full ordered sections (those
     # moved into the system prompt so they stop riding on every tail _meta).
@@ -236,11 +235,11 @@ def test_material_change_reattaches_and_retains_prior(tmp_path):
     second_holder = agent._runtime_live_holder
     assert second_holder is not first_holder
     assert second_holder.content["echo"] == "T2"
-    assert second_holder.metadata["agent_meta"]["agent_state"]["adapter_comment"] == {"note": "materially new"}
+    assert second_holder.metadata["agent_meta"]["agent_state"]["context"] == {"molt": "materially new"}
     # The previous holder RETAINS its agent_meta/guidance as a historical
     # update point; the newest emission is the current one.
     assert "agent_meta" in first_holder.metadata
-    assert "adapter_comment" not in first_holder.metadata["agent_meta"]["agent_state"]
+    assert "context" not in first_holder.metadata["agent_meta"]["agent_state"]
 
 
 # ---------------------------------------------------------------------------
@@ -303,12 +302,12 @@ def test_notification_unchanged_not_restamped_on_newer_result_at_boundary(tmp_pa
 
     _second_batch(agent)
 
-    # The final carrier owns the current notification snapshot; the prior
-    # block remains a historical trace.
-    assert agent._notification_live_holder is not first_holder
+    # An unchanged event is not copied to the later carrier. The first
+    # delivered event remains available as an untouched historical trace.
+    assert agent._notification_live_holder is first_holder
     assert "notifications" in first_holder.metadata["agent_meta"]
     second_result = agent._chat.committed[-1][0]
-    assert "notifications" in second_result.metadata["agent_meta"]
+    assert not second_result.metadata["agent_meta"].get("notifications")
 
 
 def test_notification_material_change_reattaches_at_boundary(tmp_path):

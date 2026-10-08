@@ -17,13 +17,8 @@ related_files:
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/task_card/ANATOMY.md
   - src/lingtai/tools/task_card/CONTRACT.md
-  - src/lingtai/tools/file/ANATOMY.md
-  - src/lingtai/tools/file/CONTRACT.md
-  - src/lingtai/tools/file/manual/SKILL.md
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/CONTRACT.md
-  - src/lingtai/tools/soul/ANATOMY.md
-  - src/lingtai/tools/soul/CONTRACT.md
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -78,9 +73,11 @@ maintenance: |
   over a declaration, and the Agent Plugins entry is the excluded external
   standard kept only as the registration-versus-activation precedent. Those
   navigation entries do not themselves prove a declaration: `mcp` is the base reference,
-  while the separately landed `avatar`, Context, Daemon, Email, File, Plugin,
-  Notification, Shell, Soul, System, Task Card, Vision, and Web vertical slices
-  are actual declared evidence; the former later-family target register is empty.
+  while the separately landed `avatar`, Context, Daemon, Email, Plugin,
+  Psyche, Notification, Shell, System, Task Card, Vision, and Web vertical
+  slices are actual declared evidence; the former later-family target register
+  is empty. The public `file` family was removed outright (durable filesystem
+  changes go through `shell`); nothing here may describe it as live.
   The normative rules — including the selected form, the reserved official-name
   rule, and the governed-surface classification — stay in the Contract and in
   the kernel component's own Contract.
@@ -104,9 +101,9 @@ capability names and lazy adapters.
 - `BEHAVIORS.md` — the paired LABT file: LP001 guards the closed LTP envelope,
   LP002 guards the Tool-to-MCP Plugin Contract's status, its two-class governed
   surface, its single selected wrapper form, the document graph, and the
-  current inventory: fifteen static official families (`mcp`, `avatar`,
-  `context`, `daemon`, `email`, `file`, `plugin`, `psyche`, `notification`,
-  `shell`, `soul`, `system`, `task_card`, `vision`, `web`), twenty-one grantable
+  current inventory: thirteen static official families (`mcp`, `avatar`,
+  `context`, `daemon`, `email`, `plugin`, `psyche`, `notification`,
+  `shell`, `system`, `task_card`, `vision`, `web`), nineteen grantable
   host names,
   and an empty former later-family target register.
 - `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
@@ -119,12 +116,6 @@ capability names and lazy adapters.
 - `task_card/` — intrinsic channel-neutral declarative Task Card producer: one
   public `task_card` family, one agent-local artifact under `taskcard/`, and
   no transport ownership (`src/lingtai/tools/task_card/ANATOMY.md`).
-- `file/` — sole owner of the public `file` capability: its static sixth
-  official `DECLARATION`, composed schema/envelope dispatch, all five operation
-  implementations in `_read.py`/`_write.py`/`_edit.py`/`_glob.py`/`_grep.py`,
-  its exact source/snapshot-backed 13-row SHOW provider, and the one package
-  manual body installed as `file-manual`
-  (`src/lingtai/tools/file/ANATOMY.md`).
 - `vision/` — public `vision` composition owner: one action-separated family
   with canonical `analyze`/`check`/`list`/`settings`/`manual` children over the
   existing direct provider routing and one bind-time settings snapshot,
@@ -136,10 +127,12 @@ capability names and lazy adapters.
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
   and dispatch infrastructure implementing the LTP v2 envelope, and the
   reusable ManualTool builder; `web` is its first real consumer, `mcp` its
-  second, `knowledge` its third, `file` its fourth, `vision` its fifth,
-  `avatar` its sixth, `soul` its seventh, `shell` its eighth, `skills` its
+  second, `knowledge` its third, `vision` its fifth,
+  `avatar` its sixth, `shell` its eighth, `skills` its
   ninth, `notification` its tenth, `system` its eleventh, `daemon` its
-  twelfth, `context` its thirteenth, and `plugin` its fourteenth
+  twelfth, `context` its thirteenth, and `plugin` its fourteenth (the
+  fourth consumer, `file`, and the seventh, `soul`, were removed with
+  those families)
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `psyche/` — mandatory public durable-self family: its static fifteenth
   declaration preserves the six-action signpost/settings surface, binds only
@@ -176,18 +169,14 @@ capability names and lazy adapters.
 - `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
   family envelope with the unchanged public actions `info`/`manual`
   (`src/lingtai/tools/knowledge/ANATOMY.md`).
-- `soul/` — the official declared `soul` family (its injected module remains
-  only for kernel hooks): seven action-separated children (`inquiry`, `flow`,
-  `config`, `voice`, `dismiss`, read-only `settings`, and `manual`) behind one
-  model-facing root (`src/lingtai/tools/soul/ANATOMY.md`).
 - `bash/` — public `shell` composition owner for run/poll/cancel/settings/manual
   (`src/lingtai/tools/bash/ANATOMY.md`); the public model-facing schema is
   the ToolFamily-composed LTP v2 envelope (`bash/_tool_family.py`) and is the
   package's only schema/description pair, while `ShellManager` remains the
   unchanged execution engine behind an internal-only flat call shape.
 - `notification/` — always-on declared official family owning the public
-  `notification` action set (`check`, three atomic dismiss actions, hook-registry
-  actions, `delay`, read-only `settings`, and `manual`;
+  `notification` action set (`check`, hook-registry actions, `delay`, read-only
+  `settings`, and `manual`; public generic dismiss actions are removed;
   `src/lingtai/tools/notification/ANATOMY.md`).
   Its static `DECLARATION` is registered through the official host-plugin route,
   binds only `workdir` and `notification_state`, and preserves the ToolFamily
@@ -204,14 +193,14 @@ capability names and lazy adapters.
   the public `system` summarize action moved in. `summarize` records only;
   `rebuild` is the sole active full reconstruction: canonical prompt composition,
   summary application, then provider replay. Refresh/molt invoke the same
-  internal contract passively. Like `soul` it builds its family per call and
+  internal contract passively. It builds its family per call and
   alone consumes kernel `_tc_id`.
 - `pad/` — mandatory `append | manual` family. `append` validates/persists pinned
   references without hot-loading; private `_pad_load` participates only in the
   Agent's canonical reconstruction path (`src/lingtai/tools/pad/ANATOMY.md`).
 - `lingtai/` — mandatory manual-only identity signpost. Private
-  `_lingtai_load` composes character during canonical reconstruction; generic
-  durable mutation is owned by `file` (`src/lingtai/tools/lingtai/ANATOMY.md`).
+  `_lingtai_load` composes character during canonical reconstruction; durable
+  mutation happens through `shell` (`src/lingtai/tools/lingtai/ANATOMY.md`).
 - `email/` — the filesystem-based `email` intrinsic: mailbox I/O, composition,
   search, contacts, and delivery, migrated to the LTP v2 family envelope
   (`src/lingtai/tools/email/ANATOMY.md`).
@@ -227,7 +216,7 @@ capability names and lazy adapters.
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).
 - `i18n/` — the tool locale catalog (`en`/`zh`/`wen`) holding the *human-facing
   manager prose* concrete tools resolve through `lingtai.kernel.i18n.t(lang, key)`
-  (`soul.system_prompt`, `knowledge.preamble`, `email.unread_digest`, …). It owns
+  (`context.context_forget_summary`, `knowledge.preamble`, `email.unread_digest`, …). It owns
   no model-facing schema or description text: that lives in canonical English tool
   source plus the per-package `glossary-{en,zh,wen}.md` resources
   (`src/lingtai/tools/i18n/__init__.py:1-14`).
@@ -242,11 +231,11 @@ provider factory only at composition or action boundaries, and imports
 same way and reaches `lingtai.services.vision` only on the selected direct
 route. The pinned browser transport remains an outer adapter. `web_search` is
 accepted only as a one-way configuration input alias and is never emitted as a
-public name. `soul` is a mandatory intrinsic (`INTRINSICS`, not
-`BUILTIN_TOOLS`) and imports `tool_family` statically; because it is a module
-rather than a per-Agent manager object, it composes its schema from a
-module-level schema-only `ToolFamily` and builds an agent-bound one per
-`handle(agent, args)` call. The public `shell` row imports `lingtai.tools.bash`
+public name. The intrinsic families (`INTRINSICS`, not `BUILTIN_TOOLS`) import
+`tool_family` statically; because each is a module rather than a per-Agent
+manager object, it composes its schema from a module-level schema-only
+`ToolFamily` and builds an agent-bound one per `handle(agent, args)` call. The
+public `shell` row imports `lingtai.tools.bash`
 lazily; `bash/__init__.py` imports `tool_family` (via `bash/_tool_family.py`)
 to compose the public action-separated schema (re-exported as the package's
 canonical `get_schema`/`get_description`) and to translate `action`/`input`
@@ -254,18 +243,12 @@ calls into the internal flat shape `ShellManager.handle` consumes. `bash` is
 the one-way legacy input alias for `shell` (`registry.py`) and is never
 emitted as a public name or a second schema.
 
-The public `file` row imports `lingtai.tools.file` lazily; that owner registers
-its static declaration, binds the five operation modules once per host grant,
-and reaches the working tree only through `WorkdirPort` plus the
-capability-native `FileIOPort` implemented by `AgentFileIOAdapter`. Its
-SHOW-only provider receives the canonical service factory's immutable,
-bounded backend snapshot through `ConfigurationPort`; the sidecar value is
-fully redacted, and no settings file or writer exists. Unlike
-`bash`/`web_search`, the
-file migration kept no configuration aliases: `read`, `write`, `edit`, `glob`, and
-`grep` are unknown capability names that fail loudly. Capability groups no
-longer exist at all — `file` was `_GROUPS`' only entry, so the map,
-`expand_groups`, and every consumer were deleted rather than left empty.
+There is no public `file` row: that family, its package, its `file_io` host
+port, and its FileIO service were removed outright, so `file`, `read`,
+`write`, `edit`, `glob`, and `grep` are unknown capability names that fail
+loudly. Durable filesystem changes go through the public `shell` family.
+Capability groups do not exist — `file` was `_GROUPS`' only entry, so the
+map, `expand_groups`, and every consumer were deleted rather than left empty.
 
 The public `task_card` row imports `lingtai.tools.task_card` lazily and owns
 the artifact writer entirely within `lingtai.tools`. It writes only
@@ -274,12 +257,12 @@ polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
 kernel-owned declared host-plugin contract. `mcp` is the base reference; Avatar,
-Context, Daemon, Email, File, Plugin, Notification, Shell, Soul, System,
+Context, Daemon, Email, Plugin, Notification, Shell, System,
 Task Card, Vision, and Web are accepted vertical
 evidence. They bind respectively their narrow earned ports: `avatar_parent`,
-`context_runtime`, `daemon_runtime`, `email_runtime`, `file_io`,
+`context_runtime`, `daemon_runtime`, `email_runtime`,
 `prompt_section`/`plugin_catalog`, `notification_state`,
-`notifications`/`configuration`, `soul_runtime`,
+`notifications`/`configuration`,
 `system_runtime`/`identity`,
 `shutdown`/`task_card_lifecycle`/`task_card_notifications`,
 `active_provider`/`configuration`, and `web_runtime`/`provider_identity` (all
@@ -301,13 +284,7 @@ as `context-manual`. `src/lingtai/tools/email/__init__.py` is the fifth slice:
 it owns `EmailRuntimeRequest`/`EmailRuntimePort`, creates or replaces the real
 EmailManager before using `extra_ports_for` to grant a call-time
 `AgentEmailRuntimeAdapter`, and remains a mandatory injected official family
-with no capability/manifest row. `src/lingtai/tools/file/__init__.py` is the
-sixth slice: its declaration composes the unchanged operations plus generic
-SHOW against `workdir`/`file_io`/`configuration`, and `setup` grants a typed
-`AgentFileIOAdapter` plus immutable `StaticConfigurationAdapter` only through
-`extra_ports_for`; the adapters have no whole Agent, generic dispatch, or mount
-operation. The Agent installer maps the package-owned File manual body to the
-established `capabilities/file-manual` destination. `src/lingtai/tools/plugin/__init__.py`
+with no capability/manifest row. `src/lingtai/tools/plugin/__init__.py`
 is the seventh slice: its
 `DECLARATION` binds `plugin` against `workdir`, its own protected prompt
 section, and the read-only `plugin_catalog` projection built by
@@ -319,14 +296,10 @@ catalog. `src/lingtai/tools/notification/__init__.py` is the eighth slice: its
 `DECLARATION` binds only `workdir`/`notification_state` and delegates Core policy
 through a callback-only adapter without exposing the Agent, Store,
 configuration object, or writer, including its two-row settings projection.
-`src/lingtai/tools/soul/__init__.py` is the tenth slice: its `DECLARATION`
-preserves the public `inquiry | flow | config | voice | dismiss | manual`
-family, adds the generic read-only `settings` child immediately before
-`manual`, and binds the five operational children only to `workdir` plus the
-explicit `SoulRuntimePort`; Soul stays an injected intrinsic for kernel
-lifecycle hooks while its model-facing root mounts only through the registrar,
-and its package manual is the sole operational body installed at the historical
-`soul-manual` destination. `src/lingtai/tools/task_card/__init__.py` is the
+The tenth slice was the `soul` family; the whole Soul subsystem was removed
+(its declaration, `SoulRuntimePort`, adapter, kernel hooks, manual, and
+glossary are gone, and `manifest.soul` is only tolerated legacy input).
+`src/lingtai/tools/task_card/__init__.py` is the
 twelfth slice: its `DECLARATION` preserves the public
 `start | inspect | retry | stop | remove | manual` family and binds the one
 retained `TaskCardManager` against `workdir`, `shutdown`,
@@ -354,8 +327,8 @@ provenance, composed by `setup` and granted to `web` alone through
 once), and the narrow read-only `provider_identity` label
 (`AgentProviderIdentityAdapter`, built in the standard table only for `web`);
 `_bind` fails closed with `HostPortError` on a missing or mistyped
-`web_runtime`, the explicit Anthropic/Gemini opt-in is gated by exact match on
-that label, and no automatic provider/browser fallback exists beyond the
+`web_runtime`, the backend-gated OpenAI/Anthropic engines are admitted only on
+an exact match of that label, and no automatic provider/browser fallback exists beyond the
 family's one documented OpenAI→DuckDuckGo runtime fallback.
 Every landed
 family retains its public name, actions, inputs, and result shapes. The
@@ -420,6 +393,6 @@ owned here.
 Retained physical legacy directories (`bash/`, `web_search/`) and
 provider-native wire strings remain for compatibility. They must not become
 registry, schema, prompt, check-caps, manual, or catalog entries under those old
-public names. The five pre-migration file packages are not among them: they were
-deleted outright into `file/`, so there is no legacy directory, contract,
-glossary, or alias left for that surface.
+public names. The removed `file` family is not among them: its package,
+contract, glossaries, manual, and capability names were deleted outright, so
+there is no legacy directory, alias, or shim left for that surface.

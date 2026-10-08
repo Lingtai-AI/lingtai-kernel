@@ -86,7 +86,6 @@ def test_daemon_shutdown_for_agent_stop_reclaims_pools_and_cli_processes(tmp_pat
 
 def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
     from lingtai.kernel.base_agent import lifecycle
-    import lingtai.tools.soul.flow as soul_flow
 
     order = []
 
@@ -114,11 +113,6 @@ def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
         _build_manifest=lambda: {"agent": "test"},
         get_capability=lambda name: FakeDaemon() if name == "daemon" else None,
     )
-    # _stop() now calls agent._cancel_soul_timer() (BaseAgent delegates to the
-    # soul flow hook); mirror that so the monkeypatched cancel still records.
-    agent._cancel_soul_timer = lambda: soul_flow._cancel_soul_timer(agent)
-
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda a: order.append(("soul", None)))
     monkeypatch.setattr(lifecycle, "_stop_heartbeat", lambda a: order.append(("heartbeat", None)))
 
     lifecycle._stop(agent, timeout=0.01)
@@ -171,7 +165,6 @@ def test_stop_teardown_order_withdraws_via_port_between_manifest_and_release(mon
     withdrawal sits inside the safety-critical teardown window.
     """
     from lingtai.kernel.base_agent import lifecycle
-    import lingtai.tools.soul.flow as soul_flow
 
     order = []
 
@@ -212,8 +205,6 @@ def test_stop_teardown_order_withdraws_via_port_between_manifest_and_release(mon
         _build_manifest=lambda: {"agent": "test"},
         get_capability=lambda name: None,
     )
-    agent._cancel_soul_timer = lambda: None
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda a: None)
 
     lifecycle._stop(agent, timeout=0.01)
 
@@ -266,7 +257,6 @@ def test_stop_releases_workdir_lease_when_intermediate_teardown_raises(monkeypat
     still sees the teardown failure.
     """
     from lingtai.kernel.base_agent import lifecycle
-    import lingtai.tools.soul.flow as soul_flow
 
     released = []
 
@@ -290,8 +280,6 @@ def test_stop_releases_workdir_lease_when_intermediate_teardown_raises(monkeypat
         _build_manifest=lambda: {"agent": "test"},
         get_capability=lambda name: None,
     )
-    agent._cancel_soul_timer = lambda: None
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda a: None)
 
     with pytest.raises(RuntimeError, match="session close boom"):
         lifecycle._stop(agent, timeout=0.01)
@@ -302,7 +290,6 @@ def test_stop_releases_workdir_lease_when_intermediate_teardown_raises(monkeypat
 def test_stop_releases_workdir_lease_when_manifest_write_raises(monkeypatch):
     """Issue #661: a raise at the LAST teardown step still releases the lease."""
     from lingtai.kernel.base_agent import lifecycle
-    import lingtai.tools.soul.flow as soul_flow
 
     released = []
 
@@ -326,8 +313,6 @@ def test_stop_releases_workdir_lease_when_manifest_write_raises(monkeypatch):
         _build_manifest=lambda: {"agent": "test"},
         get_capability=lambda name: None,
     )
-    agent._cancel_soul_timer = lambda: None
-    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda a: None)
 
     with pytest.raises(OSError, match="disk full"):
         lifecycle._stop(agent, timeout=0.01)
@@ -350,7 +335,6 @@ def test_stop_releases_workdir_lease_when_agent_service_teardown_raises(monkeypa
 
     agent = SimpleNamespace(
         _log=lambda event, **fields: None,
-        _cancel_soul_timer=lambda: None,
         _shutdown=threading.Event(),
         _thread=None,
         _llm_worker_poison_future=None,
@@ -415,7 +399,6 @@ def test_stop_timeout_retains_services_heartbeat_and_lease_until_execution_quies
 
     agent = SimpleNamespace(
         _log=lambda event, **fields: order.append(event),
-        _cancel_soul_timer=lambda: None,
         _shutdown=threading.Event(),
         _thread=run_loop,
         _llm_worker_poison_future=provider_future,

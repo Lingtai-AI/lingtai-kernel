@@ -7,10 +7,13 @@ related_files:
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/__init__.py
   - src/lingtai/adapters/acp/driver_authority.py
+  - src/lingtai/adapters/acp/resident_socket.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/puffo_v1.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
+  - src/lingtai/venv_resolve.py
+  - tests/test_venv_resolve.py
   - src/lingtai/cli_puffo_v0.py
   - src/lingtai/cli.py
   - src/lingtai/kernel/turns.py
@@ -20,12 +23,14 @@ related_files:
   - src/lingtai/kernel/provider_admission.py
   - src/lingtai/kernel/puffo_admission_witness.py
   - src/lingtai/kernel/tool_executor.py
+  - src/lingtai/kernel/turn_tool_overlay.py
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/process_match.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - tests/test_acp_stdio.py
+  - tests/test_resident_acp_socket.py
   - tests/test_puffo_v0_profile.py
   - tests/test_puffo_admission_witness.py
   - tests/test_driver_authority_adapter.py
@@ -46,7 +51,7 @@ maintenance: |
   behavior task, manual, adapter, composition root, Core turn boundary, and tests
   whenever structure or ownership changes. See lingtai-dev-guide for details.
 ---
-# ACP local stdio adapter
+# ACP local driving adapters
 
 Local Agent Client Protocol v1 driving Adapter. This is a governed component
 because it owns a real ecosystem wire promise; its normative owner is the
@@ -72,6 +77,16 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   the same genuine-teardown guard (`_closing`, superseded `_generation`,
   claimed/replaced active prompt) as the only legitimate non-delivery.
 - `__init__.py` — small public package export for the protocol version and server.
+- `resident_socket.py` — opt-in, owner-only POSIX Unix socket around the same
+  one-session ACP server and the already-started `run` Agent. Its short stable
+  path, peer-UID gate, single-client ownership, stale-socket check, and teardown
+  belong to the outer Adapter; it does not acquire a second workdir lease, and
+  generic local connections accept no session MCP. An optional first-frame `puffo.attach/1` receives
+  one Driver FD, checks registry identity against the resident directory, and
+  injects connection-owned authority and a private fixed Puffo Core MCP view
+  into ACP turns. Implements
+  [ACP003](BEHAVIORS.md#behavior-acp003) and
+  [ACP004](BEHAVIORS.md#behavior-acp004).
 - `puffo_v0.py` — local operator registry and typed ACP-only turn-origin policy
   for the identity/workspace-bound full-tool `puffo-v0`
   profile. It resolves an opaque runtime id to one canonical persistent identity
@@ -79,7 +94,25 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   identity, serializes provision/revoke read-modify-write operations with a
   POSIX lock, records terminal revocations in an append-only tombstone log, and
   performs read-only discovery of initialized identities below one caller-selected
-  root without following directory symlinks or creating registry artifacts. It
+  root without following directory symlinks or creating registry artifacts. Its
+  `default_registry_path` owns the single registry location: HOME-relative by
+  default, or the operator override `REGISTRY_PATH_ENV_VAR`
+  (`LINGTAI_PUFFO_V0_REGISTRY`) when set, so an explicit `registry_path=`
+  argument threaded from a CLI flag overrides the environment which overrides the
+  default. A single `_registry_location` helper resolves that choice for
+  provision/revoke/resolve/discover and enforces its *shape* (absolute, no `..`, parent
+  below the filesystem root) with no filesystem access, while
+  `_secure_registry_directory` (via `_ensure_registry_dir_component`) enforces the
+  *dedicated owner-only directory*: it builds the built-in `~/.lingtai/<profile>`
+  namespace node by node with per-node `O_NOFOLLOW` and creates only the final
+  component of any other location under an already-existing parent with
+  `O_NOFOLLOW` and an owner check on both the registry directory and the node
+  directly above it, never `chmod`-ing or creating through an operator-supplied or
+  symlinked directory and rejecting a non-conforming existing directory. The branch
+  is chosen by path value (is it the built-in namespace), not provenance, and is not
+  a security boundary — both branches verify those two levels non-symlink and owned
+  by the user and require the leaf `0700`. Every
+  call site shares one resolved, absolute location. It
   refuses missing, malformed, tampered, retargeted, or revoked entries before
   Agent construction. Its `entry_digest` authenticates registry data rather
   than claiming to authenticate the effective manifest, tool/action, or full
@@ -95,16 +128,27 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
   the service or form a security boundary.
 - `../../cli_acp.py` — outer composition root. Captures the original stdout wire,
   quarantines Python application stdout to stderr before Agent construction,
+  reuses the active virtualenv when no explicit source override is present,
+  and delegates validation to `../../venv_resolve.py`. Its bootstrap subprocesses
+  route stdout to stderr and fail on an unavailable published version pin
+  (startup coverage in ACP001 and `tests/test_venv_resolve.py`),
   composes the existing Agent, consumes the typed bounded stop proof, and hard-
   exits on incomplete quiescence so no later Python state write can race teardown.
   For both Puffo profiles, it consumes the one launcher-injected Driver authority
-  descriptor and composes either its root Port pair or a fail-closed pair.
+  descriptor and composes either its root Port pair or a fail-closed pair. Its
+  `--registry` flag selects the registry location; the composition root resolves
+  the effective location once (flag > `LINGTAI_PUFFO_V0_REGISTRY` > HOME-relative
+  default) and threads that one concrete path into both the initial resolve and
+  the pre-serve re-resolve that reaches `run_acp`, so both consult the identical
+  registry even if the environment changes mid-launch.
   Shared poisoned-worker exit logging is lease-aware: retained ownership may log,
   while a successful `STOPPED` release skips every later workdir append and still
   reaches the unconditional process exit.
 - `../../cli_puffo_v0.py` — local-only control plane that discovers initialized
   identities below an explicit root, provisions an existing persistent identity,
   or revokes it for future `puffo-v0` launches; it is not an ACP data-plane surface.
+  Provision and revoke accept a `--registry` location override (flag, else
+  `LINGTAI_PUFFO_V0_REGISTRY`, else the default).
 - `../../kernel/process_match.py` — exact duplicate-host grammar for module,
   console, legacy, and quoted Windows `.exe` ACP launch forms.
 - `../../kernel/turns.py`, `../../kernel/execution_workspace.py`, `../../kernel/turn_events.py`, `../../kernel/turn_permissions.py`, `../../kernel/provider_admission.py`, and `../../kernel/tool_executor.py` — inward Core boundary consumed by the Adapter:
@@ -123,7 +167,10 @@ co-located [`CONTRACT.md`](CONTRACT.md), and its operator/developer procedure is
 ## Connections
 
 Inbound: a local ACP client launches `lingtai-agent acp --agent-dir <dir>` and
-exchanges one JSON-RPC object per stdio line. The constrained Puffo profiles
+exchanges one JSON-RPC object per stdio line. Alternatively, the existing
+`lingtai-agent run --acp-socket` host accepts same-UID local ACP clients without
+starting another Agent; each connection owns one ACP session and closes without
+stopping the host. The constrained Puffo profiles
 instead launch `lingtai-agent acp --profile puffo-v0|puffo-v1 --runtime-id
 <opaque-id>` and share the same registry-bound identity/workspace. `puffo-v0`
 denies every session MCP; `puffo-v1` accepts only its one fixed Puffo Core stdio
@@ -165,6 +212,12 @@ Driver authority environment locator is removed at composition and is not
 retained as process state. Closing requests active cancellation
 and suppresses prompt frames that have not crossed the writer start check; typed
 Agent stop retains services/heartbeat/lease until execution quiescence is proven.
+The opt-in resident transport additionally owns one short Unix socket path in
+an owner-only `/tmp/lingtai-acp-<uid>/` directory, a listener thread, and at
+most one client; a waiting reconnect may take that slot only after bounded
+prior-session MCP cleanup. It removes only the socket inode it created on close.
+An attached client additionally owns one received Driver FD and its authenticated
+authority client until that connection ends; no authority is stored on Agent.
 
 ## Notes
 
@@ -178,6 +231,11 @@ scope.
 Both Puffo profiles are a second gate on their controlled entrypoint, not host isolation:
 the same OS identity can still alter the registry or bypass it by launching the
 generic `--agent-dir` ACP command. That is an explicit host trust boundary.
+The resident socket's ordinary path is generic local ACP. Its explicit Puffo
+attach path binds Driver authority and fixed Puffo Core MCP tools to its
+correlated turns without publishing a global tool overlay into the concurrently
+running Agent. It still needs real Agent/model and Puffo Core cross-repository
+acceptance before production use.
 
 `driver_authority.py` is process-local protocol state: one authenticated
 AF_UNIX stream, a bounded receive buffer, one request lock, endpoint identity,

@@ -22,8 +22,8 @@ from tests._agent_presence_helpers import make_test_presence_store
 def make_mock_service():
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
+    svc.provider = "anthropic"
+    svc.model = "claude-test"
     return svc
 
 
@@ -46,12 +46,6 @@ def test_agent_double_start(tmp_path):
     agent.stop(timeout=2.0)
 
 
-def test_base_agent_file_io_defaults_to_none(tmp_path):
-    """BaseAgent should have _file_io=None when no file_io is passed."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    assert agent._file_io is None
-
-
 # ---------------------------------------------------------------------------
 # Intrinsics filtering
 # ---------------------------------------------------------------------------
@@ -72,7 +66,8 @@ def test_intrinsics_enabled_by_default(tmp_path):
     assert "psyche" in agent._intrinsics
     assert "pad" not in agent._intrinsics
     assert "lingtai" not in agent._intrinsics
-    assert len(agent._intrinsics) == 5  # email, system, context, psyche, soul
+    assert "soul" not in agent._intrinsics  # the Soul subsystem was removed
+    assert len(agent._intrinsics) == 4  # email, system, context, psyche
 
 
 # ---------------------------------------------------------------------------
@@ -822,7 +817,7 @@ def test_base_agent_has_no_non_kernel_imports():
     else:
         sources = [kernel_dir / "base_agent.py"]
 
-    non_kernel = {"services.file_io", "services.mcp", "services.vision", "services.websearch",
+    non_kernel = {"services.mcp", "services.vision", "services.websearch",
                   "services.tts", "services.image_gen", "services.transcription", "services.music_gen",
                   "capabilities", "addons", "agent"}
 

@@ -192,7 +192,8 @@ co-located owning ANATOMY.md files.
   (every replacement, incl. preset m001/m002), version files, `system/migrations/`
   archive + SHA-256 evidence, and best-effort `logs/events.jsonl` audit.
 - `PosixAvatarLauncherAdapter` implements the avatar-local launcher Port with
-  inherited cwd/environment, disconnected stdio, binary-write stderr,
+  inherited cwd/environment (excluding the parent-only resident ACP opt-in),
+  disconnected stdio, binary-write stderr,
   `start_new_session`, exact `poll()` truth, one-process TERM/KILL, and
   non-killing release. For a Driver-approved avatar only, it consumes the
   opaque one-shot AF_UNIX child endpoint, passes exactly that descriptor with

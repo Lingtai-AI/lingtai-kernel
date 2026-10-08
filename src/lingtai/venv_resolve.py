@@ -256,35 +256,24 @@ def _create_venv(venv_dir: Path) -> None:
     subprocess.run(
         [python, "-m", "venv", str(venv_dir)],
         check=True,
+        stdout=sys.stderr,
     )
 
     # Install lingtai, pinned to the running kernel's version so a child agent
     # launched through CPR or cli.run provisions the same kernel that spawned it
-    # instead of whatever is newest on PyPI (issue #758). Fall back to an
-    # unpinned install for local/dev versions that were never published, and if
-    # a published pin is temporarily unavailable (index lag, yank).
+    # instead of whatever is newest on PyPI (issue #758). An unavailable
+    # published pin must fail rather than silently selecting another version.
+    # Local/dev versions retain the existing unpinned provisioning behavior.
     pip = str(venv_dir / "bin" / "pip")
     if sys.platform == "win32":
         pip = str(venv_dir / "Scripts" / "pip.exe")
 
     version = _running_lingtai_version()
-    specs = []
-    if version and not _is_local_dev_version(version):
-        specs.append(f"lingtai=={version}")
-    specs.append("lingtai")
+    spec = f"lingtai=={version}" if version and not _is_local_dev_version(version) else "lingtai"
 
     print("Installing lingtai...", file=sys.stderr)
-    for spec in specs:
-        try:
-            subprocess.run([pip, "install", spec], check=True)
-            break
-        except subprocess.CalledProcessError:
-            if spec == specs[-1]:
-                raise
-            print(
-                f"warning: install of {spec} failed; trying fallback",
-                file=sys.stderr,
-            )
+    # Python stdout quarantine does not affect inherited subprocess fd 1.
+    subprocess.run([pip, "install", spec], check=True, stdout=sys.stderr)
     _write_env_marker_best_effort(venv_dir)
     print("Runtime ready.", file=sys.stderr)
 
@@ -385,31 +374,20 @@ def _python_selection_policy() -> _PythonSelectionPolicy:
             "compatible venv_path."
         )
 
-    if architecture == "arm64" and macos_major >= 14:
-        # Managed-runtime wheel floor: the release workflow builds cp311/cp312/
-        # cp313 wheels only (no cp314 yet), so a managed selector that chose
-        # Python 3.14 here would fall onto a source build that can omit the
-        # native Rust sidecar when Rust is unavailable. Keep the managed cap at
-        # 3.13 even though onnxruntime 1.28.0 ships a cp314 ARM wheel; a user who
-        # installs lingtai from source under 3.14 remains free to do so outside
-        # the managed selector. (Jason review P1-1, 2026-08-08.)
-        maximum = (3, 13)
-        candidate_names = (
-            "python3.13",
-            "python3.12",
-            "python3.11",
-            "python3",
-            "python",
-        )
-    else:
-        maximum = (3, 13)
-        candidate_names = (
-            "python3.13",
-            "python3.12",
-            "python3.11",
-            "python3",
-            "python",
-        )
+    # Managed-runtime support window: the kernel is a pure-Python
+    # universal wheel, but its declared/tested interpreter window is
+    # 3.11-3.13 (pyproject classifiers and CI), so the managed selector
+    # keeps a 3.13 cap even though onnxruntime 1.28.0 ships a cp314 ARM
+    # wheel; a user who installs lingtai under 3.14 remains free to do so
+    # outside the managed selector. (Jason review P1-1, 2026-08-08.)
+    maximum = (3, 13)
+    candidate_names = (
+        "python3.13",
+        "python3.12",
+        "python3.11",
+        "python3",
+        "python",
+    )
     return _PythonSelectionPolicy(
         target_os=target_os,
         architecture=architecture,

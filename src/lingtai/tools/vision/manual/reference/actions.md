@@ -6,60 +6,45 @@ related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/CONTRACT.md
 maintenance: |
-  Keep examples aligned with the declaration-owned action schemas and the
-  installed manual router. Preserve strict input, first-call, and no-fallback
-  semantics when updating examples.
+  Keep examples aligned with declaration-owned action schemas and the installed
+  router. Preserve strict input, first-call, and no-fallback semantics.
 ---
 # Vision actions reference
 
 ## Call shape
 
-`vision` is one action-separated tool with five strict actions:
+The root requires `action`, `input`, and `reasoning`; optional `summarize` is host
+presentation control. Inputs are strict and action-specific:
 
-- `vision(action="analyze", input={"image_path": "...", "question": null},
-  reasoning="...")` — the direct image request. `image_path` and nullable
-  `question` are required fields; `null` selects the default prompt
-  `Describe what you see in this image.`. The optional nullable `preset` field
-  explicitly borrows one allowed preset's vision service for this call.
-- `vision(action="check", input={"preset": null}, reasoning="...")` — resolve
-  the default route without an image. The `preset` field is required and must
-  be `null` or an allowed preset reference. A non-null value resolves the
-  borrowed provider/model and constructs its service, but never calls a
-  provider or sends image data.
-- `vision(action="list", input={}, reasoning="...")` — mechanically enumerate
-  the active route and vision-capable presets in `manifest.preset.allowed`.
-  It reads route declarations only: it constructs no provider service and
-  reads no credential.
-- `vision(action="settings", input={}, reasoning="...")` — show the applied
-  bind-time configuration as rows containing exactly `key`, `current`,
-  `default`, `configurable`, and `comment`. Input is strictly `{}`. This action
-  never sets, resets, validates, re-reads, or writes configuration. Follow each
-  row's exact `comment` into the top manual's stable setting anchor, then use
-  the settings reference for meaning and the owner procedure.
-- `vision(action="manual", input={}, reasoning="...")` — load the installed
-  top-level Vision manual. Its input is strictly empty; it reads that manual's
-  body/path and performs no config, credential, provider, image, or analyze
-  operation.
+- **analyze** — `{"image_path": "...", "question": null, "preset": null}`.
+  `image_path` and nullable `question` are required; null uses
+  `Describe what you see in this image.`. `preset` is an optional explicit
+  borrow of one `manifest.preset.allowed` route.
+- **check** — `{"preset": null}`. Null checks the default; a string checks an
+  authorized borrowed route. It may construct a service and resolve its own
+  credential, but never sends an image; success is not a live server/model test.
+- **list** — `{}`. Mechanically lists the active route and allowed vision-capable
+  presets; it constructs no service or credential.
+- **settings** — `{}`. Shows the applied bind snapshot as rows with exactly
+  `key`, `current`, `default`, `configurable`, and `comment`; it never reads,
+  validates, sets, resets, or writes configuration.
+- **manual** — `{}`. Reads the installed Vision manual body/path only.
 
-`reasoning` is required on every action and is invocation metadata; it never
-becomes part of child input. Optional `summarize` is a root presentation
-control. An unknown action, root field, or cross-action input field is rejected
-before provider, credential, image, or manual-child work.
+Unknown actions or root/input fields, non-object input, and cross-action fields
+are rejected before provider, credential, image, or manual work.
 
 ## Result shapes
 
-- `analyze` success is exactly `{"status": "ok", "analysis": text}`.
-- `check` success is exactly `{"status": "ok", "route": route,
-  "provider": provider, "model": model}`.
-- `list` success is `{"status": "ok", "default": default,
-  "presets": presets, "count": count}`; entries contain route identity, not
-  credentials.
-- `settings` success is `{"settings": [...]}` with only the five row fields
-  above; unavailable truth fails as a fixed no-row result.
-- `manual` success is exactly `{"status": "ok", "action": "manual",
-  "manual": body, "manual_path": path}`; a missing installed manual returns a
-  truthful degraded result rather than another family's guidance.
+- `analyze` success: exactly `{"status": "ok", "analysis": text}`.
+- `check` success: exactly `{"status": "ok", "route": route, "provider": provider, "model": model}`;
+  it never sends an image.
+- `list` success: `{"status": "ok", "default": default, "presets": presets, "count": count}`;
+  entries contain route identity, not credentials.
+- `settings` success: `{"settings": [...]}` with only the five row fields;
+  unavailable truth returns the fixed no-row failure.
+- `manual` success: exactly `{"status": "ok", "action": "manual", "manual": body, "manual_path": path}`;
+  a missing installed manual is truthful `degraded` guidance.
 
-Setup, authorization, image, provider, or empty-response failures are
-structured errors with sanitized guidance; raw exception contents,
-credentials, and unsanitized endpoints never enter a result.
+Missing image, setup, authorization, provider, request, or empty-response
+failures remain structured and sanitized. Alternatives are instructions for a
+later explicit action; no provider/model/credential/preset/MCP fallback runs.

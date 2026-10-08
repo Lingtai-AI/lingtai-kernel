@@ -46,7 +46,7 @@ from typing import Any
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from .plugin import SYSTEM_DECLARED_ACTIONS
 
-# Canonical compatibility order for the eleven operational actions plus
+# Canonical compatibility order for the twelve operational actions plus
 # ``manual``. The ToolPlugin declaration owns operational child registration;
 # ToolFamily's reserved settings-provider opt-in mechanically inserts
 # ``settings`` immediately before ``manual`` in the final model-facing family.
@@ -143,6 +143,13 @@ _PRESETS_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+_META_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+
 # The two name actions, moved here from the dissolved ``psyche`` family. Both
 # take exactly one field, ``content``, matching the pre-move shape and
 # semantics. They are identity *runtime state* (live in-memory identity, the
@@ -191,6 +198,7 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "presets": _PRESETS_INPUT_SCHEMA,
     "name_set": _NAME_SET_INPUT_SCHEMA,
     "name_nickname": _NAME_NICKNAME_INPUT_SCHEMA,
+    "meta": _META_INPUT_SCHEMA,
     # Referenced, not restated: ``build_manual_child`` owns this literal, so
     # the schema-only family and the dispatching family cannot drift
     # (``tool_family/CONTRACT.md`` Contract rules).
@@ -220,9 +228,12 @@ ACTION_ENUM_DESCRIPTION = (
     "verify the exact target first.\n"
     "name_set: set the immutable true name once. name_nickname: set or clear "
     "the mutable nickname; neither renames the address/workdir.\n"
+    "meta: read-only complete current runtime diagnostics (input={}): token and "
+    "cache numbers, context, summarize candidates, adapter state; the per-result "
+    "tail carries only time, context size and warnings.\n"
     "settings: complete read-only SHOW (input={}). manual: return the installed "
     "system-manual (input={}) without changing runtime state.\n"
-    "Notification reads/dismissals belong to notification; context hygiene "
+    "Notification reads belong to notification; producer actions belong to their owning tools; context hygiene "
     "belongs to context(action='summarize'|'rebuild'|'molt')."
 )
 

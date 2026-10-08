@@ -269,3 +269,29 @@ def test_manual_anchors_strict_input_order_and_other_actions_are_unchanged(
     )
     assert result["status"] == "ok"
     assert result["accounts"] == ["default"]
+
+
+def test_manual_routes_each_show_anchor_without_routine_send_gate():
+    body = WECHAT_PLUGIN.skill_body
+    assert "Use the schema for routine calls" in body
+    assert "Avatar sessions must not reconfigure" in body
+    for key in SETTING_KEYS:
+        section = body.split(f"## setting-{key.replace('_', '-')}\n", 1)[1]
+        section = section.split("\n## ", 1)[0]
+        assert f"reference/setup.md#setting-{key.replace('_', '-')}" in section
+    setup = (Path(WECHAT_PLUGIN.skill_path).parent / "reference/setup.md").read_text()
+    assert "positive finite" in setup
+    assert "SETTINGS_UNAVAILABLE" in setup
+    assert "from lingtai.mcp_servers.wechat.login import cli_login" in setup
+
+
+def test_manual_distinguishes_unknown_media_from_delivery_evidence():
+    root = Path(WECHAT_PLUGIN.skill_path).parent
+    media = " ".join((root / "reference/media.md").read_text().split())
+    operations = " ".join((root / "reference/operations.md").read_text().split())
+    assert "`unknown`" in media and "no warning" in media
+    assert "Unknown/unreadable bytes fail" not in media
+    assert "after symlink" in media
+    assert "missing sent record" in operations
+    assert "later text chunk" in operations
+    assert "booleans" in operations

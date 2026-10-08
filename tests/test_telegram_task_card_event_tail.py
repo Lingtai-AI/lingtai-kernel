@@ -5,7 +5,8 @@ The automatic slot mechanically consumes the agent's authoritative
 ``logs/token_ledger.jsonl`` for correlated a-priori summary input/output counts,
 keeps the most recent N provider-call groups of canonical ``diary`` text and safe
 tool fields, and projects
-current session telemetry only from the latest final-carrier ``notification_block_injected``,
+current SESSION telemetry from authoritative versioned ``llm_response`` snapshots
+with legacy final-carrier ``notification_block_injected`` fallback,
 and broadcasts the same projection to every resident Task Card for the agent
 (no per-route correlation — this is an agent-behavior broadcast, not per-chat
 visibility).
@@ -17,13 +18,18 @@ durable files only.
 """
 from __future__ import annotations
 
+import re
+import copy
 import json
 import threading
-from datetime import datetime
+
+import pytest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from lingtai.mcp_servers.task_card.event_projection import TaskCardEventProjection
 from lingtai.mcp_servers.telegram.manager import TelegramManager
+from lingtai.mcp_servers.telegram.task_card import api_cost
 from tests._notification_store_helpers import FakeNotificationStore
 
 
@@ -154,6 +160,54 @@ def _tool_call_line(
     })
 
 
+def _llm_response_session_line(
+    *,
+    current_input: int = 150_300,
+    total_input: int = 150_300,
+    total_output: int = 500,
+    total_cached: int = 120_000,
+    molt_count: int = 4,
+    api_call_index: int = 1,
+) -> str:
+    budget = 1_000_000
+    miss = total_input - total_cached
+    window = 272_000
+    return json.dumps({
+        "type": "llm_response",
+        "api_call_id": f"api-{api_call_index}",
+        "input_tokens": current_input,
+        "output_tokens": 500,
+        "thinking_tokens": 20,
+        "cached_tokens": min(total_cached, current_input),
+        "session_usage": {
+            "schema": TaskCardEventProjection.SESSION_USAGE_SCHEMA,
+            "molt_count": molt_count,
+            "api_call_index": api_call_index,
+            "api_calls": api_call_index,
+            "input_tokens": total_input,
+            "output_tokens": total_output,
+            "cached_tokens": total_cached,
+            "avg_input_tokens_per_api_call": int(round(total_input / api_call_index)),
+            "session_cache_rate": round(total_cached / total_input, 5),
+            "cache_miss_tokens": miss,
+            "cache_miss_budget": budget,
+            "cache_miss_remaining_tokens": budget - miss,
+            "context_tokens": current_input,
+            "context_window": window,
+            "context_usage": round(current_input / window, 5),
+        },
+    })
+
+
+def _legacy_session_line(**session: object) -> str:
+    return json.dumps({
+        "type": "notification_block_injected",
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {
+            "session": session,
+        }}}},
+    })
+
+
 def _pre_resident(account: FakeAccount, chat_id: int, manager: TelegramManager) -> None:
     """Seed a resident Task Card target the way an existing account would have one."""
     account.set_task_card(chat_id, f"{account.alias}:{chat_id}:1")
@@ -230,6 +284,43 @@ def test_restart_rehydrates_latest_n_from_tail_without_checkpoint_file(tmp_path)
     assert [call[0:3] for call in acct.calls] == [("edit_message", 555, 1)]
 
 
+def test_restart_rehydrate_bounds_session_only_history(tmp_path, monkeypatch):
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    manager._TASK_CARD_EVENT_WINDOW = 3
+    manager._TASK_CARD_EVENT_TAIL_CHUNK = 1024
+    _write_lines(_events_path(tmp_path), [
+        _llm_response_session_line(
+            current_input=index * 100,
+            total_input=index * 100,
+            total_output=index * 10,
+            total_cached=index * 50,
+            api_call_index=index,
+        )
+        for index in range(1, 101)
+    ])
+
+    reduced_indexes = []
+    original_reduce = TaskCardEventProjection.reduce_session_usage_event
+
+    def counted_reduce(state, event, *, event_order=None):
+        if isinstance(event.get("session_usage"), dict):
+            reduced_indexes.append(event["session_usage"]["api_call_index"])
+        return original_reduce(state, event, event_order=event_order)
+
+    monkeypatch.setattr(
+        TaskCardEventProjection, "reduce_session_usage_event", counted_reduce
+    )
+    manager._init_event_tail()
+
+    assert reduced_indexes == [98, 99, 100]
+    assert manager._task_card_event_window() == []
+    assert (
+        manager._task_card_event_metadata["api_calls"],
+        manager._task_card_event_metadata["input_tokens"],
+    ) == (100, 10_000)
+
+
 # ---------------------------------------------------------------------------
 # Non-whitelisted / malformed / partial-line rows are skipped safely
 # ---------------------------------------------------------------------------
@@ -262,7 +353,7 @@ def test_provider_groups_count_calls_and_exclude_unprojected_fields(tmp_path):
     footer_idx = next(i for i, ln in enumerate(rendered.splitlines()) if "Don't reply to this Task Card." in ln)
     assert len(api_dividers) == 2
     assert footer_idx == 0
-    assert rendered.splitlines()[footer_idx + 1] == TaskCardEventProjection.header("en")
+    assert rendered.splitlines()[footer_idx + 1] == "📋 <b>ACTIVITIES</b>"
     assert all(value in rendered for value in ("text one", "• bash.run:", "text two", "• read.read:"))
     assert len(rendered) <= manager._TASK_CARD_TEXT_LIMIT
     assert all(secret not in rendered for secret in (
@@ -278,7 +369,7 @@ def test_provider_groups_count_calls_and_exclude_unprojected_fields(tmp_path):
     latest_footer_idx = next(i for i, ln in enumerate(latest_lines) if "Don't reply to this Task Card." in ln)
     assert len(latest_api_dividers) == 1
     assert latest_footer_idx == 0
-    assert latest_lines[latest_footer_idx + 1] == TaskCardEventProjection.header("en")
+    assert latest_lines[latest_footer_idx + 1] == "📋 <b>ACTIVITIES</b>"
     assert "text two" in latest and "• read.read:" in latest
     assert "text one" not in latest and "• bash.run:" not in latest
 
@@ -519,7 +610,7 @@ def test_apriori_summary_metrics_render_after_completed_tool(tmp_path):
         "provider": "PROVIDER_SECRET",
     })])
     _write_lines(_events_path(tmp_path), [
-        _tool_call_line(tool_name="file", action="edit", call_id="c1", ts=100.0),
+        _tool_call_line(tool_name="shell", action="run", call_id="c1", ts=100.0),
         json.dumps({
             "type": "tool_result", "tool_call_id": "c1", "status": "ok",
             "elapsed_ms": 15, "ts": 102.0, "result": "RESULT_SECRET",
@@ -535,7 +626,7 @@ def test_apriori_summary_metrics_render_after_completed_tool(tmp_path):
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
     lines = rendered.splitlines()
-    tool_index = next(i for i, line in enumerate(lines) if "file.edit:" in line)
+    tool_index = next(i for i, line in enumerate(lines) if "shell.run:" in line)
     assert lines[tool_index].endswith("(15ms, success)")
     assert lines[tool_index + 1] == " (summary, 1.2s, 12.3k in, 456 out)"
     assert all(secret not in rendered for secret in (
@@ -673,13 +764,13 @@ def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
     # First tool call of the stream has no prior progress: 0.0 baseline.
     assert window[0]["api_delay_s"] == 0.0
     # Second tool call: exact ts delta.
-    assert window[1]["api_delay_s"] == 3.4
+    assert window[1]["api_delay_s"] == pytest.approx(3.4)
     # The raw ts stays private and never leaks into the public window.
     assert all("_ts" not in row for row in window)
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
     # The api delay is rendered on the group divider line, not in tool rows.
-    assert "↻ 3.4s" in rendered
+    assert "3.4s" in rendered
     # Tool rows no longer carry the api suffix.
     assert "3.4s api" not in rendered
 
@@ -723,11 +814,11 @@ def test_divider_renders_compact_per_call_usage_arrows(tmp_path):
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
     # The visible tail (last group) carries its own API delay + arrows + rate.
-    assert "↻ 3.4s" in rendered
+    assert "3.4s" in rendered
     assert "\u21931.2k" in rendered    # ↓1.2k output tokens
     assert "(56.8k)" in rendered  # 56.8k thinking/reasoning tokens
     assert "\u2191512.3k" in rendered  # ↑512.3k cache miss
-    assert "↻ 3.4s ↓1.2k (56.8k) ↑512.3k ◌ 259.8k | 55.0%" in rendered
+    assert "3.4s\n↓1.2k (56.8k) ↑512.3k ◌ 259.8k | 55.0%" in rendered
     # Usage is private per-row state: projected for rendering but never
     # leaked into the public window rows.
     assert all("_usage" not in row for row in manager._task_card_event_window())
@@ -745,7 +836,7 @@ def test_divider_usage_degrades_when_event_lacks_usage(tmp_path):
     ])
     manager._poll_event_tail()
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    assert "↻ 3.4s" in rendered
+    assert "3.4s" in rendered
     assert "\u2191" not in rendered
     assert "\u2193" not in rendered
 
@@ -787,6 +878,157 @@ def test_pure_text_turn_renders_api_usage_from_llm_response(tmp_path):
     assert "\u2191100" in rendered   # 1000 - 900 cache miss
     assert "◌ 1.0k | 90.0%" in rendered  # context=input_tokens; rate=900/1000
 
+
+
+def _call_line(call_id, api_id, ts):
+    return json.dumps({
+        "type": "tool_call", "ts": ts, "tool_name": "bash",
+        "tool_call_id": call_id, "api_call_id": api_id,
+        "tool_args": {"action": "run"},
+    })
+
+
+def _result_line(call_id, ts, status="ok"):
+    return json.dumps({
+        "type": "tool_result", "ts": ts, "tool_call_id": call_id,
+        "status": status, "elapsed_ms": 158,
+    })
+
+
+def _usage_line(api_id, total, cached, out, ts, **extra):
+    return json.dumps({
+        "type": "llm_response", "ts": ts, "api_call_id": api_id,
+        "input_tokens": total, "cached_tokens": cached,
+        "output_tokens": out, "thinking_tokens": 0, **extra,
+    })
+
+
+def _row_usages(manager):
+    return {
+        row.get("_tool_call_id"): row.get("_usage")
+        for group in manager._task_card_event_groups_snapshot()
+        for row in group["events"]
+    }
+
+
+def test_response_first_split_poll_still_feeds_later_rows(tmp_path):
+    acct = FakeAccount()
+    manager, _service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    path.touch()
+    manager._init_event_tail()
+
+    _write_lines(path, [_usage_line("api_1", 198_526, 197_376, 258, 10.0)])
+    manager._poll_event_tail()
+    assert _row_usages(manager) == {}
+
+    _write_lines(path, [_call_line("c1", "api_1", 9.0)])
+    manager._poll_event_tail()
+    usage = _row_usages(manager)["c1"]
+    assert usage["output"] == 258
+    assert usage["cache_miss"] == 1_150
+    assert usage["context"] == 198_526
+
+    _write_lines(path, [_result_line("c1", 11.0)])
+    manager._poll_event_tail()
+    usage = _row_usages(manager)["c1"]
+    assert usage["output"] == 258
+    row = next(
+        r for g in manager._task_card_event_groups_snapshot() for r in g["events"]
+    )
+    assert row["status"] == "success"
+
+
+def test_same_poll_and_rows_first_usage_after(tmp_path):
+    acct = FakeAccount()
+    manager, _service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    path.touch()
+    manager._init_event_tail()
+
+    _write_lines(path, [
+        _call_line("c1", "api_1", 1.0),
+        _usage_line("api_1", 1_000, 900, 10, 2.0),
+    ])
+    manager._poll_event_tail()
+    assert _row_usages(manager)["c1"]["output"] == 10
+
+    _write_lines(path, [_call_line("c2", "api_2", 3.0)])
+    manager._poll_event_tail()
+    assert _row_usages(manager)["c2"] is None
+    _write_lines(path, [_usage_line("api_2", 2_000, 0, 20, 4.0)])
+    manager._poll_event_tail()
+    usages = _row_usages(manager)
+    assert usages["c2"]["output"] == 20
+    assert "cache_rate" not in usages["c2"]
+    assert usages["c1"]["output"] == 10
+
+
+def test_multiple_apis_do_not_cross_contaminate_across_polls(tmp_path):
+    acct = FakeAccount()
+    manager, _service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    path.touch()
+    manager._init_event_tail()
+
+    _write_lines(path, [
+        _usage_line("api_1", 1_000, 0, 11, 1.0),
+        _usage_line("api_2", 2_000, 0, 22, 2.0),
+    ])
+    manager._poll_event_tail()
+    _write_lines(path, [_call_line("c2", "api_2", 3.0)])
+    manager._poll_event_tail()
+    _write_lines(path, [_call_line("c1", "api_1", 4.0), _call_line("c3", "api_3", 5.0)])
+    manager._poll_event_tail()
+    usages = _row_usages(manager)
+    assert usages["c1"]["output"] == 11
+    assert usages["c2"]["output"] == 22
+    assert usages["c3"] is None
+
+
+def test_split_poll_preserves_billing_facts(tmp_path):
+    acct = FakeAccount()
+    manager, _service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    path.touch()
+    manager._init_event_tail()
+
+    line = json.loads(_usage_line("api_1", 1_000, 0, 10, 1.0))
+    expected = TaskCardEventProjection.project_llm_response_usage(line)[1]
+    _write_lines(path, [json.dumps(line)])
+    manager._poll_event_tail()
+    _write_lines(path, [_call_line("c1", "api_1", 2.0)])
+    manager._poll_event_tail()
+    assert _row_usages(manager)["c1"] == expected
+
+
+def test_call_usage_cache_is_bounded_and_resets_on_truncation(tmp_path, monkeypatch):
+    acct = FakeAccount()
+    manager, _service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    monkeypatch.setattr(manager, "_TASK_CARD_EVENT_WINDOW", 2)
+    path = _events_path(tmp_path)
+    path.touch()
+    manager._init_event_tail()
+
+    _write_lines(path, [
+        _usage_line(f"api_{i}", 1_000, 0, i + 1, float(i)) for i in range(20)
+    ])
+    manager._poll_event_tail()
+    assert len(manager._task_card_call_usages) == 8
+    assert "api_0" not in manager._task_card_call_usages
+    assert "api_19" in manager._task_card_call_usages
+
+    path.write_text("", encoding="utf-8")
+    manager._poll_event_tail()
+    assert manager._task_card_call_usages == {}
+    _write_lines(path, [_call_line("c1", "api_19", 1.0)])
+    manager._poll_event_tail()
+    assert _row_usages(manager)["c1"] is None
 
 
 def test_divider_context_fallbacks():
@@ -1030,6 +1272,40 @@ def test_malformed_current_telemetry_carrier_clears_previous_snapshot(tmp_path):
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert "calls 7" not in edits[-1][3]
     assert "session ·" not in edits[-1][3]
+
+
+def test_fresh_llm_response_replaces_exact_stale_93_8k_session_and_rehydrates(tmp_path):
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [
+        _tool_call_line(),
+        _legacy_session_line(
+            input_tokens=93_800,
+            output_tokens=100,
+            session_cache_rate=0.5,
+            cache_miss_tokens=46_900,
+            cache_miss_budget=1_000_000,
+            api_calls=1,
+            context_tokens=93_800,
+            context_window=272_000,
+            context_usage=round(93_800 / 272_000, 5),
+        ),
+    ])
+    manager._poll_event_tail()
+    assert "tokens 93.8k" in acct.calls[-1][3]
+
+    _write_lines(events_path, [_llm_response_session_line()])
+    manager._poll_event_tail()
+    rendered = acct.calls[-1][3]
+    assert "tokens 150.3k" in rendered and "tokens 93.8k" not in rendered
+    assert "ctx 55% · 150.3k/272.0k" in rendered
+
+    manager2, _ = _manager(tmp_path, acct)
+    manager2._init_event_tail()
+    assert manager2._task_card_event_metadata == manager._task_card_event_metadata
+    assert manager2._task_card_event_metadata["input_tokens"] == 150_300
 
 
 def _programmable_update(manager, account, chat_id, lines):
@@ -1765,7 +2041,7 @@ def test_active_seconds_tick_does_not_edit_after_interval(
     manager._broadcast_task_card_event_window()
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert len(edits) == 2
-    assert "agent · idle" in edits[-1][3]
+    assert "<b>Agent</b> · idle" in edits[-1][3]
 
 
 def test_fingerprint_ignores_only_wall_clock_ticks(tmp_path):
@@ -1800,3 +2076,554 @@ def test_fingerprint_ignores_only_wall_clock_ticks(tmp_path):
     assert fingerprint(active_12) == fingerprint(active_13)
     assert fingerprint(active_12) != fingerprint(idle)
     assert fingerprint(active_13) != fingerprint(active_with_usage)
+
+
+# ---------------------------------------------------------------------------
+# Telegram-only API list-price line: live append + rehydrate via the manager
+# ---------------------------------------------------------------------------
+#
+# Real TelegramManager, FakeAccount transport, tiny in-memory price catalog
+# installed as ``api_cost.CATALOG``: no provider, Telegram or catalog network.
+
+_PRICE_LINE_RE = re.compile(r"^\s*(?:<?\$[\d.,]+\+? · ↓|cost (?:n/a|\?|loading))")
+
+
+def _is_price_line(line: str) -> bool:
+    """The compact Telegram API list-price line."""
+    return bool(_PRICE_LINE_RE.match(line))
+
+
+def _price_lines(text: str) -> list[str]:
+    return [line for line in text.splitlines() if _is_price_line(line)]
+
+
+_FIXED_NOW = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc)  # footer clock
+_TINY = {
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "cache_read_input_token_cost": 1e-07,
+    "cache_creation_input_token_cost": 2e-06,
+}
+_TINY2 = {name: rate * 2 for name, rate in _TINY.items()}
+_BILL = {"model": "tiny", "cache_write_tokens": 1000, "billable_output_tokens": 500}
+# total 10k input / 4k read / 1k write / 500 output over a 2.0 s API delay.
+_TINY_LINE = "$0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004"
+_TINY2_LINE = "$0.0168 · ↓$0.0020 ↑$0.0140 | $0.0008"
+
+
+def _static_catalog(monkeypatch, models):
+    """Install a ready in-memory catalog: no fetch, no thread, no network."""
+
+    def no_fetch(*_args):
+        raise AssertionError("live catalog fetch attempted")
+
+    catalog = api_cost.PriceCatalog(no_fetch, refresh_after_s=1e12)
+    catalog._models = {name: dict(rates) for name, rates in models.items()}
+    catalog._loaded_at = catalog._clock()
+    catalog._as_of = "2026-09-29"
+    monkeypatch.setattr(api_cost, "CATALOG", catalog)
+    return catalog
+
+
+def _priced_tool_call(api, call, ts):
+    return json.dumps({
+        "type": "tool_call", "ts": ts, "api_call_id": api, "tool_name": "bash",
+        "tool_call_id": call, "tool_trace_id": "t1",
+        "tool_args": {"action": "run", "_reasoning": "work"},
+    })
+
+
+def _priced_diary(api, ts, text="pure text answer"):
+    return json.dumps({
+        "type": "diary", "ts": ts, "api_call_id": api, "text": text, "visibility": "public",
+    })
+
+
+def _priced_llm(api, ts, *, billing=None, total=10_000, cached=4_000, out=500):
+    event = {
+        "type": "llm_response", "ts": ts, "api_call_id": api, "input_tokens": total,
+        "cached_tokens": cached, "output_tokens": out, "thinking_tokens": 0,
+        "estimated": False,
+    }
+    if billing is not None:
+        event["usage_billing"] = billing
+    return json.dumps(event)
+
+
+def _priced_carrier(call, out, miss):
+    return json.dumps({
+        "type": "notification_block_injected", "call_id": call,
+        "_meta": {"agent_meta": {"agent_state": {"token_usage": {"current_call": {
+            "output": out, "cache_miss": miss, "cache_rate": 0.4,
+        }}}}},
+    })
+
+
+def _last_edit(acct) -> str:
+    return [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+
+
+def _assert_price_line_after_metrics(text, expected, *, metrics="↓"):
+    lines = text.splitlines()
+    cost = [i for i, line in enumerate(lines) if _is_price_line(line)]
+    assert len(cost) == 1, text
+    assert expected in lines[cost[0]]
+    # The established token glyphs stay directly above cost; time is its own line.
+    assert metrics in lines[cost[0] - 1]
+    assert "$" not in lines[cost[0] - 1]
+
+
+def test_live_append_renders_actual_prices_directly_after_old_metrics_row(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    _write_lines(_events_path(tmp_path), [
+        _priced_tool_call("api-0", "c0", 100.0),
+        _priced_tool_call("api-1", "c1", 102.0),
+        _priced_llm("api-1", 103.0, billing=_BILL),
+    ])
+
+    manager._poll_event_tail()
+
+    text = _last_edit(acct)
+    _assert_price_line_after_metrics(text, _TINY_LINE)
+    assert "↓500" in text and "↑6.0k" in text  # old metrics numbers intact
+    assert "≥" not in text
+
+
+def test_same_round_llm_then_later_carrier_batch_keeps_price_line(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    _write_lines(path, [
+        _priced_tool_call("api-0", "c0", 100.0),
+        _priced_tool_call("api-1", "c1", 102.0),
+        _priced_llm("api-1", 103.0, billing=_BILL),
+    ])
+    manager._poll_event_tail()
+    _assert_price_line_after_metrics(_last_edit(acct), _TINY_LINE)
+
+    # A later batch carries only the carrier for the same call: the row keeps
+    # its own round's facts and the metrics row follows the carrier numbers.
+    _write_lines(path, [_priced_carrier("c1", 500, 6_100)])
+    manager._poll_event_tail()
+    text = _last_edit(acct)
+    _assert_price_line_after_metrics(text, _TINY_LINE)
+    assert "↑6.1k" in text
+
+
+def test_carrier_first_then_llm_response_in_later_batch_gains_price_line(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    _write_lines(path, [
+        _priced_tool_call("api-0", "c0", 100.0),
+        _priced_tool_call("api-1", "c1", 102.0),
+        _priced_carrier("c1", 500, 6_000),
+    ])
+    manager._poll_event_tail()
+    before = _last_edit(acct)
+    assert "↑6.0k" in before and _price_lines(before)
+    assert "cost n/a (model unknown)" in before  # carrier alone: no round facts yet
+
+    _write_lines(path, [_priced_llm("api-1", 103.0, billing=_BILL)])
+    manager._poll_event_tail()
+    _assert_price_line_after_metrics(_last_edit(acct), _TINY_LINE)
+
+
+def test_rehydrate_reverse_tail_and_ensure_resident_render_price_line(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    _write_lines(_events_path(tmp_path), [
+        _priced_tool_call("api-0", "c0", 100.0),
+        _priced_tool_call("api-1", "c1", 102.0),
+        _priced_llm("api-1", 103.0, billing=_BILL),
+        _priced_carrier("c1", 500, 6_000),
+    ])
+
+    restarted, _ = _manager(tmp_path, acct)
+    restarted._init_event_tail()  # reverse-tail rehydrate, no checkpoint file
+    acct.calls.clear()
+    restarted._broadcast_task_card_event_window()
+    _assert_price_line_after_metrics(_last_edit(acct), _TINY_LINE)
+
+    # The second automatic entry point (first card for a newly established chat).
+    acct.calls.clear()
+    restarted._ensure_task_card_resident("mybot", 777)
+    frames = [c[3] for c in acct.calls if c[0] in ("send_message", "edit_message") and c[1] == 777]
+    assert frames, acct.calls
+    _assert_price_line_after_metrics(frames[-1], _TINY_LINE)
+
+
+def test_repeated_render_one_price_line_per_group_and_model_change_between_calls(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY, "tiny2": _TINY2})
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    service.normal_rows = 2
+    _pre_resident(acct, 555, manager)
+    _write_lines(_events_path(tmp_path), [
+        _priced_tool_call("api-0", "c0", 100.0),
+        _priced_tool_call("api-1", "c1", 102.0),
+        _priced_llm("api-1", 103.0, billing=_BILL),
+        _priced_tool_call("api-2", "c2", 104.0),
+        _priced_llm("api-2", 105.0, billing={**_BILL, "model": "tiny2"}),
+    ])
+    manager._poll_event_tail()
+
+    def render():
+        return TaskCardEventProjection.render_event_groups(
+            manager._task_card_event_groups_snapshot(),
+            normal_rows=2,
+            now=_FIXED_NOW,
+            usage_line=api_cost.usage_line,
+        )
+
+    first = render()
+    assert first == render() == render()  # repeated render is stable
+    assert len(_price_lines(first)) == 2  # exactly one line per group
+    # Each exact call id is priced with its OWN model's catalog entry.
+    lines = _price_lines(first)
+    assert _TINY_LINE in lines[0] and _TINY2_LINE in lines[1]
+    delivered = _last_edit(acct)
+    assert _TINY_LINE in delivered and _TINY2_LINE in delivered
+
+    # A later carrier for the second call cannot take the first call's bill.
+    _write_lines(_events_path(tmp_path), [_priced_carrier("c2", 500, 6_000)])
+    manager._poll_event_tail()
+    after = _last_edit(acct)
+    assert _TINY_LINE in after and _TINY2_LINE in after and len(_price_lines(after)) == 2
+
+
+def test_pure_text_call_gets_price_line(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    _write_lines(_events_path(tmp_path), [
+        _priced_tool_call("api-0", "c0", 100.0),
+        _priced_diary("api-1", 102.0),
+        _priced_llm("api-1", 103.0, billing=_BILL),
+    ])
+    manager._poll_event_tail()
+
+    text = _last_edit(acct)
+    assert "pure text answer" in text
+    _assert_price_line_after_metrics(text, _TINY_LINE)
+
+
+def test_legacy_event_without_billing_facts_shows_unknown_never_a_price(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    _write_lines(_events_path(tmp_path), [
+        _priced_tool_call("api-0", "c0", 100.0),
+        _priced_tool_call("api-1", "c1", 102.0),
+        _priced_llm("api-1", 103.0),  # legacy: no usage_billing at all
+    ])
+    manager._poll_event_tail()
+
+    text = _last_edit(acct)
+    assert "cost n/a (model unknown)" in text
+    assert "↓500" in text  # the old metrics row is still rendered
+    assert not any(line.lstrip().startswith("$") for line in text.splitlines())  # no price without billing facts
+
+
+def test_price_line_is_html_escaped_in_telegram_delivery(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    _write_lines(_events_path(tmp_path), [
+        _priced_tool_call("api-0", "c0", 100.0),
+        _priced_tool_call("api-1", "c1", 102.0),
+        # 500 cached tokens -> cache-hit part 5e-05 USD renders as "<$0.0001".
+        _priced_llm("api-1", 103.0, billing=_BILL, cached=500),
+    ])
+    manager._poll_event_tail()
+
+    text = _last_edit(acct)
+    assert "| &lt;$0.0001" in text
+    assert "| <$0.0001" not in text
+
+
+def test_default_shared_render_is_byte_identical_and_hook_only_adds_price_lines(tmp_path, monkeypatch):
+    """Feishu/non-Telegram callers render with no hook: billing facts are inert."""
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    service.normal_rows = 2
+    _write_lines(_events_path(tmp_path), [
+        _priced_tool_call("api-0", "c0", 100.0),
+        _priced_tool_call("api-1", "c1", 102.0),
+        _priced_llm("api-1", 103.0, billing=_BILL),
+        _priced_diary("api-2", 104.0),
+        _priced_llm("api-2", 105.0, billing=_BILL),
+    ])
+    manager._poll_event_tail()
+
+    groups = manager._task_card_event_groups_snapshot()
+    assert any("bill" in row.get("_usage", {}) for g in groups for row in g["events"])
+    stripped = copy.deepcopy(groups)
+    for group in stripped:
+        for row in group["events"]:
+            if isinstance(row.get("_usage"), dict):
+                row["_usage"].pop("bill", None)
+
+    default = TaskCardEventProjection.render_event_groups(groups, normal_rows=2, now=_FIXED_NOW)
+    assert default == TaskCardEventProjection.render_event_groups(
+        stripped, normal_rows=2, now=_FIXED_NOW,
+    )
+    assert "STANDARD" not in default and "LiteLLM" not in default and "$" not in default
+
+    telegram = TaskCardEventProjection.render_event_groups(
+        groups, normal_rows=2, now=_FIXED_NOW, usage_line=api_cost.usage_line,
+    )
+    assert len(_price_lines(telegram)) == 2
+    # Removing exactly the added price lines gives back the shared bytes.
+    kept = [line for line in telegram.splitlines() if not _is_price_line(line)]
+    assert kept == default.splitlines()
+
+
+def test_price_lines_stay_whole_under_the_text_budget(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    service.normal_rows = 10
+    _pre_resident(acct, 555, manager)
+    lines = [_priced_tool_call("api-0", "c0", 100.0)]
+    for index in range(1, 11):
+        ts = 100.0 + 2 * index
+        lines.append(_priced_diary(f"api-{index}", ts, text="long answer " * 40))
+        lines.append(_priced_llm(f"api-{index}", ts + 1, billing=_BILL))
+    _write_lines(_events_path(tmp_path), lines)
+    manager._poll_event_tail()
+
+    raw = TaskCardEventProjection.render_event_groups(
+        manager._task_card_event_groups_snapshot(), normal_rows=10, usage_line=api_cost.usage_line,
+    )
+    assert len(raw) <= TaskCardEventProjection.TEXT_LIMIT
+    for line in raw.splitlines():
+        if _is_price_line(line):
+            # A price line is either whole or absent; never cut mid-number.
+            assert re.search(r"\| (?:<?\$[\d.,]+|\?)(?: stale prices)?$", line) or "cost " in line
+            assert len(line) <= TaskCardEventProjection.EVENT_TEXT_CAP
+
+
+# ---------------------------------------------------------------------------
+# SESSION Cost row: since-molt sum of the per-call estimates
+# ---------------------------------------------------------------------------
+
+
+def _cost_llm(index, ts, *, molt=4, model="tiny"):
+    """A priced ``llm_response`` ($0.0084 on tiny) carrying a coherent v1 snapshot."""
+    event = json.loads(_priced_llm(f"api-{molt}-{index}", ts, billing={**_BILL, "model": model}))
+    total, cached, out = 10_000, 4_000, 500
+    cum_in, cum_cached = total * index, cached * index
+    event["session_usage"] = {
+        "schema": TaskCardEventProjection.SESSION_USAGE_SCHEMA,
+        "molt_count": molt, "api_call_index": index, "api_calls": index,
+        "input_tokens": cum_in, "output_tokens": out * index, "cached_tokens": cum_cached,
+        "avg_input_tokens_per_api_call": total,
+        "session_cache_rate": round(cum_cached / cum_in, 5),
+        "cache_miss_tokens": cum_in - cum_cached, "cache_miss_budget": 1_000_000,
+        "cache_miss_remaining_tokens": 1_000_000 - (cum_in - cum_cached),
+        "context_tokens": total,
+    }
+    return json.dumps(event)
+
+
+def _cost_rows(text):
+    return [line for line in text.splitlines() if line.startswith("<b>Cost</b> · ")]
+
+
+def test_session_cost_row_sums_each_live_response_once_under_session(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY, "tiny2": _TINY2})
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    manager._poll_event_tail()  # no journal yet: later lines take the live append path
+    assert manager._task_card_event_path == path and not path.exists()
+    _write_lines(path, [
+        # One API round with two tool calls is still one response.
+        _priced_tool_call("api-4-1", "c1", 100.0),
+        _priced_tool_call("api-4-1", "c2", 100.5),
+        _cost_llm(1, 101.0),
+        _priced_tool_call("api-4-2", "c3", 102.5),
+        _cost_llm(2, 103.0, model="tiny2"),
+    ])
+    manager._poll_event_tail()
+
+    text = _last_edit(acct)
+    # $0.0084 (tiny) + $0.0168 (tiny2): each response at its own recorded model.
+    assert _cost_rows(text) == ["<b>Cost</b> · total ~$0.0252 · in $0.0150 · write $0.0060 · read $0.0012 · out $0.0030"]
+    lines = text.splitlines()
+    session_at, cost_at = lines.index("📊 <b>SESSION</b>"), lines.index(_cost_rows(text)[0])
+    assert session_at < cost_at and all(
+        line.startswith("<b>") and "$" not in line for line in lines[session_at + 1:cost_at]
+    )
+    # The per-call price line is unchanged and the Cost row is not one.
+    _assert_price_line_after_metrics(text, _TINY2_LINE)
+
+    # The visible row window and re-broadcasts neither shrink nor recount it.
+    service.normal_rows = 2
+    manager._broadcast_task_card_event_window()
+    manager._poll_event_tail()
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0252 · in $0.0150 · write $0.0060 · read $0.0012 · out $0.0030"]
+    assert len(_price_lines(_last_edit(acct))) == 2
+
+
+def test_session_cost_row_rehydrates_complete_or_honestly_partial(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY, "tiny2": _TINY2})
+    acct = FakeAccount()
+    _pre_resident(acct, 555, None)
+    _write_lines(_events_path(tmp_path), [
+        _priced_tool_call("api-4-1", "c1", 100.0),
+        _cost_llm(1, 101.0),
+        _priced_tool_call("api-4-2", "c2", 102.0),
+        _cost_llm(2, 103.0, model="tiny2"),
+        _priced_tool_call("api-4-3", "c3", 104.0),
+        _cost_llm(3, 105.0),
+    ])
+
+    # Restart/refresh: the existing bounded tail still holds calls 1-3.
+    restarted, _ = _manager(tmp_path, acct)
+    restarted._init_event_tail()
+    restarted._broadcast_task_card_event_window()
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0336 · in $0.0200 · write $0.0080 · read $0.0016 · out $0.0040"]
+
+    # A tail window that no longer reaches call 1 is a lower bound, not $0
+    # and not a complete total.
+    bounded, _ = _manager(tmp_path, acct)
+    bounded._TASK_CARD_EVENT_WINDOW = 2
+    bounded._init_event_tail()
+    bounded._broadcast_task_card_event_window()
+    assert _cost_rows(_last_edit(acct)) == [
+        "<b>Cost</b> · total ≥$0.0252 · in $0.0150+ · write $0.0060+ · read $0.0012+ · out $0.0030+ · partial"
+    ]
+
+
+def test_session_cost_row_resets_at_molt_and_is_absent_for_legacy_history(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    _write_lines(path, [
+        _priced_tool_call("api-0", "c0", 100.0),
+        _priced_tool_call("api-1", "c1", 102.0),
+        _priced_llm("api-1", 103.0, billing=_BILL),  # no v1 snapshot: no session total
+    ])
+    manager._poll_event_tail()
+    assert _cost_rows(_last_edit(acct)) == []
+
+    _write_lines(path, [
+        _priced_tool_call("api-4-1", "c2", 104.0), _cost_llm(1, 105.0),
+        _priced_tool_call("api-4-2", "c3", 106.0), _cost_llm(2, 107.0),
+    ])
+    manager._poll_event_tail()
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0168 · in $0.0100 · write $0.0040 · read $0.0008 · out $0.0020"]
+
+    _write_lines(path, [
+        json.dumps({"type": "psyche_molt", "molt_count": 5}),
+        _priced_tool_call("api-5-1", "c4", 108.0), _cost_llm(1, 109.0, molt=5),
+    ])
+    manager._poll_event_tail()
+    assert _cost_rows(_last_edit(acct)) == ["<b>Cost</b> · total ~$0.0084 · in $0.0050 · write $0.0020 · read $0.0004 · out $0.0010"]
+
+
+def test_session_cost_row_is_escaped_inside_the_telegram_session_section():
+    from lingtai.mcp_servers.telegram.manager import _telegram_task_card_html
+
+    divider = TaskCardEventProjection.METADATA_DIVIDER
+    html = _telegram_task_card_html("\n".join([
+        divider, "Session · sol", "Cost · session <b>&", divider, "Identity · path · /w",
+    ]))
+    assert html.splitlines() == [
+        "📊 <b>SESSION</b>",
+        "<b>Agent</b> · sol",
+        "<b>Cost</b> · session &lt;b&gt;&amp;",
+        "",
+        "🪪 <b>IDENTITY</b>",
+        "<b>Path</b> · <code>/w</code>",
+    ]
+    # Outside the Session section the same text is ordinary escaped content.
+    assert _telegram_task_card_html("Cost · <x>") == "Cost · &lt;x&gt;"
+
+
+def test_actual_telegram_tail_stream_time_and_tokens_use_two_lines(tmp_path, monkeypatch):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    event = json.loads(_priced_llm("api_timed", 112.3, total=1000, cached=100, out=200))
+    event["thinking_tokens"] = 20
+    event["stream_timing"] = {
+        "first_token_s": 1.2, "generation_s": 4.0, "generation_tokens": 180,
+    }
+    _write_lines(_events_path(tmp_path), [
+        _priced_tool_call("api_before", "call_before", 100.0),
+        json.dumps(event), _priced_diary("api_timed", 112.4),
+    ])
+    manager._poll_event_tail()
+    text = _last_edit(acct)
+    assert "↻12.4s · ⏱7.2s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
+    assert "TTFT" not in text and "↻" in text
+
+
+@pytest.mark.parametrize("mode", ["known", "multiple", "tool", "missing", "asleep", "restart", "partial", "zero"])
+@pytest.mark.parametrize("live", [False, True])
+def test_actual_telegram_idle_time_row(tmp_path, monkeypatch, mode, live):
+    _static_catalog(monkeypatch, {"tiny": _TINY})
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    before = _priced_tool_call("api_before", "call_before", 100.0)
+    enter = {"type": "agent_state", "old": "active", "new": "idle", "ts": 101.0}
+    leave = {"type": "agent_state", "old": "idle", "new": "active", "ts": 108.0, "idle_elapsed_s": 2.5}
+    states = [enter, leave]
+    if mode == "multiple":
+        states += [enter, leave]
+    elif mode == "tool":
+        states = [{"type": "tool_result", "tool_call_id": "call_before", "ts": 108.0, "status": "success", "elapsed_ms": 8000}]
+    elif mode == "missing":
+        states = [enter, {k: v for k, v in leave.items() if k != "idle_elapsed_s"}]
+    elif mode == "asleep":
+        states = [{"type": "agent_state", "old": "active", "new": "asleep"}, {"type": "agent_state", "old": "asleep", "new": "active"}]
+    elif mode == "restart":
+        states = [enter, {"type": "heartbeat_start"}, leave]
+    elif mode == "partial":
+        states = [leave]
+    elif mode == "zero":
+        states = [enter, {**leave, "idle_elapsed_s": 0.0}]
+    event = json.loads(_priced_llm("api_timed", 112.3, total=1000, cached=100, out=200))
+    event["thinking_tokens"] = 20
+    event["stream_timing"] = {"first_token_s": 1.2, "generation_s": 4.0, "generation_tokens": 180}
+    lines = [json.dumps(state) for state in states] + [json.dumps(event), _priced_diary("api_timed", 112.4)]
+    if live:
+        _write_lines(path, [before])
+        manager._poll_event_tail()
+        # Exercise interval reduction across separate foreground polls.
+        for line in lines:
+            with path.open("a") as f:
+                f.write(line + "\n")
+            manager._poll_event_tail()
+    else:
+        _write_lines(path, [before] + lines)
+        manager._poll_event_tail()
+    text = _last_edit(acct)
+    expected = {"known": "2.5", "multiple": "5.0", "zero": "0.0"}.get(mode)
+    coffee = f" · ☕{expected}s" if expected is not None else ""
+    residual = {"known": "4.7", "multiple": "2.2"}.get(mode, "7.2")
+    assert f"↻12.4s · ⏱{residual}s{coffee} · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
+    if expected is None:
+        assert "☕" not in text

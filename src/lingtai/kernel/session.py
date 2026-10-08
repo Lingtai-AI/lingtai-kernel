@@ -13,7 +13,6 @@ from typing import Any, Callable, TYPE_CHECKING
 from .config import (
     CONTEXT_PRESSURE_HIGH_RATIO,
     AgentConfig,
-    THINKING_OWNED_PROVIDERS,
     # Re-exported for backward compatibility: the streak logic now lives in
     # ``ContextPressureReminder`` and reads these off ``config`` directly, but
     # ``from lingtai.kernel.session import CONTEXT_PRESSURE_*`` remains a public
@@ -29,6 +28,7 @@ from .llm import (
     LLMResponse,
     LLMService,
 )
+from .llm.base import checked_count, safe_billing_model, safe_billing_tier
 from .llm_utils import (
     send_with_timeout,
     send_with_timeout_stream,
@@ -37,6 +37,7 @@ from .llm_utils import (
 from .llm.reasoning_effort import ReasoningEffortController, ReasoningEffortResult
 from .agent_session import AgentSession, RuntimeSession, new_runtime_session
 from .logging import get_logger
+from .meta_block import CACHE_MISS_BUDGET_DEFAULT, build_session_token_economy
 from .reminders.context_pressure import ContextPressureReminder
 from .token_counter import count_tokens, count_tool_tokens
 
@@ -66,48 +67,10 @@ def _elapsed_ms(start: float) -> int:
     return max(0, int((time.monotonic() - start) * 1000))
 
 
-#: Allowlisted ``llm_call`` reasoning-observation fields. Bounded plain strings
-#: only — never payloads, prompts, credentials, or arbitrary provider scalars.
-_REASONING_OBSERVATION_KEYS = (
-    "provider",
-    "wire",
-    "effort_requested",
-    "effort_normalized",
-    "effort_emitted",
-    "effort_provenance",
-)
-
-
-def _reasoning_observation_fields(chat: object) -> dict[str, str]:
-    """Return the reasoning observation for an ``llm_call``, if there is one.
-
-    Read from the one decision the adapter resolved when the session was
-    constructed, so an alias can never be reported as if the requested and
-    emitted values were identical, and an omitted level stays distinguishable
-    from explicitly disabled reasoning. A session on a route that applies no
-    reasoning control contributes no fields at all.
-    """
-    applied = getattr(chat, "reasoning_application", None)
-    if applied is None:
-        return {}
-    fields = applied.observation_fields()
-    return {
-        key: str(fields[key])
-        for key in _REASONING_OBSERVATION_KEYS
-        if key in fields
-    }
-
-
 _SAFE_USAGE_EXTRA_EVENT_KEYS = {
     "codex_account_id_sha8",
     "codex_auth_path_sha8",
     "codex_auth_path_source",
-    "codex_pool_fallback",
-    "codex_pool_source_ref",
-    "codex_pool_source_index",
-    "codex_pool_size",
-    "codex_pool_weight",
-    "codex_pool_model_scope",
     "codex_session_id",
     "codex_thread_id",
     "codex_prompt_cache_key",
@@ -151,6 +114,27 @@ def _safe_usage_extra_for_event(extra: object) -> dict[str, str] | None:
             continue
         safe[key] = str(value)[:512]
     return safe or None
+
+
+def _usage_billing_for_event(usage: object, model: object) -> dict[str, object] | None:
+    """Bounded neutral pricing evidence for one ``llm_response`` round.
+
+    Carries only the model that made this exact call, the wire service tier the
+    adapter REQUESTED for it (not an applied tier), and the adapter's explicitly
+    established non-negative integer counts; unknown stays absent.
+    """
+    billing: dict[str, object] = {}
+    safe_model = safe_billing_model(model)
+    if safe_model is not None:
+        billing["model"] = safe_model
+    tier = safe_billing_tier(getattr(usage, "requested_service_tier", None))
+    if tier is not None:
+        billing["service_tier"] = tier
+    for key in ("cache_write_tokens", "cache_write_1h_tokens", "billable_output_tokens"):
+        value = checked_count(getattr(usage, key, None))
+        if value is not None:
+            billing[key] = value
+    return billing or None
 
 
 def _ensure_spill_manifest_fields(messages: list) -> None:
@@ -199,6 +183,8 @@ class SessionManager:
         logger_fn: Callable[..., None] | None,
         build_system_batches_fn: Callable[[], list[str]] | None = None,
         tool_result_recovery_lookup_fn: Callable[[Any], Any] | None = None,
+        molt_count_fn: Callable[[], int] | None = None,
+        cache_miss_budget_fn: Callable[[], int] | None = None,
     ):
         self._llm_service = llm_service
         self._config = config
@@ -209,6 +195,8 @@ class SessionManager:
         self._build_tool_schemas_fn = build_tool_schemas_fn
         self._logger_fn = logger_fn
         self._tool_result_recovery_lookup_fn = tool_result_recovery_lookup_fn
+        self._molt_count_fn = molt_count_fn
+        self._cache_miss_budget_fn = cache_miss_budget_fn
         # Optional batched system-prompt builder. When provided, adapters
         # that support per-block caching receive mutation-frequency batches
         # and can place cache breakpoints between them. When absent, the
@@ -257,11 +245,6 @@ class SessionManager:
         self._token_fallback_warned = False
         self._latest_input_tokens = 0
         self._latest_token_usage_snapshot: dict[str, Any] | None = None
-
-        # Process-local runtime reasoning-effort control. The controller is
-        # agent-owned, survives in-process session rebuilds, and is intentionally
-        # not persisted across refresh/restart/molt.
-        self._reasoning_effort = ReasoningEffortController()
 
         # Sustained context-pressure / molt reminder (channel B). Transient
         # runtime state — not persisted, since a fresh/restored session has
@@ -394,15 +377,10 @@ class SessionManager:
     def _session_thinking(self) -> str | None:
         """Resolve the session-level ``thinking`` argument.
 
-        Provider-owned routes (``THINKING_OWNED_PROVIDERS``, e.g. DeepSeek)
-        keep an explicitly configured ``None`` so their provider policy can
-        honor omission (no reasoning field on the wire); promoting it to the
-        legacy cross-provider ``"high"`` default would change the payload and
-        corrupt the ``llm_call`` observation record. Every other provider keeps
-        the historical programmatic-``None`` -> ``"high"`` fallback.
+        A programmatic ``None`` keeps the historical ``"high"`` fallback; the
+        ``"default"`` sentinel (an omitted manifest level on routes that own
+        their omitted default) passes through for the adapter to map.
         """
-        if str(self._config.provider or "").lower() in THINKING_OWNED_PROVIDERS:
-            return self._config.thinking
         return self._config.thinking or "high"
 
     # ------------------------------------------------------------------
@@ -520,7 +498,6 @@ class SessionManager:
             "model": self._config.model or self._llm_service.model or "unknown",
             "api_call_id": api_call_id,
         }
-        llm_call_fields.update(_reasoning_observation_fields(self._chat))
         self._log("llm_call", **llm_call_fields)
 
         retry_timeout = self._config.retry_timeout
@@ -651,6 +628,30 @@ class SessionManager:
         self._tools_tokens = count_tool_tokens(self._build_tool_schemas_fn())
         self._token_decomp_dirty = False
 
+    def _current_molt_count(self) -> int:
+        """Resolve the current Agent Session generation without an agent reference."""
+        if self._molt_count_fn is not None:
+            try:
+                value = self._molt_count_fn()
+            except Exception:
+                value = None
+            if type(value) is int and value >= 0:
+                return value
+        installed = self._agent_session
+        value = getattr(installed, "molt_count", 0)
+        return value if type(value) is int and value >= 0 else 0
+
+    def _current_cache_miss_budget(self) -> int:
+        """Resolve the effective budget through the optional narrow callback."""
+        if self._cache_miss_budget_fn is not None:
+            try:
+                value = self._cache_miss_budget_fn()
+            except Exception:
+                value = None
+            if type(value) is int and value > 0:
+                return value
+        return CACHE_MISS_BUDGET_DEFAULT
+
     def _track_usage(
         self,
         response: LLMResponse,
@@ -663,6 +664,13 @@ class SessionManager:
         tokenizer (tiktoken / gemini / char estimate) and sets
         ``token_fallback_used`` so the TUI can warn the user.
         """
+        timing_fields = dict(timing_fields or {})
+        if type(getattr(response.usage, "first_token_s", None)) in (int, float):
+            timing_fields["stream_timing"] = {
+                "first_token_s": response.usage.first_token_s,
+                "generation_s": response.usage.generation_s,
+                "generation_tokens": response.usage.generation_tokens,
+            }
         usage_start = time.monotonic()
         if self._token_decomp_dirty:
             self._update_token_decomposition()
@@ -789,12 +797,38 @@ class SessionManager:
             if api_call_id:
                 snapshot["api_call_id"] = str(api_call_id)
             self._latest_token_usage_snapshot = snapshot
+
+            # Additive, versioned, since-molt snapshot.  This is built only after
+            # ``track_llm_usage`` advanced every cumulative counter, so it is
+            # coherent with this exact provider round even when no notification
+            # carrier/tool result follows (pure text and carrier-less tool use).
+            session_usage = {
+                "schema": "lingtai.token_usage.session/v1",
+                "molt_count": self._current_molt_count(),
+                "api_call_index": int(self._api_calls),
+                **build_session_token_economy(
+                    {
+                        "api_calls": self._api_calls,
+                        "input_tokens": self._total_input_tokens,
+                        "output_tokens": self._total_output_tokens,
+                        "cached_tokens": self._total_cached_tokens,
+                    },
+                    context_tokens=input_tokens,
+                    context_window=latest_context_window,
+                    cache_miss_budget=self._current_cache_miss_budget(),
+                ),
+            }
             usage_track_ms = _elapsed_ms(usage_start)
             telemetry_fields = dict(timing_fields or {})
             telemetry_fields["usage_track_ms"] = usage_track_ms
             usage_extra_for_event = _safe_usage_extra_for_event(usage_extra)
             if usage_extra_for_event:
                 telemetry_fields["usage_extra"] = usage_extra_for_event
+            usage_billing = _usage_billing_for_event(
+                response.usage, self._config.model or self._llm_service.model,
+            )
+            if usage_billing:
+                telemetry_fields["usage_billing"] = usage_billing
             self._log(
                 "llm_response",
                 input_tokens=response.usage.input_tokens,
@@ -803,6 +837,7 @@ class SessionManager:
                 cached_tokens=response.usage.cached_tokens,
                 estimated=fallback,
                 api_call_id=response.api_call_id,
+                session_usage=session_usage,
                 **telemetry_fields,
             )
 
@@ -958,6 +993,7 @@ class SessionManager:
         usage = self.get_token_usage()
         api_calls = max(0, int(usage.get("api_calls", 0) or 0))
         input_tokens = max(0, int(usage.get("input_tokens", 0) or 0))
+        output_tokens = max(0, int(usage.get("output_tokens", 0) or 0))
         cached_tokens = max(0, int(usage.get("cached_tokens", 0) or 0))
         session_cache_rate = (
             round(min(cached_tokens / input_tokens, 1.0), 5)
@@ -969,6 +1005,7 @@ class SessionManager:
             "session_cache_rate": session_cache_rate,
             "api_calls": api_calls,
             "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "cached_tokens": cached_tokens,
             "cache_miss_tokens": max(input_tokens - cached_tokens, 0),
             "avg_input_tokens_per_api_call": avg_input,

@@ -1,63 +1,33 @@
 ---
 related_files:
-  - src/lingtai/tools/web_search/manual/reference/academic-pipeline.md
   - src/lingtai/tools/web_search/manual/SKILL.md
+  - src/lingtai/tools/web_search/manual/reference/tier-quick-refs/SKILL.md
+  - src/lingtai/tools/web_search/manual/reference/academic-pipeline.md
+  - src/lingtai/tools/web_search/manual/assets/api-endpoints.json
 maintenance: |
-  Keep this bundled web-search reference synchronized with its parent manual and implementation when behavior or routing changes.
+  Keep this endpoint index and routing note aligned with the academic pipeline
+  and bundled endpoint asset. Verify current vendor policy; do not duplicate
+  runnable API recipes here.
 ---
-# Tier 1 — API Metadata Queries
+# Tier 1 — public API metadata
 
-> External legacy recipe, not a built-in `web` engine or installed-capability
-> promise. Start with public `web(search/browse)`; select a separate fallback
-> explicitly through [web-manual](../SKILL.md) only when needed. Check the
-> selected vendor's current API, dependencies, account access and quotas before
-> use. These examples grant no install, credential/config change, paid use or
-> access-control bypass authority. No live vendor validation is claimed here.
+Use when a known identifier or a documented public structured API is the right
+source. The historical endpoint inventory is
+[`assets/api-endpoints.json`](../assets/api-endpoints.json); the
+identifier and open-access sequence belongs to
+[academic-pipeline.md](academic-pipeline.md).
 
-> Part of the [web-manual](../SKILL.md) skill.
+| Input/need | First owner |
+|---|---|
+| DOI metadata/citations | CrossRef → OpenAlex; see academic pipeline. |
+| arXiv identifier | arXiv Atom API; derive the public PDF URL only when appropriate. |
+| PMID/PMC biomedical record | PubMed E-utilities or Europe PMC. |
+| CS/ML discovery | DBLP or Papers With Code, then the academic pipeline. |
+| OA copy | Unpaywall, then an applicable public repository/API. |
+| facts or public structured data | The matching endpoint in the asset and [real-time data](realtime-data.md). |
 
-**When it applies:** Known academic IDs (DOI, arXiv, PMID, PMC), or sites with free APIs.
-**Tools:** `requests` (HTTP) — call APIs directly from Python.
-**Speed:** ~0.5s.
-
-### Academic APIs
-
-| API | Endpoint | Best for |
-|-----|----------|----------|
-| **arXiv** | `GET https://export.arxiv.org/api/query?id_list={ID}` | CS/Physics/Math papers |
-| **OpenAlex** | `GET https://api.openalex.org/works/https://doi.org/{DOI}` | Any DOI → full metadata + citations |
-| **CrossRef** | `GET https://api.crossref.org/works/{DOI}` | DOI → metadata (title, authors, journal) |
-| **Semantic Scholar** | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI}?fields=...` | AI/ML papers, citation graphs |
-| **PubMed E-utilities** | `GET https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={PMID}` | Biomedical literature |
-| **CORE** | `GET https://api.core.ac.uk/v3/search/works?q={query}` | Open access full text (30M+ papers) |
-| **Unpaywall** | `GET https://api.unpaywall.org/v2/{DOI}?email=lingtai@users.noreply.github.com` | Find free PDF for any paper |
-| **Europe PMC** | `GET https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={q}&format=json` | Biomedical + PMC full text |
-| **DBLP** | `GET https://dblp.org/search/publ/api?q={query}&format=json&h=10` | Computer science conference papers |
-| **Papers With Code** | `GET https://paperswithcode.com/api/v1/search/?q={query}` | ML/AI papers with code + benchmarks |
-| **DOAJ** | `GET https://doaj.org/api/search/articles/{query}` | Open access journal articles |
-| **Zenodo** | `GET https://zenodo.org/api/records?q={query}` | Research data, software, datasets |
-| **NASA ADS** | `GET https://ui.adsabs.harvard.edu/abs/{arxiv_id}/bibtex` | Astrophysics/astronomy |
-
-
-### Quick Examples
-
-The runnable academic recipes have one owner:
-[Academic pipeline](academic-pipeline.md#doi-resolution-chain) for CrossRef,
-OpenAlex and Semantic Scholar; [PDF acquisition](academic-pipeline.md#pdf-acquisition-chain)
-for Unpaywall/CORE/Europe PMC; its DBLP/Papers With Code section for CS/ML.
-
-### Academic Search Pipeline: Find → Enrich → Get PDF
-
-Use [the end-to-end pipeline](academic-pipeline.md#end-to-end-pipeline), not a
-second local copy. For keyword batches, search OpenAlex with `per_page` and
-`sort=cited_by_count:desc`, retain title/DOI/year/citations/authors, and enrich
-each DOI with the owner's Unpaywall routine; missing OA or a failed lookup
-must not discard the search result. Preserve both `url_for_pdf` and landing
-`url` when available.
-
-### ID Resolution Chain
-
-The [academic routing table](academic-pipeline.md#quick-routing-table) owns
-DOI/arXiv/PMID/title/field routing and fallback order; its PDF acquisition
-chain owns Unpaywall → arXiv → CORE → Europe PMC (biomedical) ordering.
-Metadata-only callers need not fetch a PDF. Never bypass a paywall or login.
+Check response status, content type, current rate policy, and whether a key or
+mailto is required. Use an authorized real contact for Unpaywall under its current policy, not
+an invented identity or a copied example address. Preserve a search result when enrichment or OA
+lookup fails. Never bypass a publisher paywall or login, and never treat this
+external catalog as a built-in Web provider.

@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 # ``handle(agent, args)``, and optionally ``boot(agent)``. ``BaseAgent`` iterates
 # this mapping in ``_wire_intrinsics``; membership here is the mandatory-include
 # mechanism (there is no manifest gate for intrinsics).
-from . import email, system, context, soul  # noqa: E402  (lingtai.tools.<pkg>)
+from . import email, system, context  # noqa: E402  (lingtai.tools.<pkg>)
 # ``psyche`` is the single model-visible root for the four durable domains:
 # ``pad + lingtai + knowledge + skills = psyche``. It replaced the four former
 # public roots as a clean break: those tool names are unknown and fail loudly,
@@ -76,7 +76,6 @@ INTRINSICS: dict[str, dict[str, Any]] = {
     "system": {"module": system, "official_plugin": True},
     "context": {"module": context, "official_plugin": True},
     "psyche": {"module": psyche, "official_plugin": True},
-    "soul": {"module": soul},
 }
 
 
@@ -126,11 +125,10 @@ BUILTIN_TOOLS: dict[str, str] = {
     # inherited skills path mounts nothing at all.
     "plugin": "lingtai.tools.plugin",
     "task_card": "lingtai.tools.task_card",
-    # Unified public file capability: one package owning the composed schema,
-    # the envelope dispatch, and all five operation implementations. The
-    # pre-migration ``read``/``write``/``edit``/``glob``/``grep`` capabilities
-    # and packages are gone, with no alias — those names now fail loudly.
-    "file": "lingtai.tools.file",
+    # There is no ``file`` capability. Durable filesystem work goes through
+    # ``shell``; the former ``file`` family (and the still-older
+    # ``read``/``write``/``edit``/``glob``/``grep`` split) are unknown names
+    # that fail loudly, with no alias.
     "vision": "lingtai.tools.vision",
     # Unified public web capability.  ``web_search`` is a one-way input alias
     # below so old presets materialize this single handler.
@@ -141,8 +139,8 @@ BUILTIN_TOOLS: dict[str, str] = {
 # init.json's ``manifest.capabilities`` only needs to declare overrides (kwargs)
 # or opt-ins beyond this set; ``manifest.disable`` is the opt-out channel.
 #
-# ``shell`` defaults to {"yolo": True} (unsandboxed). Hosts that want a sandbox
-# pass {"policy_file": "..."} in init.json, which overrides the default kwargs.
+# ``shell`` has no default kwargs: its binding resolves omitted config to yolo
+# (unsandboxed). Sandboxing hosts pass {"policy_file": ...} or {"yolo": false}.
 # ``vision`` is always registered: its provider defaults to the active LLM
 # (the agent's own Responses API), and the analyze call may explicitly borrow
 # another preset's vision service via the ``preset`` option. ``web_search``
@@ -151,7 +149,7 @@ BUILTIN_TOOLS: dict[str, str] = {
 CORE_DEFAULTS: dict[str, dict] = {
     "knowledge": {},
     "skills": {},
-    "shell": {"yolo": True},
+    "shell": {},
     "avatar": {},
     "daemon": {},
     "mcp": {},
@@ -163,7 +161,6 @@ CORE_DEFAULTS: dict[str, dict] = {
     # so booting it on every agent costs one directory scan and risks nothing.
     "plugin": {},
     "task_card": {},
-    "file": {},
     "vision": {},
 }
 
@@ -221,10 +218,10 @@ def apply_core_defaults(
 
 # One-way configuration input aliases: a retained legacy config key on the left,
 # the canonical public capability it materializes on the right. Never emitted as
-# a public capability or tool name. The five pre-migration file capabilities
-# (``read``/``write``/``edit``/``glob``/``grep``) are deliberately absent — the
-# ``file`` migration was a clean break, so those names are unknown capabilities
-# and fail loudly rather than resolving silently.
+# a public capability or tool name. The removed ``file`` capability and the
+# five pre-migration file capabilities (``read``/``write``/``edit``/``glob``/
+# ``grep``) are deliberately absent — both removals were clean breaks, so those
+# names are unknown capabilities and fail loudly rather than resolving silently.
 _LEGACY_CAPABILITY_ALIASES: dict[str, str] = {
     "bash": "shell",
     "web_search": "web",
@@ -390,7 +387,6 @@ def get_all_providers() -> dict[str, dict]:
     Used by ``lingtai-agent check-caps`` CLI.
     """
     _USER_FACING: dict[str, str] = {
-        "file": "lingtai.tools.file",
         "shell": "lingtai.tools.bash",
         "web": "lingtai.tools.web_search",
         "knowledge": "lingtai.tools.knowledge",

@@ -1,25 +1,11 @@
 #!/usr/bin/env python3
-"""Find and print the locally-installed README for an MCP server's Python package.
+"""Print an installed MCP package README, preferring editable source then wheel
+``METADATA``. Exit 2 means no local README; use the registry homepage with
+Web ``browse``. The README is authoritative for install, config fields, env vars,
+and troubleshooting; this utility performs no installation or network access.
 
-Usage:
-    python3 find_readme.py <pkg-name>          # e.g. some-mcp-package
-    python3 find_readme.py --module <modname>  # e.g. some_mcp_server (resolves to dist)
-
-Resolution order:
-    1. Editable install     -> repo's README.md / .rst / .txt on disk
-    2. PyPI / wheel install -> README embedded in dist-info METADATA (PEP 566)
-    3. Neither found        -> exit 2 with a hint to fall back to homepage URL
-
-Exit codes:
-    0  README printed to stdout (source label printed to stderr)
-    1  argument error
-    2  README not found locally; fall back to homepage <web_read>
-
-Why this exists:
-    MCP server READMEs are the canonical install / config / troubleshooting
-    docs (config field names, env vars, error meanings). Reading the local
-    copy is faster, version-accurate, and works offline -- preferred over
-    fetching the homepage URL with web_read.
+Usage: ``find_readme.py <distribution>`` or
+``find_readme.py --module <importable-module>``.
 """
 from __future__ import annotations
 
@@ -31,13 +17,7 @@ import importlib.metadata as md
 
 
 def _find_editable_readme(dist: md.Distribution) -> tuple[str, str] | None:
-    """If `dist` is an editable install, return (content, source-label) for its
-    on-disk README. Otherwise return None.
-
-    Editable installs (`pip install -e <path>`) write a PEP 610 `direct_url.json`
-    into dist-info with `dir_info.editable: true` and a `file://` URL pointing
-    at the source repo.
-    """
+    """Return an editable-install README and its source label, or ``None``."""
     try:
         durl_text = dist.read_text("direct_url.json")
     except (FileNotFoundError, OSError):
@@ -65,13 +45,7 @@ def _find_editable_readme(dist: md.Distribution) -> tuple[str, str] | None:
 
 
 def _find_metadata_readme(dist: md.Distribution, pkg_name: str) -> tuple[str, str] | None:
-    """Return the README embedded in the wheel's METADATA file (PEP 566), or None.
-
-    Modern build backends (setuptools >= 61, hatchling, pdm, poetry) embed the
-    package's README into METADATA's Description field when `pyproject.toml`
-    declares `readme = "README.md"`. This survives PyPI publish -> pip install
-    so non-editable users get the same docs.
-    """
+    """Return the wheel ``METADATA`` README, or ``None``."""
     meta = dist.metadata
     body: str | None = None
     if hasattr(meta, "get_payload"):
@@ -92,12 +66,7 @@ def _find_metadata_readme(dist: md.Distribution, pkg_name: str) -> tuple[str, st
 
 
 def find_readme(pkg_name: str) -> tuple[str | None, str]:
-    """Return (content, source-label-or-error) for `pkg_name`.
-
-    Tries editable repo first, then dist-info METADATA. content is None when
-    neither path yields a README; in that case the second element describes
-    the failure reason for stderr.
-    """
+    """Return ``(content, source-or-error)`` using local README sources only."""
     try:
         dist = md.distribution(pkg_name)
     except md.PackageNotFoundError:
@@ -115,15 +84,7 @@ def find_readme(pkg_name: str) -> tuple[str | None, str]:
 
 
 def _resolve_module_to_dist(module_name: str) -> str | None:
-    """Map an importable module name (e.g. `some_mcp_server`) to its owning
-    distribution name. Returns None if no install can be located.
-
-    Tries `packages_distributions()` first (works for normal wheels via
-    `top_level.txt`), then falls back to the standard underscore-to-hyphen
-    convention -- editable installs via `.pth` files don't always populate
-    `packages_distributions`, but their distribution name is usually the
-    obvious transform of the module name.
-    """
+    """Resolve an importable module to its installed distribution, if any."""
     try:
         dists = md.packages_distributions().get(module_name, [])
     except Exception:

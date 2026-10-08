@@ -155,7 +155,7 @@ def is_apriori_summary(content: Any) -> bool:
 # ``src/lingtai/tools/CONTRACT.md`` Contract rules > Envelope).
 _LTP_V2_MIGRATED_FAMILIES = frozenset(
     {
-        "web", "mcp", "plugin", "file", "vision", "avatar", "soul",
+        "web", "mcp", "plugin", "vision", "avatar",
         "shell", "notification", "system", "daemon", "email",
         "task_card",
         "context",
@@ -189,10 +189,10 @@ def summary_requested(args: dict | None, tool_name: str | None = None) -> bool:
     behavior exactly for either spelling.
 
     This is only the opt-in control. It says nothing about which results are
-    worth summarizing: ``file``'s own manual carries that per-action guidance
-    (bulky-result for ``read``/``grep``/``glob``, short-result for the
-    ``write``/``edit`` receipts a caller should read exactly), and the
-    summarizer never rewrites a recorded raw result or an error either way.
+    worth summarizing: callers should opt in when raw output is bulky and
+    the retention contract is precise, while short receipts should be read
+    exactly. The summarizer never rewrites a recorded raw result or an error
+    either way.
     """
     if not isinstance(args, dict):
         return False
@@ -466,7 +466,7 @@ def maybe_summarize_result(
     # A migrated LTP v2 family may instead use its own canonical error status
     # (``web``'s, ``mcp``'s, and ``knowledge``'s envelope failures are exactly
     # ``"failed"``, and every family built on the generic ``ToolFamily``
-    # dispatcher — including ``avatar`` and ``soul`` — likewise returns
+    # dispatcher — including ``avatar`` — likewise returns
     # ``"failed"`` for its envelope-level errors; ``mcp``'s unknown-action
     # envelope uses the kernel-wide ``"error"`` above); recognizing it here is
     # scoped to migrated families only, so an unrelated tool's non-error

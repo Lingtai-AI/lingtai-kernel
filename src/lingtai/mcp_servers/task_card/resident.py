@@ -63,12 +63,16 @@ class TaskCardResident:
         enabled: bool,
         transport: TaskCardResidentTransport | None = None,
         deliver: Callable[..., dict[str, Any]] | None = None,
+        programmable_header: str = "— TASK CARD —",
     ) -> None:
         if type(enabled) is not bool:
             raise TypeError("enabled must be a boolean")
         if transport is None and deliver is None:
             raise TypeError("transport or deliver must be provided")
+        if not isinstance(programmable_header, str) or not programmable_header.strip():
+            raise TypeError("programmable_header must be non-empty text")
         self._enabled = enabled
+        self._programmable_header = programmable_header
         self._transport = transport
         # Compatibility hook for the original Telegram-owned resident wrapper.
         self._legacy_deliver = deliver
@@ -166,7 +170,7 @@ class TaskCardResident:
         programmable = slots.get("programmable", "")
         if not programmable:
             return automatic
-        watch = f"— TASK CARD —\n{programmable}"
+        watch = f"{self._programmable_header}\n{programmable}"
         return watch if not automatic else f"{automatic}\n\n{watch}"
 
     def delivery_lock(

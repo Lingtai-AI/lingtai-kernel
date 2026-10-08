@@ -27,7 +27,7 @@ pytest commands must run from the repo root with the project's Python.
 - **id**: WL001
 - **title**: a held lease excludes a second acquire with the exact contention error, and release is idempotent
 - **guards**: `workdir-lease` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch working directory `<scratch>`
 - **estimate**: ≈ 20 minutes
 

@@ -4,12 +4,14 @@ related_files:
   - src/lingtai/adapters/acp/ANATOMY.md
   - src/lingtai/adapters/acp/BEHAVIORS.md
   - src/lingtai/adapters/acp/driver_authority.py
+  - src/lingtai/adapters/acp/resident_socket.py
   - src/lingtai/adapters/acp/puffo_v0.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
   - src/lingtai/cli_puffo_v0.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/turn_tool_overlay.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
@@ -17,6 +19,7 @@ related_files:
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - tests/test_acp_stdio.py
+  - tests/test_resident_acp_socket.py
   - tests/test_puffo_v0_profile.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
@@ -31,22 +34,23 @@ maintenance: |
   composition, governed twins, and tests. This manual must remain reachable from
   both ACP CONTRACT.md and ANATOMY.md; update all three when behavior changes.
 ---
-# LingTai local ACP v1 stdio manual
+# LingTai local ACP v1 manual
 
 ## What this capability is
 
 `lingtai-agent acp` lets one local ACP client drive one existing LingTai agent
-over standard input/output. It is intended for an editor, terminal UI, or other
-local process that can launch an ACP subprocess. The implementation speaks ACP
-protocol version 1 directly with the standard library; no ACP SDK or optional
-package is required.
+over standard input/output. An opt-in socket on `lingtai-agent run` instead
+lets a same-user client connect to the Agent already running in that process.
+Both are intended for local editors or terminal clients and speak ACP protocol
+version 1 with the standard library; no ACP SDK is required.
 
 This slice supports exactly:
 
 - `initialize` negotiation that returns this Agent's supported `protocolVersion: 1`;
-- one `session/new` per process;
+- one `session/new` per stdio process or resident socket connection;
 - one canonical execution workspace from `session/new.cwd`;
-- zero or more session-scoped stdio MCP servers mounted all-or-nothing;
+- zero or more session-scoped stdio MCP servers mounted all-or-nothing in the
+  separate stdio host; the resident socket accepts only zero;
 - one active `session/prompt` at a time;
 - baseline Text and ResourceLink prompt blocks;
 - one-shot fail-closed tool permission and minimal lifecycle projection;
@@ -60,13 +64,79 @@ capability-gated image/audio/embedded-resource content, message/usage streaming,
 tool arguments/results/content, remote transport,
 authentication, or ACP v2.
 
-Stable ACP v1 requires stdio session MCP and applying `cwd`. This slice implements
-both: cwd is canonicalized once and scopes execution-facing File, Shell, guard,
-and parallel tool work; stdio servers use stable v1's `name`, absolute `command`,
-string `args`, and `{name,value}` env-array shape. It remains a narrow local flow,
-not complete general-purpose ACP v1 conformance.
+The separate stdio host implements stable ACP v1's session MCP and `cwd` rules:
+cwd is canonicalized once and scopes execution-facing File, Shell, guard, and
+parallel tool work; stdio servers use stable v1's `name`, absolute `command`,
+string `args`, and `{name,value}` env-array shape. The resident socket retains
+the workspace behavior but rejects non-empty MCP while per-turn isolation is
+unavailable. Neither mode claims complete general-purpose ACP v1 conformance.
 
 ## Launch
+
+### Attach to an already-running local Agent
+
+On POSIX, start the ordinary resident Agent with an optional owner-only local
+ACP socket:
+
+```bash
+lingtai-agent run /absolute/path/to/agent --acp-socket
+lingtai-agent acp-socket-path /absolute/path/to/agent
+```
+
+The second command prints the short socket path, deterministically derived
+from the canonical Agent directory. The socket is `0600` inside a per-user
+`0700` directory under `/tmp`; the server also checks the connecting process's
+UID. A client connects to that Unix socket and exchanges the same UTF-8
+newline-delimited ACP v1 JSON-RPC frames shown below. Each connection owns one
+session, and the resident host admits only one connection at a time. An
+immediate reconnect waits for bounded previous-session MCP cleanup; a second
+client while the first remains active is still refused. Closing the client
+cancels its active ACP turn but leaves the LingTai Agent, its other
+ingresses, and `.agent.lock` running. A later client reconnects to the same
+host. `--acp-socket` sets `LINGTAI_ACP_SOCKET_AGENT_DIR` to this Agent's
+canonical directory; the normal refresh watcher inherits that scoped marker
+so the endpoint is restored after refresh, while Avatar launches remove it.
+An unsupported
+platform or unsafe socket-path collision fails explicitly.
+
+Without the special preface this is generic same-user local ACP, not Puffo
+attach. Generic local `session/new` must pass `mcpServers: []`. Only an
+authenticated Puffo attach may pass the single fixed Puffo Core stdio server;
+its tools are private to that connection's turns and do not mutate the Agent's
+global tool table. Real Agent/model and Puffo Core MCP have passed manual
+cross-repository attach tests; Puffo RuntimeManager auto-attach wiring remains
+the production cutover gate.
+
+### Connection-authorized Puffo attach (integration testing only)
+
+After connecting to the same socket, send one UTF-8 newline JSON frame of
+the exact shape
+`{"type":"puffo.attach/1","runtime_id":"...","registry":"/absolute/...","launch_id":"..."}`
+with exactly one `SCM_RIGHTS` FD from the Puffo Driver root authority endpoint.
+The `registry` path must exactly equal the resident server's operator registry
+(`LINGTAI_PUFFO_V0_REGISTRY` at server start, or the profile default); the
+client cannot select another registry. The runtime must already be provisioned
+there for this running Agent directory; `session/new.cwd` must equal its
+provisioned workspace. The endpoint's Driver hello must name both the same
+launch id and the same runtime id. A Driver root FD issued without a runtime
+binding is rejected on this attach path, though older spawn paths can still
+use such endpoints.
+Wait for `{"ok":true,"kernel_version":"..."}`; rejection returns
+`{"ok":false,"reason":"attach_rejected"}` and closes. Only after success send
+the ordinary ACP `initialize`, then `session/new` and prompts over that same
+socket. Closing it retires its authority, not the resident Agent.
+
+The attach turn's model requests use that connection's Driver admission. A
+deny or lost connection prevents the model call, even though the resident
+Agent's ordinary local ingress is permissive. Attach `session/new` may use
+`mcpServers: []` for transport testing or the same one-service Puffo Core shape
+as the `puffo-v1` process profile below. Other non-empty MCP input is rejected.
+The private MCP child closes with the connection; only attached correlated
+turns see its tool schemas or handlers. `session/load` is not advertised, so
+reconnect must create a new ACP session. Keep production cutover gated on
+Puffo RuntimeManager auto-attach wiring and end-to-end acceptance.
+
+### Separate stdio host
 
 Use an already initialized agent directory containing a valid `init.json`:
 
@@ -103,6 +173,36 @@ through the local operator registry (`~/.lingtai/puffo-v0/runtime-registry.json`
 to its bound persistent identity and workspace. The profile rejects an unknown,
 tampered, or revoked id before constructing the Agent. Revoke a future launch
 with `lingtai-agent puffo-v0 revoke --runtime-id puffo-agent-7`.
+
+To isolate the registry without mutating `HOME` (for example a staging run that
+must not touch a production registry), select its location explicitly. Pass
+`--registry /abs/path/runtime-registry.json` to `provision`, `revoke`,
+`discover`, and `acp`, or set
+`LINGTAI_PUFFO_V0_REGISTRY=/abs/path/runtime-registry.json` in the launch
+environment; an explicit flag wins over the environment, which wins over the
+HOME-relative default. The location must be an **absolute** path with no `..`
+segment whose parent is below the filesystem root — a relative path, a `..`
+segment, `/`, or a root-level file is rejected before any filesystem access
+rather than created under the process's current directory. Its directory must be
+a dedicated owner-only (`0700`) directory you own; LingTai creates a missing one
+(for an operator-selected location, only the final component, under an
+already-existing parent) but **rejects** an existing directory that is a symlink,
+is owned by another user, or is not already `0700` rather than changing its
+permissions — fix such a directory, or point elsewhere, instead of relying on
+LingTai to harden it. The directory's **parent** must likewise be a non-symlink
+directory you own. On macOS in particular do not place the registry one level
+under `/tmp` (a symlink) — put it at least two levels below any symlinked
+ancestor, or it is rejected with "parent directory is unavailable or a symlink".
+And a registry directly under a root-owned system directory (`/var/lib/...`,
+`/opt/...`) while running as a normal user is rejected with "owned by another
+user"; make that directory owned by the running user, or nest the registry under
+a subdirectory you create and own (that subdirectory becomes the checked parent).
+Provisioning and launch must name the **same** registry — `acp` resolves the id
+against the location you give it (both at startup and in the pre-serve
+re-resolve), so a launch pointed at a different registry than its `provision` used
+fails closed with *runtime id is not provisioned*. The location selects only which
+registry is read, while every binding and integrity rule still derives solely from
+that registry's entry.
 Revocation does not terminate an already-running ACP host or invalidate its
 in-progress turn; stop that host separately when incident response must stop
 existing work.
@@ -284,8 +384,13 @@ separate cross-process contract; do not treat this registry hash as its proxy.
 The Phase A registry is POSIX-only: it serializes provision/revoke updates,
 records terminal revocations in an append-only local tombstone log, and creates
 its registry directory as `0700` and registry, tombstone, temporary, and lock
-files as `0600`, independent of umask. Loading an older registry tightens its
-directory and file modes before use. On Windows the command fails closed until
+files as `0600`, independent of umask. LingTai creates its own
+`~/.lingtai/<profile>` namespace node by node with `O_NOFOLLOW`, verifies both
+the registry directory and the node directly above it are non-symlinks, and never
+`chmod`s or creates through an operator-supplied or symlinked directory; an
+existing registry directory that is not an owner-only (`0700`) directory it owns
+is rejected rather than re-hardened, while existing owner-only registry *files*
+are still tightened to `0600` before use. On Windows the command fails closed until
 an equivalent owner-only ACL implementation is available. The `puffo-v0`
 control-plane commands are the only supported writers; do not hand-edit the
 registry or use a third-party writer. The current versioned registry requires
@@ -487,7 +592,20 @@ if stdin remains open; the ACP connection is not preserved across refresh.
 The Adapter and Python `sys.stdout`/`print` path are protocol-only. Configure the
 client to capture stderr for boot reader outcomes, logs, and diagnostics. This
 slice does not redirect native fd 1, previously captured stdout objects, or child
-stdout: code launched in this host must not use those paths. Common explicit errors:
+stdout: code launched in this host must not use those paths. Runtime bootstrap
+is an explicit exception in implementation: its venv/pip child output is directed
+to stderr, never the protocol stream.
+
+Install and invoke the intended kernel's `lingtai-agent` from its virtualenv.
+Without `init.json` `venv_path`, ACP reuses that active virtualenv; an explicit
+project override still takes precedence and is validated. Startup does not write
+this selection into the source file. Without an active virtualenv, the managed
+runtime resolution remains available. If bootstrap cannot install the exact
+published kernel version, install that release into a virtualenv from its
+official distribution and invoke its executable, or explicitly configure a
+working environment. It will not fall back to another published version.
+
+Common explicit errors:
 
 - non-integer protocol version: invalid params (a different integer negotiates to
   this Agent's supported version `1`, which the client must accept or close);

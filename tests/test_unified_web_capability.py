@@ -5,6 +5,7 @@ import gzip
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,8 +18,11 @@ from lingtai.tools.browser.port import TransportResponse
 class _Agent:
     """Minimal official-plugin host used by Web's focused behavior tests."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, provider: str | None = None) -> None:
         self._working_dir = root
+        # The narrow provider-identity port reads ``service.provider``; the
+        # backend-gated ``openai`` engine needs an ``openai`` label.
+        self.service = SimpleNamespace(provider=provider)
         self._official_tool_plugins = {}
         self._bound_plugins = {}
 
@@ -145,7 +149,7 @@ def test_missing_and_operator_defaults_report_the_computed_source(tmp_path, monk
     assert built_result["current_setting"]["source"] == "built_in_default"
     assert built_result["current_setting"]["engine"] == "duckduckgo"
 
-    operator_agent = _Agent(tmp_path / "operator")
+    operator_agent = _Agent(tmp_path / "operator", provider="openai")
     operator = setup(
         operator_agent,
         provider="openai",
@@ -358,7 +362,7 @@ def test_lazy_initialization_failure_updates_availability_truth(tmp_path, monkey
 
     monkeypatch.setattr("lingtai.services.websearch.create_search_service", fail_factory)
     manager = setup(
-        _Agent(tmp_path),
+        _Agent(tmp_path, provider="openai"),
         provider="openai",
         api_key=secret,
         browser_port=_Port(),

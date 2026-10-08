@@ -92,7 +92,7 @@ def test_plan_github_uploads_same_byte_collision_skips_without_upload(tmp_path, 
     existing_names = {manifest.artifacts[0].filename}
     calls = []
 
-    def fake_run(cmd, capture_output=True, text=True, check=False):
+    def fake_run(cmd, **kwargs):
         calls.append(cmd)
         if cmd[:2] == ["gh", "release"] and cmd[2] == "view":
             return _FakeCompletedProcess(
@@ -100,8 +100,8 @@ def test_plan_github_uploads_same_byte_collision_skips_without_upload(tmp_path, 
                 stdout=json.dumps({"assets": [{"name": n, "apiUrl": "https://api.github.test/assets/1"} for n in existing_names]}),
             )
         if cmd[:2] == ["gh", "api"]:
-            output = Path(cmd[cmd.index("--output") + 1])
-            output.write_bytes((assets_dir / manifest.artifacts[0].filename).read_bytes())
+            assert "--output" not in cmd
+            kwargs["stdout"].write((assets_dir / manifest.artifacts[0].filename).read_bytes())
             return _FakeCompletedProcess()
         raise AssertionError(cmd)
 
@@ -121,8 +121,9 @@ def test_plan_github_uploads_mismatch_fails_before_upload(tmp_path, monkeypatch)
     def fake_run(cmd, **kwargs):
         if cmd[:2] == ["gh", "release"]:
             return _FakeCompletedProcess(stdout=json.dumps({"assets": [{"name": manifest.artifacts[0].filename, "apiUrl": "https://api.github.test/assets/1"}]}))
-        output = Path(cmd[cmd.index("--output") + 1])
-        output.write_bytes(b"different")
+        assert cmd[:2] == ["gh", "api"]
+        assert "--output" not in cmd
+        kwargs["stdout"].write(b"different")
         return _FakeCompletedProcess()
     monkeypatch.setattr(pub.subprocess, "run", fake_run)
     with pytest.raises(pub.AssetConflict, match="GitHub asset"):
@@ -594,3 +595,22 @@ def test_publisher_has_no_delete_replace_or_github_mutation_path():
     assert "gh release replace" not in text
     assert "gitee_delete" not in text
     assert "gitee_replace" not in text
+
+
+@pytest.mark.parametrize("version,prerelease", [("1.0.6", False), ("1.0.6a1", True), ("1.0.6rc1", True)])
+def test_missing_github_release_creation_preserves_version_channel(tmp_path, monkeypatch, version, prerelease):
+    from dataclasses import replace
+
+    manifest, assets_dir, manifest_path = _sample_manifest_and_assets(tmp_path)
+    manifest = replace(manifest, kernel_version=version, kernel_tag=f"v{version}")
+    monkeypatch.setattr(pub, "load_manifest", lambda _: manifest)
+    monkeypatch.setattr(pub, "gh_release_exists", lambda *args: False)
+    monkeypatch.setattr(pub, "plan_github_uploads", lambda *args: [])
+    calls = []
+    monkeypatch.setattr(pub.subprocess, "run", lambda command, **kwargs: calls.append(command))
+    assert pub.main(["--manifest", str(manifest_path), "--assets-dir", str(assets_dir), "--skip-gitee", "--execute"]) == 0
+    command, = calls
+    assert command[:4] == ["gh", "release", "create", f"v{version}"]
+    assert command[command.index("--target") + 1] == manifest.commit
+    assert ("--prerelease" in command) is prerelease
+    assert ("--latest=false" in command) is prerelease

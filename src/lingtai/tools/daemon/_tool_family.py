@@ -127,33 +127,32 @@ def _emanate_task_schema() -> dict[str, Any]:
                 "items": {"type": "string"},
                 "description": (
                     "Optional skill directories or SKILL.md paths; relative paths "
-                    "use the parent working directory. Runtime injects a compact "
-                    "frontmatter catalog; the worker reads selected skills."
+                    "use the parent working directory. Runtime exposes a compact "
+                    "catalog; the worker reads selected skills."
                 ),
             },
             "mcp": {
                 "type": "array",
                 "items": {"type": "object"},
                 "description": (
-                    "Optional one-run stdio/http registrations; env/headers are "
-                    "redacted, LingTai mounts task clients, and exposed tool names "
-                    "must be unique."
+                    "Optional one-run stdio/http registrations; env/headers are redacted "
+                    "in prompt context, not launch inputs. Exposed tool names must be unique."
                 ),
             },
             "plugin": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Optional plugin directories/search roots relative to the parent; "
-                    "manifests merge skills/MCP for the run. Missing paths are ignored."
+                    "Optional parent-relative plugin paths; manifests merge skills/MCP "
+                    "for the run. Missing paths are ignored."
                 ),
             },
             "preset": {
                 "type": "string",
                 "description": (
-                    "Optional authorized .json/.jsonc path from "
-                    "system(action='presets'); use its full path. Omission inherits "
-                    "the parent's regular tools; task MCP remains explicit."
+                    "Optional authorized .json/.jsonc path from system(action='presets'); "
+                    "use its full path. Omission inherits regular parent tools; task MCP "
+                    "remains explicit."
                 ),
             },
             "backend_options": {
@@ -162,16 +161,15 @@ def _emanate_task_schema() -> dict[str, Any]:
                     "env": _backend_option_env_schema(),
                     "config": {
                         **_backend_option_value_schema(),
-                        "description": "CLI config override using the generic scalar/list option contract.",
+                        "description": "CLI config override for constrained tool-schema providers; use the generic scalar/list option contract and installed --help.",
                     },
                 },
                 "additionalProperties": _backend_option_value_schema(),
                 "description": (
-                    "CLI-only options (ignored by lingtai): booleans emit flags, "
-                    "scalars values, lists repeat flags, and false/null omit them; "
-                    "`env` is a string environment overlay. Unsafe/reserved keys fail "
-                    "preflight; use only at emanate. Verify --help (for example "
-                    "`opencode run --help`) before passing options."
+                    "CLI-only passthrough (ignored by lingtai): booleans emit flags, "
+                    "scalars values, lists repeat flags, false/null omit them; `env` "
+                    "is a string overlay. Unsafe/reserved keys fail preflight; use only "
+                    "at emanate and verify the installed --help first."
                 ),
             },
             "task_files": {
@@ -196,7 +194,7 @@ def _emanate_task_schema() -> dict[str, Any]:
             "prompt": {
                 "type": "string",
                 "description": (
-                    'Optional first LingTai user message. Blank/omitted means exactly '
+                    'Optional first LingTai user message; blank/omitted means exactly '
                     '"Begin the assigned daemon task."; external CLIs reject it.'
                 ),
             },
@@ -204,11 +202,10 @@ def _emanate_task_schema() -> dict[str, Any]:
                 "type": "integer",
                 "minimum": 1,
                 "description": (
-                    "Positive provider-compaction threshold, not a spend or window "
-                    "setting. Applies only to supported native LingTai providers; "
-                    "external CLI backends and other providers ignore it. Omission "
-                    "uses the resolved session window. Native failure behavior and "
-                    "window resolution live in the built-in LingTai child/manual."
+                    "Positive separate provider-compaction threshold; does not set daemon context "
+                    "or spend limits. Only supported native LingTai providers use it; external "
+                    "CLIs ignore it. Omission uses the session's resolved window. See the "
+                    "built-in LingTai reference for window ownership and failure behavior."
                 ),
             },
         },
@@ -226,7 +223,7 @@ def _emanate_input_schema(backend_enum: list[str]) -> dict[str, Any]:
                 "items": _emanate_task_schema(),
                 "description": (
                     "Required task objects: `task` is the complete parent-controlled "
-                    "instruction and `tools` its capability list. Optional fields select "
+                    "instruction and `tools` its capability list. Optional fields add "
                     "skills, MCP, plugins, presets, files, prompt, limits, or CLI options; "
                     "parent MCP tools are not inherited."
                 ),
@@ -235,10 +232,9 @@ def _emanate_input_schema(backend_enum: list[str]) -> dict[str, Any]:
                 "type": ["string", "null"],
                 "enum": [*backend_enum, None],
                 "description": (
-                    "Execution backend: `lingtai` is the default in-process session; "
-                    "other enum values select external CLIs (aliases accepted). "
-                    "Support, MCP/completion status, and constraints are in the "
-                    "daemon-manual CLI reference. Null uses lingtai."
+                    "Execution backend; choose an advertised enum value. `lingtai` is "
+                    "in-process; CLI support, completion status, and constraints are in "
+                    "the daemon-manual CLI reference. Null uses lingtai."
                 ),
             },
             "max_turns": {
@@ -246,17 +242,16 @@ def _emanate_input_schema(backend_enum: list[str]) -> dict[str, Any]:
                 "minimum": 1,
                 "maximum": DEFAULT_MAX_TURNS,
                 "description": (
-                    "Positive LLM tool-loop turns per emanation, capped at 5000; "
-                    "null uses the manager default/ceiling."
+                    "Positive LLM tool-loop turns per emanation (maximum 5000); null uses the manager "
+                    "default/ceiling. Keep enough for explore, act, and verify."
                 ),
             },
             "timeout": {
                 "type": ["number", "null"],
                 "minimum": 5,
                 "description": (
-                    "Batch wall-clock seconds (minimum 5, no upper bound); null uses "
-                    "the manager default of 3600 seconds and the watchdog terminates "
-                    "overruns."
+                    "Batch wall-clock seconds (minimum 5); null uses the manager "
+                    "default and the watchdog terminates overruns."
                 ),
             },
         },

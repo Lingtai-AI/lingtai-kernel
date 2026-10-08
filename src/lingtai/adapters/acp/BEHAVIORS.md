@@ -9,10 +9,12 @@ related_files:
   - src/lingtai/adapters/acp/ANATOMY.md
   - src/lingtai/adapters/acp/MANUAL.md
   - src/lingtai/adapters/acp/driver_authority.py
+  - src/lingtai/adapters/acp/resident_socket.py
   - src/lingtai/adapters/acp/server.py
   - src/lingtai/cli_acp.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/kernel/turns.py
+  - src/lingtai/kernel/turn_tool_overlay.py
   - src/lingtai/kernel/execution_workspace.py
   - src/lingtai/kernel/turn_events.py
   - src/lingtai/kernel/turn_permissions.py
@@ -20,6 +22,7 @@ related_files:
   - src/lingtai/services/session_mcp.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - tests/test_acp_stdio.py
+  - tests/test_resident_acp_socket.py
   - tests/test_driver_authority_adapter.py
   - tests/test_correlated_turns.py
   - tests/test_execution_workspace.py
@@ -33,7 +36,63 @@ maintenance: |
   evidence, supported scope, commands, and pass criteria whenever the v1 stdio
   behavior changes; do not turn an omitted capability into an implied promise.
 ---
-# ACP Local Stdio Behavior Tests
+# ACP Local Driving Adapter Behavior Tests
+
+## Behavior ACP004 — resident attach binds Driver authority to one connection
+
+- **id**: ACP004
+- **title**: resident attach binds Driver authority to one connection
+- **guards**: `acp-local-stdio` § Puffo resident attach — see [CONTRACT.md](CONTRACT.md#puffo-resident-attach)
+- **supersedes**: `tests/test_resident_acp_socket.py`, `tests/test_provider_admission.py` (retained as bottom asserts)
+- **runner**: a LingTai coding agent on POSIX with shell access
+- **prerequisites**: project Python and pytest; no live Agent sharing the test directory
+- **estimate**: ≈ 1 minute
+
+### Steps
+1. Run `python -m pytest -q -x tests/test_resident_acp_socket.py tests/test_provider_admission.py`.
+2. Confirm the attach first frame carries one Driver FD, registry identity matches the running directory, and the Driver hello launch id matches the first frame before any ACP request is accepted.
+3. Confirm a granted connection Port permits a provider call and records that Port's decision; a denied or missing connection Port prevents the underlying provider call despite the resident local path remaining permissive.
+4. Confirm a valid fixed Puffo Core descriptor creates only a connection-owned MCP view, and an attached correlated turn sees its tools while ordinary ingress does not. Invalid non-empty descriptors, duplicate/colliding catalogs, and a closed lease fail closed.
+5. Close an attached MCP session and immediately reconnect while its lease is still cleaning up: the next attach receives a handshake after teardown, while a genuinely active first session still excludes a second client.
+5. Confirm a missing descriptor rejects before ACP and connection close does not stop the Agent or leave an MCP child open.
+
+### Expected evidence
+- [ ] Both focused files pass and no external provider is called.
+- [ ] Attached turns never use the resident local grant in place of connection authority.
+- [ ] Generic resident ACP remains empty-MCP only; attached non-empty MCP is fixed to Puffo Core and remains turn-local.
+- [ ] Immediate close/reopen does not lose a new attach during the previous MCP lease teardown.
+- [ ] No production claim until real Agent/model and Puffo Core cross-repository acceptance.
+
+### Pass / Fail
+Pass only if the connection owns the admission Port and deny prevents provider
+I/O. Fail if a missing FD enters ACP or if local admission overrides Driver
+denial.
+
+## Behavior ACP003 — resident local ACP reconnects without becoming a Puffo profile
+
+- **id**: ACP003
+- **title**: resident local ACP reconnects without becoming a Puffo profile
+- **guards**: `acp-local-stdio` § Resident socket transport — see [CONTRACT.md](CONTRACT.md#resident-socket-transport)
+- **supersedes**: `tests/test_resident_acp_socket.py` (retained as bottom asserts)
+- **runner**: a LingTai coding agent on POSIX with shell access
+- **prerequisites**: project Python and pytest; no live Agent sharing the test directory
+- **estimate**: ≈ 1 minute
+
+### Steps
+1. Run `python -m pytest -q -x tests/test_resident_acp_socket.py`.
+2. Confirm the socket is owner-only, same-UID clients can initialize and create one empty-MCP session, and disconnect/reconnect keeps the Agent alive.
+3. Confirm non-empty MCP is rejected without mounting, a second listener cannot replace the live socket, stale refused sockets recover, and a non-socket collision remains untouched.
+4. Confirm `acp-socket-path` is read-only and `run --acp-socket` carries its opt-in across the refresh environment.
+
+### Expected evidence
+- [ ] All focused tests pass without a provider or another Agent process.
+- [ ] Close removes only the socket, not Agent state or `.agent.lock`.
+- [ ] No test treats same-UID access as Puffo Driver authentication.
+
+### Pass / Fail
+Pass only if reconnect uses the same Agent and every unsafe collision or MCP
+request fails closed. Fail if disconnect stops the Agent, a second Agent is
+started, or the generic socket admits Puffo session MCP.
 
 ## Behavior ACP001 — one local ACP v1 baseline turn settles normally or cooperatively cancelled without corrupting stdout
 
@@ -46,7 +105,7 @@ maintenance: |
 - **estimate**: ≈ 5 minutes
 
 ### Steps
-1. From `<repo>`, run `python -m pytest -q -x tests/test_turn_events.py tests/test_turn_permissions.py tests/test_tool_executor.py tests/test_correlated_turns.py tests/test_execution_workspace.py tests/test_session_mcp.py tests/test_acp_stdio.py` with the project Python.
+1. From `<repo>`, run `python -m pytest -q -x tests/test_turn_events.py tests/test_turn_permissions.py tests/test_tool_executor.py tests/test_correlated_turns.py tests/test_execution_workspace.py tests/test_session_mcp.py tests/test_acp_stdio.py tests/test_venv_resolve.py` with the project Python.
 2. Inspect the captured normal-turn frames in the passing wire test: initialize result, session/new result, one `session/update` with `sessionUpdate=agent_message_chunk` and Text content, then the original prompt result with `stopReason=end_turn`; inspect the ResourceLink case and confirm validated link metadata reaches the Core text boundary.
 3. Inspect lifecycle tests: serial, parallel, denied, and failed tools emit minimal ordered `tool_call`/`tool_call_update` status frames before terminal response; collector-owned future exceptions, timeout boundaries after worker return, and cancellation each produce one FAILED terminal with no late completion; arguments/results/raw payloads are absent; observer exceptions, late terminal events, and close do not leak or alter Core execution.
 4. Inspect permission tests: every otherwise-allowed known tool emits pending and
@@ -68,7 +127,11 @@ maintenance: |
    `-32010`/`-32011`, not ACP's predefined authentication/resource errors
    `-32000`/`-32002` or the Adapter's established session-not-found `-32001`.
 7. Inspect every Adapter-authored stdout line with `json.loads`; confirm there is one complete JSON-RPC object per physical line and Python boot/runtime/stop `print` output is captured only on stderr. Confirm docs prohibit native fd 1, pre-captured stdout, and child stdout rather than claiming to quarantine them.
-8. Inspect explicit-scope/lifecycle tests: malformed cwd/MCP, a second session, concurrent prompt, invalid ResourceLink, and failed Core turn each produce the named error path. Confirm canonical outside-agent workspace rooting, parent/symlink refusal, parallel propagation without later leakage, atomic stdio MCP publication/rollback/collision refusal, and lease teardown on close/EOF. Confirm the existing blocked-write and typed-stop lifecycle evidence remains intact.
+8. Check runtime startup: absent `venv_path` reuses the active virtualenv,
+   explicit configuration wins, and non-virtualenv launches retain managed
+   resolution. Native bootstrap subprocess diagnostics must reach stderr only;
+   an unavailable published version pin must fail without an unpinned retry.
+9. Inspect explicit-scope/lifecycle tests: malformed cwd/MCP, a second session, concurrent prompt, invalid ResourceLink, and failed Core turn each produce the named error path. Confirm canonical outside-agent workspace rooting, parent/symlink refusal, parallel propagation without later leakage, atomic stdio MCP publication/rollback/collision refusal, and lease teardown on close/EOF. Confirm the existing blocked-write and typed-stop lifecycle evidence remains intact.
 
 ### Expected evidence
 - [ ] Step 1 reports all focused tests passing with no network/provider call.
@@ -171,7 +234,30 @@ the evidence trail in the task report.
   every discover `bound` output resolves and every `available` output provisions
   (with a healthy control exercising both branches), and every blocking subtype
   stays blocked and byte-unchanged across `revoke` — swept per subtype, not by a
-  single sample, and across registry insertion orders.
+  single sample, and across registry insertion orders. Confirm the registry
+  *location* is operator-selectable without mutating `HOME`: a non-empty
+  `LINGTAI_PUFFO_V0_REGISTRY` (or a `--registry` flag) redirects
+  `default_registry_path`, an explicit flag wins over the environment which wins
+  over the HOME-relative default, and the `provision`/`revoke`/`discover` control
+  plane and the `acp` launch (its initial resolve AND its pre-serve re-resolve)
+  all consult the same selected registry — so a launch pointed at a registry the
+  runtime was not provisioned into fails closed, and an isolated run never creates
+  the HOME-relative default. A location that is not a well-shaped absolute path —
+  relative, containing `..`, `/` itself, or a root-level file — is rejected before
+  any filesystem access; and the registry directory must be a dedicated owner-only
+  (`0700`) directory LingTai owns: LingTai builds its own `~/.lingtai/<profile>`
+  namespace node by node with `O_NOFOLLOW` (never through a planted symlink, even
+  from a same-uid sibling), creates only the final component of any other location
+  under an already-existing parent with `O_NOFOLLOW` and an owner check on both the
+  registry directory and the node directly above it (a higher symlinked ancestor is
+  followed, but when it is the direct parent — e.g. one level under macOS `/tmp` —
+  it is rejected), and rejects — never re-`chmod`s — an existing directory that is a
+  symlink, is foreign-owned, or is not already `0700`. The branch (built-in
+  namespace vs other) is chosen by path value, not by how the location was
+  configured, and is not a security boundary — both branches verify those two levels
+  non-symlink and owned by the user and require the leaf `0700`.
+  The selection changes only the location; bindings and integrity still derive
+  solely from the named registry's entry.
 3. Inspect the profile session and turn-origin cases: `puffo-v0` rejects every
    non-empty `mcpServers` input. `puffo-v1` accepts exactly one `puffo` service
    with `-m puffo_agent.mcp.puffo_core_server`, a deployment-local absolute

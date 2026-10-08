@@ -58,7 +58,7 @@ Guarded by: [SK001](BEHAVIORS.md#behavior-sk001)
   memory state; the dependency direction is knowledge → skill, never the reverse.
 - Non-goals: it does not create or populate `.library/` (the Agent initializer's
   `_install_intrinsic_manuals` does that), and it does not author skills — the
-  agent writes `SKILL.md` files with `write`/`edit`.
+  agent writes `SKILL.md` files through `shell`.
 - Path sources scanned: `.library/intrinsic/`, `.library/custom/`, and each entry
   of `manifest.capabilities.skills.paths` (absolute, workdir-relative, or
   tilde-prefixed).

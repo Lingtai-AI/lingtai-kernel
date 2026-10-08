@@ -320,16 +320,11 @@ def test_build_meta_readme_documents_always_on_session_cache_miss_telemetry():
 
 
 def test_build_meta_readme_documents_timely_latest_only_semantics():
-    """agent_meta and notifications are timely transient state: older payloads
-    may remain in historical context/logs as traces (canonical history is no
-    longer retroactively stripped), and only the NEWEST emission is current —
-    old payloads are not current instructions/state, and full-history replay
-    does not strip them out."""
+    """Only the newest runtime snapshot is current. Delivered messages remain
+    usable records after empty tails, with producer/supersession safeguards;
+    old runtime warnings are never revived as current instructions."""
     readme = build_meta_readme()
-    for doc in (
-        readme["agent_meta"]["agent_state"],
-        readme["agent_meta"]["notifications"],
-    ):
+    for doc in (readme["agent_meta"]["agent_state"],):
         assert "timely" in doc.lower()
         assert "only the NEWEST" in doc
         assert "historical trace" in doc
@@ -338,7 +333,10 @@ def test_build_meta_readme_documents_timely_latest_only_semantics():
 
     notification_doc = readme["agent_meta"]["notifications"]
     assert "not current instructions" in notification_doc
-    assert "source of truth" in notification_doc
+    assert "canonical business state" in notification_doc
+    assert "Earlier delivered messages remain usable" in notification_doc
+    assert "after later empty tails" in notification_doc
+    assert "sender/admission/routing/edit safeguards" in notification_doc
 
 
 def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_guidance():
@@ -513,17 +511,20 @@ def test_attach_active_runtime_tail_adapter_comment_has_no_ledger_rows():
 
     attach_active_runtime(agent, [block])
 
-    tail = block.metadata["agent_meta"]["agent_state"]["adapter_comment"]
-    assert calls == {"legacy": 0, "dynamic": 1}
-    assert tail["adapter"] == "codex"
-    assert tail["turns_since_epoch_reset"] == 4
-    assert "summary" not in tail
-    assert "cache_note" not in tail
-    assert "cache_ledger" not in tail
-    assert "rows" not in json.dumps(tail)
-    assert tail["cache_ledger_summary"] == {"api_calls": 1}
-    assert "reason" not in tail["maintenance_hint"]
-    assert "meta_guidance_ref" not in tail
+    # The default tail carries no adapter diagnostics at all; the adapter is
+    # not even consulted when stamping the final carrier.
+    assert "adapter_comment" not in block.metadata["agent_meta"]["agent_state"]
+    assert calls == {"legacy": 0, "dynamic": 0}
+
+    # The on-demand full snapshot carries the full dynamic adapter view.
+    from lingtai.kernel.meta_block import build_full_runtime_meta
+
+    full_agent = _fake_agent()
+    full_agent._session = agent._session
+    full = build_full_runtime_meta(full_agent)["agent_state"]["adapter_comment"]
+    assert full["turns_since_epoch_reset"] == 4
+    assert full["cache_ledger"]["rows"] == [[0, "F", 0.5, 100.0, 50.0, "sum"]]
+    assert "summary" not in full
 
 def _fake_agent_with_lang(lang: str, *, time_awareness: bool = True):
     return SimpleNamespace(
@@ -755,7 +756,7 @@ def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
             "output": 636,
             "thinking": 40,
         },
-        "ref": "See meta_guidance.token_efficiency for details.",
+        "ref": 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.',
     }
     # The unified token_usage block is the sole token diagnostics carrier; the
     # separate token_efficiency block must be gone.
@@ -786,6 +787,7 @@ _SESSION_TOKEN_USAGE_KEYS = {
     "session_cache_rate",
     "api_calls",
     "input_tokens",
+    "output_tokens",
     "cached_tokens",
     "avg_input_tokens_per_api_call",
     "cache_miss_tokens",
@@ -858,7 +860,7 @@ def test_build_tool_meta_token_usage_compacts_full_snapshot_to_exact_keys():
             "output": 636,
             "thinking": 40,
         },
-        "ref": "See meta_guidance.token_efficiency for details.",
+        "ref": 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.',
     }
     # current_call carries none of the context-state keys anymore.
     assert not (_SESSION_CONTEXT_STATE_KEYS & set(compact[_TOKEN_USAGE_CURRENT_CALL_KEY]))
@@ -883,6 +885,7 @@ def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
         get_token_usage=lambda: {
             "api_calls": 4,
             "input_tokens": 22_000,
+            "output_tokens": 1_234,
             "cached_tokens": 5_500,
         },
     )
@@ -906,6 +909,7 @@ def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
             "session_cache_rate": 0.25,
             "api_calls": 4,
             "input_tokens": 22_000,
+            "output_tokens": 1_234,
             "cached_tokens": 5_500,
             "avg_input_tokens_per_api_call": 5_500,
             # Always-on cache-miss telemetry uses the fixed default when neither
@@ -917,7 +921,7 @@ def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
             # ctx_total_tokens, so context_tokens/context_usage are unresolvable.
         },
         # short guidance hook, shared across both halves
-        "ref": "See meta_guidance.token_efficiency for details.",
+        "ref": 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.',
     }
     # No dropped/noisy keys leak into either half — and the hook is the short
     # `ref`, never the long `guidance_ref`. context_usage/window no longer sit
@@ -938,6 +942,7 @@ def test_build_tool_meta_token_usage_session_only_when_no_snapshot():
         get_token_usage=lambda: {
             "api_calls": 2,
             "input_tokens": 1_000,
+            "output_tokens": 250,
             "cached_tokens": 1_200,  # cached > input clamps to 1.0
         },
     )
@@ -951,6 +956,7 @@ def test_build_tool_meta_token_usage_session_only_when_no_snapshot():
     )
     assert compact[_TOKEN_USAGE_SESSION_KEY]["session_cache_rate"] == 1.0
     assert compact[_TOKEN_USAGE_SESSION_KEY]["avg_input_tokens_per_api_call"] == 500
+    assert compact[_TOKEN_USAGE_SESSION_KEY]["output_tokens"] == 250
 
 
 def test_build_tool_meta_token_usage_preserves_zero_and_sentinel_values():
@@ -981,7 +987,7 @@ def test_build_tool_meta_token_usage_preserves_zero_and_sentinel_values():
             "output": 0,
             "thinking": 0,
         },
-        "ref": "See meta_guidance.token_efficiency for details.",
+        "ref": 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.',
     }
 
 
@@ -997,7 +1003,7 @@ def test_build_tool_meta_token_usage_robust_to_missing_fields():
 
     assert compact == {
         "current_call": {"input": 100, "cache_rate": 0.5},
-        "ref": "See meta_guidance.token_efficiency for details.",
+        "ref": 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.',
     }
 
 
@@ -1120,10 +1126,9 @@ def test_build_meta_session_cache_rate_clamps_to_fraction():
     assert session["session_cache_rate"] == 1.0
 
 
-def test_synthetic_meta_envelope_shows_token_usage_in_agent_state():
-    # /notification synthetic raw meta carries token diagnostics under
-    # agent_meta.agent_state when pending/session data is available. The nested
-    # current_call/session split is preserved on that current-state axis.
+def test_synthetic_meta_envelope_shows_context_only_in_agent_state():
+    # Synthetic default notifications carry current context only; detailed
+    # current_call/session accounting remains available via system.meta.
     snapshot = {
         "input_tokens": 190_000,
         "cache_miss_tokens": 22_000,
@@ -1139,6 +1144,7 @@ def test_synthetic_meta_envelope_shows_token_usage_in_agent_state():
         "api_calls": 4,
         "input_tokens": 22_000,
         "cached_tokens": 5_500,
+        "ctx_total_tokens": 190_000,
     }
     payload = build_notification_payload({"system": {"events": [{"body": "ping"}]}})
 
@@ -1148,9 +1154,12 @@ def test_synthetic_meta_envelope_shows_token_usage_in_agent_state():
     assert tool_meta["synthetic"] is True
     agent_meta = envelope["agent_meta"]
     state = agent_meta["agent_state"]
-    assert state["token_usage"]["current_call"]["input"] == 190_000
-    assert state["token_usage"]["session"]["session_cache_rate"] == 0.25
-    assert state["token_usage"]["session"]["api_calls"] == 4
+    assert set(state["token_usage"]) == {"session"}
+    assert state["token_usage"]["session"] == {
+        "context_tokens": 190_000,
+        "context_window": 250_000,
+        "context_usage": 0.76,
+    }
     assert "token_efficiency" not in agent_meta
     assert "token_usage" in state
     assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in agent_meta
@@ -1337,7 +1346,7 @@ def test_token_usage_block_carries_short_guidance_ref():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert compact["ref"] == "See meta_guidance.token_efficiency for details."
+    assert compact["ref"] == 'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.'
     assert "guidance_ref" not in json.dumps(compact)
     # The ref is not duplicated inside the halves.
     assert "ref" not in _current_call_half(compact)
@@ -1688,9 +1697,11 @@ def test_forced_rebuild_always_carries_unified_warning_even_when_low():
     assert "Forced provider-context rebuild applied at the 100% hard context boundary" in warning
     assert "100000 tokens (100%) before" in warning
     assert "40000 tokens (40%) after" in warning
-    assert "prefer a proactive" in warning
-    # The proactive rebuild is now the explicit public action, not a boolean.
+    # Molt is the preferred deliberate response; a manual rebuild is discouraged.
+    assert "prefer preparing a deliberate molt" in warning
     assert "context(action='rebuild')" in warning
+    assert "strongly discouraged" in warning
+    assert "prefer a proactive" not in warning
     assert "0.85" in warning or "85%" in warning
     assert "75%" in warning or "0.75" in warning
     assert "molt" in warning
@@ -1920,10 +1931,10 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
             "data": {"email_ids": ["email-1"]},
             "instructions": (
                 "High-attention email hook: full unread content lives in "
-                "notification_persistent.email. Prefer email.dismiss after handling; "
-                "use email.read/reply for source-of-truth mailbox actions. When "
-                "handled through the email tool, the producer mirror updates or "
-                "clears this notification."
+                "notification_persistent.email. This event is delivered once and is not "
+                "re-attached automatically; use email.read/reply/dismiss for "
+                "source-of-truth mailbox actions. Handling mail through the email tool "
+                "updates the producer mirror."
             ),
         }
     }
@@ -1933,7 +1944,7 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
     assert "digest" not in persistent_email
     assert persistent_email["emails"][0]["message"] == "Full email body"
     assert first.metadata["agent_meta"]["guidance"]["transient"] == {
-        "ref": "meta_guidance.notification_handling",
+        "ref": 'psyche(action="instructions", input={}): meta_guidance.notification_handling',
         "sources": ["email"],
     }
     assert "notification_guidance" not in first.metadata["agent_meta"]["notifications"]["attention"]["email"]
@@ -1947,27 +1958,32 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
 
 
 def test_attach_active_notifications_unchanged_payload_not_restamped(tmp_path):
-    # The complete current notification snapshot is repeated on the final
-    # carrier, even when its payload is unchanged.
+    # One-shot delivery: an unchanged notification event is attached once and
+    # is not chased onto later ordinary tool results.
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
 
     first = ToolResultBlock(id="t1", name="x", content={"ok": True})
     holder = attach_active_notifications(agent, [first], prior_holder=None)
     assert "notifications" in first.metadata["agent_meta"]
+    before_first = json.dumps(first.metadata, sort_keys=True)
 
-    # Second batch: the notification files are unchanged.  An ordinary tool
-    # result must NOT receive the payload; the prior holder keeps it.
-    second = ToolResultBlock(id="t2", name="x", content={"ok": False})
-    new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
+    # Second and third batches: the notification files are unchanged.  An
+    # ordinary tool result must NOT receive the payload; the prior holder stays.
+    for tool_id in ("t2", "t3"):
+        later = ToolResultBlock(id=tool_id, name="x", content={"ok": False})
+        new_holder = attach_active_notifications(agent, [later], prior_holder=holder)
 
-    assert new_holder is second
-    assert "notifications" in second.metadata["agent_meta"]
+        assert new_holder is holder
+        assert "notifications" not in later.metadata.get("agent_meta", {})
+        assert "guidance" not in later.metadata.get("agent_meta", {})
     # Prior holder remains historical and is not rewritten.
-    assert "notifications" in first.metadata["agent_meta"]
+    assert json.dumps(first.metadata, sort_keys=True) == before_first
     assert first.metadata["agent_meta"]["notifications"]["attention"]["email"]["data"] == {
         "email_ids": ["email-1"]
     }
+    # Explicit producer bytes were never touched by delivery.
+    assert (tmp_path / ".notification" / "email.json").exists()
 
 
 def test_attach_active_notifications_changed_payload_reattaches_and_retains_prior(tmp_path):
@@ -2017,9 +2033,9 @@ def test_attach_active_notifications_changed_payload_reattaches_and_retains_prio
 
 
 def test_attach_active_notifications_unchanged_commits_fp_to_avoid_retry(tmp_path):
-    # Even when an unchanged payload is not restamped, the fingerprint is
-    # committed so an equivalent rewrite / same-material payload does not retry
-    # forever against the IDLE-path synthesized pair.
+    # An unchanged payload is not restamped, but the fingerprint is committed
+    # so an equivalent rewrite / same-material payload does not retry forever
+    # against the IDLE-path synthesized pair.
     from tests._notification_store_helpers import fingerprint_notifications
 
     _write_email_notif(tmp_path)
@@ -2042,16 +2058,17 @@ def test_attach_active_notifications_unchanged_commits_fp_to_avoid_retry(tmp_pat
     second = ToolResultBlock(id="t2", name="x", content={"ok": False})
     new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
 
-    # The current whole snapshot is present and the fingerprint is committed.
-    assert new_holder is second
-    assert "notifications" in second.metadata["agent_meta"]
+    # Nothing new is attached, the live holder is kept, and the fingerprint is
+    # committed.
+    assert new_holder is holder
+    assert "notifications" not in second.metadata.get("agent_meta", {})
     assert agent._notification_fp == fingerprint_notifications(tmp_path)
 
 
-def test_attach_active_notifications_unchanged_signature_without_holder_reattaches(tmp_path):
-    # Defensive regression: if the signature says "unchanged" but the live
-    # holder was lost (e.g. after unusual recovery), do NOT commit an invisible
-    # notification state. Fall through and attach the payload to the target.
+def test_attach_active_notifications_delivered_identity_survives_holder_loss(tmp_path):
+    # The delivered identity — not the live holder — decides one-shot delivery:
+    # losing the holder (e.g. after unusual recovery) must not re-deliver an
+    # event the model already received.
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
 
@@ -2060,13 +2077,12 @@ def test_attach_active_notifications_unchanged_signature_without_holder_reattach
     assert holder is first
     assert "notifications" in first.metadata["agent_meta"]
 
-    # Simulate holder loss while the material signature remains recorded.
     agent._notification_live_holder = None
     second = ToolResultBlock(id="t2", name="x", content={"ok": False})
     new_holder = attach_active_notifications(agent, [second], prior_holder=None)
 
-    assert new_holder is second
-    assert "notifications" in second.metadata["agent_meta"]
+    assert new_holder is None
+    assert "notifications" not in second.metadata.get("agent_meta", {})
 
 
 
@@ -2103,7 +2119,7 @@ def test_attach_active_notifications_check_read_receives_unchanged_payload(tmp_p
 
 def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp_path):
     # When notifications go empty the signature resets to None, so a later
-    # reappearance of the SAME payload attaches again as the first active one.
+    # reappearance of the same known event must not replay; new IDs still attach.
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
 
@@ -2121,12 +2137,17 @@ def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp
     # strip); it is simply no longer the live holder.
     assert "notifications" in first.metadata["agent_meta"]
 
-    # Same payload reappears — must attach afresh (first-active semantics).
+    # The same mail ID/material reappears: it is not a new event merely
+    # because the mirror was cleared. Process-local event identity survives.
     _write_email_notif(tmp_path)
     third = ToolResultBlock(id="t3", name="x", content={"ok": True})
-    new_holder = attach_active_notifications(agent, [third], prior_holder=None)
-    assert new_holder is third
-    assert "notifications" in third.metadata["agent_meta"]
+    assert attach_active_notifications(agent, [third], prior_holder=None) is None
+    assert "notifications" not in third.metadata.get("agent_meta", {})
+    # A genuinely new mail still attaches after the empty observation.
+    _write_email_notif(tmp_path, email_id="email-2", message="new mail")
+    fourth = ToolResultBlock(id="t4", name="x", content={"ok": True})
+    assert attach_active_notifications(agent, [fourth], prior_holder=None) is fourth
+    assert fourth.metadata["agent_meta"]["notifications"]["persistent"]["email"]["email_ids"] == ["email-2"]
 
 
 def test_attach_active_notifications_adds_telegram_persistent_snapshot(tmp_path):
@@ -2299,10 +2320,10 @@ def test_attach_active_notifications_sanitizes_telegram_without_new_persistent_b
 
     assert new_holder is check_result
     meta = check_result.metadata["agent_meta"]
-    # No new message ids, but the routing event hook is Telegram content too, so
-    # it is emitted in persistent while the transient lane stays generic.
+    # Deliberate check rereads all selected mirror records, while attention
+    # remains thin. Automatic delivery of this unchanged event stays suppressed.
     telegram = meta["notifications"]["persistent"]["mcp"]["telegram"]
-    assert telegram["messages"] == []
+    assert [message["id"] for message in telegram["messages"]] == [message["id"] for message in messages]
     assert telegram["events"] == [
         {
             "from": "Jason",
@@ -2660,6 +2681,26 @@ def test_sanitize_telegram_notification_after_persistent_uses_latest_incoming_id
     telegram = notification_payload["notifications"]["mcp.telegram"]
     assert telegram["data"] == {"message_ids": ["main:123:9"]}
     assert "previews" not in telegram["data"]
+
+
+def test_sanitize_telegram_notification_after_persistent_instructions_teach_no_reread():
+    """The sanitized attention hook overwrites any plugin-owned instructions,
+    so it must itself carry the no-reread-when-full-and-id-present rule
+    rather than leaving only a generic 'use notification_persistent' pointer."""
+    notification_payload = {
+        "notifications": {
+            "mcp.telegram": {
+                "data": {"previews": [{"latest_incoming": _telegram_message(1)}]},
+                "instructions": "stale plugin-owned instructions",
+            }
+        }
+    }
+
+    meta_block.sanitize_telegram_notification_after_persistent(notification_payload)
+
+    instructions = notification_payload["notifications"]["mcp.telegram"]["instructions"]
+    assert "do not call Telegram's read/check merely to reread" in instructions
+    assert "full current message" in instructions
 
 
 def test_sanitize_telegram_notification_after_persistent_is_noop_without_telegram():
@@ -3274,13 +3315,15 @@ def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):
         "second body",
     ]
     assert all(message["source"] == "notification_preview" for message in telegram["messages"])
+    # Generated display IDs must not become producer routing/reply targets.
+    assert all("message_ref" not in event for event in telegram["events"])
     assert telegram["events"] == [
         {"from": "alice", "subject": "hello"},
         {"from": "bob", "subject": "status"},
     ]
     assert "notification_guidance" not in payload
     assert meta["guidance"]["transient"] == {
-        "ref": "meta_guidance.notification_handling",
+        "ref": 'psyche(action="instructions", input={}): meta_guidance.notification_handling',
         "sources": ["mcp.telegram"],
     }
 
@@ -3306,11 +3349,11 @@ def test_attach_active_notifications_uses_canonical_system_payload(tmp_path):
     ]
 
 
-def test_attach_active_notifications_uses_canonical_soul_payload(tmp_path):
+def test_attach_active_notifications_uses_canonical_producer_payload(tmp_path):
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)
-    (notif_dir / "soul.json").write_text(
-        '{"header": "soul flow", "icon": "🌊", "priority": "normal", '
+    (notif_dir / "cron.json").write_text(
+        '{"header": "cron", "icon": "⏰", "priority": "normal", '
         '"data": {"voices": ['
         '{"source": "insights", "voice": "Remember to verify by email."}'
         ']}}'
@@ -3320,7 +3363,7 @@ def test_attach_active_notifications_uses_canonical_soul_payload(tmp_path):
 
     attach_active_notifications(agent, [block], prior_holder=None)
 
-    payload = block.metadata["agent_meta"]["notifications"]["attention"]["soul"]
+    payload = block.metadata["agent_meta"]["notifications"]["attention"]["cron"]
     assert "_notifications" not in block.content
     assert payload["data"]["voices"] == [
         {"source": "insights", "voice": "Remember to verify by email."}
@@ -3572,7 +3615,7 @@ def _stamped_result(meta, elapsed_ms, *, result=None, id="t1", name="x"):
     )
 
 
-def test_attach_active_runtime_counts_current_batch_tool_result_chars():
+def test_attach_active_runtime_default_tail_omits_tool_result_chars():
     agent = _fake_agent()
     block = _stamped_result(
         build_meta(agent), 12, result={"payload": "B" * 1200}, id="tc-batch", name="bash"
@@ -3580,17 +3623,10 @@ def test_attach_active_runtime_counts_current_batch_tool_result_chars():
 
     attach_active_runtime(agent, [block])
 
-    agent_meta = block.metadata["agent_meta"]
-    current = agent_meta["agent_state"]["current_tool_result_chars"]
-    expected = len(json.dumps({"payload": "B" * 1200}, ensure_ascii=False, default=str))
-    assert current["total_chars"] == expected
-    assert current["top_results"] == [
-        {
-            "id": "tc-batch",
-            "tool_name": "bash",
-            "chars": expected,
-        }
-    ]
+    state = block.metadata["agent_meta"]["agent_state"]
+    assert "current_tool_result_chars" not in state
+    assert "adapter_comment" not in state
+    assert "active_turn_tool_calls" not in state
 
 
 def test_attach_active_runtime_does_not_leak_tool_meta_token_usage_to_agent_meta():
@@ -3625,7 +3661,7 @@ def test_attach_active_runtime_keeps_no_token_efficiency_in_agent_meta():
 
     agent_meta = block.metadata["agent_meta"]
     assert "token_efficiency" not in agent_meta
-    assert agent_meta["agent_state"]["active_turn_tool_calls"] == 3
+    assert "active_turn_tool_calls" not in agent_meta["agent_state"]
 
 
 def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
@@ -3642,8 +3678,8 @@ def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
     assert state["current_time"] == "T"
     assert state["context"] == {"usage": 0.1}
     assert state["elapsed_ms"] == 12
-    # active_turn_tool_calls is sourced from the guard and lives under agent_state.
-    assert state["active_turn_tool_calls"] == 3
+    # The guard counter is a full-snapshot diagnostic (system.meta), not tail.
+    assert "active_turn_tool_calls" not in state
     # Tail guidance is now a lightweight ref/hook pointing at the resident
     # meta_guidance system-prompt section — NOT the full ordered sections,
     # which moved into the system prompt to stop riding on every tail _meta.
@@ -3658,28 +3694,19 @@ def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
 
 
 
-def test_attach_active_runtime_refreshes_adapter_comment_at_batch_boundary():
+def test_attach_active_runtime_drops_adapter_comment_even_if_captured():
     agent = _runtime_agent(total_calls=1)
-
-    def dynamic_comment():
-        return {"adapter": "fake", "next_reset_in": 5}
-
-    agent._session = SimpleNamespace(
-        chat=SimpleNamespace(
-            adapter_comment=lambda: {"adapter": "fake", "summary": "legacy provider note"},
-            dynamic_adapter_comment=dynamic_comment,
-        )
+    block = _stamped_result(
+        {"current_time": "T", "adapter_comment": {"adapter": "fake", "next_reset_in": 5}},
+        12,
+        id="t-adapter",
     )
-    block = _stamped_result({"current_time": "T"}, 12, id="t-adapter")
 
     attach_active_runtime(agent, [block])
 
-    agent_meta = block.metadata["agent_meta"]["agent_state"]
-    tail = agent_meta["adapter_comment"]
-    assert tail["adapter"] == "fake"
-    assert tail["next_reset_in"] == 5
-    assert "summary" not in tail
-    assert "meta_guidance_ref" not in tail
+    state = block.metadata["agent_meta"]["agent_state"]
+    assert "adapter_comment" not in state
+    assert state["current_time"] == "T"
 
 def test_attach_active_runtime_moves_to_latest_and_retains_prior():
     agent = _runtime_agent(total_calls=1)
@@ -3699,7 +3726,6 @@ def test_attach_active_runtime_moves_to_latest_and_retains_prior():
     assert "agent_meta" in first.metadata
     assert "guidance" in first.metadata["agent_meta"]
     assert second.metadata["agent_meta"]["agent_state"]["current_time"] == "T2"
-    assert second.metadata["agent_meta"]["agent_state"]["active_turn_tool_calls"] == 2
 
 
 def test_attach_active_runtime_uses_final_block_as_carrier():
@@ -3717,7 +3743,6 @@ def test_attach_active_runtime_uses_final_block_as_carrier():
     assert "agent_meta" not in middle.metadata
     state = string_tail.metadata["agent_meta"]["agent_state"]
     assert state["elapsed_ms"] == 3
-    assert state["active_turn_tool_calls"] == 4
     # Earlier blocks get no current agent_meta, and their pending scaffolding is stripped.
     assert "_agent_pending" not in earlier.to_dict()
     assert string_tail.content == "plain text"
@@ -3791,39 +3816,35 @@ def test_attach_active_runtime_material_change_reattaches():
     assert holder2 is second
     assert "agent_meta" in second.metadata
 
-    # Material change: a new adapter_comment scalar appears in the snapshot.
+    # Material change: a new context warning appears in the snapshot.
     agent._executor.guard.total_calls = 3
     third = _stamped_result(
-        {"current_time": "T3", "adapter_comment": {"note": "materially new"}}, 7, id="t3"
+        {"current_time": "T3", "context": {"molt": "materially new"}}, 7, id="t3"
     )
     new_holder = attach_active_runtime(agent, [third], prior_holder=holder2)
 
     assert new_holder is third
     assert "agent_meta" in third.metadata
-    assert third.metadata["agent_meta"]["agent_state"]["adapter_comment"] == {"note": "materially new"}
+    assert third.metadata["agent_meta"]["agent_state"]["context"] == {"molt": "materially new"}
     # The older holder RETAINS its earlier snapshot as a historical update
     # point (no retroactive strip); the newest emission is the current one.
     assert "agent_meta" in first.metadata
-    assert "adapter_comment" not in first.metadata["agent_meta"]["agent_state"]
+    assert "context" not in first.metadata["agent_meta"]["agent_state"]
 
 
-def test_attach_active_runtime_new_large_result_is_material():
-    # A new large tool result appearing in current_tool_result_chars.top_results
-    # is a material change worth re-surfacing agent_meta, even if nothing else
-    # changed.
+def test_attach_active_runtime_large_result_candidates_are_on_demand_only():
+    # A big result does not grow the default tail; its candidate row is visible
+    # through the full on-demand snapshot instead.
     agent = _fake_agent()
     small = _stamped_result(build_meta(agent), 5, id="t1")
     holder = attach_active_runtime(agent, [small], prior_holder=None)
     assert "agent_meta" in small.metadata
 
-    # A big result enters the batch — top_results changes materially.
     big = _stamped_result(build_meta(agent), 6, result={"payload": "B" * 5000}, id="t2", name="bash")
     new_holder = attach_active_runtime(agent, [big], prior_holder=holder)
 
     assert new_holder is big
-    assert "agent_meta" in big.metadata
-    top = big.metadata["agent_meta"]["agent_state"]["current_tool_result_chars"]["top_results"]
-    assert any(entry["id"] == "t2" for entry in top)
+    assert "current_tool_result_chars" not in big.metadata["agent_meta"]["agent_state"]
 
 
 def test_agent_meta_signature_ignores_volatile_bookkeeping():
@@ -4464,6 +4485,12 @@ def test_build_context_rebuild_hint_stamps_after_high_ratio():
     assert "does NOT itself rebuild the active provider context" in hint
     assert "forces a rebuild at the 1.0 hard boundary" in hint
     assert "meta_guidance" in hint
+    # Molt is preferred; a manual rebuild is a discouraged, rare exception.
+    assert "Prefer preparing a deliberate molt" in hint
+    assert "strongly discouraged as routine compaction" in hint
+    assert "one targeted rebuild" in hint
+    assert "MAY pay" not in hint
+    assert "proactive rebuild" not in hint
     assert build_context_rebuild_hint(SimpleNamespace(_intrinsics=set()), 0.90) is None
 
 

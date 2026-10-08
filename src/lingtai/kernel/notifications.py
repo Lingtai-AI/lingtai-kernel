@@ -15,7 +15,7 @@ protocol.
 Naming convention:
 
 * Kernel intrinsics write ``<intrinsic_name>.json`` (e.g. ``email.json``,
-  ``soul.json``, ``system.json``).
+  ``system.json``, ``daemon.json``).
 * MCP-loaded servers write ``mcp.<server_name>.json`` (e.g.
   ``mcp.imap.json``, ``mcp.telegram.json``).
 
@@ -46,7 +46,6 @@ _CHANNEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 # because server names are dynamic but still owned by the MCP inbox contract.
 _NOTIFICATION_CHANNEL_ALLOWLIST: set[str] = {
     "bash",
-    "btw",
     "cron",
     "daemon",
     "delay-alarm",
@@ -55,7 +54,7 @@ _NOTIFICATION_CHANNEL_ALLOWLIST: set[str] = {
     "molt",
     "nudge",
     "post-molt",
-    "soul",
+    "memory-length",
     "system",
     "tool_loop_guard",
 }
@@ -104,7 +103,7 @@ _PROTECTED_GENERIC_DISMISS: dict[str, str] = {
 
 # Channels whose generic dismissal would leak producer-owned state.
 # Producers with durable unread/state mirrors register themselves here at
-# import time so notification(action="dismiss_channel", channel=...) can refuse
+# import time so the private generic-dismiss helper (no public action) can refuse
 # unsafe generic clears and point the agent at the producer-specific verb.
 _GENERIC_DISMISS_GUARDED: dict[str, str] = {}
 
@@ -406,8 +405,8 @@ def _delay_alarm_payload(completion: dict[str, Any]) -> dict[str, Any]:
         "published_at": completion["expired_at"],
         "instructions": (
             "This is a consumer-only delay alarm. The target producer state was "
-            "not changed; handle the re-exposed target, then dismiss delay-alarm "
-            "when this reminder is no longer needed."
+            "not changed; handle the re-exposed target. This alarm is delivered "
+            "once and is not re-attached automatically."
         ),
         "data": {
             "delay_alarm": {
@@ -1578,7 +1577,7 @@ def submit(
 
     Args:
         agent: The agent instance.
-        tool_name: The producer's namespace key — ``email``, ``soul``,
+        tool_name: The producer's namespace key — ``email``, ``daemon``,
             ``system``, ``mcp.<server>``, …  This becomes both the file
             basename (``<tool_name>.json``) AND the dict key the agent
             sees when it reads ``notification(action="check")``.
@@ -1587,7 +1586,7 @@ def submit(
         header: One-line glanceable summary used by frontends (TUI
             status bar, portal cards) for compact rendering.
         icon: Optional glyph for status indicators.  Defaults to 🔔;
-            common conventions: 📧 (mail), 🌊 (soul), 💬 (chat), …
+            common conventions: 📧 (mail), 💬 (chat), …
         priority: ``"low"``, ``"normal"``, or ``"high"``.  Frontends
             may surface high-priority notifications more prominently.
         instructions: Optional agent-facing directive describing how to
@@ -1884,12 +1883,10 @@ def dismiss_channel(
     event_id: str | None = None,
     ref_id: str | None = None,
 ) -> dict:
-    """Shared agent-facing notification dismissal helper.
+    """Private compatibility/Core notification clear helper.
 
-    Used by the standalone ``notification`` tool's atomic dismiss verbs
-    (``dismiss_channel``/``dismiss_event``/``dismiss_ref``, all with
-    ``invoked_by="notification"``) and the ``soul(action="dismiss")``
-    convenience alias.
+    Public notification/system dismiss routes are removed. Producer-specific
+    business operations and private Core callers keep their own lifecycle.
 
     Generic dismiss clears only the notification surface; producer-owned state
     is untouched.
@@ -2096,8 +2093,6 @@ def dismiss_channel(
                     forced=bool(force),
                     reason=ack_reason or None,
                 )
-            elif invoked_by == "soul":
-                agent._log("soul_dismiss")
         except Exception:
             pass
 

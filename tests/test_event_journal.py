@@ -212,7 +212,6 @@ def test_outer_agent_composes_posix_journal_for_keyword_working_dir(tmp_path):
         working_dir=tmp_path,
         capabilities={},
         disable=list(CORE_DEFAULTS),
-        file_io=MagicMock(),
         config=config,
     )
     try:

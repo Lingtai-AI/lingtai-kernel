@@ -244,7 +244,7 @@ def test_defaults_when_nothing_is_configured(tmp_path):
     defaults = AgentConfig()
     assert policy.context_limit is None
     assert policy.max_rpm == 60
-    assert policy.streaming is False
+    assert policy.streaming is True
     assert policy.aed_timeout == defaults.aed_timeout == 360.0
     assert policy.max_aed_attempts == defaults.max_aed_attempts == 3
     assert policy.snapshot_interval is None
@@ -426,7 +426,6 @@ def test_build_agent_config_with_policy_leaves_manifest_untouched():
     cfg = build_agent_config(manifest, max_rpm=policy.max_rpm, runtime_policy=policy)
     assert (cfg.context_limit, cfg.activeness, cfg.snapshot_interval) == (2, "policy", 6.0)
     assert (cfg.aed_timeout, cfg.max_aed_attempts, cfg.max_rpm) == (4.0, 5, 3)
-    assert cfg.soul_delay == 5
     assert json.dumps(manifest, sort_keys=True) == snapshot
     # A raw manifest is never an ordinary runtime-policy fallback.
     legacy = build_agent_config(manifest, max_rpm=0)
@@ -641,7 +640,7 @@ def test_refresh_applies_and_removes_system_policy_coherently(tmp_path, monkeypa
     assert agent.service._context_window == 272_000
     assert agent._config.max_rpm == 60
     assert agent._config.aed_timeout == 360.0
-    assert agent._session.streaming is False
+    assert agent._session.streaming is True
 
     _write_settings(
         tmp_path,
@@ -675,7 +674,7 @@ def test_refresh_applies_and_removes_system_policy_coherently(tmp_path, monkeypa
     assert agent._config.aed_timeout == 360.0
     assert agent._config.max_aed_attempts == 3
     assert agent._config.activeness == "balanced"
-    assert agent._session.streaming is False
+    assert agent._session.streaming is True
 
 
 def test_refresh_env_beats_system_file_and_invalid_env_falls_through(tmp_path, monkeypatch):

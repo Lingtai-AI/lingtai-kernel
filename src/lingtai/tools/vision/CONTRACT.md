@@ -1,7 +1,7 @@
 ---
 name: vision-contract
 tool: vision
-contract_version: 2
+contract_version: 3
 related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/ANATOMY.md
@@ -107,9 +107,9 @@ this family contract only specifies the Vision-side requirements above.
 Guarded by: [VN007](BEHAVIORS.md#behavior-vn007)
 
 Vision inventories exactly these owner-route facts, in order: `provider`,
-`base_url`, `model`, `api_key`, `api_key_env`, `max_tokens`, `api_compat`,
-`wire_api`, `default_headers`, `token_path`, `instructions`,
-`max_output_tokens`, and `timeout`. A success row is exactly `key`, `current`,
+`base_url`, `model`, `api_key`, `api_key_env`, `max_tokens`, `wire_api`,
+`default_headers`, `token_path`, `instructions`, `max_output_tokens`, and
+`timeout`. A success row is exactly `key`, `current`,
 `default`, `configurable`, and `comment`; every comment is a stable
 `vision-manual#setting-...` pointer.
 
@@ -138,18 +138,24 @@ Guarded by: [VN002](BEHAVIORS.md#behavior-vn002),
 [VN006](BEHAVIORS.md#behavior-vn006)
 
 Without a `preset`, direct routing uses the configured Vision service or the
-active provider's own compatible identity. Provider/model/base URL/credential
-identity is inherited only from that same active provider (including the
-supported GLM/Zhipu and Codex-family aliases). `PROVIDERS["fallback_on_inherit"]`
-is `None`: an unsupported or failed active route remains a manual/error result;
-Vision does not silently switch to a different provider, legacy credential, or
-MCP route.
+active provider's own family: `openai` or `anthropic` (any compatible
+endpoint), `codex`, or `claude-code`. Provider/model/endpoint/credential
+identity is inherited only from that same active provider. The inherited
+endpoint is the active service's *effective* endpoint
+(`LLMService.effective_base_url`: the configured `base_url`, else the adapter's
+own default), never a guessed one, and the active credential is sent only to
+that endpoint: a capability that names a different `base_url` must supply its
+own `api_key`/`api_key_env` or the route is manual-only.
+`PROVIDERS["fallback_on_inherit"]` is `None`: an unsupported or failed active
+route remains a manual/error result; Vision does not silently switch to a
+different provider, legacy credential, or MCP route. An endpoint that cannot do
+vision simply fails the request.
 
 With a non-null `preset`, Vision first requires the reference to be present in
 `manifest.preset.allowed` and then loads it read-only. The borrowed route uses
 the allowed preset's own `manifest.llm` and `manifest.capabilities.vision`
 identity: its provider/model/base URL and, where declared, its own
-`api_key`/`api_key_env` or Codex OAuth-pool identity. Resolving that explicitly
+`api_key`/`api_key_env` or Codex OAuth identity. Resolving that explicitly
 allowed preset credential is an intentional consequence of the caller's borrow
 request; it is not an active-preset switch and is not an automatic fallback.
 An unlisted, unreadable, or incomplete preset fails closed with a sanitized
@@ -165,13 +171,21 @@ route, and performs no provider or image operation.
 
 ## Provider and wire boundaries
 
-Codex spellings (`codex`, `codex-pool`, `codex_pool`) are one family gate; spelling
-does not choose direct versus pool. The active Codex default bucket chooses the
-route: a nonblank trimmed `codex_auth_path` is direct, otherwise the active
-Codex pool selects its current OAuth identity. An unrelated active provider may
+Vision routes exactly these providers: `openai` and `anthropic` (API families,
+explicitly configurable with `base_url`, `api_key`/`api_key_env`, `model`,
+`default_headers`, `max_tokens`, and for `openai` `wire_api`), `codex`,
+`claude-code` (plus the vision-only `claude-p` alias), `local`, and `mlx`. Any
+other provider name — including every removed LLM provider — is manual-only,
+and a legacy `api_compat` capability value is ignored.
+
+The Codex provider (`codex`) uses one OAuth identity, mirroring the Codex
+factory: an explicit capability `token_path`, else the active Codex bucket's
+nonblank trimmed `codex_auth_path`, else (active Codex service only) the default
+`codex-auth.json`. An unrelated active provider may
 not lend its model, endpoint, or credential to a Codex request. Claude-family
-vision is manual-only guidance to the explicit Claude CLI. OpenAI-compatible
-routes preserve their current endpoint/model/wire, and unsupported wires remain
+vision is manual-only guidance to the explicit Claude CLI. The `openai` route
+selects `responses` only for `wire_api: responses`; `chat_completions`, the
+legacy `auto`, and omission select Chat Completions, and an unknown wire remains
 manual-only. Local vision requires an explicit model and uses its operator-owned
 settings/manifest values; no hidden model or credential default is invented.
 
@@ -209,7 +223,8 @@ Guarded by: [VN002](BEHAVIORS.md#behavior-vn002),
   strict branches, action/input correlation, and pre-handler rejection:
   `tests/test_tool_family_vision_migration.py`.
 - [VN002](BEHAVIORS.md#behavior-vn002) guards analyze success/failure shapes,
-  image-path handling, same-provider identity, and no automatic fallback:
+  image-path handling, same-provider identity (effective endpoint, no
+  credential leak to another endpoint), and no automatic fallback:
   `tests/test_tool_family_vision_migration.py` and
   `tests/test_vision_capability.py`.
 - [VN003](BEHAVIORS.md#behavior-vn003) guards default/borrowed checks, denied

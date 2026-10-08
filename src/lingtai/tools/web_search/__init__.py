@@ -44,12 +44,16 @@ if TYPE_CHECKING:
     )
     from ..browser.port import BrowserPort
 
-# MiniMax and Zhipu are no longer built-in `web` providers (see
-# src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md for the
-# skill-owned MCP route). Anthropic and Gemini are explicit opt-in only,
-# gated on canonical backend identity — never an implicit built-in default.
+# Built-in Search admits exactly three engines: DuckDuckGo (the default, no
+# credential) and the backend-gated ``openai`` / ``anthropic`` engines, which run
+# only for an Agent whose own LLM provider is that same family. MiniMax and
+# Zhipu are no longer built-in `web` providers (see
+# src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md for
+# the skill-owned MCP route). Any other name — including the removed ``gemini``
+# engine — is an unrecognized legacy name that composition maps to the
+# DuckDuckGo ``legacy_fallback_from`` route below.
 PROVIDERS = {
-    "providers": ["duckduckgo", "gemini", "anthropic", "openai"],
+    "providers": ["duckduckgo", "anthropic", "openai"],
     "default": "duckduckgo",
     "fallback_on_inherit": "duckduckgo",
 }
@@ -67,35 +71,46 @@ class RetiredProviderError(ValueError):
     """A composition kwarg named a provider retired from built-in admission.
 
     Reserved for MiniMax/Zhipu (``_RETIRED_PROVIDERS``) — providers that no
-    longer exist as a `web` built-in at all. Anthropic and Gemini are still
-    fully active, admitted, canonical providers; a composition kwarg
-    attempting to select either through a forbidden route raises the
-    distinct :class:`SettingsOnlyProviderError` instead, never this class.
+    longer exist as a `web` built-in at all. Anthropic is still a fully
+    active, admitted provider; a composition kwarg attempting to select it
+    through a forbidden route raises the distinct
+    :class:`SettingsOnlyProviderError` instead, never this class.
     """
 
 
 class SettingsOnlyProviderError(ValueError):
-    """A composition kwarg tried to select a settings-only canonical provider.
+    """A composition kwarg tried to select the settings-only Anthropic engine.
 
-    Raised when ``provider=``/``default_engine=`` (or an ``engines={}``-only
-    engine set with no ``duckduckgo``/``openai`` fallback) would otherwise
-    select Anthropic or Gemini — both fully active, canonical, currently
-    admitted providers, just restricted to explicit opt-in through the
-    hot-read ``search.engine`` environment/document setting plus canonical-backend
-    eligibility (never this composition-time route). Distinct from
-    :class:`RetiredProviderError`, which is reserved for a provider retired
-    from admission entirely (MiniMax, Zhipu) — Anthropic/Gemini are never
+    Raised when ``provider=``/``default_engine=`` would otherwise select
+    Anthropic — a fully active, admitted engine, just restricted to explicit
+    opt-in through the hot-read ``search.engine`` environment/document setting
+    plus backend eligibility (never this composition-time route). Distinct
+    from :class:`RetiredProviderError`, which is reserved for a provider
+    retired from admission entirely (MiniMax, Zhipu) — Anthropic is never
     "retired" and must never be described as such in error text, tests, or
     docs.
     """
 
 
-# Explicit-opt-in engines: admitted only through the hot-read search.engine
-# environment/document setting, and only when the current Agent's LLM
-# backend truthfully IS that same canonical provider. Never selectable via
-# the flat ``provider=``/``default_engine=`` composition kwargs — those are
-# rejected outright at composition time (see ``_specs_from_kwargs``).
-_BACKEND_GATED_ENGINES = frozenset({"anthropic", "gemini"})
+# Backend-gated engines: each runs only when the current Agent's own LLM
+# provider label truthfully IS that same family (``openai`` for the OpenAI
+# Responses Web Search engine, ``anthropic`` for Anthropic server-side Web
+# Search), however the engine was selected — composition default, built-in
+# default, or the hot-read search.engine setting. A gated engine selected on
+# any other backend fails ``PROVIDER_BACKEND_INELIGIBLE`` with no provider
+# construction and no search call.
+_BACKEND_GATED_ENGINES = frozenset({"openai", "anthropic"})
+
+# Settings-only engines: the subset of gated engines that additionally may be
+# selected ONLY through the hot-read search.engine environment/document
+# setting. Never selectable via the flat ``provider=``/``default_engine=``
+# composition kwargs — those are rejected outright at composition time (see
+# ``_specs_from_kwargs``) — and never the built-in default. ``openai`` is
+# deliberately NOT settings-only: it stays composable and is the automatic
+# built-in default when eligible (credential present and an ``openai``
+# backend), preserving existing ``capabilities.web.provider = "openai"``
+# compositions while the backend gate above still applies at search time.
+_SETTINGS_ONLY_ENGINES = frozenset({"anthropic"})
 
 # The standard, publicly-documented API-key environment variable for each
 # canonical built-in web-search spec
@@ -106,23 +121,20 @@ _BACKEND_GATED_ENGINES = frozenset({"anthropic", "gemini"})
 _CANONICAL_API_KEY_ENV = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
-    "gemini": "GEMINI_API_KEY",
 }
 
 
 def _same_provider_identity(provider_identity: "ProviderIdentityPort", name: str) -> bool:
-    """Return whether the narrow provider port truthfully IS canonical *name*.
+    """Return whether the narrow provider port truthfully IS family *name*.
 
-    Exact equality against the host-provided canonical provider label — the one
-    registered name bound to a provider's own dedicated adapter factory
-    (``LLMService.register_adapter`` in ``lingtai.llm._register``). Aliased,
-    CLI-login, or wire-compatible names (``claude-code``/``claude_code``,
-    ``custom``, ``openrouter``, ``deepseek``, ``glm``/``zhipu``, ``grok``,
-    ``qwen``, ``kimi``, ``codex``/``codex-pool``/``codex_pool``) never
-    register under ``"anthropic"`` or ``"gemini"``, so exact equality is the
-    smallest truthful boundary — no substring, alias, or model-name guess.
-    Private to ``web``: only this capability's Anthropic/Gemini opt-in needs
-    this predicate today, so it stays unexported rather than becoming a
+    Exact equality against the host-provided provider label — the one
+    registered name bound to that family's adapter factory
+    (``LLMService.register_adapter`` in ``lingtai.llm._register``: ``openai``,
+    ``anthropic``, ``codex``, ``claude-code``). ``codex`` and ``claude-code``
+    never register under ``"openai"`` or ``"anthropic"``, so exact equality is
+    the smallest truthful boundary — no substring, alias, or model-name guess.
+    Private to ``web``: only this capability's backend-gated engines need this
+    predicate today, so it stays unexported rather than becoming a
     speculative cross-tool identity API.
     """
     if name not in _BACKEND_GATED_ENGINES:
@@ -134,7 +146,7 @@ def _same_provider_identity(provider_identity: "ProviderIdentityPort", name: str
 _SEARCH_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "query": {"type": "string", "description": "Query for current web sources."},
+        "query": {"type": "string", "description": "Precise query for current web sources."},
     },
     "required": ["query"],
     "additionalProperties": False,
@@ -153,7 +165,7 @@ _BROWSE_INPUT_SCHEMA: dict[str, Any] = {
         },
         "cursor": {
             "type": ["string", "null"],
-            "description": "Continuation cursor for that URL/link_ref; null when unused.",
+            "description": "Cached-snapshot locator for the same URL/link_ref; null when unused.",
         },
         "extract": {
             "type": ["string", "null"],
@@ -164,7 +176,7 @@ _BROWSE_INPUT_SCHEMA: dict[str, Any] = {
             "type": ["integer", "null"],
             "minimum": 1,
             "maximum": 100000,
-            "description": "Per-call delivery threshold override (1–100000); null uses settings/web.json.",
+            "description": "One-call complete-output threshold override (1–100000); null uses Web settings.",
         },
     },
     "required": ["url", "link_ref", "cursor", "extract", "max_chars"],
@@ -209,11 +221,11 @@ def _schema_only_family() -> ToolFamily:
 
 def get_description(lang: str = "en") -> str:
     return (
-        "Search current sources with web(action='search', input={'query':'...'}), then browse a "
-        "returned link_ref or public HTTP(S) URL with web(action='browse', input={...}). Use "
-        "web(action='settings', input={}) for read-only config and web(action='manual', input={}) "
-        "for procedures; browse optionals are JSON null when unused and complete content is inline "
-        "or a full artifact."
+        "Search current sources with web(action='search', input={'query':'...'}), then browse one "
+        "returned same-Agent link_ref or public HTTP(S) URL with web(action='browse', input={...}); "
+        "use web(action='settings', input={}) for read-only config and web(action='manual', input={}) "
+        "for procedures. Browse is static; unused optionals are JSON null and complete output is "
+        "inline or a full artifact."
     )
 
 
@@ -227,8 +239,8 @@ def _deferred_bind(host: "ToolPluginHost") -> BoundToolPlugin:
 #: :class:`WebComposition` that ``setup`` grants to this declaration alone as
 #: the Web-owned ``web_runtime`` host port (through ``extra_ports_for``, the
 #: same declaration-scoped seam Email, File, Shell, and Vision use).
-#: ``provider_identity`` is the narrow read-only canonical provider label that
-#: gates the explicit Anthropic/Gemini opt-in; ``workdir`` roots settings,
+#: ``provider_identity`` is the narrow read-only provider label that gates the
+#: backend-gated OpenAI/Anthropic engines; ``workdir`` roots settings,
 #: artifacts, and the installed manual.
 DECLARATION = ToolPluginDeclaration(
     name="web",
@@ -390,22 +402,28 @@ class WebManager:
 
     def _default_engine_now(self) -> str | None:
         # The built-in default (no operator ``default_engine``/``provider``
-        # and no settings-file selection) resolves live, per call: canonical
-        # OpenAI Responses Web Search when genuinely available, else
+        # and no settings-file selection) resolves live, per call: OpenAI
+        # Responses Web Search only when it is genuinely available AND the
+        # Agent's own LLM provider is ``openai`` (the backend gate), else
         # DuckDuckGo. An operator-chosen ``default_engine``/``provider`` (a
         # non-``built_in_default`` source) is never overridden here.
         if self._default_source != "built_in_default":
             return self._default_engine
-        if "openai" in self._specs and self._status(self._specs["openai"]) == "available":
+        if (
+            "openai" in self._specs
+            and self._status(self._specs["openai"]) == "available"
+            and _same_provider_identity(self._provider_identity, "openai")
+        ):
             return "openai"
         if "duckduckgo" in self._specs:
             return "duckduckgo"
         if self._default_engine in _BACKEND_GATED_ENGINES:
-            # The built-in default must never land on a settings-gated
-            # engine (Contract item 3/repair item 2) — even one that
-            # happened to be first in an operator's ``engines={}`` mapping
-            # with no explicit ``default_engine``/``provider`` choice and no
-            # ``duckduckgo`` spec composed at all.
+            # The built-in default must never land on a backend-gated engine
+            # it did not prove eligible above (Contract item 3/repair item 2)
+            # — even one that happened to be first in an operator's
+            # ``engines={}`` mapping with no explicit
+            # ``default_engine``/``provider`` choice and no ``duckduckgo``
+            # spec composed at all.
             return None
         return self._default_engine
 
@@ -571,28 +589,32 @@ class WebManager:
         if not name or name not in self._specs:
             return self._failure("search", snapshot, diagnostic, "SEARCH_ENGINE_UNAVAILABLE", "the selected search engine is unavailable")
         if name in _BACKEND_GATED_ENGINES:
-            if snapshot.source not in {"settings/web.search.json", "environment"}:
-                # Anthropic/Gemini are explicit opt-in through a valid
-                # hot-read settings/web.search.json or LINGTAI_WEB_ENGINE
-                # selection only. A
-                # composition-time default_engine/provider can never select
-                # them (rejected outright in _specs_from_kwargs), and the
-                # no-config built-in default never picks them either — this
+            if (
+                name in _SETTINGS_ONLY_ENGINES
+                and snapshot.source not in {"settings/web.search.json", "environment"}
+            ):
+                # Anthropic is explicit opt-in through a valid hot-read
+                # settings/web.search.json or LINGTAI_WEB_ENGINE selection
+                # only. A composition-time default_engine/provider can never
+                # select it (rejected outright in _specs_from_kwargs), and the
+                # no-config built-in default never picks it either — this
                 # branch is the last-resort guard against any other route
-                # reaching a gated engine name.
+                # reaching a settings-only engine name.
                 return self._failure(
                     "search", snapshot, diagnostic, "PROVIDER_BACKEND_INELIGIBLE",
                     f"engine {name!r} is explicit opt-in only through Web's engine setting",
                 )
             if not _same_provider_identity(self._provider_identity, name):
-                # Explicit Anthropic/Gemini opt-in fails explicitly when the
-                # current Agent's own LLM backend is not truthfully that same
-                # canonical provider — no provider construction, no search
-                # call, no silent substitution (settings-selected, not the
-                # automatic OpenAI-only runtime fallback in Contract item 7).
+                # A backend-gated engine (OpenAI or Anthropic), however it was
+                # selected, fails explicitly when the current Agent's own LLM
+                # provider is not that same family — no provider
+                # construction, no search call, no silent substitution (not
+                # the automatic OpenAI-only runtime fallback in Contract item
+                # 7, which covers only a provider-typed failure of an
+                # eligible OpenAI search).
                 return self._failure(
                     "search", snapshot, diagnostic, "PROVIDER_BACKEND_INELIGIBLE",
-                    f"engine {name!r} requires the Agent's own LLM backend to be the canonical {name} API provider",
+                    f"engine {name!r} requires the Agent's own LLM provider to be {name!r}",
                 )
         spec = self._specs[name]
         if self._status(spec) != "available":
@@ -627,7 +649,7 @@ class WebManager:
                 # retried against DuckDuckGo.
                 return self._openai_duckduckgo_fallback(query, exc.failure_class, output_snapshot, diagnostic)
             if isinstance(exc, SearchProviderError):
-                # A typed Anthropic/Gemini (or any other) provider failure —
+                # A typed Anthropic (or any other) provider failure —
                 # including Anthropic's official in-body HTTP-200
                 # web_search_tool_result_error — never triggers a fallback
                 # for any engine except the one explicit OpenAI case above.
@@ -898,20 +920,20 @@ class WebManager:
 
 
 def _canonical_default_specs() -> dict[str, _EngineSpec]:
-    # The real no-config built-in spec set: all four canonical providers,
-    # using only each provider's own standard, publicly-documented API-key
-    # env var (_CANONICAL_API_KEY_ENV) as the credential source — never the
-    # current Agent's own live LLM service credentials or any private
-    # LLM-adapter attribute. DuckDuckGo needs no credential. Anthropic/Gemini
-    # are present as selectable specs (so their status is honestly reported
-    # in diagnostics) but are never chosen by the default resolver — only an
-    # explicit search.engine environment/document selection plus canonical-backend
-    # eligibility can select them (see WebManager._search).
+    # The real no-config built-in spec set: all three engines, using only each
+    # provider's own standard, publicly-documented API-key env var
+    # (_CANONICAL_API_KEY_ENV) as the credential source — never the current
+    # Agent's own live LLM service credentials or any private LLM-adapter
+    # attribute. DuckDuckGo needs no credential. OpenAI is the default
+    # resolver's choice only when available on an ``openai`` backend.
+    # Anthropic is present as a selectable spec (so its status is honestly
+    # reported in diagnostics) but is never chosen by the default resolver —
+    # only an explicit search.engine environment/document selection plus
+    # backend eligibility can select it (see WebManager._search).
     return {
         "duckduckgo": _EngineSpec("duckduckgo", provider="duckduckgo"),
         "openai": _EngineSpec("openai", provider="openai", api_key_env=_CANONICAL_API_KEY_ENV["openai"]),
         "anthropic": _EngineSpec("anthropic", provider="anthropic", api_key_env=_CANONICAL_API_KEY_ENV["anthropic"]),
-        "gemini": _EngineSpec("gemini", provider="gemini", api_key_env=_CANONICAL_API_KEY_ENV["gemini"]),
     }
 
 
@@ -936,17 +958,17 @@ def _specs_from_kwargs(
             "wire it as a third-party MCP server instead (see "
             "src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md)"
         )
-    if default_engine in _BACKEND_GATED_ENGINES or provider in _BACKEND_GATED_ENGINES:
-        # Anthropic/Gemini are active, fully-admitted canonical providers —
-        # never retired — restricted to explicit opt-in through
-        # search.engine environment/document setting only; a composition-time
-        # default_engine/provider must never select them, even when the
+    if default_engine in _SETTINGS_ONLY_ENGINES or provider in _SETTINGS_ONLY_ENGINES:
+        # Anthropic is an active, fully-admitted engine — never retired —
+        # restricted to explicit opt-in through the search.engine
+        # environment/document setting only; a composition-time
+        # default_engine/provider must never select it, even when the
         # composed spec set would otherwise be eligible (Contract item 3,
         # g1 repair item 2). engines={...} may still declare a bounded spec
-        # for one of them (credential/service injection for
-        # tests/integration) without selecting it as the default.
+        # for it (credential/service injection for tests/integration)
+        # without selecting it as the default.
         raise SettingsOnlyProviderError(
-            f"engine {(default_engine or provider)!r} is a canonical provider explicit opt-in "
+            f"engine {(default_engine or provider)!r} is explicit opt-in "
             "only through Web's search.engine setting; it cannot be selected via default_engine= or provider="
         )
     if engines is not None:
@@ -1006,12 +1028,12 @@ def _specs_from_kwargs(
                 raise ValueError("web engine names must use the bounded selector grammar")
             specs[name] = _EngineSpec(name, provider=provider or name, service=search_service, api_key=api_key, api_key_env=api_key_env, model=model, extra=kwargs)
     else:
-        # True no-config path: build the real canonical spec set (all four
-        # providers) rather than a single bare duckduckgo spec, so the
-        # runtime default resolver (WebManager._default_engine_now) can
-        # actually see and select OpenAI when its standard credential env
-        # var is genuinely set — the ordinary, no-operator-config runtime
-        # path, not a test-only injected engine set.
+        # True no-config path: build the real canonical spec set (all three
+        # engines) rather than a single bare duckduckgo spec, so the runtime
+        # default resolver (WebManager._default_engine_now) can actually see
+        # and select OpenAI when its standard credential env var is genuinely
+        # set on an ``openai`` backend — the ordinary, no-operator-config
+        # runtime path, not a test-only injected engine set.
         specs = _canonical_default_specs()
     if default_engine is not None and default_engine not in specs:
         raise ValueError("web default_engine must name an admitted engine")
@@ -1021,7 +1043,8 @@ def _specs_from_kwargs(
     # (``engines=``/``search_service=`` alone, or the true no-config path):
     # the latter still leaves the engine choice itself to the runtime
     # built-in default resolver (``WebManager._default_engine_now`` —
-    # canonical OpenAI when genuinely available, else DuckDuckGo), so it
+    # OpenAI when genuinely available on an ``openai`` backend, else
+    # DuckDuckGo), so it
     # must not be misreported as an operator override that resolution
     # should never touch.
     source = "operator_default" if default_engine or provider else "built_in_default"

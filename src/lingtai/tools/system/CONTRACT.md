@@ -1,7 +1,7 @@
 ---
 name: system-contract
 tool: system
-contract_version: 5
+contract_version: 6
 related_files:
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/plugin.py
@@ -10,11 +10,15 @@ related_files:
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/agent.py
   - src/lingtai/tools/system/schema.py
+  - src/lingtai/tools/system/meta.py
   - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/tools/system/ANATOMY.md
+  - src/lingtai/kernel/base_agent/CONTRACT.md
+  - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/tools/system/BEHAVIORS.md
+  - src/lingtai/tools/context/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
@@ -22,7 +26,15 @@ related_files:
   - src/lingtai/kernel/malloc_relief.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/project-move/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/reference/agent-name-move/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/migration-guide/scripts/change_name.py
   - src/lingtai/intrinsic_skills/system-manual/reference/settings-inventory/SKILL.md
+  - src/lingtai/cli.py
+  - tests/test_how_to_change_name.py
+  - tests/test_how_to_change_name_e2e.py
+  - tests/test_cli.py
   - tests/test_tool_family_system_migration.py
   - tests/test_system_sleep_alarm.py
   - tests/test_system_declared_plugin.py
@@ -33,6 +45,9 @@ maintenance: |
   suite. If behavior and this contract disagree, the code is the source of
   truth — fix the contract in the same change and bump contract_version on
   breaking contract edits.
+  contract_version 6 collapses the LLM route classifier to the four provider
+  families and retires the llm.api_compat / llm.reasoning_effort_vocab rows
+  (their init pointers, with llm.use_responses_api, are inert exclusions).
   contract_version 5 applies the System kernel-level catch-all rule to every
   effective setting without another concrete ToolPlugin owner while retaining
   a SHOW-only five-field surface. contract_version 4 added read-only discovery
@@ -70,8 +85,8 @@ model-facing root is exactly `action`, `input`, `reasoning`, and `summarize`
 with `additionalProperties: false`, and each action's arguments live only in
 that action's own strict `input` object — so `address` belongs to the six
 address verbs, `preset`/`revert_preset` only to `refresh`, and `content` only
-to the two name actions. It is the third migrated *intrinsic* (after `soul` and
-`notification`) and therefore composes its dispatching family per call rather
+to the two name actions. It is the third migrated *intrinsic* (after the
+since-removed `soul` and `notification`) and therefore composes its dispatching family per call rather
 than owning a per-Agent manager, and drops the kernel-injected `_tc_id` at its
 own Host boundary. The migration changed the argument shape only: the public
 tool name, every retained action value, every privilege gate, receipt, and error
@@ -123,9 +138,12 @@ resolver, constant, or selected registered-factory route. SHOW fresh-reads
 effective init/preset inputs and per-use environment resolvers where the runtime
 does; process-start constants are reported as the current effective process
 state. Canonical provider-default normalization runs before the narrow
-registered-factory classifier projects each LLM row. A selected factory's row
-reports the effective value and default that factory actually consumes; an axis
-the factory ignores reports null current/default. Effective adapter selectors
+registered-factory classifier projects each LLM row; the registered factories
+are exactly `openai`, `anthropic`, `codex`, and `claude-code`. A selected
+factory's row reports the effective value and default that factory actually
+consumes; an axis the factory ignores reports null current/default. The retired
+`manifest.llm.api_compat`, `reasoning_effort_vocab`, and `use_responses_api`
+keys are recognized-and-ignored inert exclusions, never rows. Effective adapter selectors
 report the selected public route rather than malformed authored syntax, and an
 unknown selected provider fails the complete action loudly. Projection may
 inspect registry/factory identity, canonical constants, and signatures only; it
@@ -156,7 +174,7 @@ apply timing, sensitivity notes, real change procedure, and second-SHOW
 verification live only in the manual section named by `comment`. Legacy
 `manifest.cache_miss_budget` remains ignored and is not hydrated.
 
-The owner-local classification explicitly excludes settings assigned to Soul,
+The owner-local classification explicitly excludes settings assigned to
 Shell, Daemon, Notification, Email, File, Vision, Web, Task Card,
 Plugin/Psyche, MCP, and curated-addon ToolPlugins. In particular,
 `manifest.pseudo_agent_subscriptions` is Email-owned and is projected only by
@@ -213,7 +231,9 @@ value rejects the whole document; absent and explicit `null` are distinct. The
 and `Agent._setup_from_init` (through `Agent.resolve_runtime_policy`) apply the
 same resolved policy to the LLM service, `AgentConfig` (via
 `build_agent_config(..., runtime_policy=)`), and the `SessionManager.streaming`
-setter, so boot and refresh never disagree. Enabling `snapshot_interval` on a
+setter, so boot and refresh never disagree. Streaming defaults to **on**;
+explicit valid environment OFF or v2 `streaming: false` still disables it.
+Enabling `snapshot_interval` on a
 started agent initializes the snapshot port before the new config is published;
 on failure snapshots remain off and `snapshot_initialize_failed` is logged. The
 v2 `notification_max_chars` field is exposed only through
@@ -240,6 +260,10 @@ branch, receipt, or duplicate sleep policy, and no `runtime.sleep(reason,
 force)` callback exists. Mounted and direct refusal/force parity
 is guarded by [B008](BEHAVIORS.md#behavior-b008) and pinned by
 `tests/test_system_declared_plugin.py::test_system_sleep_direct_and_mounted_routes_have_refusal_force_parity`.
+Both transition adapters tag a successful self-sleep for the current correlated
+turn while still setting the cooperative cancel latch; Core owns the terminal
+classification and a later external cancellation still wins (see the
+correlated-turn rule in `kernel/base_agent/CONTRACT.md`).
 
 ## Routing Card
 
@@ -248,11 +272,13 @@ is guarded by [B008](BEHAVIORS.md#behavior-b008) and pinned by
   karma-gated verbs (`lull`/`suspend`/`cpr`/`interrupt`/`clear`/`nirvana`).
 - You are editing the agent's name: `name_set` (once, immutable) or
   `name_nickname` (mutable). Neither renames the agent's address or working
-  directory — that is the operator migration workflow in `system-manual`.
+  directory — that operator migration workflow is routed by `system-manual`,
+  specified in its [Agent-name helper reference](../../intrinsic_skills/system-manual/reference/migration-guide/reference/agent-name-move/SKILL.md),
+  and guarded by [L006](../context/BEHAVIORS.md#behavior-l006).
 - You are reviewing preset listing/connectivity or the karma/nirvana authz gate.
 
 **Do not use this for:**
-- Notification reads/dismissals: use the `notification` tool
+- Notification reads (delivery is one-shot; there is no notification dismiss action): use the `notification` tool
   (`src/lingtai/tools/notification/CONTRACT.md`). `system` exposes no `notification`/
   `dismiss` alias; those actions are rejected as unknown.
 - Context lifecycle and hygiene: molt, tool-result summarization, and the
@@ -299,6 +325,7 @@ siblings.
 | `presets` | — | — | `{status: "ok", active, available: [...]}` | `{status: "error", message}` on unreadable init.json |
 | `name_set` | `content` | — | `{status: "ok", name}` | `{error}` when empty or when a true name is already set (immutable) |
 | `name_nickname` | `content` | — | `{status: "ok", nickname}` (`null` when cleared) | — (empty `content` clears the nickname) |
+| `meta` | — | — | `{status: "ok", agent_state: {current_time, token_usage{current_call, session}, context warnings, current_tool_result_chars, adapter_comment, active_turn_tool_calls, ...}}` — the complete current runtime diagnostics from the kernel's one `build_full_runtime_meta` builder; read-only (never refreshes, molts, changes configuration, or consumes the one-shot reconstruction event) | — |
 | `settings` | — | — | `{"settings":[...]}` in the stable System catch-all order; every row has exactly `key`, `current`, `default`, `configurable`, `comment` | fixed no-row failure for invalid input, unavailable current, malformed provider row, unserializable value, or oversized complete response |
 
 `manual` takes the canonical strict-empty `input` and returns the flat
@@ -441,7 +468,7 @@ drive it are `context`'s.
 | PRIVATE ENGINE: runtime threshold mutation is rejected | `src/lingtai/tools/system/summarize.py:_summarize` | `tests/test_system_summarize.py::test_summarize_runtime_threshold_change_rejected` |
 | Notification/dismiss actions are dropped from the `system` schema | `src/lingtai/tools/system/schema.py` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss`, `tests/test_notification_tool.py::test_system_rejects_dismiss_action` |
 | Karma signal files clear a target channel path end-to-end | `src/lingtai/tools/system/karma.py` | `tests/test_system_dismiss.py` |
-| The model-facing root is the closed LTP v2 envelope with eleven operational actions followed by reserved `settings`, `manual` | `src/lingtai/tools/system/__init__.py:get_schema` | `tests/test_tool_family_system_migration.py::test_root_envelope_is_exactly_the_four_ltp_v2_fields`, `::test_public_tool_name_and_action_inventory_adds_only_reserved_settings` |
+| The model-facing root is the closed LTP v2 envelope with twelve operational actions (including read-only `meta`) followed by reserved `settings`, `manual` | `src/lingtai/tools/system/__init__.py:get_schema` | `tests/test_tool_family_system_migration.py::test_root_envelope_is_exactly_the_four_ltp_v2_fields`, `::test_public_tool_name_and_action_inventory_adds_only_reserved_settings` |
 | Each action's arguments live only in its own strict `input` | `src/lingtai/tools/system/schema.py:INPUT_SCHEMAS` | `tests/test_tool_family_system_migration.py::test_action_input_fields_match_what_the_handler_reads` |
 | A cross-action smuggle is rejected before any lifecycle I/O | `src/lingtai/tools/tool_family/__init__.py:ToolFamily.handle` | `tests/test_tool_family_system_migration.py::test_cross_action_input_is_rejected_before_any_lifecycle_io` |
 | Envelope metadata never reaches a child handler | `src/lingtai/tools/system/__init__.py:_build_children` | `tests/test_tool_family_system_migration.py::test_envelope_metadata_never_reaches_a_child_handler` |

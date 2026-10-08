@@ -24,7 +24,7 @@ from copy import deepcopy
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.kernel.time_veil import now_iso as render_now_iso
@@ -36,8 +36,6 @@ if TYPE_CHECKING:
 from lingtai.kernel import notifications
 from lingtai.kernel.tool_plugin import (
     BoundToolPlugin,
-    FileGrepMatch,
-    FileTraversalStats,
     PluginCatalogState,
     ToolPluginDeclaration,
     register_official_tool_plugins,
@@ -49,7 +47,6 @@ __all__ = [
     "AgentActiveProviderAdapter",
     "AgentProviderIdentityAdapter",
     "AgentPromptSectionAdapter",
-    "AgentFileIOAdapter",
     "AgentContextRuntimeAdapter",
     "AgentAvatarParentAdapter",
     "AgentDaemonRuntimeAdapter",
@@ -58,8 +55,6 @@ __all__ = [
     "AgentNotificationStateAdapter",
     "AgentNotificationAdapter",
     "StaticConfigurationAdapter",
-    "AgentSoulRuntimeAdapter",
-    "agent_soul_runtime",
     "AgentSystemRuntimeAdapter",
     "AgentIdentityAdapter",
     "agent_system_runtime",
@@ -93,17 +88,33 @@ class AgentWorkdirAdapter:
 class AgentPsycheSettingsAdapter:
     """``PsycheSettingsPort`` over the last applied reconstruction snapshot."""
 
-    __slots__ = ("_read",)
+    __slots__ = ("_read", "_read_covenant", "_read_instructions")
 
     def __init__(
         self,
         read: Callable[[], "PsycheSettingsSnapshotPort"],
+        read_covenant: Callable[[], str] | None = None,
+        read_instructions: Callable[[], str] | None = None,
     ) -> None:
         self._read = read
+        self._read_covenant = read_covenant
+        self._read_instructions = read_instructions
 
     def read_snapshot(self) -> "PsycheSettingsSnapshotPort":
         """Return the current immutable Psyche owner-input snapshot."""
         return self._read()
+
+    def read_instructions(self) -> str:
+        """Disclose the applied in-memory owners, never ambient sources."""
+        if self._read_instructions is None:
+            raise RuntimeError("Instructions reader is unavailable")
+        return self._read_instructions()
+
+    def read_covenant(self) -> str:
+        """Read the loaded body, never the ambient source or configured input."""
+        if self._read_covenant is None:
+            raise RuntimeError("Covenant reader is unavailable")
+        return self._read_covenant()
 
 
 class AgentActiveProviderAdapter:
@@ -130,7 +141,7 @@ class AgentProviderIdentityAdapter:
 
     Narrower than :class:`AgentActiveProviderAdapter`: it holds one read
     closure and exposes only a string (or ``None``). Web consumes exactly this
-    label for its explicit Anthropic/Gemini eligibility gate; it never sees the
+    label for its backend-gated OpenAI/Anthropic engine eligibility; it never sees the
     provider service, credentials, model configuration, or the Agent. A
     non-string read is reported as ``None`` rather than coerced.
     """
@@ -288,103 +299,17 @@ class StaticConfigurationAdapter:
         return self._values
 
 
-class _FileGlobOperation(Protocol):
-    def __call__(self, pattern: str, root: str | None = None) -> list[str]: ...
-
-
-class _FileGrepOperation(Protocol):
-    def __call__(
-        self,
-        pattern: str,
-        path: str | None = None,
-        max_results: int = 50,
-        *,
-        glob_filter: str | None = None,
-    ) -> list[FileGrepMatch]: ...
-
-
-class AgentFileIOAdapter:
-    """``FileIOPort`` assembled from only File's consumed host callables.
-
-    The adapter owns no Agent, has no generic forwarding or dispatch operation,
-    and never publishes the backing FileIOService. It receives individual
-    service methods plus two read-only fact readers and forwards only the exact
-    vocabulary the declared ``file`` family consumes. Workdir remains a separate
-    port, and model-facing mounting remains registrar-only.
-    """
-
-    __slots__ = (
-        "_read",
-        "_write",
-        "_glob",
-        "_grep",
-        "_last_traversal",
-        "_max_result_chars",
-    )
-
-    def __init__(
-        self,
-        *,
-        read: Callable[[str], str],
-        write: Callable[[str, str], None],
-        glob: _FileGlobOperation,
-        grep: _FileGrepOperation,
-        last_traversal: Callable[[], FileTraversalStats | None],
-        max_result_chars: Callable[[], int | None],
-    ) -> None:
-        self._read = read
-        self._write = write
-        self._glob = glob
-        self._grep = grep
-        self._last_traversal = last_traversal
-        self._max_result_chars = max_result_chars
-
-    def read(self, path: str) -> str:
-        return self._read(path)
-
-    def write(self, path: str, content: str) -> None:
-        self._write(path, content)
-
-    def glob(self, pattern: str, root: str | None = None) -> list[str]:
-        return self._glob(pattern, root=root)
-
-    def grep(
-        self,
-        pattern: str,
-        path: str | None = None,
-        max_results: int = 50,
-        *,
-        glob_filter: str | None = None,
-    ) -> list[FileGrepMatch]:
-        return self._grep(
-            pattern,
-            path=path,
-            max_results=max_results,
-            glob_filter=glob_filter,
-        )
-
-    @property
-    def last_traversal(self) -> FileTraversalStats | None:
-        return self._last_traversal()
-
-    @property
-    def max_result_chars(self) -> int | None:
-        return self._max_result_chars()
-
-
 class AgentNotificationStateAdapter:
     """Bind Notification Core's real agent-scoped operations to one narrow port.
 
     The adapter retains callbacks only. It never exposes the Agent, Store,
     notification fingerprints, or producer state to a plugin. Each callback
     still enters the existing Core function with the live Agent bound by the
-    composition root, so producer guards, stale-delivery checks,
-    acknowledgement, timers, hook manifests, and Store semantics remain in
+    composition root, so timers, hook manifests, and Store semantics remain in
     :mod:`lingtai.kernel.notifications`.
     """
 
     __slots__ = (
-        "_dismiss",
         "_delay",
         "_add",
         "_drop",
@@ -397,7 +322,6 @@ class AgentNotificationStateAdapter:
     def __init__(
         self,
         *,
-        dismiss: Callable[..., dict[str, Any]],
         delay: Callable[[str, int], dict[str, Any]],
         add_hook: Callable[[dict[str, Any]], dict[str, Any]],
         drop_hook: Callable[[str], dict[str, Any]],
@@ -406,7 +330,6 @@ class AgentNotificationStateAdapter:
         read_settings: Callable[[], tuple[int, int]],
         log: Callable[..., None],
     ) -> None:
-        self._dismiss = dismiss
         self._delay = delay
         self._add = add_hook
         self._drop = drop_hook
@@ -414,23 +337,6 @@ class AgentNotificationStateAdapter:
         self._list = list_hooks
         self._read_settings = read_settings
         self._log = log
-
-    def dismiss(
-        self,
-        channel: str,
-        *,
-        force: bool,
-        reason: str | None,
-        event_id: str | None = None,
-        ref_id: str | None = None,
-    ) -> dict[str, Any]:
-        return self._dismiss(
-            channel,
-            force=force,
-            reason=reason,
-            event_id=event_id,
-            ref_id=ref_id,
-        )
 
     def delay(self, channel: str, seconds: int) -> dict[str, Any]:
         return self._delay(channel, seconds)
@@ -1011,231 +917,6 @@ class AgentPluginCatalogAdapter:
         )
 
 
-class AgentSoulRuntimeAdapter:
-    """``SoulRuntimePort`` over the exact live-self operations Soul consumes.
-
-    The adapter stores individual getters, setters, and bound operations rather
-    than an Agent. Its explicit surface covers Soul's real conversation,
-    cadence, lock, and notification semantics without granting an unrelated
-    tool, mount, or generic Agent API.
-    """
-
-    __slots__ = (
-        "_working_dir", "_config", "_service", "_chat", "_session",
-        "_agent_name", "_state", "_idle_event", "_shutdown", "_soul_delay",
-        "_set_soul_delay", "_soul_timer", "_set_soul_timer", "_fire_lock",
-        "_notification_store", "_notification_fingerprint", "_appendix_ids",
-        "_log", "_restart_soul_timer", "_run_consultation_fire",
-        "_sync_notifications", "_wake_nap", "_persist_soul_entry",
-        "_append_soul_flow_record", "_publish_notification",
-        "_clear_notification", "_dismiss_notification",
-    )
-
-    def __init__(
-        self,
-        *,
-        working_dir: Callable[[], Path],
-        config: Callable[[], Any],
-        service: Callable[[], Any],
-        chat: Callable[[], Any],
-        session: Callable[[], Any],
-        agent_name: Callable[[], str],
-        state: Callable[[], Any],
-        idle_event: Callable[[], Any],
-        shutdown: Callable[[], Any],
-        soul_delay: Callable[[], float],
-        set_soul_delay: Callable[[float], None],
-        soul_timer: Callable[[], Any],
-        set_soul_timer: Callable[[Any], None],
-        fire_lock: Callable[[], Any],
-        notification_store: Callable[[], Any],
-        notification_fingerprint: Callable[[], Any],
-        appendix_ids: Callable[[], dict[str, str]],
-        log: Callable[..., None],
-        restart_soul_timer: Callable[[], None],
-        run_consultation_fire: Callable[[], None],
-        sync_notifications: Callable[[], None],
-        wake_nap: Callable[[str], None],
-        persist_soul_entry: Callable[..., None],
-        append_soul_flow_record: Callable[[dict], None],
-        publish_notification: Callable[..., None],
-        clear_notification: Callable[[str], None],
-        dismiss_notification: Callable[..., dict],
-    ) -> None:
-        self._working_dir = working_dir
-        self._config = config
-        self._service = service
-        self._chat = chat
-        self._session = session
-        self._agent_name = agent_name
-        self._state = state
-        self._idle_event = idle_event
-        self._shutdown = shutdown
-        self._soul_delay = soul_delay
-        self._set_soul_delay = set_soul_delay
-        self._soul_timer = soul_timer
-        self._set_soul_timer = set_soul_timer
-        self._fire_lock = fire_lock
-        self._notification_store = notification_store
-        self._notification_fingerprint = notification_fingerprint
-        self._appendix_ids = appendix_ids
-        self._log = log
-        self._restart_soul_timer = restart_soul_timer
-        self._run_consultation_fire = run_consultation_fire
-        self._sync_notifications = sync_notifications
-        self._wake_nap = wake_nap
-        self._persist_soul_entry = persist_soul_entry
-        self._append_soul_flow_record = append_soul_flow_record
-        self._publish_notification = publish_notification
-        self._clear_notification = clear_notification
-        self._dismiss_notification = dismiss_notification
-
-    @property
-    def working_dir(self) -> Path:
-        return self._working_dir()
-
-    @property
-    def config(self) -> Any:
-        return self._config()
-
-    @property
-    def service(self) -> Any:
-        return self._service()
-
-    @property
-    def chat(self) -> Any:
-        return self._chat()
-
-    @property
-    def session(self) -> Any:
-        return self._session()
-
-    @property
-    def agent_name(self) -> str:
-        return self._agent_name()
-
-    @property
-    def state(self) -> Any:
-        return self._state()
-
-    @property
-    def idle_event(self) -> Any:
-        return self._idle_event()
-
-    @property
-    def shutdown(self) -> Any:
-        return self._shutdown()
-
-    @property
-    def soul_delay(self) -> float:
-        return self._soul_delay()
-
-    @soul_delay.setter
-    def soul_delay(self, value: float) -> None:
-        self._set_soul_delay(value)
-
-    @property
-    def soul_timer(self) -> Any:
-        return self._soul_timer()
-
-    @soul_timer.setter
-    def soul_timer(self, value: Any) -> None:
-        self._set_soul_timer(value)
-
-    @property
-    def fire_lock(self) -> Any:
-        return self._fire_lock()
-
-    @property
-    def notification_store(self) -> Any:
-        return self._notification_store()
-
-    @property
-    def notification_fingerprint(self) -> Any:
-        return self._notification_fingerprint()
-
-    @property
-    def appendix_ids_by_source(self) -> dict[str, str]:
-        return self._appendix_ids()
-
-    def log(self, event: str, **fields: Any) -> None:
-        self._log(event, **fields)
-
-    def restart_soul_timer(self) -> None:
-        self._restart_soul_timer()
-
-    def run_consultation_fire(self) -> None:
-        self._run_consultation_fire()
-
-    def sync_notifications(self) -> None:
-        self._sync_notifications()
-
-    def wake_nap(self, reason: str) -> None:
-        self._wake_nap(reason)
-
-    def persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:
-        # Preserve the existing call shape for the default agent-source path;
-        # source is an additive override used only by the /btw runner.
-        if source == "agent":
-            self._persist_soul_entry(result, mode=mode)
-        else:
-            self._persist_soul_entry(result, mode=mode, source=source)
-
-    def append_soul_flow_record(self, record: dict) -> None:
-        self._append_soul_flow_record(record)
-
-    def publish_notification(self, channel: str, **kwargs: Any) -> None:
-        self._publish_notification(channel, **kwargs)
-
-    def clear_notification(self, channel: str) -> None:
-        self._clear_notification(channel)
-
-    def dismiss_notification(self, channel: str, *, invoked_by: str) -> dict:
-        return self._dismiss_notification(channel, invoked_by=invoked_by)
-
-
-def agent_soul_runtime(agent: Any) -> AgentSoulRuntimeAdapter:
-    """Bind Soul's explicit runtime port to one live Agent.
-
-    This is composition-only: each value is a single read closure or bound
-    operation. The resulting adapter retains no Agent attribute, and callers
-    can reach only its declared SoulRuntimePort vocabulary.
-    """
-    from lingtai.kernel.notifications import clear, dismiss_channel, submit
-
-    return AgentSoulRuntimeAdapter(
-        working_dir=lambda: agent.working_dir if isinstance(getattr(type(agent), "working_dir", None), property) else agent._working_dir,
-        config=lambda: getattr(agent, "_config", None),
-        service=lambda: getattr(agent, "service", None),
-        chat=lambda: getattr(agent, "_chat", None),
-        session=lambda: getattr(agent, "_session", None),
-        agent_name=lambda: getattr(agent, "agent_name", ""),
-        state=lambda: agent.state if isinstance(getattr(type(agent), "state", None), property) else getattr(agent, "_state", None),
-        idle_event=lambda: getattr(agent, "_idle", None),
-        shutdown=lambda: getattr(agent, "_shutdown", None),
-        soul_delay=lambda: getattr(agent, "_soul_delay", 0.0),
-        set_soul_delay=lambda value: setattr(agent, "_soul_delay", value),
-        soul_timer=lambda: getattr(agent, "_soul_timer", None),
-        set_soul_timer=lambda value: setattr(agent, "_soul_timer", value),
-        fire_lock=lambda: getattr(agent, "_soul_fire_lock", None),
-        notification_store=lambda: getattr(agent, "_notification_store", None),
-        notification_fingerprint=lambda: getattr(agent, "_notification_fp", None),
-        appendix_ids=lambda: getattr(agent, "_appendix_ids_by_source", {}),
-        log=getattr(agent, "_log", lambda *_args, **_kwargs: None),
-        restart_soul_timer=getattr(agent, "_start_soul_timer", lambda: None),
-        run_consultation_fire=getattr(agent, "_run_consultation_fire", lambda: None),
-        sync_notifications=getattr(agent, "_sync_notifications", lambda: None),
-        wake_nap=getattr(agent, "_wake_nap", lambda _reason: None),
-        persist_soul_entry=getattr(agent, "_persist_soul_entry", lambda *_args, **_kwargs: None),
-        append_soul_flow_record=getattr(agent, "_append_soul_flow_record", lambda _record: None),
-        publish_notification=lambda channel, **kwargs: submit(agent, channel, **kwargs),
-        clear_notification=lambda channel: clear(agent, channel),
-        dismiss_notification=lambda channel, *, invoked_by: dismiss_channel(
-            agent, channel, invoked_by=invoked_by
-        ),
-    )
-
-
 class AgentSystemRuntimeAdapter:
     """SystemRuntimePort composed from narrow Agent callbacks, never an Agent.
 
@@ -1247,7 +928,7 @@ class AgentSystemRuntimeAdapter:
     """
 
     __slots__ = (
-        "_admin", "_language", "_log", "_token_usage", "_load_preset",
+        "_admin", "_language", "_log", "_token_usage", "_runtime_meta", "_load_preset",
         "_activate_preset", "_activate_default_preset", "_retry_failed_mcps",
         "_perform_refresh", "_resuscitate", "_sleep_attention_fingerprints",
         "_transition_to_asleep", "_sleep_alarm_lock", "_arm_sleep_alarm",
@@ -1260,6 +941,7 @@ class AgentSystemRuntimeAdapter:
         language: Callable[[], str],
         log: Callable[..., None],
         token_usage: Callable[[], Mapping[str, Any]],
+        runtime_meta: Callable[[], Mapping[str, Any]],
         load_preset: Callable[[str], dict],
         activate_preset: Callable[[str], None],
         activate_default_preset: Callable[[], None],
@@ -1275,6 +957,7 @@ class AgentSystemRuntimeAdapter:
         self._language = language
         self._log = log
         self._token_usage = token_usage
+        self._runtime_meta = runtime_meta
         self._load_preset = load_preset
         self._activate_preset = activate_preset
         self._activate_default_preset = activate_default_preset
@@ -1299,6 +982,9 @@ class AgentSystemRuntimeAdapter:
 
     def token_usage(self) -> Mapping[str, Any]:
         return self._token_usage()
+
+    def runtime_meta(self) -> Mapping[str, Any]:
+        return self._runtime_meta()
 
     def load_preset(self, name: str) -> dict:
         return self._load_preset(name)
@@ -1370,6 +1056,7 @@ def agent_system_runtime(agent: Any) -> AgentSystemRuntimeAdapter:
         _arm_sleep_alarm,
         _sleep_alarm_lock,
     )
+    from lingtai.kernel.meta_block import build_full_runtime_meta
     from lingtai.kernel.notifications import (
         _workdir_key,
         attention_fingerprint,
@@ -1389,13 +1076,14 @@ def agent_system_runtime(agent: Any) -> AgentSystemRuntimeAdapter:
     def _transition_to_asleep() -> None:
         agent._set_state(AgentState.ASLEEP, reason="self-sleep")
         agent._asleep.set()
-        agent._request_turn_cancel()
+        agent._request_turn_cancel(self_sleep=True)
 
     return AgentSystemRuntimeAdapter(
         admin=lambda: getattr(agent, "_admin", {}) or {},
         language=lambda: agent._config.language,
         log=lambda event, **fields: agent._log(event, **fields),
         token_usage=lambda: agent.get_token_usage(),
+        runtime_meta=lambda: build_full_runtime_meta(agent),
         load_preset=lambda name: agent.load_preset(name),
         activate_preset=lambda name: agent._activate_preset(name),
         activate_default_preset=lambda: agent._activate_default_preset(),
@@ -1607,13 +1295,12 @@ def agent_host_ports(
     """Build the complete grantable table for one declaration on *agent*.
 
     The table preserves the landed MCP, Avatar, Plugin, Psyche, Context, Daemon,
-    Email, and File wiring while constructing only each declaration's earned adapter.
+    and Email wiring while constructing only each declaration's earned adapter.
     Psyche receives only its read-through applied Pad settings snapshot;
     Notification receives its narrow state port at this composition boundary, and
     Shell receives its narrow durable-notification port here too; Shell's
     setup-selected ``configuration`` port arrives through ``extra_ports``.
-    Soul receives its explicit live-self ``soul_runtime`` port here as well,
-    and System receives its ``system_runtime`` lifecycle vocabulary plus the
+    System receives its ``system_runtime`` lifecycle vocabulary plus the
     durable naming ``identity`` port. Task Card receives its ``shutdown``
     predicate, current-Agent ``task_card_lifecycle`` slot, and closed
     ``task_card_notifications`` operations from ``agent_task_card_ports``.
@@ -1656,7 +1343,9 @@ def agent_host_ports(
         )
     elif plugin_name == "psyche":
         ports["psyche_settings"] = AgentPsycheSettingsAdapter(
-            lambda: getattr(agent, "_psyche_settings_snapshot", None)
+            lambda: getattr(agent, "_psyche_settings_snapshot", None),
+            lambda: agent._effective_covenant,
+            agent._prompt_manager.read_instructions,
         )
     elif plugin_name == "notification":
         # Import Notification Core lazily at the composition-root boundary. The
@@ -1665,7 +1354,6 @@ def agent_host_ports(
         from lingtai.kernel.notifications import (
             add_hook,
             delay_notification_channel,
-            dismiss_channel,
             drop_hook,
             edit_hook,
             list_hooks,
@@ -1674,7 +1362,6 @@ def agent_host_ports(
         from lingtai.kernel.meta_block import _notification_persistent_max_chars
 
         ports["notification_state"] = AgentNotificationStateAdapter(
-            dismiss=partial(dismiss_channel, agent, invoked_by="notification"),
             delay=partial(delay_notification_channel, agent),
             add_hook=partial(add_hook, agent),
             drop_hook=partial(drop_hook, agent),
@@ -1691,8 +1378,6 @@ def agent_host_ports(
             agent._enqueue_system_notification,
             lambda: agent._notification_store,
         )
-    elif plugin_name == "soul":
-        ports["soul_runtime"] = agent_soul_runtime(agent)
     elif plugin_name == "system":
         ports["system_runtime"] = agent_system_runtime(agent)
         ports["identity"] = AgentIdentityAdapter(
@@ -1737,7 +1422,7 @@ def register_agent_tool_plugins(
     unmounting is not a capability this component owns.
 
     ``extra_ports`` remains the current Context compatibility seam. Daemon,
-    Email, File, Shell, Vision, and Web use ``extra_ports_for`` so each can earn
+    Email, Shell, Vision, and Web use ``extra_ports_for`` so each can earn
     its runtime or setup-selected port; Notification, Shell, Vision, and Web
     receive their dedicated Agent-derived ports in ``agent_host_ports``,
     without granting them to every declaration. Both maps are merged per

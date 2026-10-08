@@ -73,7 +73,21 @@ and should be read exactly.
 ## Inbound delivery
 
 Polling delivers new mail separately through LICC; an automatically delivered
-inbox event is not proof that an outbound send succeeded. For inbound mail,
-use the compound id in the event metadata or in a later `check`/`search` result
-when a full body is needed. See [`setup.md`](setup.md) for polling, watermark,
-and configuration details.
+inbox event is not proof that an outbound send succeeded. Cloud Mail has no
+persistent conversation lane, so each notification's `data.previews[*]`
+already carries the current message: `from`, `subject`, up to 10,000 chars of
+body under `preview`, a `preview_truncated` flag, and the exact reply/read id
+under `message_ref` (also `conversation_ref` for the account). When
+the required current content is fully present in the final visible notification,
+do not call `check`, `search`, or `read` merely to reread that content or obtain
+an id already present in `message_ref`. `preview_truncated` describes the
+preview's own cut; it is not proof that a later host cap retained every field. A body that merely reads as unclear, media-bearing, or in need
+of exact wording for a later action is not a reason to reread identical bytes
+that are already in the current notification. Call `read` (with that id, or
+the compound id from a `check`/`search` result) only when `preview_truncated`
+is true, or the notification's `preview`/body is actually absent (for example
+mail delivered headers-only). A full body already delivered in the current
+notification does not become "missing" because an older, unrelated message
+was capped or dropped elsewhere; that is a separate history/overflow case, not
+a reason to reread the current one. See [`setup.md`](setup.md) for polling,
+watermark, and configuration details.

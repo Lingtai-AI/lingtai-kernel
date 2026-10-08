@@ -185,7 +185,7 @@ def test_manual_publish_requires_and_validates_an_exact_semver_tag():
         assert "inputs.release_tag" in step["env"]["RELEASE_TAG"]
         script = step["run"]
         assert '"$PUBLISH_REQUESTED" == "true" && -z "$RELEASE_TAG"' in script
-        assert "^v[0-9]+\\.[0-9]+\\.[0-9]+$" in script
+        assert "^v[0-9]+\\.[0-9]+\\.[0-9]+((a|b|rc)[0-9]+)?$" in script
         assert 'refs/tags/${RELEASE_TAG}^{commit}' in script
         assert "git rev-parse HEAD" in script
         assert '"$tag_commit" != "$head_commit"' in script
@@ -193,3 +193,19 @@ def test_manual_publish_requires_and_validates_an_exact_semver_tag():
     publish_mode = _step(_release_manifest_job(data), "Determine publish mode")["run"]
     assert "inputs.release_tag" in publish_mode
     assert "Manual publishing requires release_tag" in publish_mode
+
+
+def test_manual_tag_guard_executes_for_stable_and_prerelease_tags(tmp_path):
+    import os
+    import subprocess
+
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "fixture"], check=True, capture_output=True)
+    tags = ["v1.0.6", "v1.0.6a1", "v1.0.6b2", "v1.0.6rc3"]
+    for tag in tags:
+        subprocess.run(["git", "-C", str(tmp_path), "tag", tag], check=True)
+    for job in _load_workflow()["jobs"].values():
+        script = _step(job, "Validate manual recovery tag")["run"]
+        for tag in tags + ["v1.0.6a", "v1.0.6+local", "main", "v1.0.6a1;true"]:
+            result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env={**os.environ, "PUBLISH_REQUESTED": "true", "RELEASE_TAG": tag}, capture_output=True, text=True)
+            assert (result.returncode == 0) == (tag in tags), (tag, result.stderr)

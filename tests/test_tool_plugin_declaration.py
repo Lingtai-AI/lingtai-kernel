@@ -22,13 +22,13 @@ import pytest
 
 from lingtai.agent import Agent
 from lingtai.services.vision import VisionService
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 
 
 @pytest.fixture
 def mcp_agent(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="tool-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"mcp": {}},
@@ -43,7 +43,7 @@ def mcp_agent(tmp_path):
 @pytest.fixture
 def daemon_agent(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="daemon-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"daemon": {}},
@@ -57,7 +57,7 @@ def daemon_agent(tmp_path):
 @pytest.fixture
 def plugin_agent(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="tool-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"plugin": {}},
@@ -71,7 +71,7 @@ def plugin_agent(tmp_path):
 @pytest.fixture
 def task_card_agent(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="task-card-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"task_card": {}},
@@ -82,24 +82,23 @@ def task_card_agent(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_all_fifteen_official_families_mount_exactly_once_together(tmp_path):
+def test_all_thirteen_official_families_mount_exactly_once_together(tmp_path):
     """The cumulative composition keeps every landed family and no duplicate."""
     from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
 
     assert OFFICIAL_TOOL_PLUGIN_NAMES == (
-        "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "psyche",
-        "notification", "shell", "soul", "system", "task_card", "vision", "web",
+        "mcp", "avatar", "context", "daemon", "email", "plugin", "psyche",
+        "notification", "shell", "system", "task_card", "vision", "web",
     )
     agent = Agent(
-        service=make_gemini_mock_service(),
-        agent_name="all-fifteen-official-plugins",
+        service=make_mock_llm_service(),
+        agent_name="all-thirteen-official-plugins",
         working_dir=tmp_path / "agent",
         capabilities={
             "mcp": {},
             "avatar": {},
             "context": {},
             "daemon": {},
-            "file": {},
             "plugin": {},
             "notification": {},
             "shell": {"yolo": True},
@@ -148,7 +147,7 @@ def test_official_vision_mount_keeps_active_provider_and_packaged_manual(tmp_pat
     from lingtai.tools.vision import DECLARATION, VisionManager
 
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="vision-tool-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"vision": {"vision_service": MagicMock(spec=VisionService)}},
@@ -192,7 +191,7 @@ def test_official_web_mount_keeps_provider_identity_and_packaged_manual(tmp_path
     from lingtai.tools.web_search import DECLARATION, WebManager
 
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="web-tool-plugin-declaration",
         working_dir=tmp_path / "agent",
         capabilities={"web": {}},
@@ -315,27 +314,19 @@ def test_official_task_card_manager_holds_only_the_native_notification_operation
     assert not hasattr(manager._host, "task_card_lifecycle")
 
 
-def test_official_soul_mount_preserves_real_flow_and_packaged_manual(mcp_agent):
-    """Soul uses only its earned self/runtime port, without a second public root."""
-    from lingtai.tools.soul import DECLARATION
-
-    assert DECLARATION.public_actions == (
-        "inquiry", "flow", "config", "voice", "dismiss", "settings", "manual",
+def test_soul_family_is_absent_from_the_official_surface(mcp_agent):
+    """The Soul subsystem was removed: no reserved name, no port, no mount."""
+    from lingtai.kernel.tool_plugin import (
+        GRANTABLE_HOST_PORTS,
+        OFFICIAL_TOOL_PLUGIN_NAMES,
     )
-    assert DECLARATION.settings is True
-    assert DECLARATION.requires == ("workdir", "soul_runtime")
-    assert mcp_agent.official_tool_plugins["soul"] is DECLARATION
-    assert [schema.name for schema in mcp_agent._tool_schemas].count("soul") == 1
 
-    handler = mcp_agent._tool_handlers["soul"]
-    disabled = handler({"action": "flow", "input": {}, "reasoning": "health"})
-    assert disabled["status"] == "disabled"
-    assert disabled["enabled"] is False
-
-    manual = handler({"action": "manual", "input": {}, "reasoning": "guidance"})
-    assert manual["status"] == "ok"
-    assert manual["manual"]
-    assert manual["manual_path"].endswith("capabilities/soul-manual/SKILL.md")
+    assert "soul" not in OFFICIAL_TOOL_PLUGIN_NAMES
+    assert "soul_runtime" not in GRANTABLE_HOST_PORTS
+    assert "soul" not in mcp_agent.official_tool_plugins
+    assert "soul" not in mcp_agent._tool_handlers
+    assert "soul" not in [schema.name for schema in mcp_agent._tool_schemas]
+    assert "soul" not in mcp_agent._intrinsics
 
 
 def test_official_notification_mount_preserves_core_state_and_packaged_manual(
@@ -348,8 +339,7 @@ def test_official_notification_mount_preserves_core_state_and_packaged_manual(
     monkeypatch.delenv("LINGTAI_NOTIFICATION_MAX_CHARS", raising=False)
     monkeypatch.delenv("LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS", raising=False)
     assert DECLARATION.public_actions == (
-        "check", "dismiss_channel", "dismiss_event", "dismiss_ref", "add",
-        "drop", "edit", "list", "delay", "settings", "manual",
+        "check", "add", "drop", "edit", "list", "delay", "settings", "manual",
     )
     assert DECLARATION.requires == ("workdir", "notification_state")
     assert mcp_agent.official_tool_plugins["notification"] is DECLARATION
@@ -380,21 +370,16 @@ def test_official_notification_mount_preserves_core_state_and_packaged_manual(
     assert manual["notification_manual"]
     assert manual["manual_path"].endswith("capabilities/notification/SKILL.md")
 
-    submit(mcp_agent, "system", data={"events": []}, header="dismiss me")
-    dismissed = handler(
+    submit(mcp_agent, "system", data={"events": []}, header="keep me")
+    rejected = handler(
         {
             "action": "dismiss_channel",
             "input": {"channel": "system", "force": True, "reason": None},
-            "reasoning": "clear the mirror only",
+            "reasoning": "the removed action must not clear anything",
         }
     )
-    assert dismissed == {
-        "status": "ok",
-        "channel": "system",
-        "cleared": True,
-        "forced": True,
-    }
-    assert not (mcp_agent.working_dir / ".notification" / "system.json").exists()
+    assert rejected.get("status") in ("error", "failed")
+    assert (mcp_agent.working_dir / ".notification" / "system.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -409,7 +394,7 @@ def test_notification_is_mounted_once_on_live_construction_despite_opt_out(
 ):
     """Both capability-shaped opt-outs preserve one live official Notification mount."""
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="notification-always-on-construction",
         working_dir=tmp_path / "agent",
         **construction_kwargs,
@@ -442,7 +427,7 @@ def test_notification_is_remounted_once_on_live_refresh_despite_opt_out(
     """Refresh clears/rebuilds the surface but cannot remove the official mount."""
     workdir = tmp_path / "agent"
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="notification-always-on-refresh",
         working_dir=workdir,
         capabilities={},
@@ -452,8 +437,8 @@ def test_notification_is_remounted_once_on_live_refresh_despite_opt_out(
             "agent_name": "notification-always-on-refresh",
             "language": "en",
             "llm": {
-                "provider": "gemini",
-                "model": "gemini-test",
+                "provider": "anthropic",
+                "model": "claude-test",
                 "api_key": "test-key",
                 "base_url": None,
             },

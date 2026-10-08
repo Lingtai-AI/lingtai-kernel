@@ -25,7 +25,6 @@ related_files:
   - .github/workflows/kernel-windows-pr.yml
   - .github/workflows/shell-windows-pr.yml
   - .github/workflows/wheels.yml
-  - crates/lingtai-search-sidecar/ANATOMY.md
   - dev-guide-skill/SKILL.md
   - discussions/headless-runtime-contract.md
   - IMPLEMENTATION_REPORT.md
@@ -47,7 +46,6 @@ related_files:
   - migration/migration.md
   - pyproject.toml
   - reports/ANATOMY.md
-  - setup.py
   - scripts/check_docs_governance.py
   - scripts/generate_release_manifest.py
   - scripts/publish_release_assets.py
@@ -232,9 +230,6 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   the pull-request template carries its governance metadata in an HTML comment
   rather than a `---` fence, because GitHub injects its raw bytes into every new
   PR description (`docs.yaml` `metadata_mode_overrides`).
-- [`crates/lingtai-search-sidecar/`](crates/lingtai-search-sidecar/) — Rust file
-  search sidecar packaged with the Python runtime; descend through
-  [`crates/lingtai-search-sidecar/ANATOMY.md`](crates/lingtai-search-sidecar/ANATOMY.md).
 - [`docs/`](docs/) — durable documentation, plans, language-specific readmes,
   long-form references, and example plugins: `plans/` holds dated migration
   plans, `readmes/` the translated `README.{zh,wen}.md`, `references/` the
@@ -293,14 +288,15 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   Markdown too, so what this file ignores decides what must carry frontmatter.
   `docs/` and `reports/` are ignored by default: durable files there are tracked
   only because they were force-added.
-- [`pyproject.toml`](pyproject.toml), [`setup.py`](setup.py), and
-  [`MANIFEST.in`](MANIFEST.in) — Python packaging and Rust-sidecar build hooks.
+- [`pyproject.toml`](pyproject.toml) and [`MANIFEST.in`](MANIFEST.in) — Python
+  packaging metadata for the pure-Python universal wheel and source
+  distribution.
 
 ## Composition
 
-`pyproject.toml` declares Python package metadata and delegates sidecar build
-hooks to `setup.py`. `MANIFEST.in` connects Rust sources and packaged Markdown
-resources to source distributions. Runtime source begins under `src/lingtai/`;
+`pyproject.toml` declares Python package metadata and package data for a
+pure-Python universal wheel (`py3-none-any`). `MANIFEST.in` connects packaged
+Markdown resources to source distributions. Runtime source begins under `src/lingtai/`;
 long-form material that is not a root entry point remains under `docs/`.
 
 README exposes the repository knowledge network to humans and agents. The repository-local [kernel development skill](dev-guide-skill/SKILL.md)

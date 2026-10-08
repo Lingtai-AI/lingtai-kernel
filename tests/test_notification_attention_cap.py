@@ -126,6 +126,22 @@ def test_large_attention_spills_and_compacts(tmp_path):
     assert attention == original
 
 
+def test_compacted_attention_messages_get_truthful_truncated_flag(tmp_path):
+    """The attention cap must never blank a heavy field while leaving a stale
+    ``text_truncated: false`` — a shortened record has to say so."""
+    agent = _cap_agent(tmp_path)
+    messages = [_telegram_message(i, text="T" * 3000) for i in range(1, 41)]
+    attention = _attention_payload(messages)
+
+    capped = meta_block._cap_notification_attention(agent, attention)
+
+    preview = capped["mcp.telegram"]["data"]["previews"][0]
+    shortened = [m for m in preview["recent_messages"] if len(m["text"]) < 3000]
+    assert shortened, "sanity: the cap must have actually shortened something"
+    for message in shortened:
+        assert message["text_truncated"] is True
+
+
 def test_attention_overflow_comment_points_at_the_spill_file(tmp_path):
     agent = _cap_agent(tmp_path)
     messages = [_telegram_message(i, text="T" * 3000) for i in range(1, 41)]
@@ -610,7 +626,7 @@ def test_concurrent_writers_different_payloads_never_lose(tmp_path):
 def test_non_ascii_attention_measured_with_provider_escaping(tmp_path, monkeypatch):
     """P1-1: multilingual attention is measured like the provider serializes it.
 
-    Anthropic/OpenAI Chat/OpenAI Responses/Gemini canonical converters
+    Anthropic/OpenAI Chat/OpenAI Responses canonical converters
     re-serialize projected ToolResultBlock dictionaries with default ASCII
     escaping (``json.dumps(..., default=str)``), so a CJK body that is small
     under ``ensure_ascii=False`` is far larger on the wire.  The cap ruler must

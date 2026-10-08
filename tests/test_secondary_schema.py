@@ -5,7 +5,7 @@ from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 from unittest.mock import MagicMock
 
 from lingtai.kernel.base_agent import BaseAgent
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 from tests._workdir_lease_helpers import make_test_lease
 from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
 from tests._lifecycle_clock_helpers import make_test_lifecycle_clock

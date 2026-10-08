@@ -74,7 +74,6 @@ _LLM_PUBLIC_KEYS = (
     "provider",
     "model",
     "base_url",
-    "api_compat",
     "context_limit",
     "service_tier",
 )
@@ -98,15 +97,8 @@ def _build_manifest(agent) -> dict:
         "admin": agent._admin,
         "language": agent._config.language,
         "state": agent._state.value,
-        "soul_delay": agent._soul_delay,
-        "soul_voice": getattr(agent._config, "soul_voice", "inner"),
         "molt_count": agent._molt_count,
     }
-    # Custom voice prompt is only meaningful when voice == "custom".
-    # Surface it so /kanban (and any consumer reading .agent.json)
-    # can show the active prompt without calling soul(action='voice').
-    if data["soul_voice"] == "custom":
-        data["soul_voice_prompt"] = getattr(agent._config, "soul_voice_prompt", "") or ""
     if agent._mail_service is not None and agent._mail_service.address:
         data["address"] = agent._mail_service.address
 
@@ -125,7 +117,7 @@ def _safe_llm_from_service(agent) -> dict:
     """Extract a sanitized ``llm`` block from the live LLMService.
 
     Returns a safelisted public block (provider/model/base_url plus optional
-    api_compat/context_limit) with only string/int values. Empty values, None,
+    context_limit/service_tier) with only string/int values. Empty values, None,
     and non-scalars are dropped. Returns ``{}`` on any unexpected service shape
     (mocks in tests, future adapter rewrites). Never raises.
     """
@@ -154,28 +146,46 @@ def _safe_llm_from_service(agent) -> dict:
     if context_limit is not None:
         llm["context_limit"] = context_limit
 
-    api_compat = _provider_default_from_service(service, "api_compat")
-    if isinstance(api_compat, str) and api_compat:
-        llm["api_compat"] = api_compat
-
-    # The native Codex adapter always uses the Responses API. Its configured
-    # service tier is safe runtime identity metadata; other adapters do not
-    # consume this option and must not claim one in presentation surfaces.
-    provider = llm.get("provider")
-    if isinstance(provider, str) and provider.lower() in {
-        "codex",
-        "codex-pool",
-        "codex_pool",
-    }:
+    # The configured service tier is safe runtime identity metadata, reported
+    # only for routes whose factory actually forwards it (``openai`` and
+    # ``codex``); ``anthropic``/``claude-code`` never claim one.
+    route = _service_tier_route(service, llm.get("provider"))
+    if route is not None:
         service_tier = _provider_default_from_service(service, "service_tier")
-        if isinstance(service_tier, str) and service_tier.strip():
-            llm["service_tier"] = service_tier.strip()
-        else:
-            # The request omits service_tier, so label the known request-side
-            # default rather than inventing a provider-returned tier.
-            llm["service_tier"] = "default"
+        authored = service_tier.strip() if isinstance(service_tier, str) else ""
+        try:
+            from lingtai.llm._register import _normalize_service_tier
+
+            _normalize_service_tier(authored)
+        except Exception:
+            authored = ""
+        # An omitted tier labels the known request-side default rather than
+        # inventing a provider-returned tier.
+        llm["service_tier"] = authored or "default"
 
     return llm
+
+
+def _service_tier_route(service, provider) -> str | None:
+    """Return ``"codex"``/``"openai"`` when the selected factory forwards
+    ``service_tier``, else ``None``. Classified by registered factory identity
+    (mirroring ``lingtai.llm._register``), never by provider-name guesses."""
+    if not isinstance(provider, str) or not provider:
+        return None
+    try:
+        from lingtai.llm.service import LLMService
+
+        factories = LLMService._adapter_registry
+    except Exception:
+        return None
+    selected = factories.get(provider.lower())
+    if selected is None:
+        return None
+    if selected is factories.get("codex"):
+        return "codex"
+    if selected is factories.get("openai"):
+        return "openai"
+    return None
 
 
 def _effective_base_url_from_service(service) -> str | None:

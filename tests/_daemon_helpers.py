@@ -50,7 +50,7 @@ def make_daemon_run_dir(
     handle: str = "em-test",
     em_id: str | None = None,
     task: str = "test task",
-    tools: Iterable[str] | None = ("file",),
+    tools: Iterable[str] | None = ("shell",),
     model: str = "mock-model",
     max_turns: int = 30,
     timeout_s: float = 300.0,

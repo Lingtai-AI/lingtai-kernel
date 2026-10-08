@@ -30,7 +30,7 @@ def test_default_locale_is_english():
          "elapsed_s": 3, "done": False},
     ])
     assert text.startswith("Don't reply to this Task Card")
-    assert "\U0001f4cb ACTIVITIES\n" in text
+    assert "📋 ACTIVITIES\n" in text
     assert "Last Updated: " in text
     assert "Don't reply to this Task Card" in text
 
@@ -48,8 +48,8 @@ def test_normalize_locale_falls_back_to_english():
 # ---------------------------------------------------------------------------
 
 def test_zh_header_and_footer():
-    assert TaskCardEventProjection.header("zh") == "\U0001f4cb \u6d3b\u52a8"
-    assert TaskCardEventProjection.header("en") == "\U0001f4cb ACTIVITIES"
+    assert TaskCardEventProjection.header("zh") == "📋 \u6d3b\u52a8"
+    assert TaskCardEventProjection.header("en") == "📋 ACTIVITIES"
     assert TaskCardEventProjection.time_prefix("zh") == "\u6700\u540e\u66f4\u65b0: "
     assert TaskCardEventProjection.time_prefix("en") == "Last Updated: "
     assert TaskCardEventProjection.footer(3, "zh") == (
@@ -68,7 +68,7 @@ def test_zh_rows_render_localized_surface():
          "elapsed_s": 3, "done": False},
     ], locale="zh")
     assert text.startswith("\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247")
-    assert "\U0001f4cb \u6d3b\u52a8\n" in text
+    assert "📋 \u6d3b\u52a8\n" in text
     assert "\u6700\u540e\u66f4\u65b0: " in text
     assert "\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247" in text
     assert "ACTIVITIES" not in text
@@ -115,7 +115,7 @@ def test_render_event_groups_locale():
         groups, normal_rows=1, locale="zh"
     )
     assert text.startswith("\u8bf7\u52ff\u56de\u590d\u6b64\u4efb\u52a1\u5361\u7247")
-    assert "\U0001f4cb \u6d3b\u52a8\n" in text
+    assert "📋 \u6d3b\u52a8\n" in text
 
 
 # ---------------------------------------------------------------------------

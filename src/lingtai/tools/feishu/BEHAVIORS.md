@@ -54,14 +54,16 @@ maintenance).
 
 ### Expected evidence
 
-- [ ] **Actions**: `FEISHU_ACTIONS` is exactly `("send", "check", "read", "reply", "react", "search", "delete", "edit", "contacts", "add_contact", "remove_contact", "accounts", "manual")` — 13 actions.
+- [ ] **Actions**: `FEISHU_ACTIONS` is exactly `("send", "check", "read", "reply", "react", "search", "delete", "edit", "contacts", "add_contact", "remove_contact", "accounts", "settings", "manual")` — 14 actions.
 - [ ] **Envelope validation**: each of the 9 invalid shapes returns a `failed`-status result **before** any manager I/O (the stub records zero calls for those inputs).
 - [ ] **accounts**: the valid call makes the manager receive exactly `{"action": "accounts"}` and returns `{status: ok, accounts: [main], details, ...}` with `identity_path == "/tmp/identities.json"`; the ltpv2 flat result equals the family handle result.
 - [ ] **send**: requires `receive_id` with **text XOR content** (body); a payload with both or neither is rejected.
 - [ ] **remove_contact**: accepts **exactly one** of `alias` / `open_id`; both or neither is rejected.
 - [ ] **manual**: echoes the input verbatim or returns `{status: ok, skill: "feishu-mcp-manual", manual: <str>}`.
-- [ ] **Child schemas**: `input` uses `anyOf` (not `oneOf`); `reasoning`/`summarize` never appear in child schemas or handlers; scrub preserves `required`, the `action` enum, `anyOf`/`allOf`, an `allOf` length of 13, and `additionalProperties: false`.
-- [ ] **Empty-input branches**: exactly `{check, contacts, accounts, manual}` succeed with an empty payload.
+- [ ] **Child schemas**: `input` uses `anyOf` (not `oneOf`); `reasoning`/`summarize` never appear in child schemas or handlers; scrub preserves `required`, the `action` enum, `anyOf`/`allOf`, an `allOf` length of 14, and `additionalProperties: false`.
+- [ ] **Empty-input branches**: exactly `{check, contacts, accounts, settings, manual}` accept an empty payload;
+  successful `settings` additionally needs a bound service (otherwise a no-row
+  `SETTINGS_UNAVAILABLE`), not a recording manager without that owner.
 
 ### Pass / Fail
 

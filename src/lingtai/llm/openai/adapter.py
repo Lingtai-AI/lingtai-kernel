@@ -1,8 +1,9 @@
 """OpenAI adapter — wraps the ``openai`` SDK for OpenAI and compatible APIs.
 
-Covers: OpenAI, DeepSeek, Together AI, Groq, Fireworks, Ollama, vLLM,
-and any other provider exposing an OpenAI-compatible ``/chat/completions``
-endpoint.
+Backs the ``openai`` provider (official OpenAI by default, or any endpoint
+exposing an OpenAI-compatible ``/chat/completions`` or ``/responses`` API —
+vendor endpoints, gateways, local servers) and, through
+``CodexOpenAIAdapter``, the ``codex`` provider.
 
 This is the **only** module that imports the ``openai`` package.
 """
@@ -41,6 +42,7 @@ from lingtai.kernel.llm.base import (
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    checked_count,
     mark_llm_replay_terminal,
     safe_exception_description,
     wire_tool_description,
@@ -54,7 +56,12 @@ from lingtai.kernel.llm.reasoning_effort import (
 from lingtai.llm.base import LLMAdapter
 from .codex_effort import CodexEffortDescriptor, resolve_codex_effort_descriptor
 from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
-from ..interface_converters import to_openai, to_responses_input
+from ..interface_converters import (
+    _responses_replay_fingerprint,
+    _responses_snapshot_ids_are_unique,
+    to_openai,
+    to_responses_input,
+)
 from lingtai.kernel.llm.streaming import StreamingAccumulator
 from lingtai.llm.identity_headers import lingtai_user_agent, merge_lingtai_identity_headers
 from lingtai.kernel.token_counter import count_tokens
@@ -909,28 +916,36 @@ def _read_molt_count(agent_json_path: Path) -> int:
         return 0
 
 
-def _validate_compact_threshold(value: int | None) -> int | None:
-    """Normalize the OpenAI Responses auto-compaction threshold.
+def _wire_cache_write_tokens(details: object) -> int | None:
+    """Cache-write count from a usage details object, else unknown.
 
-    ``None`` intentionally disables Responses ``context_management``.  Any
-    concrete value must be a positive integer; reject bool explicitly because
-    it is an ``int`` subclass in Python but not a valid token threshold.
+    OpenAI-compatible backends (e.g. the Codex backend) may report
+    ``input_tokens_details.cache_write_tokens`` / ``prompt_tokens_details.
+    cache_write_tokens``. Only a real non-negative int counts; an absent field
+    stays ``None`` (unknown, never zero).
     """
-    if value is None:
+    if details is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("compact_threshold must be a positive int or None")
-    if value <= 0:
-        raise ValueError("compact_threshold must be > 0 or None")
-    return value
+    return checked_count(getattr(details, "cache_write_tokens", None))
+
+
+def _stamp_requested_tier(response: LLMResponse, request_kwargs: dict[str, Any]) -> LLMResponse:
+    """Record the ``service_tier`` this round's request REQUESTED on its usage.
+
+    Read from the kwargs the session actually dispatched, so it is a request
+    snapshot for this round (never the tier the provider applied) and an
+    omitted tier stays unknown (``None``), not filled from current config.
+    """
+    tier = request_kwargs.get("service_tier")
+    if isinstance(tier, str) and tier and response.usage is not None:
+        response.usage.requested_service_tier = tier
+    return response
 
 
 def _validate_codex_compact_token_limit(value: int | None) -> int | None:
     """Normalize the Codex standalone-compaction context-token threshold.
 
-    Distinct from ``compact_threshold``/``context_management`` (the generic
-    OpenAI Responses auto-compaction the Codex backend rejects — see
-    ``_create_responses_session``). ``None`` means "no explicit task limit";
+    ``None`` means "no explicit task limit";
     the caller resolves the effective threshold from the session's
     ``context_window()``. A concrete value must be a positive integer; bool is
     rejected explicitly because it is an ``int`` subclass in Python but not a
@@ -980,35 +995,35 @@ def _estimate_responses_input_tokens(
     return total
 
 
-def _responses_reasoning_kwargs(thinking: str | None) -> dict[str, dict[str, str]]:
-    """Return OpenAI Responses reasoning kwargs for a configured thinking level.
+def _standard_reasoning_effort(thinking: str | None) -> str | None:
+    """Return the standard reasoning-effort value for a configured level.
 
-    An omitted/``default`` level maps to the explicit ``xhigh`` effort (the
-    kernel's canonical default), matching the Codex adapter's longstanding
-    behavior. Explicit levels pass through; ``none`` is sent as
-    ``reasoning.effort = "none"``.
+    ``thinking`` is sent verbatim as the standard field on both wires; the
+    omitted/``default`` sentinel returns ``None`` so the field is omitted and
+    the endpoint's own default applies. Explicit ``none`` is a real value and
+    is sent. Anything outside ``THINKING_LEVELS`` fails loudly.
     """
     if thinking in (None, "default"):
-        thinking = "xhigh"
+        return None
     if thinking not in THINKING_LEVELS:
         raise ValueError(
-            "OpenAI Responses thinking must be one of "
+            "thinking must be one of "
             f"{', '.join(THINKING_LEVELS)}, or default"
         )
-    return {"reasoning": {"effort": thinking}}
+    return thinking
 
 
-def _capture_reasoning_application(session: Any, applied: Any) -> Any:
-    """Attach the one resolved reasoning decision to the session, if any.
+def _responses_reasoning_kwargs(thinking: str | None) -> dict[str, dict[str, str]]:
+    """Return Responses ``reasoning`` kwargs for a configured thinking level.
 
-    Observation (``lingtai.kernel.session``) reads this exact object, so what
-    gets recorded is the decision the request really carries rather than a
-    recomputation from raw config. Sessions on a route with no provider-local
-    reasoning policy are left untouched.
+    ``reasoning: {effort: <level>}`` verbatim; omitted/``default`` sends no
+    ``reasoning`` field. (The Codex adapter substitutes its own explicit
+    ``xhigh`` default before calling this.)
     """
-    if applied is not None:
-        session.reasoning_application = applied
-    return session
+    effort = _standard_reasoning_effort(thinking)
+    if effort is None:
+        return {}
+    return {"reasoning": {"effort": effort}}
 
 
 def _codex_responses_trace_path() -> Path | None:
@@ -1449,10 +1464,15 @@ def _parse_response(raw) -> LLMResponse:
         usage = UsageMetadata(
             input_tokens=raw.usage.prompt_tokens or 0,
             output_tokens=raw.usage.completion_tokens or 0,
+            # completion_tokens already includes reasoning tokens.
+            billable_output_tokens=checked_count(
+                getattr(raw.usage, "completion_tokens", None)
+            ),
             thinking_tokens=getattr(raw.usage, "completion_tokens_details", None)
             and getattr(raw.usage.completion_tokens_details, "reasoning_tokens", 0)
             or 0,
             cached_tokens=cached_tokens,
+            cache_write_tokens=_wire_cache_write_tokens(cached),
         )
 
     return LLMResponse(
@@ -1530,6 +1550,491 @@ def _handle_responses_reasoning_event(
     return False
 
 
+_RESPONSES_OUTPUT_ITEMS_KEY = "openai_responses_output_items"
+_RESPONSES_REPLAY_FINGERPRINT_KEY = "openai_responses_replay_fingerprint"
+_RESPONSES_MISSING = object()
+
+
+_RESPONSES_INVALID = object()
+
+
+def _responses_json_value(value: Any) -> Any:
+    """Copy only JSON-shaped SDK/simple event values.
+
+    OpenAI response models are dumped in JSON mode and the local fixtures use
+    ``SimpleNamespace``.  Any other leaf is rejected rather than stringified;
+    the caller then declines the complete raw snapshot and uses canonical
+    blocks instead.
+    """
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else _RESPONSES_INVALID
+    if isinstance(value, dict):
+        converted: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                return _RESPONSES_INVALID
+            item = _responses_json_value(item)
+            if item is _RESPONSES_INVALID:
+                return _RESPONSES_INVALID
+            converted[key] = item
+        return converted
+    if isinstance(value, (list, tuple)):
+        converted_list = [_responses_json_value(item) for item in value]
+        return (
+            _RESPONSES_INVALID
+            if any(item is _RESPONSES_INVALID for item in converted_list)
+            else converted_list
+        )
+    if isinstance(value, SimpleNamespace):
+        return _responses_json_value(vars(value))
+    return _RESPONSES_INVALID
+
+
+def _responses_item_to_dict(item: Any) -> dict | None:
+    """Serialize one documented SDK/dict/fixture output item."""
+    try:
+        if isinstance(item, dict):
+            converted = _responses_json_value(item)
+            return converted if isinstance(converted, dict) else None
+        if isinstance(item, SimpleNamespace):
+            converted = _responses_json_value(vars(item))
+            return converted if isinstance(converted, dict) else None
+        model_dump = getattr(item, "model_dump", None)
+        if not callable(model_dump):
+            return None
+        converted = model_dump(mode="json", exclude_unset=True)
+        converted = _responses_json_value(converted)
+        return converted if isinstance(converted, dict) else None
+    except Exception:
+        # A cyclic fixture or SDK serialization failure is an invalid snapshot,
+        # not a reason to weaken the JSON boundary or stringify the object.
+        return None
+
+
+def _responses_output_items_from_response(raw: Any) -> list[dict] | None:
+    """Return a complete non-stream Responses output list, when supplied."""
+    if getattr(raw, "status", None) not in (None, "completed"):
+        return None
+    output = getattr(raw, "output", _RESPONSES_MISSING)
+    if output is _RESPONSES_MISSING or output is None:
+        return None
+    if isinstance(output, (str, bytes, dict)):
+        return None
+    try:
+        raw_items = list(output)
+    except TypeError:
+        return None
+    items = [_responses_item_to_dict(item) for item in raw_items]
+    if any(item is None for item in items):
+        return None
+    converted = [item for item in items if item is not None]
+    return converted if _responses_snapshot_ids_are_unique(converted) else None
+
+
+class _ResponsesStreamOutputRecorder:
+    """Collect complete Responses output items without trusting projections."""
+
+    def __init__(self) -> None:
+        self._order: list[str] = []
+        self._added: set[str] = set()
+        self._done: set[str] = set()
+        self._items: dict[str, dict] = {}
+        self._indices: dict[str, int | None] = {}
+        self._item_ids: dict[str, str] = {}
+        self._index_keys: dict[int, str] = {}
+        self._id_keys: dict[str, str] = {}
+        self._completed = False
+        self._terminal_invalid = False
+        self._completion_output: Any = _RESPONSES_MISSING
+        self._anonymous_index = 0
+        self._summary_item_ids: set[str] = set()
+        self._saw_output_text = False
+        self._saw_reasoning_summary = False
+        self._saw_function_arguments = False
+        self._incomplete_done_item = False
+        self._active_function_key: str | None = None
+        self._function_argument_deltas: dict[str, str] = {}
+        self._function_argument_done: dict[str, str] = {}
+
+    @staticmethod
+    def _output_index(event: Any, item: Any) -> int | None | object:
+        index = getattr(event, "output_index", _RESPONSES_MISSING)
+        if index is _RESPONSES_MISSING or index is None:
+            index = getattr(item, "output_index", _RESPONSES_MISSING)
+        if index is _RESPONSES_MISSING or index is None:
+            return None
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            return _RESPONSES_INVALID
+        return index
+
+    @staticmethod
+    def _item_id(item: Any, event: Any) -> str | None:
+        item_id = (
+            getattr(item, "id", None)
+            or getattr(item, "call_id", None)
+            or getattr(event, "item_id", None)
+        )
+        return item_id if isinstance(item_id, str) and item_id else None
+
+    def _key_for_item_id(self, item_id: str | None) -> str | None:
+        if item_id and item_id in self._id_keys:
+            return self._id_keys[item_id]
+        return self._active_function_key
+
+    def _record_key(self, item: Any, event: Any, *, done: bool) -> str | None:
+        item_type = getattr(item, "type", None) or "unknown"
+        item_id = self._item_id(item, event)
+        index = self._output_index(event, item)
+        if index is _RESPONSES_INVALID:
+            self._terminal_invalid = True
+            return None
+        existing_by_index = self._index_keys.get(index) if index is not None else None
+        existing_by_id = self._id_keys.get(item_id) if item_id else None
+        if (
+            existing_by_index is not None
+            and existing_by_id is not None
+            and existing_by_index != existing_by_id
+        ):
+            self._terminal_invalid = True
+            return None
+        key = existing_by_index or existing_by_id
+        if key is None and not item_id and index is None and done:
+            # A few gateways omit both identity axes on output_item.done. Pair
+            # that event with the first unmatched same-type added item; this is
+            # deterministic, but only the all-unindexed path may use it.
+            key = next(
+                (
+                    candidate
+                    for candidate in self._order
+                    if candidate not in self._done
+                    and self._indices.get(candidate) is None
+                    and self._item_ids.get(candidate) is None
+                    and candidate.startswith(f"{item_type}:")
+                ),
+                None,
+            )
+        if key is None:
+            if item_id:
+                key = f"{item_type}:{item_id}"
+            elif index is not None:
+                key = f"{item_type}:index:{index}"
+            else:
+                self._anonymous_index += 1
+                key = f"{item_type}:anonymous:{self._anonymous_index}"
+            if key in self._order:
+                self._terminal_invalid = True
+                return None
+            if index is not None and index in self._index_keys:
+                self._terminal_invalid = True
+                return None
+            if item_id and item_id in self._id_keys:
+                self._terminal_invalid = True
+                return None
+            self._order.append(key)
+            self._indices[key] = index
+            self._item_ids[key] = item_id
+            if index is not None:
+                self._index_keys[index] = key
+            if item_id:
+                self._id_keys[item_id] = key
+        else:
+            previous_index = self._indices.get(key)
+            previous_id = self._item_ids.get(key)
+            if (
+                previous_index is not None
+                and index is not None
+                and previous_index != index
+            ) or (previous_id and item_id and previous_id != item_id):
+                self._terminal_invalid = True
+                return None
+            if index is not None and previous_index is None:
+                if index in self._index_keys and self._index_keys[index] != key:
+                    self._terminal_invalid = True
+                    return None
+                self._indices[key] = index
+                self._index_keys[index] = key
+            if item_id and previous_id is None:
+                if item_id in self._id_keys and self._id_keys[item_id] != key:
+                    self._terminal_invalid = True
+                    return None
+                self._item_ids[key] = item_id
+                self._id_keys[item_id] = key
+            if (done and key in self._done) or (not done and key in self._added):
+                # Repeated identity/index events must not silently overwrite an
+                # earlier output item. A single added -> done pair is allowed.
+                self._terminal_invalid = True
+                return None
+        return key
+
+    def observe(self, event: Any) -> None:
+        event_type = getattr(event, "type", None)
+        if event_type in {"response.failed", "response.incomplete"}:
+            self._terminal_invalid = True
+            self._completed = False
+            return
+        if event_type == "response.output_text.delta":
+            self._saw_output_text = True
+        elif event_type in {
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+        }:
+            self._saw_reasoning_summary = True
+            item_id = getattr(event, "item_id", None)
+            if isinstance(item_id, str) and item_id:
+                self._summary_item_ids.add(item_id)
+        elif event_type in {
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+        }:
+            self._saw_function_arguments = True
+            key = self._key_for_item_id(getattr(event, "item_id", None))
+            if key:
+                if event_type.endswith("delta"):
+                    delta = getattr(event, "delta", None)
+                    if isinstance(delta, str):
+                        self._function_argument_deltas[key] = (
+                            self._function_argument_deltas.get(key, "") + delta
+                        )
+                else:
+                    arguments = getattr(event, "arguments", None)
+                    if isinstance(arguments, str):
+                        self._function_argument_done[key] = arguments
+        if event_type in {
+            "response.output_item.added",
+            "response.output_item.done",
+        }:
+            item = getattr(event, "item", None)
+            if item is None:
+                self._terminal_invalid = True
+                return
+            done = event_type.endswith("done")
+            key = self._record_key(item, event, done=done)
+            if key is None:
+                return
+            if not done:
+                self._added.add(key)
+                if getattr(item, "type", None) == "function_call":
+                    self._active_function_key = key
+                return
+            serialized = _responses_item_to_dict(item)
+            if serialized is None:
+                self._incomplete_done_item = True
+                return
+            item_type = serialized.get("type")
+            if item_type == "function_call" and "arguments" not in serialized:
+                arguments = (
+                    self._function_argument_done.get(key)
+                    or self._function_argument_deltas.get(key)
+                )
+                if arguments is not None:
+                    serialized["arguments"] = arguments
+            if item_type == "function_call" and "arguments" not in serialized:
+                self._incomplete_done_item = True
+            if item_type == "message" and "content" not in serialized:
+                self._incomplete_done_item = True
+            if (
+                item_type == "reasoning"
+                and self._item_ids.get(key) in self._summary_item_ids
+                and "summary" not in serialized
+            ):
+                self._incomplete_done_item = True
+            self._done.add(key)
+            self._items[key] = serialized
+            return
+        if event_type == "response.completed":
+            self._completed = True
+            response = getattr(event, "response", None)
+            status = getattr(response, "status", _RESPONSES_MISSING)
+            if status is not _RESPONSES_MISSING and status not in {None, "completed"}:
+                self._terminal_invalid = True
+            self._completion_output = getattr(
+                response, "output", _RESPONSES_MISSING,
+            )
+
+    @staticmethod
+    def _valid_item_list(raw_items: Any) -> list[dict] | None:
+        if isinstance(raw_items, (str, bytes, dict)):
+            return None
+        try:
+            raw_items = list(raw_items)
+        except TypeError:
+            return None
+        items = [_responses_item_to_dict(item) for item in raw_items]
+        if any(item is None for item in items):
+            return None
+        converted = [item for item in items if item is not None]
+        return converted if _responses_snapshot_ids_are_unique(converted) else None
+
+    def _finalized_done_items(self) -> list[dict] | None:
+        """Return a complete, safely ordered item-done snapshot, if provable."""
+        if not self._done or self._added - self._done or self._incomplete_done_item:
+            return None
+        done_items = [self._items[key] for key in self._order if key in self._done]
+        if self._summary_item_ids - {
+            self._item_ids.get(key) for key in self._done if self._item_ids.get(key)
+        }:
+            return None
+        if self._saw_output_text and not any(
+            item.get("type") == "message" for item in done_items
+        ):
+            return None
+        indices = [self._indices.get(key) for key in self._done]
+        if any(index is not None for index in indices):
+            if any(index is None for index in indices):
+                return None
+            ordered_indices = sorted(index for index in indices if index is not None)
+            if ordered_indices != list(range(len(done_items))):
+                return None
+            keys = sorted(
+                (key for key in self._done),
+                key=lambda key: self._indices[key],
+            )
+            return [self._items[key] for key in keys]
+        return done_items
+
+    def finalized_items(self) -> list[dict] | None:
+        if not self._completed or self._terminal_invalid:
+            return None
+        if self._completion_output is not _RESPONSES_MISSING and self._completion_output is not None:
+            items = self._valid_item_list(self._completion_output)
+            if items is None:
+                return None
+            # An empty trailer is not authoritative when deltas or item events
+            # already proved that output existed. Reconcile complete item-done
+            # evidence when possible; otherwise fall back to canonical blocks.
+            if not items and (
+                self._order
+                or self._summary_item_ids
+                or self._saw_output_text
+                or self._saw_reasoning_summary
+                or self._saw_function_arguments
+                or self._function_argument_deltas
+                or self._function_argument_done
+            ):
+                return self._finalized_done_items()
+            return items
+
+        # A compatible stream may omit response.output entirely. Item-done is
+        # sufficient only when every observed item has reached done; added-only
+        # or partial output is deliberately not committed as complete.
+        return self._finalized_done_items()
+
+
+def _responses_normalized_response(
+    items: list[dict],
+    usage: UsageMetadata,
+) -> LLMResponse | None:
+    """Normalize complete raw output items without using lossy projections.
+
+    This is intentionally limited to the documented output item forms that the
+    streaming accumulator already understands. Unknown or malformed shapes do
+    not become a falsely successful raw replay; callers fall back to the
+    accumulator and decline the raw sidecar.
+    """
+    text_parts: list[str] = []
+    thoughts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    for item in items:
+        item_type = item.get("type")
+        if item_type == "message":
+            content = item.get("content")
+            if not isinstance(content, list):
+                return None
+            for part in content:
+                if not isinstance(part, dict):
+                    return None
+                part_type = part.get("type")
+                if part_type != "output_text":
+                    return None
+                text = part.get("text")
+                if not isinstance(text, str):
+                    return None
+                text_parts.append(text)
+        elif item_type == "reasoning":
+            summary = item.get("summary")
+            if not isinstance(summary, list):
+                return None
+            for part in summary:
+                if not isinstance(part, dict) or part.get("type") != "summary_text":
+                    return None
+                text = part.get("text")
+                if not isinstance(text, str):
+                    return None
+                if text:
+                    thoughts.append(text)
+        elif item_type == "function_call":
+            name = item.get("name")
+            arguments = item.get("arguments")
+            if not isinstance(name, str) or not isinstance(arguments, str):
+                return None
+            try:
+                args = json.loads(arguments) if arguments else {}
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            if not isinstance(args, dict):
+                args = {}
+            call_id = item.get("call_id")
+            tool_calls.append(
+                ToolCall(
+                    name=name,
+                    args=args,
+                    id=call_id if isinstance(call_id, str) else None,
+                )
+            )
+        else:
+            return None
+    return LLMResponse(
+        # StreamingAccumulator concatenates text deltas across content parts
+        # and output messages without inserting separators. Match that same
+        # projection while retaining the original boundaries in the raw items.
+        text="".join(text_parts),
+        tool_calls=tool_calls,
+        usage=usage,
+        thoughts=thoughts,
+    )
+
+
+def _responses_responses_match(left: LLMResponse, right: LLMResponse) -> bool:
+    """Compare normalized stream output without hiding observed portions."""
+    if right.text and (not left.text or left.text != right.text):
+        return False
+    if right.thoughts:
+        if not left.thoughts:
+            return False
+        left_thoughts = iter(left.thoughts)
+        if not all(
+            any(candidate == thought for candidate in left_thoughts)
+            for thought in right.thoughts
+        ):
+            return False
+    if right.tool_calls:
+        for observed in right.tool_calls:
+            if not any(
+                candidate.id == observed.id
+                and candidate.name == observed.name
+                and candidate.args == observed.args
+                for candidate in left.tool_calls
+            ):
+                return False
+    return True
+
+
+def _responses_merge_normalized_response(
+    trailer: LLMResponse,
+    accumulated: LLMResponse,
+) -> LLMResponse:
+    """Fill only portions omitted by a complete trailer from observed deltas."""
+    return LLMResponse(
+        text=trailer.text or accumulated.text,
+        tool_calls=trailer.tool_calls or accumulated.tool_calls,
+        usage=accumulated.usage,
+        thoughts=trailer.thoughts or accumulated.thoughts,
+        raw=trailer.raw,
+    )
+
+
 def _parse_responses_api_response(raw) -> LLMResponse:
     """Parse a raw OpenAI Responses API response into a provider-agnostic LLMResponse."""
     text_parts = []
@@ -1560,10 +2065,15 @@ def _parse_responses_api_response(raw) -> LLMResponse:
         usage = UsageMetadata(
             input_tokens=getattr(raw.usage, "input_tokens", 0) or 0,
             output_tokens=getattr(raw.usage, "output_tokens", 0) or 0,
+            # output_tokens already includes reasoning tokens.
+            billable_output_tokens=checked_count(
+                getattr(raw.usage, "output_tokens", None)
+            ),
             thinking_tokens=getattr(raw.usage, "output_tokens_details", None)
             and getattr(raw.usage.output_tokens_details, "reasoning_tokens", 0)
             or 0,
             cached_tokens=cached_tokens,
+            cache_write_tokens=_wire_cache_write_tokens(cached),
         )
 
     return LLMResponse(
@@ -1648,17 +2158,31 @@ def _decode_responses_sse_text(raw: str) -> list[Any]:
     return events
 
 
+def _visible_output_tokens(total: object, details: object) -> int | None:
+    """Non-reasoning output from explicit wire counts; absent is unknown."""
+    output = checked_count(total)
+    reasoning = checked_count(getattr(details, "reasoning_tokens", None))
+    if output is None or reasoning is None or reasoning > output:
+        return None
+    return output - reasoning
+
+
 def _consume_responses_stream(
     stream: Any,
     on_chunk: Callable[[str], None] | None = None,
+    *, request_started_at: float | None = None,
 ) -> tuple[LLMResponse, str | None]:
     """Consume typed SDK events or locally decoded Responses SSE events."""
-    acc = StreamingAccumulator()
+    acc = StreamingAccumulator(request_started_at=request_started_at)
     response_id = None
+    raw_response = None
     usage = UsageMetadata()
     seen_reasoning_summary_items: set[str] = set()
+    output_recorder = _ResponsesStreamOutputRecorder()
+    saw_output_text_delta = False
 
     for event in stream:
+        output_recorder.observe(event)
         # Any lifecycle event may carry the response id (``response.created``,
         # ``response.in_progress``, ``response.incomplete``, ``response.failed``,
         # ``response.completed``).  Latch the newest one so a stream that ends
@@ -1670,6 +2194,7 @@ def _consume_responses_stream(
         if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
             continue
         if event.type == "response.output_text.delta":
+            saw_output_text_delta = saw_output_text_delta or bool(event.delta)
             acc.add_text(event.delta)
             if on_chunk:
                 on_chunk(event.delta)
@@ -1687,6 +2212,8 @@ def _consume_responses_stream(
                 acc.set_tool_args_if_empty(getattr(event.item, "arguments", None))
                 acc.finish_tool()
         elif event.type == "response.completed":
+            acc.finish_generation()
+            raw_response = getattr(event, "response", None)
             # Locally decoded gateway SSE is raw JSON, not an SDK model: every
             # field here is optional and must be probed, never dotted.
             raw_usage = getattr(getattr(event, "response", None), "usage", None)
@@ -1697,15 +2224,49 @@ def _consume_responses_stream(
                 )
                 details = getattr(raw_usage, "output_tokens_details", None)
                 usage = UsageMetadata(
+                    generation_tokens=_visible_output_tokens(
+                        getattr(raw_usage, "output_tokens", None), details,
+                    ),
                     input_tokens=getattr(raw_usage, "input_tokens", 0) or 0,
                     output_tokens=getattr(raw_usage, "output_tokens", 0) or 0,
+                    billable_output_tokens=checked_count(
+                        getattr(raw_usage, "output_tokens", None)
+                    ),
                     thinking_tokens=(
                         getattr(details, "reasoning_tokens", 0) or 0 if details else 0
                     ),
                     cached_tokens=cached_tokens,
+                    cache_write_tokens=_wire_cache_write_tokens(cached),
                 )
 
-    return acc.finalize(usage=usage), response_id
+    accumulated = acc.finalize(usage=usage)
+    output_items = output_recorder.finalized_items()
+    response = accumulated
+    if output_items is not None:
+        # A completion trailer is also the only complete output source for
+        # several forced-SSE gateways. Normalize it for the caller instead of
+        # leaving tool calls/text hidden in the private replay sidecar.
+        normalized = _responses_normalized_response(output_items, usage)
+        if normalized is not None and _responses_responses_match(normalized, accumulated):
+            response = _responses_merge_normalized_response(normalized, accumulated)
+            if on_chunk and not saw_output_text_delta and normalized.text:
+                on_chunk(normalized.text)
+        else:
+            # Contradictory or unsupported trailer shape cannot safely claim a
+            # raw/canonical round trip. Keep an already observed projection;
+            # with no projection at all, fail instead of claiming a successful
+            # tool turn whose only output is not normalized.
+            if not accumulated.text and not accumulated.thoughts and not accumulated.tool_calls:
+                raise ValueError("Responses stream trailer could not be normalized safely")
+            output_items = None
+    # Keep the raw replay candidate private to this transient response. The
+    # stateless session records it only after the whole stream has finalized;
+    # incomplete/error streams therefore cannot commit partial raw history.
+    # Match non-streaming LLMResponse.raw without projecting provider metadata
+    # into canonical history or the safe token-ledger extension.
+    response.raw = raw_response
+    setattr(response, "_openai_responses_output_items", output_items)
+    return response, response_id
 
 
 # ---------------------------------------------------------------------------
@@ -1760,12 +2321,12 @@ def _inject_responses_reasoning_fallback(items: list[dict]) -> list[dict]:
 
     Responses items are a flat list; a single assistant turn can span
     multiple items (reasoning, text, function_call). After the first
-    ``function_call`` item we must ensure every later assistant turn
-    carries a ``reasoning`` item — the Responses analogue of
-    ``_inject_chat_reasoning_fallback``. We walk the list, track
-    whether a ``function_call`` has been seen, and for each ``assistant``
-    text item that follows a call without an immediately-preceding
-    reasoning item, insert one before it.
+    ``function_call`` item, legacy canonical assistant text can receive a
+    ``reasoning`` fallback, as in ``_inject_chat_reasoning_fallback``.
+    Raw Responses messages and array-valued content are authoritative and
+    pass through unchanged. For eligible legacy text after a call with no
+    immediately preceding reasoning item, insert a per-turn fallback.
+    Missing legacy text retains the historical empty-text fallback.
     """
     seen_function_call = False
     turn_idx = 0
@@ -1775,11 +2336,11 @@ def _inject_responses_reasoning_fallback(items: list[dict]) -> list[dict]:
             seen_function_call = True
             out.append(item)
             continue
-        if seen_function_call and item.get("role") == "assistant":
+        if (seen_function_call and item.get("role") == "assistant"
+                and item.get("type") != "message"
+                and (item.get("content") is None or isinstance(item.get("content"), str))):
+            # Only legacy text is repaired; valid raw output is never synthesized.
             turn_idx += 1
-            # Insert a fallback reasoning item before this assistant text
-            # item unless the immediately preceding item already carries
-            # reasoning (real thinking was preserved).
             if not (out and out[-1].get("type") == "reasoning"):
                 out.append(
                     _fallback_responses_reasoning_item(
@@ -2075,8 +2636,13 @@ class OpenAIChatSession(ChatSession):
 
         # 3. Make the API call (with auto-recovery on context overflow);
         #    revert interface on any other error.
+        dispatched: list[dict[str, Any]] = []  # kwargs of the call that succeeded
+
         def _do_call():
-            return self._client.chat.completions.create(**_build_kwargs())
+            kwargs = _build_kwargs()
+            raw = self._client.chat.completions.create(**kwargs)
+            dispatched.append(kwargs)
+            return raw
 
         try:
             raw, total_dropped, rounds = self._run_with_overflow_recovery(_do_call)
@@ -2096,7 +2662,7 @@ class OpenAIChatSession(ChatSession):
         # 4. Record assistant response into interface
         self._record_assistant_response(raw)
 
-        return _parse_response(raw)
+        return _stamp_requested_tier(_parse_response(raw), dispatched[-1] if dispatched else {})
 
     def commit_tool_results(self, tool_results: list) -> None:
         """Append tool results to interface without an API call."""
@@ -2182,32 +2748,6 @@ class OpenAIChatSession(ChatSession):
             usage=usage_dict,
         )
 
-    @staticmethod
-    def _response_to_message(raw) -> dict:
-        """Convert an OpenAI ChatCompletion response to a message dict for history."""
-        choice = raw.choices[0] if raw.choices else None
-        if not choice:
-            return {"role": "assistant", "content": ""}
-        msg = choice.message
-        result: dict[str, Any] = {"role": "assistant"}
-        if msg.content:
-            result["content"] = msg.content
-        if msg.tool_calls:
-            result["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                for tc in msg.tool_calls
-            ]
-        if not msg.content and not msg.tool_calls:
-            result["content"] = ""
-        return result
-
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
         """Send a streaming request.  Same shape as :meth:`send` —
         ``str`` / ``list`` / ``None`` (continue from wire).
@@ -2258,6 +2798,7 @@ class OpenAIChatSession(ChatSession):
 
         acc = StreamingAccumulator()
         usage = UsageMetadata()
+        dispatched: list[dict[str, Any]] = []  # kwargs of the stream that opened
 
         # Streaming overflow-recovery: most providers raise the 400 either
         # when ``create()`` returns or on the first iteration of the stream
@@ -2265,17 +2806,21 @@ class OpenAIChatSession(ChatSession):
         # stream and pull the first chunk inside the recovery wrapper; once
         # that succeeds, we hand off to the regular streaming loop.
         def _open_and_first_chunk():
-            stream = self._client.chat.completions.create(**_build_kwargs())
+            nonlocal acc
+            kwargs = _build_kwargs()
+            acc = StreamingAccumulator(request_started_at=time.monotonic())
+            stream = self._client.chat.completions.create(**kwargs)
+            dispatched.append(kwargs)
             it = iter(stream)
             try:
                 first = next(it)
             except StopIteration:
                 first = None
-            return stream, it, first
+            return stream, it, first, time.monotonic()
 
         # 3. Stream; revert interface on error
         try:
-            (stream, it, first_chunk), total_dropped, rounds = (
+            (stream, it, first_chunk, first_chunk_at), total_dropped, rounds = (
                 self._run_with_overflow_recovery(_open_and_first_chunk)
             )
             if rounds > 0:
@@ -2291,11 +2836,19 @@ class OpenAIChatSession(ChatSession):
             for chunk in _chunks():
                 if not chunk.choices:
                     if chunk.usage:
+                        acc.finish_generation()
                         cached = getattr(chunk.usage, "prompt_tokens_details", None)
                         cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
                         usage = UsageMetadata(
+                            generation_tokens=_visible_output_tokens(
+                                getattr(chunk.usage, "completion_tokens", None),
+                                getattr(chunk.usage, "completion_tokens_details", None),
+                            ),
                             input_tokens=chunk.usage.prompt_tokens or 0,
                             output_tokens=chunk.usage.completion_tokens or 0,
+                            billable_output_tokens=checked_count(
+                                getattr(chunk.usage, "completion_tokens", None)
+                            ),
                             thinking_tokens=(
                                 getattr(
                                     getattr(chunk.usage, "completion_tokens_details", None),
@@ -2305,13 +2858,17 @@ class OpenAIChatSession(ChatSession):
                                 or 0
                             ),
                             cached_tokens=cached_tokens,
+                            cache_write_tokens=_wire_cache_write_tokens(cached),
                         )
                     continue
                 delta = chunk.choices[0].delta
                 if delta is None:
                     continue
                 if delta.content:
-                    acc.add_text(delta.content)
+                    acc.add_text(
+                        delta.content,
+                        received_at=first_chunk_at if chunk is first_chunk else None,
+                    )
                     if on_chunk:
                         on_chunk(delta.content)
                 # OpenRouter (and OpenAI o-series under some SDKs) streams
@@ -2330,6 +2887,7 @@ class OpenAIChatSession(ChatSession):
                             id=tc.id,
                             name=(tc.function.name if tc.function else None),
                             args_delta=(tc.function.arguments if tc.function else None),
+                            received_at=first_chunk_at if chunk is first_chunk else None,
                         )
         except Exception as exc:
             if message is not None:
@@ -2369,7 +2927,7 @@ class OpenAIChatSession(ChatSession):
             },
         )
 
-        return result
+        return _stamp_requested_tier(result, dispatched[-1] if dispatched else {})
 
     # -- Context compaction ---------------------------------------------------
 
@@ -2383,7 +2941,15 @@ class OpenAIChatSession(ChatSession):
 
 
 class OpenAIResponsesSession(ChatSession):
-    """Session backed by OpenAI's Responses API with server-side state."""
+    """Session backed by the Responses API.
+
+    ``OpenAIAdapter`` always builds it with ``stateless_replay=True``: every
+    request replays the full canonical history and never sends
+    ``previous_response_id``. The non-replay mode (``stateless_replay=False``)
+    remains only as the base of ``CodexResponsesSession``, which overrides
+    ``send``/``send_stream`` with its own full/incremental planner and uses the
+    base accessors of that mode.
+    """
 
     def __init__(
         self,
@@ -2394,7 +2960,6 @@ class OpenAIResponsesSession(ChatSession):
         tool_choice: str | None,
         extra_kwargs: dict,
         previous_response_id: str | None = None,
-        compact_threshold: int | None = None,
         interface: ChatInterface | None = None,
         prompt_cache_key: str | None = None,
         base_url: str | None = None,
@@ -2417,7 +2982,6 @@ class OpenAIResponsesSession(ChatSession):
         # on (env LINGTAI_INJECT_REASONING_FALLBACK to disable); explicit
         # param wins.
         self._inject_reasoning_fallback = bool(inject_reasoning_fallback)
-        self._compact_threshold = _validate_compact_threshold(compact_threshold)
         self._interface = interface or ChatInterface()
         # Optional OpenAI Responses ``prompt_cache_key`` — opts the request
         # into cross-request prompt caching keyed by a stable string. Sent
@@ -2530,7 +3094,11 @@ class OpenAIResponsesSession(ChatSession):
         self._interface._pending_system = restored._pending_system
         self._interface.tool_result_recovery_lookup = recovery_lookup
 
-    def _record_assistant_response(self, response: LLMResponse) -> None:
+    def _record_assistant_response(
+        self,
+        response: LLMResponse,
+        output_items: list[dict] | None = None,
+    ) -> None:
         blocks: list = []
         for thought in response.thoughts:
             if thought:
@@ -2541,8 +3109,20 @@ class OpenAIResponsesSession(ChatSession):
             blocks.append(ToolCallBlock(id=tc.id or "", name=tc.name, args=tc.args))
         if not blocks:
             blocks.append(TextBlock(text=""))
+
+        provider_data: dict[str, Any] = {}
+        if output_items is not None:
+            # This metadata is an immutable-by-convention snapshot of the
+            # completed provider output. Validity is tied to the visible
+            # canonical blocks so edits/summaries cannot resurrect stale raw
+            # fields; the converter deep-copies it on every replay.
+            provider_data = {
+                _RESPONSES_OUTPUT_ITEMS_KEY: copy.deepcopy(output_items),
+                _RESPONSES_REPLAY_FINGERPRINT_KEY: _responses_replay_fingerprint(blocks),
+            }
         self._interface.add_assistant_message(
             blocks,
+            provider_data=provider_data,
             model=self._model,
             provider="openai",
             usage={
@@ -2556,18 +3136,16 @@ class OpenAIResponsesSession(ChatSession):
     def _replay_input_items(self) -> list[dict]:
         """Return the stateless-replay wire items for the CURRENT interface.
 
-        Extracted seam (not just an inline ``to_responses_input`` call) so a
-        subclass with standalone compaction active (e.g.
-        ``MimoResponsesSession``) can substitute the opaque compacted-prefix-
-        plus-delta representation here instead of a full re-conversion —
-        without duplicating ``send``/``send_stream``. Plain (non-compacting)
-        Responses sessions keep the original full-conversion behavior. When
+        Plain Responses sessions convert the full canonical interface. When
         ``inject_reasoning_fallback`` is enabled, assistant turns after the
         first ``function_call`` that lack a preserved ``reasoning`` item get
         a per-turn-unique fallback item injected (generic version of the
         former DeepSeek behavior).
         """
-        items = to_responses_input(self._interface)
+        items = to_responses_input(
+            self._interface,
+            replay_raw_output_items=True,
+        )
         if self._inject_reasoning_fallback:
             return _inject_responses_reasoning_fallback(items)
         return items
@@ -2610,10 +3188,6 @@ class OpenAIResponsesSession(ChatSession):
                     kwargs["tool_choice"] = self._tool_choice
             if self._response_id and not self._stateless_replay:
                 kwargs["previous_response_id"] = self._response_id
-            if self._compact_threshold:
-                kwargs["context_management"] = [
-                    {"type": "compaction", "compact_threshold": self._compact_threshold}
-                ]
             if self._prompt_cache_key:
                 kwargs["prompt_cache_key"] = self._prompt_cache_key
 
@@ -2629,8 +3203,19 @@ class OpenAIResponsesSession(ChatSession):
             else:
                 response = _parse_responses_api_response(raw)
                 response_id = raw.id
+                setattr(
+                    response,
+                    "_openai_responses_output_items",
+                    _responses_output_items_from_response(raw),
+                )
+            _stamp_requested_tier(response, kwargs)
             if self._stateless_replay:
-                self._record_assistant_response(response)
+                self._record_assistant_response(
+                    response,
+                    output_items=getattr(
+                        response, "_openai_responses_output_items", None
+                    ),
+                )
             else:
                 self._adopt_response_id(response_id)
             return response
@@ -2668,17 +3253,22 @@ class OpenAIResponsesSession(ChatSession):
                     kwargs["tool_choice"] = self._tool_choice
             if self._response_id and not self._stateless_replay:
                 kwargs["previous_response_id"] = self._response_id
-            if self._compact_threshold:
-                kwargs["context_management"] = [
-                    {"type": "compaction", "compact_threshold": self._compact_threshold}
-                ]
             if self._prompt_cache_key:
                 kwargs["prompt_cache_key"] = self._prompt_cache_key
 
+            request_started_at = time.monotonic()
             stream = self._client.responses.create(**kwargs)
-            response, response_id = _consume_responses_stream(stream, on_chunk)
+            response, response_id = _consume_responses_stream(
+                stream, on_chunk, request_started_at=request_started_at,
+            )
+            _stamp_requested_tier(response, kwargs)
             if self._stateless_replay:
-                self._record_assistant_response(response)
+                self._record_assistant_response(
+                    response,
+                    output_items=getattr(
+                        response, "_openai_responses_output_items", None
+                    ),
+                )
             else:
                 self._adopt_response_id(response_id)
             return response
@@ -2738,15 +3328,25 @@ class OpenAIResponsesSession(ChatSession):
 # ---------------------------------------------------------------------------
 
 
-class OpenAIAdapter(LLMAdapter):
-    """Adapter that wraps the ``openai`` SDK for OpenAI and compatible APIs."""
+#: The official OpenAI endpoint — the ``openai`` provider's default when a
+#: manifest omits ``base_url``.
+OPENAI_OFFICIAL_BASE_URL = "https://api.openai.com/v1"
 
-    # Session class for the Chat Completions path. MiMo and Zhipu subclasses
-    # override this to inject provider-specific behavior. Shared-adapter routes
-    # such as DeepSeek configure behavior through constructor hooks instead.
-    # Responses-API sessions use OpenAIResponsesSession unconditionally
-    # since that path is OpenAI-only.
-    _session_class: type = OpenAIChatSession
+#: Accepted ``wire_api`` selector values. ``auto`` is a legacy spelling that
+#: means the same as omitting the selector (Chat Completions).
+_WIRE_API_VALUES = frozenset({"auto", "chat_completions", "responses"})
+
+
+class OpenAIAdapter(LLMAdapter):
+    """Adapter that wraps the ``openai`` SDK for any OpenAI-compatible endpoint.
+
+    ``base_url`` is optional (the official endpoint when omitted). ``wire_api``
+    selects Chat Completions (default; legacy ``auto`` means the same) or the
+    Responses API, which is ALWAYS stateless full-history replay: every request
+    carries the canonical conversation and never relies on
+    ``previous_response_id`` server-side state. ``thinking`` and
+    ``service_tier`` are forwarded as the standard wire fields.
+    """
 
     def __init__(
         self,
@@ -2754,32 +3354,23 @@ class OpenAIAdapter(LLMAdapter):
         *,
         base_url: str | None = None,
         timeout_ms: int = 300_000,
-        use_responses: bool = False,
-        force_responses: bool = False,
         wire_api: str | None = None,
         max_rpm: int = 0,
         default_headers: dict | None = None,
-        compact_threshold: int | None = 100_000,
         prompt_cache_key: str | bool | None = None,
-        responses_stateless_replay: bool = False,
+        service_tier: str | None = None,
         inject_reasoning_fallback: bool | None = None,
-        reasoning_effort_vocab: str = "openai",
         prompt_cache_namespace: str | None = None,
-        reasoning_policy: Callable[..., Any] | None = None,
     ):
         self.base_url = base_url
-        self._use_responses = use_responses
-        self._force_responses = force_responses
-        # Canonical wire selection: ``auto`` delegates to the legacy
-        # ``use_responses``/``force_responses`` heuristics; explicit
-        # ``chat_completions``/``responses`` force that path regardless of
-        # base URL or legacy flags. ``None`` is treated as ``auto`` so
-        # existing callers keep their current behavior.
-        if wire_api is not None and wire_api not in {"auto", "chat_completions", "responses"}:
+        # Canonical wire selection: ``responses`` selects the Responses API;
+        # ``chat_completions``, the legacy ``auto``, and omission all select
+        # Chat Completions.
+        if wire_api is not None and wire_api not in _WIRE_API_VALUES:
             raise ValueError(
-                f"wire_api must be one of auto/chat_completions/responses, got {wire_api!r}"
+                f"wire_api must be one of chat_completions/responses (or legacy auto), got {wire_api!r}"
             )
-        self._wire_api = wire_api or "auto"
+        self._wire_api = "responses" if wire_api == "responses" else "chat_completions"
         # Prompt-cache-key policy for this adapter's OpenAI-compatible sessions:
         #   None  -> auto-derive a stable, namespaced default per model
         #   str   -> use this exact key for every session (override)
@@ -2793,22 +3384,16 @@ class OpenAIAdapter(LLMAdapter):
             self._prompt_cache_key_policy = _AUTO_PROMPT_CACHE_KEY
         else:
             self._prompt_cache_key_policy = prompt_cache_key
-        # Responses-API auto-compaction threshold (input tokens). The host
-        # injects its resolved config value via the adapter factory
-        # (lingtai/llm/_register.py:_openai reads provider defaults); when
-        # unset we fall back to the intended 100k default. ``None`` disables
-        # compaction entirely. Config is injected at construction here, never
-        # read from a global module — see lingtai.kernel.config's contract.
-        self._compact_threshold = _validate_compact_threshold(compact_threshold)
-        self._responses_stateless_replay = bool(responses_stateless_replay)
-        # Generic ``reasoning_content`` round-trip fallback (the former
-        # DeepSeek-specific behavior, now available to any OpenAI-compatible
-        # provider). On by default: real thinking is already passed back via
-        # ThinkingBlock, and this only injects a per-turn-unique stub on
-        # assistant tool-call turns that lack preserved thinking — required
-        # by thinking-mode endpoints (DeepSeek V4, opencode.ai zen/go) and
-        # harmlessly ignored by endpoints that don't know the field. The
-        # explicit bool param (from provider config) wins; when unset, the
+        # Wire ``service_tier`` (already normalized by the factory, e.g. user
+        # ``fast`` -> ``priority``). ``None`` omits the field.
+        self._service_tier: str | None = service_tier or None
+        # Generic ``reasoning_content`` round-trip fallback for any
+        # OpenAI-compatible endpoint. On by default: real thinking is already
+        # passed back via ThinkingBlock, and this only injects a
+        # per-turn-unique stub on assistant tool-call turns that lack preserved
+        # thinking — required by thinking-mode endpoints and harmlessly
+        # ignored by endpoints that don't know the field. The explicit bool
+        # param (from provider config) wins; when unset, the
         # LINGTAI_INJECT_REASONING_FALLBACK env var controls it (default on).
         # Forwarded into both session classes.
         if inject_reasoning_fallback is None:
@@ -2816,21 +3401,8 @@ class OpenAIAdapter(LLMAdapter):
                 "LINGTAI_INJECT_REASONING_FALLBACK", default=True
             )
         self._inject_reasoning_fallback = bool(inject_reasoning_fallback)
-        # Chat Completions ``reasoning_effort`` vocabulary: ``openai`` (default)
-        # maps kernel levels onto OpenAI's high/low surface; ``seven_tier`` is
-        # the retained compatibility path that passes THINKING_LEVELS through.
-        self._reasoning_effort_vocab = reasoning_effort_vocab
-        # Optional provider-local reasoning owner. A route may install a
-        # callable ``policy(model=..., wire=..., thinking=...)`` that returns
-        # the reasoning decision for that request; when it is installed it
-        # decides the reasoning fields for BOTH wires and the generic
-        # vocabulary projections below are never consulted. When it is absent
-        # — every route except deepseek — this adapter behaves exactly as
-        # before. This transport holds no provider's models, levels, aliases,
-        # or defaults; see ``lingtai/llm/deepseek/policy.py``.
-        self._reasoning_policy = reasoning_policy
-        # Optional fixed provider namespace for the auto-derived
-        # ``prompt_cache_key`` (e.g. ``deepseek`` -> ``lingtai-deepseek:{model}:v1``).
+        # Optional fixed namespace for the auto-derived ``prompt_cache_key``
+        # (e.g. ``acme`` -> ``lingtai-acme:{model}:v1``).
         self._prompt_cache_namespace = prompt_cache_namespace
         kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:
@@ -2840,6 +3412,23 @@ class OpenAIAdapter(LLMAdapter):
         self._client_kwargs = dict(kwargs)  # store for session reset
         self._client = openai.OpenAI(**kwargs)
         self._setup_gate(max_rpm)
+
+    @property
+    def effective_base_url(self) -> str:
+        """The endpoint this adapter's requests actually reach.
+
+        The configured ``base_url`` when set; otherwise the SDK client's
+        resolved endpoint (the official ``https://api.openai.com/v1`` unless
+        the SDK's own environment override applies). Credential-reusing
+        capabilities read this instead of the raw manifest ``base_url``.
+        """
+        if self.base_url:
+            return self.base_url
+        try:
+            resolved = str(self._client.base_url).rstrip("/")
+        except Exception:
+            resolved = ""
+        return resolved or OPENAI_OFFICIAL_BASE_URL
 
     # -- Prompt cache key ------------------------------------------------------
 
@@ -2852,8 +3441,8 @@ class OpenAIAdapter(LLMAdapter):
           * custom/compatible base_url    -> ``lingtai-openai-compat:{host}:{model}:v1``
 
         A configured ``prompt_cache_namespace`` gives a fixed provider identity
-        (DeepSeek, Zhipu, MiMo, Codex) a clean provider namespace instead of
-        the base_url host, without needing a subclass override.
+        a clean namespace instead of the base_url host, without needing a
+        subclass override.
         """
         if self._prompt_cache_namespace:
             return f"lingtai-{self._prompt_cache_namespace}:{model}:v1"
@@ -2875,21 +3464,8 @@ class OpenAIAdapter(LLMAdapter):
         return policy  # explicit override string
 
     def _should_use_responses(self) -> bool:
-        """Return True if the selected wire API is the Responses path.
-
-        Canonical ``wire_api`` wins over legacy ``use_responses``/
-        ``force_responses`` heuristics:
-          * ``chat_completions`` -> always False
-          * ``responses``        -> always True, even for custom base URLs
-          * ``auto``             -> legacy behavior: ``use_responses`` AND
-            (no base URL OR ``force_responses``)
-        """
-        if self._wire_api == "chat_completions":
-            return False
-        if self._wire_api == "responses":
-            return True
-        # auto
-        return self._use_responses and (not self.base_url or self._force_responses)
+        """Return True when the selected wire is the Responses API."""
+        return self._wire_api == "responses"
 
     # -- LLMAdapter interface --------------------------------------------------
 
@@ -2903,7 +3479,7 @@ class OpenAIAdapter(LLMAdapter):
         force_tool_call: bool = False,
         interface: ChatInterface | None = None,
         thinking: str = "default",
-        interaction_id: str | None = None,  # ignored — Gemini-specific
+        interaction_id: str | None = None,  # ignored — no server-side resume
         context_window: int = 0,
     ) -> ChatSession:
         # Create interface if not provided
@@ -2912,7 +3488,7 @@ class OpenAIAdapter(LLMAdapter):
             interface = ChatInterface()
             interface.add_system(system_prompt, tools=tool_dicts)
 
-        # Select the wire path. Canonical ``wire_api`` wins over legacy flags.
+        # Select the wire path from the canonical ``wire_api`` selector.
         if self._should_use_responses():
             session = self._create_responses_session(
                 model,
@@ -2967,19 +3543,17 @@ class OpenAIAdapter(LLMAdapter):
 
         # Responses API takes `reasoning: { effort: ... }`, not the Chat
         # Completions SDK's flat `reasoning_effort`. Sending the wrong shape
-        # silently drops the field on the OpenAI Responses endpoint and 400s
-        # on Codex's `/backend-api/codex/responses`.
-        #
-        # A route with a provider-local reasoning policy owns this decision
-        # entirely — including whether any field is sent at all — and may raise
-        # before the SDK is ever touched.
-        applied = self._apply_reasoning_policy(
-            model=model, wire="responses", thinking=thinking, extra_kwargs=extra_kwargs
-        )
-        if applied is None:
-            extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        # silently drops the field on the OpenAI Responses endpoint. The
+        # configured level is sent verbatim; omitted/``default`` sends none.
+        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        if self._service_tier is not None:
+            extra_kwargs["service_tier"] = self._service_tier
 
-        session = OpenAIResponsesSession(
+        # The Responses wire is ALWAYS stateless full-history replay: every
+        # request carries the canonical conversation and never sends
+        # ``previous_response_id``, on every endpoint including official
+        # OpenAI.
+        return OpenAIResponsesSession(
             client=self._client,
             model=model,
             instructions=system_prompt,
@@ -2987,46 +3561,12 @@ class OpenAIAdapter(LLMAdapter):
             tool_choice=tool_choice,
             extra_kwargs=extra_kwargs,
             previous_response_id=None,
-            compact_threshold=self._compact_threshold,
             interface=interface,
             prompt_cache_key=self._resolve_prompt_cache_key(model),
             context_window=context_window,
-            stateless_replay=self._responses_stateless_replay,
+            stateless_replay=True,
             inject_reasoning_fallback=self._inject_reasoning_fallback,
         )
-        return _capture_reasoning_application(session, applied)
-
-    def _apply_reasoning_policy(
-        self,
-        *,
-        model: str,
-        wire: str,
-        thinking: Any,
-        extra_kwargs: dict[str, Any],
-    ) -> Any:
-        """Let an installed provider-local policy own the reasoning fields.
-
-        Returns the resolved application (for capture on the session), or
-        ``None`` when no policy is installed so the caller keeps the generic
-        OpenAI projection. Transport-neutral: nothing here knows any provider's
-        models, levels, aliases, or defaults.
-        """
-        policy = self._reasoning_policy
-        if policy is None:
-            return None
-        applied = policy(model=model, wire=wire, thinking=thinking)
-        payload = applied.request_kwargs()
-        # ``extra_body`` is a shared channel — a provider extension, a subclass
-        # contribution and a caller override can all want a key in it — so it
-        # composes instead of overwriting; unrelated existing keys survive.
-        extra_body = payload.pop("extra_body", None)
-        extra_kwargs.update(payload)
-        if extra_body:
-            extra_kwargs["extra_body"] = {
-                **(extra_kwargs.get("extra_body") or {}),
-                **extra_body,
-            }
-        return applied
 
     def _create_completions_session(
         self,
@@ -3063,35 +3603,16 @@ class OpenAIAdapter(LLMAdapter):
                 },
             }
 
-        # Generic Chat Completions reasoning projection. The retained
-        # ``seven_tier`` compatibility vocabulary passes kernel levels through
-        # unchanged, while the default ``openai`` vocabulary clamps
-        # ``xhigh``/``max`` to ``high`` and omits the field for the
-        # omitted/``default`` sentinel so the upstream v1 default applies.
-        # A route with a provider-local reasoning policy owns this decision
-        # entirely (DeepSeek, for instance, also emits its own ``thinking``
-        # switch and rejects levels its model does not really have); the
-        # generic vocabulary projection is then never consulted.
-        applied = self._apply_reasoning_policy(
-            model=model,
-            wire="chat_completions",
-            thinking=thinking,
-            extra_kwargs=extra_kwargs,
-        )
-        if applied is None:
-            effort = self._chat_reasoning_effort(thinking)
-            if effort is not None:
-                extra_kwargs["reasoning_effort"] = effort
+        # Standard Chat Completions ``reasoning_effort``: the configured level
+        # verbatim; omitted/``default`` sends no field so the endpoint's own
+        # default applies.
+        effort = _standard_reasoning_effort(thinking)
+        if effort is not None:
+            extra_kwargs["reasoning_effort"] = effort
+        if self._service_tier is not None:
+            extra_kwargs["service_tier"] = self._service_tier
 
-        # Subclass-provided extra_body (e.g. OpenRouter's reasoning include).
-        # Merge rather than overwrite so callers adding their own extra_body
-        # via extra_kwargs aren't clobbered.
-        sub_extra_body = self._adapter_extra_body()
-        if sub_extra_body:
-            existing = extra_kwargs.get("extra_body") or {}
-            extra_kwargs["extra_body"] = {**sub_extra_body, **existing}
-
-        session = self._session_class(
+        return OpenAIChatSession(
             client=self._client,
             model=model,
             interface=interface,
@@ -3104,59 +3625,6 @@ class OpenAIAdapter(LLMAdapter):
             inject_reasoning_fallback=self._inject_reasoning_fallback,
             base_url=self.base_url,
         )
-        return _capture_reasoning_application(session, applied)
-
-    def _adapter_extra_body(self) -> dict:
-        """Return extra_body JSON fields to include on every request.
-
-        Default is empty. Subclasses override to inject provider-specific
-        kwargs (e.g. OpenRouter needs `reasoning: {include: true}` to
-        surface reasoning text on reasoning-capable models).
-        """
-        return {}
-
-    def _chat_reasoning_effort(self, thinking: str | None) -> str | None:
-        """Map a kernel thinking level to the Chat Completions reasoning_effort value.
-
-        This is the v1 projection of the Responses semantics (which sends
-        ``reasoning: {effort: <level>}`` verbatim and maps an omitted/default
-        level to explicit ``xhigh``). The vocabulary is selected by
-        ``reasoning_effort_vocab``:
-
-          * ``openai`` (default) projects the Responses vocabulary onto OpenAI
-            v1's official set ``minimal | low | medium | high``: explicit
-            ``minimal``/``low``/``medium``/``high`` pass through, ``xhigh`` and
-            ``max`` clamp to ``high`` (v1 has no higher tier), ``none`` maps to
-            ``None`` so the field is omitted (no reasoning control), and the
-            omitted/``default`` sentinel maps to ``None`` so the upstream v1
-            default applies (OpenAI v1 has no ``xhigh``; omission is the
-            graceful v1 projection of the Responses xhigh default).
-          * ``seven_tier`` is the retained compatibility projection: it passes
-            the kernel THINKING_LEVELS through unchanged and maps the omitted/
-            ``default`` sentinel to explicit ``xhigh``. Provider-specific routes
-            with a different model/wire contract use a provider-local policy.
-
-        Returns ``None`` so the field is not sent.
-        """
-        from lingtai.kernel.config import THINKING_LEVELS
-
-        if self._reasoning_effort_vocab == "seven_tier":
-            if thinking in (None, "default"):
-                return "xhigh"
-            if thinking not in THINKING_LEVELS:
-                raise ValueError(
-                    "thinking must be one of "
-                    f"{', '.join(THINKING_LEVELS)}, or default"
-                )
-            return thinking
-        if thinking in (None, "default", "none"):
-            return None
-        if thinking not in THINKING_LEVELS:
-            raise ValueError(
-                "thinking must be one of "
-                f"{', '.join(THINKING_LEVELS)}, or default"
-            )
-        return "high" if thinking in ("xhigh", "max") else thinking
 
     def generate(
         self,
@@ -3311,21 +3779,19 @@ class _StandaloneCompactionMixin:
     compacted-prefix-plus-strict-additive-delta replay basis
     (``_compacted_replay_input``), and the turn-aware boundary selection that
     builds the next compact request's ``input`` (``_prepare_compact_request``).
-    First extracted from ``CodexResponsesSession`` (PR #926) so a second
-    provider (MiMo) can reuse it without duplicating the calibration/boundary
-    logic — see PR #926 for the original design rationale and
+    Extracted from ``CodexResponsesSession`` (PR #926); Codex is its only
+    host today — see PR #926 for the original design rationale and
     ``tests/test_codex_standalone_compaction.py`` for the behavior contract.
 
-    Subclasses differ in exactly two ways, both left as seams:
+    The host class supplies two seams:
       * ``_compaction_prefix_input(entries)`` — how a list of canonical
         ``ChatInterface`` entries converts to Responses-wire items for the
         compact request / delta replay. Codex routes this through its
-        per-session tool-result output freezing; a plain stateless session
-        uses the ordinary converter.
+        per-session tool-result output freezing; the default uses the
+        ordinary converter.
       * ``_compact_now()`` — the actual ``client.responses.compact()`` call
         and its failure policy. Codex treats any failure as non-fatal (skip
-        compaction for this turn); MiMo treats it as a hard failure (see
-        ``MimoResponsesSession._compact_now``). This mixin does not call
+        compaction for this turn). This mixin does not call
         ``client.responses.compact`` itself; it only prepares the request.
 
     Requires the host class to also provide (already true of
@@ -3342,8 +3808,7 @@ class _StandaloneCompactionMixin:
         # actual reported input-token count and a LOCAL estimate of the exact
         # rendered representation that produced it, captured together right
         # after a successful response (see each host session's own
-        # post-response hook — ``CodexResponsesSession.send_stream`` /
-        # ``MimoResponsesSession._record_calibration_sample``). Both ``None``
+        # post-response hook — ``CodexResponsesSession.send_stream``). Both ``None``
         # until the first successful provider response.
         self._last_provider_input_tokens: int | None = None
         self._last_local_estimate_tokens: int | None = None
@@ -3560,7 +4025,6 @@ class _CodexAccountContext:
     client: Any
     binding: dict[str, Any] = field(default_factory=dict)
     binding_generation: int = 0
-    selection: dict[str, Any] = field(default_factory=dict)
     bound_molt_count: int | None = None
     excluded_accounts: set[str] = field(default_factory=set)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
@@ -3595,7 +4059,6 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         account_id: str | None = None,
         codex_auth_path_sha8: str | None = None,
         codex_auth_path_source: str | None = None,
-        codex_pool_selection: dict[str, Any] | None = None,
         codex_account_error_callback: Callable[[Exception, bool], None] | None = None,
         codex_account_success_callback: Callable[[], dict[str, Any] | None] | None = None,
         codex_account_request_callback: Callable[
@@ -3641,8 +4104,6 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         # auth material, or raw provider objects.
         self._last_effort_dispatch: dict[str, Any] | None = None
         # Standalone Codex compaction (daemon task ``context_token_limit``).
-        # Distinct axis from ``compact_threshold``/``context_management``,
-        # which Codex never receives (see ``_create_responses_session``).
         # ``None`` -> no explicit task limit; the effective threshold falls
         # back to ``context_window()`` at check time (see
         # ``_effective_compact_token_limit``). Validated once here (in the
@@ -3764,14 +4225,10 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         # It is a non-secret account identifier and is never copied into usage
         # metadata or logs.
         self._account_id = account_id if isinstance(account_id, str) and account_id else None
-        # Native Codex account selection is owned by this session's provider
+        # Native Codex account binding is owned by this session's provider
         # request path.  The callbacks never receive canonical history or
-        # provider policy; they only refresh auth and report a safe selection /
-        # structural failure to the ordinary Codex adapter.
-        self._codex_pool_selection = (
-            dict(codex_pool_selection) if isinstance(codex_pool_selection, dict) else {}
-        )
-        self.codex_pool_selection = dict(self._codex_pool_selection)
+        # provider policy; they only refresh auth and report a structural
+        # failure to the ordinary Codex adapter.
         # A deliberate context epoch reset already rebases the continuation
         # state. If the fresh draw chooses another account, do not emit a second
         # technical account-switch reset and overwrite the approved boundary
@@ -3826,6 +4283,20 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         else:
             self._session_id = None
             self._thread_id = None
+
+    def update_tools(self, tools: list[FunctionSchema] | None) -> None:
+        """Refresh Codex request tools when a turn-scoped overlay changes.
+
+        The generic Responses session only accepts updates in stateless replay
+        mode. Codex plans each request from its local interface even though it
+        does not use that mode, so it must update both the request payload and
+        the interface snapshot on every turn.
+        """
+        self._tools = _apply_site_quirks(self._base_url, _build_responses_tools(tools))
+        self._interface.add_system(
+            self._interface.current_system_prompt or "",
+            tools=FunctionSchema.list_to_dicts(tools),
+        )
 
     def _cache_affinity_headers(self) -> dict[str, str]:
         """Return the stable ``session_id`` / ``thread_id`` headers, if any.
@@ -4062,23 +4533,6 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             extra["codex_auth_path_sha8"] = self._codex_auth_path_sha8[:64]
         if self._codex_auth_path_source:
             extra["codex_auth_path_source"] = self._codex_auth_path_source[:64]
-        pool_selection = getattr(self, "codex_pool_selection", None)
-        if isinstance(pool_selection, dict):
-            pool_fields = {
-                "source_ref": "codex_pool_source_ref",
-                "source_index": "codex_pool_source_index",
-                "pool_size": "codex_pool_size",
-                "weight": "codex_pool_weight",
-                "auth_path_sha8": "codex_auth_path_sha8",
-                "quota_left": "codex_pool_quota_left",
-                "model_scope": "codex_pool_model_scope",
-                "failover": "codex_pool_failover",
-                "fallback": "codex_pool_fallback",
-            }
-            for source_key, ledger_key in pool_fields.items():
-                value = pool_selection.get(source_key)
-                if value is not None and ledger_key not in extra:
-                    extra[ledger_key] = str(value)[:240]
         if affinity_headers.get("session_id"):
             extra["codex_session_id"] = affinity_headers["session_id"]
         if affinity_headers.get("thread_id"):
@@ -4586,8 +5040,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
     # (``POST /responses/compact``) to fold prior context into an opaque
     # ``compaction_summary`` + trailing ``message`` pair, which is then
     # replayed as the new provider-context prefix, with only strict-additive
-    # entries appended on top — never ``context_management`` (Codex rejects
-    # it; see ``_create_responses_session``). The projected-token trigger,
+    # entries appended on top. The projected-token trigger,
     # boundary selection, and opaque replay basis are shared with any other
     # standalone-compaction session via ``_StandaloneCompactionMixin``; only
     # the wire-shaping (``_compaction_prefix_input``, Codex's per-session
@@ -4985,78 +5438,6 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         per_full = incremental_count / full_count
         return f"1:{per_full:.1f}".replace(".0", "")
 
-    @staticmethod
-    def _ws_maintenance_hint(
-        *,
-        full_count: int,
-        incremental_count: int,
-    ) -> dict[str, Any]:
-        """Ratio-oriented summarize-economy hint for the dynamic adapter comment.
-
-        Replaces the older interval/countdown guidance ("wait N API calls after
-        the last full epoch"), which was misleading: summarize is an investment,
-        not a fixed cooldown. Each summarize spends a fresh ``full`` epoch (a
-        cache miss) now to buy future context/token savings, so it only pays off
-        when those savings exceed the miss. A healthy continuation keeps fulls
-        rare relative to incremental turns: the target is a full:incremental
-        ratio at or below ``1:10`` (≈ at most one full per ten incremental
-        turns). When fulls are too frequent the actionable fix is to summarize
-        less often / batch more so each full epoch earns its cost.
-        """
-        target_ratio = "1:10"
-        # full:incremental <= 1:10  <=>  full_count <= incremental_count / 10.
-        target_max_full_per_incremental = 0.1
-        if full_count <= 0:
-            return {
-                "summarize_economy": "ok" if incremental_count > 0 else "unknown",
-                "full_count": int(full_count),
-                "incremental_count": int(incremental_count),
-                "full_to_incremental_ratio": (
-                    CodexResponsesSession._ws_full_to_incremental_ratio(
-                        full_count, incremental_count
-                    )
-                ),
-                "target_full_to_incremental_ratio": target_ratio,
-                "reason": (
-                    "no full epoch in the last 20 Codex API calls; summarize "
-                    "frequency is healthy"
-                    if incremental_count > 0
-                    else "no Codex continuation cache ledger entries yet"
-                ),
-            }
-        full_per_incremental = full_count / max(incremental_count, 1)
-        ratio_ok = (
-            incremental_count > 0
-            and full_per_incremental <= target_max_full_per_incremental
-        )
-        hint = {
-            "summarize_economy": "ok" if ratio_ok else "reduce_summarize_frequency",
-            "full_count": int(full_count),
-            "incremental_count": int(incremental_count),
-            "full_to_incremental_ratio": (
-                CodexResponsesSession._ws_full_to_incremental_ratio(
-                    full_count, incremental_count
-                )
-            ),
-            "target_full_to_incremental_ratio": target_ratio,
-        }
-        if ratio_ok:
-            hint["reason"] = (
-                f"full:incremental is {hint['full_to_incremental_ratio']} over the "
-                f"last 20 Codex API calls, within the {target_ratio} target; "
-                "summarize frequency is healthy"
-            )
-        else:
-            hint["reason"] = (
-                f"full:incremental is {hint['full_to_incremental_ratio']} over the "
-                f"last 20 Codex API calls, worse than the {target_ratio} target; "
-                "each full epoch is a cache miss, and summarize is an investment "
-                "that must buy back more than it spends — reduce summarize "
-                "frequency (defer/batch non-urgent summarize until the expected "
-                "savings justify the miss, or molt if context pressure stays high)"
-            )
-        return hint
-
     def static_adapter_comment(self):
         """Codex adapter comments are intentionally disabled.
 
@@ -5152,7 +5533,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         ``notification_guidance`` copy, without mutating canonical history.
         """
         return _freeze_responses_outputs(
-            to_responses_input(iface),
+            to_responses_input(iface, replay_raw_output_items=False),
             self._ws_frozen_outputs,
         )
 
@@ -5234,10 +5615,6 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         self._codex_binding_api_key = (
             next_api_key if isinstance(next_api_key, str) and next_api_key else None
         )
-        selection = binding.get("selection")
-        if isinstance(selection, dict):
-            self._codex_pool_selection = dict(selection)
-            self.codex_pool_selection = dict(selection)
 
     def _codex_refresh_account_for_request(self) -> None:
         """Bind and publish the current epoch account as one owned transaction."""
@@ -5613,10 +5990,6 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                     kwargs["tool_choice"] = self._tool_choice
             if previous_response_id:
                 kwargs["previous_response_id"] = previous_response_id
-            if self._compact_threshold:
-                kwargs["context_management"] = [
-                    {"type": "compaction", "compact_threshold": self._compact_threshold}
-                ]
             # Resolve this request's cache-affinity values — the single stable
             # per-agent id (a pure hash of the agent path). All three levers
             # (prompt_cache_key / session_id / thread_id) carry the same value on
@@ -5961,6 +6334,13 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                         usage = UsageMetadata(
                             input_tokens=input_tokens,
                             output_tokens=getattr(event.response.usage, "output_tokens", 0) or 0,
+                            # Responses wire output_tokens already includes
+                            # reasoning; absent stays unknown. Cache writes come
+                            # from input_tokens_details.cache_write_tokens when
+                            # the backend reports them, else stay unknown.
+                            billable_output_tokens=checked_count(
+                                getattr(event.response.usage, "output_tokens", None)
+                            ),
                             thinking_tokens=getattr(
                                 event.response.usage, "output_tokens_details", None
                             )
@@ -5971,6 +6351,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                             )
                             or 0,
                             cached_tokens=cached_tokens,
+                            cache_write_tokens=_wire_cache_write_tokens(cached),
                             extra=self._usage_extra(
                                 affinity_headers,
                                 effective_cache_key,
@@ -6014,7 +6395,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             self._codex_reraise_terminalized(exc, escaped)
 
         try:
-            result = acc.finalize(usage=usage)
+            result = _stamp_requested_tier(acc.finalize(usage=usage), kwargs)
             # The provider dispatch actually completed. A rejected attempt
             # deliberately does NOT reach here, so its dispatch-start evidence
             # stays on record with ``completed`` false rather than vanishing
@@ -6166,11 +6547,11 @@ class CodexOpenAIAdapter(OpenAIAdapter):
     """OpenAIAdapter variant that builds CodexResponsesSession instead of the
     standard server-stateful OpenAIResponsesSession.
 
-    Use this with `provider=codex` only. Always set `use_responses=True,
-    force_responses=True`. `base_url` defaults to the official Codex endpoint
+    Use this with `provider=codex` only. Always set `wire_api="responses"`.
+    `base_url` defaults to the official Codex endpoint
     (`https://chatgpt.com/backend-api/codex`) but is configurable — the `codex`
-    factory forwards an explicit `manifest.llm['base_url']`. Account selection
-    remains inside this adapter; aliases do not create a second implementation.
+    factory forwards an explicit `manifest.llm['base_url']`. It binds one
+    OAuth account (``FixedAccountSource``); account pooling is external.
     """
 
     def __init__(
@@ -6187,7 +6568,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         codex_service_tier: str | None = None,
         codex_account_source: Any = None,
         codex_token_manager_factory: Callable[..., Any] | None = None,
-        codex_fallback_auth_path: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -6197,10 +6577,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             str(codex_service_tier) if codex_service_tier else None
         )
         # Standalone Codex compaction threshold (daemon task
-        # ``context_token_limit``), Codex-only and orthogonal to the generic
-        # ``compact_threshold``/``context_management`` this adapter always
-        # forces to ``None`` in ``_create_responses_session`` (Codex rejects
-        # that parameter). ``None`` here means "no explicit override"; the
+        # ``context_token_limit``), Codex-only. ``None`` here means "no explicit override"; the
         # session resolves its effective threshold from its own
         # ``context_window()`` at check time. Validated eagerly so an invalid
         # daemon task value fails at adapter construction, before any request.
@@ -6249,24 +6626,18 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         self.codex_auth_path_source: str | None = (
             str(codex_auth_path_source) if codex_auth_path_source else None
         )
-        # Account selection is a native Codex adapter concern.  The source is
-        # deliberately retained as a live object so a weighted pool re-reads its
-        # snapshot for every request; no session manager or pool chat wrapper is
-        # involved.
+        # Account binding is a native Codex adapter concern: one fixed account
+        # (``FixedAccountSource``). Pooling is external (subs-pool).
         self._codex_account_source = codex_account_source
         self._codex_token_manager_factory = codex_token_manager_factory
-        self._codex_fallback_auth_path = codex_fallback_auth_path
         self._codex_account_resolution_enabled = not (
-            codex_account_source is None
-            and codex_token_manager_factory is None
-            and codex_fallback_auth_path is None
+            codex_account_source is None and codex_token_manager_factory is None
         )
         # Account state is owned by ``_CodexAccountContext`` instances created
         # below, never by this cached adapter.  This exclusion set is retained
         # only as a construction-time compatibility seam for older callers;
         # live failover state is copied into and kept on each context.
         self._codex_excluded_accounts: set[str] = set()
-        self._codex_current_selection: dict[str, Any] = {}
         self._codex_selection_lock = threading.Lock()
         self._codex_context_owner = object()
         # Optional Codex-only endpoint POOL (molt-boundary shuffle). When this
@@ -6301,7 +6672,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         # on purpose: the offset must not move with molt_count or the pool index
         # would advance twice per molt.
         offset_seed = self._codex_session_anchor or "codex"
-        self._codex_pool_offset = int(
+        self._codex_endpoint_offset = int(
             hashlib.sha256(offset_seed.encode("utf-8")).hexdigest(), 16
         )
 
@@ -6356,8 +6727,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         owned = dict(binding)
         owned["binding_generation"] = context.binding_generation
         context.binding = owned
-        selection = owned.get("selection")
-        context.selection = dict(selection) if isinstance(selection, dict) else {}
         return dict(owned)
 
     @staticmethod
@@ -6365,7 +6734,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         """Forget only this context's account for its next approved epoch."""
         context.binding_generation += 1
         context.binding = {}
-        context.selection = {}
         context.bound_molt_count = None
 
     def _codex_account_epoch_reset(
@@ -6375,99 +6743,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         if reason in {"summarize_delayed", "summarize_rebuild_only"}:
             with context.lock:
                 self._clear_codex_account_binding(context)
-
-    @staticmethod
-    def _valid_codex_quota_percent(value: object) -> bool:
-        return (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and value == value
-            and 0.0 <= float(value) <= 100.0
-        )
-
-    @staticmethod
-    def _codex_snapshot_identity(candidate: object) -> str | None:
-        identity = getattr(candidate, "sha8", None)
-        if not isinstance(identity, str):
-            identity = getattr(candidate, "auth_path_sha8", None)
-        return identity if isinstance(identity, str) else None
-
-    @classmethod
-    def _codex_count_snapshot_matches(
-        cls,
-        snapshot: object,
-        identities: set[str],
-    ) -> int:
-        if not isinstance(snapshot, (list, tuple)):
-            return 0
-        return sum(
-            cls._codex_snapshot_identity(candidate) in identities
-            for candidate in snapshot
-        )
-
-    @classmethod
-    def _codex_no_candidate_diagnostics(
-        cls,
-        *,
-        snapshot: object,
-        context: _CodexAccountContext,
-        zero_accounts: set[str],
-        quota_target_count: int,
-        quota_observed_count: int,
-        quota_read_error_count: int,
-        quota_invalid_count: int,
-        quota_left: dict[str, float] | None,
-        fallback_auth_path: str | None,
-    ) -> dict[str, int | bool]:
-        combined_exclusions = context.excluded_accounts | zero_accounts
-        if snapshot is None:
-            pool_size = 1
-            excluded = min(len(combined_exclusions), 1)
-            zero_quota = 0
-        else:
-            pool_size = len(snapshot) if isinstance(snapshot, (list, tuple)) else 0
-            excluded = cls._codex_count_snapshot_matches(
-                snapshot, combined_exclusions
-            )
-            zero_quota = cls._codex_count_snapshot_matches(snapshot, zero_accounts)
-        return {
-            "codex_account_pool_size": pool_size,
-            "codex_account_excluded_count": excluded,
-            "codex_account_zero_quota_count": zero_quota,
-            "codex_account_eligible_count": max(pool_size - excluded, 0),
-            "codex_account_quota_target_count": quota_target_count,
-            "codex_account_quota_observed_count": quota_observed_count,
-            "codex_account_quota_read_error_count": quota_read_error_count,
-            "codex_account_quota_invalid_count": quota_invalid_count,
-            "codex_account_quota_snapshot_complete": quota_left is not None,
-            "codex_account_legacy_fallback_allowed": (
-                fallback_auth_path is not None
-                and isinstance(snapshot, (list, tuple))
-                and not snapshot
-            ),
-        }
-
-    def _refresh_codex_bound_quota(
-        self, context: _CodexAccountContext
-    ) -> dict[str, Any]:
-        """Refresh safe quota telemetry without redrawing this context."""
-        binding = dict(context.binding)
-        selection = dict(binding.get("selection") or {})
-        auth_ref = binding.get("auth_ref")
-        if auth_ref:
-            try:
-                from lingtai.llm.openai.codex_quota import read_remaining_percent
-                percent = read_remaining_percent(auth_ref)
-            except Exception:
-                percent = None
-            if self._valid_codex_quota_percent(percent):
-                selection["quota_left"] = round(float(percent), 3)
-            else:
-                selection.pop("quota_left", None)
-        binding["selection"] = selection
-        context.binding = binding
-        context.selection = dict(selection)
-        return binding
 
     def _publish_legacy_codex_binding(self, binding: dict[str, Any]) -> None:
         """Preserve the old private direct-selection test seam.
@@ -6494,22 +6769,16 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 client=self._client,
                 excluded_accounts=set(self._codex_excluded_accounts),
             )
-        model = context.model
-        # AccountSource/token refresh may touch shared pool/auth files. Serialize
-        # that narrow operation, but keep all resulting state on ``context``.
+        # Token refresh may touch the shared auth file. Serialize that narrow
+        # operation, but keep all resulting state on ``context``.
         with self._codex_selection_lock:
             source = self._codex_account_source
-            if (
-                source is None
-                and self._codex_fallback_auth_path is None
-                and self._codex_token_manager_factory is None
-            ):
+            if source is None and self._codex_token_manager_factory is None:
                 binding = {
                     "api_key": self._client_kwargs.get("api_key"),
                     "account_id": self.codex_account_id,
                     "auth_path_sha8": self.codex_auth_path_sha8,
                     "auth_path_source": self.codex_auth_path_source,
-                    "selection": dict(context.selection),
                 }
                 binding = self._set_codex_account_binding(context, binding)
                 context.bound_molt_count = self._current_molt_count()
@@ -6517,110 +6786,15 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                     self._publish_legacy_codex_binding(binding)
                 return binding
             if source is None:
+                from lingtai.auth.codex import default_codex_token_path
                 from lingtai.auth.codex_account_source import FixedAccountSource
-                source = FixedAccountSource(self._codex_fallback_auth_path or "")
+                source = FixedAccountSource(str(default_codex_token_path()))
 
-            quota_left: dict[str, float] | None = None
-            observed_quota: dict[str, float] = {}
-            zero_accounts: set[str] = set()
-            quota_target_count = 0
-            quota_read_error_count = 0
-            quota_invalid_count = 0
-            snapshot = None
-            if callable(getattr(source, "snapshot", None)):
-                snapshot = source.snapshot()
-                targets = source.quota_targets(
-                    exclude=context.excluded_accounts,
-                    snapshot=snapshot,
-                )
-                quota_target_count = len(targets)
-                complete = bool(targets)
-                quota_left = {}
-                try:
-                    from lingtai.llm.openai.codex_quota import read_remaining_percent
-                    for auth_ref, auth_sha8 in targets:
-                        try:
-                            percent = read_remaining_percent(auth_ref)
-                        except Exception:
-                            quota_read_error_count += 1
-                            complete = False
-                            continue
-                        if not self._valid_codex_quota_percent(percent):
-                            quota_invalid_count += 1
-                            complete = False
-                            continue
-                        fraction = float(percent) / 100.0
-                        observed_quota[auth_sha8] = fraction
-                        quota_left[auth_sha8] = fraction
-                        if fraction <= 0.0:
-                            zero_accounts.add(auth_sha8)
-                except Exception:
-                    complete = False
-                if not complete:
-                    quota_left = None
-
-            excluded = context.excluded_accounts | zero_accounts
-            try:
-                if snapshot is None:
-                    candidate = source.select(exclude=excluded or None)
-                    pool_size = 1
-                else:
-                    candidate = source.select(
-                        exclude=excluded or None,
-                        quota_left_snapshot=quota_left,
-                        snapshot=snapshot,
-                    )
-                    pool_size = len(snapshot)
-            except Exception as exc:
-                # Only a truly empty configured pool may use the legacy account.
-                if (
-                    self._codex_fallback_auth_path is None
-                    or snapshot is None
-                    or not isinstance(snapshot, (list, tuple))
-                    or snapshot
-                ):
-                    from lingtai.auth.codex_account_source import NoCandidateError
-
-                    if isinstance(exc, NoCandidateError):
-                        diagnostics = self._codex_no_candidate_diagnostics(
-                            snapshot=snapshot,
-                            context=context,
-                            zero_accounts=zero_accounts,
-                            quota_target_count=quota_target_count,
-                            quota_observed_count=len(observed_quota),
-                            quota_read_error_count=quota_read_error_count,
-                            quota_invalid_count=quota_invalid_count,
-                            quota_left=quota_left,
-                            fallback_auth_path=self._codex_fallback_auth_path,
-                        )
-                        raise exc.with_diagnostics(diagnostics) from exc
-                    raise
-                from lingtai.auth.codex_account_source import FixedAccountSource
-                fallback = FixedAccountSource(self._codex_fallback_auth_path)
-                candidate = fallback.select()
-                pool_size = 1
-                quota_left = None
-                selection_fallback = "legacy_default"
-            else:
-                selection_fallback = None
-
+            # Raises NoCandidateError when the one account is excluded.
+            candidate = source.select(exclude=context.excluded_accounts or None)
             manager = self._new_codex_token_manager(candidate.auth_ref)
             access_token = manager.get_access_token()
             account_id = manager.get_account_id()
-            auth_source = "configured" if selection_fallback is None else selection_fallback
-            selection: dict[str, Any] = {
-                "source_ref": candidate.source_ref,
-                "source_index": candidate.source_index,
-                "pool_size": pool_size,
-                "weight": candidate.weight,
-                "auth_path_sha8": candidate.auth_path_sha8,
-                "model_scope": model if pool_size > 1 else None,
-            }
-            fraction = (quota_left or observed_quota).get(candidate.auth_path_sha8)
-            if fraction is not None:
-                selection["quota_left"] = round(fraction * 100.0, 3)
-            if selection_fallback is not None:
-                selection["fallback"] = selection_fallback
             context.client.api_key = access_token
             binding = self._set_codex_account_binding(
                 context,
@@ -6628,9 +6802,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                     "api_key": access_token,
                     "account_id": account_id,
                     "auth_path_sha8": candidate.auth_path_sha8,
-                    "auth_path_source": auth_source,
+                    "auth_path_source": "configured",
                     "auth_ref": candidate.auth_ref,
-                    "selection": dict(selection),
                 },
             )
             context.bound_molt_count = self._current_molt_count()
@@ -6651,7 +6824,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             if not context.binding:
                 binding = self._select_codex_account(context)
             else:
-                binding = self._refresh_codex_bound_quota(context)
+                binding = dict(context.binding)
             if apply_binding is not None:
                 apply_binding(binding)
             return binding
@@ -6729,7 +6902,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         from lingtai.auth.codex import _is_usage_limit_reached_error
         if _is_usage_limit_reached_error(exc):
             with context.lock:
-                identity = context.selection.get("auth_path_sha8")
+                identity = context.binding.get("auth_path_sha8")
                 if identity:
                     context.excluded_accounts.add(str(identity))
                 # AED rebuild/replay may reuse this interface/context and will
@@ -6809,7 +6982,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             return self._codex_fixed_base_url
         if len(pool) == 1:
             return pool[0]
-        idx = (self._codex_pool_offset + self._current_molt_count()) % len(pool)
+        idx = (self._codex_endpoint_offset + self._current_molt_count()) % len(pool)
         return pool[idx]
 
     def _repoint_client_if_needed(self, endpoint: str | None) -> None:
@@ -6946,15 +7119,13 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         # Omitted/``default`` thinking sends an explicit
         # ``reasoning.effort = "xhigh"`` instead of omitting the field
         # (omitting it would fall back to the Codex backend's own, lower
-        # default). Explicit levels pass through unchanged; the generic OpenAI
-        # Responses path shares the same explicit ``xhigh`` default (see
-        # ``_responses_reasoning_kwargs``).
+        # default). Explicit levels pass through unchanged. This default is
+        # Codex-only: the generic ``openai`` Responses path omits the field
+        # for ``default`` (see ``_responses_reasoning_kwargs``).
         if thinking in (None, "default"):
             thinking = "xhigh"
         extra_kwargs.update(_responses_reasoning_kwargs(thinking))
 
-        # Codex's backend doesn't accept context_management compaction —
-        # leave compact_threshold unset.
         # service_tier: common Codex capability (REST + WS).  Omitted when None.
         if self._codex_service_tier is not None:
             extra_kwargs["service_tier"] = self._codex_service_tier
@@ -6968,7 +7139,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             tool_choice=tool_choice,
             extra_kwargs=extra_kwargs,
             previous_response_id=None,
-            compact_threshold=None,
             interface=interface,
             # On the normal/root path this resolves to the SAME per-agent
             # (anchor, molt_count) hash as session_id / thread_id (see
@@ -6988,7 +7158,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             account_id=self.codex_account_id,
             codex_auth_path_sha8=self.codex_auth_path_sha8,
             codex_auth_path_source=self.codex_auth_path_source,
-            codex_pool_selection=context.selection,
             codex_account_error_callback=(
                 (lambda exc, partial: self._codex_account_error(context, exc, partial))
                 if self._codex_account_resolution_enabled

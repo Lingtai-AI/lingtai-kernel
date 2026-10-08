@@ -27,7 +27,7 @@ Pinned pytest commands must run from the repo root with the project's Python.
 - **id**: SN001
 - **title**: snapshot capture stages all changes and returns None for a clean tree or operational failure
 - **guards**: `snapshot-source-revision` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch git workdir `<scratch>`
 - **estimate**: ≈ 20 minutes
 

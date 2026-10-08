@@ -32,7 +32,7 @@ Pinned pytest commands must run from the repo root with the project's Python.
 - **id**: PY001
 - **title**: Psyche manuals and settings are read-only; durable changes apply only through file + rebuild
 - **guards**: `psyche-tool-contract` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
 - **estimate**: ≈ 15 minutes
 
@@ -40,14 +40,18 @@ Pinned pytest commands must run from the repo root with the project's Python.
 1. From `<repo>`, run `python -m pytest -q tests/test_psyche_family.py tests/test_psyche_prompt_settings.py` and capture the outcome.
 2. Call `pad | lingtai | knowledge | skills | manual` with strict empty input;
    confirm each returns its intended manual.
-3. Call `settings` with strict empty input and record the eight rows. Edit the
+3. Call `settings` with strict empty input and record the six rows. Edit the
    Psyche owner document without reconstructing, then make it malformed;
    confirm SHOW remains available and unchanged. Restore a valid owner document,
    reconstruct, and confirm the focused provider assertion sees the newly
    applied snapshot. Call settings with any input key and record the rejection.
    Hash all prompt/source files around each SHOW call.
-4. Make a durable change with `file.edit` on the domain's own source and confirm the prompt section does not change until one explicit `context(action="rebuild", input={}, reasoning="...")` (or passive refresh/molt) is applied.
-5. Inspect the focused prompt-plan tests and confirm the three static sections are
+4. Make a durable change with `shell` (a verified exact replacement on the domain's own source, read back afterwards) and confirm the prompt section does not change until one explicit `context(action="rebuild", input={}, reasoning="...")` (or passive refresh/molt) is applied.
+5. Call `covenant` with strict empty input. Confirm the complete current loaded
+   body matches configured custom text or mirror fallback, is absent from the
+   resident prompt, and remains unchanged on ambient edits and failed publication.
+   Confirm no source writes or lifecycle calls occur; invalid input is rejected.
+6. Inspect the focused prompt-plan tests and confirm the three static sections are
    composed in order as one immutable candidate, startup passes the exact same
    object through reconstruction, and a failed final flush restores that plan
    with the prior generation's existing rollback state.
@@ -57,15 +61,15 @@ Pinned pytest commands must run from the repo root with the project's Python.
       settings discovery, strict owner parsing, and read-only behavior.
 - [ ] Step 2: the five manual bodies are nonempty and distinct.
 - [ ] Step 3: success is exactly `pad`, `pad_file`, `base_prompt`,
-      `base_prompt_file`, `covenant`, `covenant_file`, `comment`, then
-      `comment_file`; each row has exactly `key,current,default,configurable,comment`,
+      `base_prompt_file`, `covenant`, then `covenant_file`; each row has exactly `key,current,default,configurable,comment`,
       both values are `<redacted>`, an ambient source edit or malformed owner
       document cannot change/make SHOW
       unavailable before successful reconstruction, and invalid input fails
       without rows. No `psyche` action authors, edits, pins, installs, migrates,
       rescans, writes, or reloads — hashes are unchanged.
 - [ ] Step 4: file mutation never hot-loads the prompt; the prompt section updates only after an explicit rebuild or passive reconstruction.
-- [ ] Step 5: the static plan is read/applied once per reconstruction, cannot be
+- [ ] Step 5: Covenant body is exact, current, read-only, and separately disclosed.
+- [ ] Step 6: the static plan is read/applied once per reconstruction, cannot be
       mutated through its dataclass/tuple fields, and a failed final flush
       restores the prior plan and the existing rollback state.
 

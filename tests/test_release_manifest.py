@@ -54,6 +54,17 @@ def test_parse_wheel_filename_rejects_malformed():
     assert parse_wheel_filename("lingtai-0.16.4.whl") is None
 
 
+def test_parse_wheel_filename_accepts_universal_wheel():
+    parsed = parse_wheel_filename("lingtai-0.16.4-py3-none-any.whl")
+    assert parsed == {
+        "name": "lingtai",
+        "version": "0.16.4",
+        "python_tag": "py3",
+        "abi_tag": "none",
+        "platform_tag": "any",
+    }
+
+
 def test_parse_sdist_filename():
     parsed = parse_sdist_filename("lingtai-0.16.4.tar.gz")
     assert parsed == {"name": "lingtai", "version": "0.16.4"}
@@ -296,25 +307,41 @@ def test_manifest_from_dict_round_trips():
 # ---------------------------------------------------------------------------
 
 
-def _write_fixture_wheel(path: Path, sidecar: bool) -> None:
+def _write_fixture_wheel(path: Path, *, native_payload: bool = False) -> None:
     """A minimal real zip so classify/sha256 logic runs against real bytes.
-    Sidecar presence is irrelevant here because these tests pass
-    --skip-sidecar-check; the sidecar contract itself is covered by the
-    existing tests/test_wheel_sidecar_smoke.py suite.
+
+    The generator's universal-wheel check reads the archive, so the fixture
+    places ``lingtai/`` at the root like a real pure wheel; ``native_payload``
+    plants the exact entry a pure wheel must never carry.
     """
     import zipfile
 
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr("lingtai/__init__.py", "")
-        if sidecar:
-            zf.writestr("lingtai/bin/lingtai-search-sidecar", b"fake-binary")
+        if native_payload:
+            zf.writestr("lingtai/bin/native-helper", b"fake-binary")
+
+
+def _run_generator(assets: Path, tmp_path: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            sys.executable, str(GENERATE_SCRIPT),
+            "--assets-dir", str(assets),
+            "--kernel-version", "0.16.4",
+            "--kernel-tag", "v0.16.4",
+            "--commit", "a" * 40,
+            "--generated-at", "2026-07-15T00:00:00Z",
+            "--out-manifest", str(tmp_path / "manifest.json"),
+            "--out-sha256sums", str(tmp_path / "SHA256SUMS"),
+        ],
+        capture_output=True, text=True,
+    )
 
 
 def test_generate_release_manifest_cli_end_to_end(tmp_path: Path):
     assets = tmp_path / "assets"
     assets.mkdir()
-    _write_fixture_wheel(assets / "lingtai-0.16.4-cp312-cp312-macosx_11_0_arm64.whl", sidecar=True)
-    _write_fixture_wheel(assets / "lingtai-0.16.4-cp313-cp313-manylinux_2_28_x86_64.whl", sidecar=True)
+    _write_fixture_wheel(assets / "lingtai-0.16.4-py3-none-any.whl")
     (assets / "lingtai-0.16.4.tar.gz").write_bytes(b"fake-sdist-bytes")
 
     out_manifest = tmp_path / "manifest.json"
@@ -330,7 +357,6 @@ def test_generate_release_manifest_cli_end_to_end(tmp_path: Path):
             "--generated-at", "2026-07-15T00:00:00Z",
             "--out-manifest", str(out_manifest),
             "--out-sha256sums", str(out_sums),
-            "--skip-sidecar-check",
         ],
         capture_output=True, text=True,
     )
@@ -339,37 +365,38 @@ def test_generate_release_manifest_cli_end_to_end(tmp_path: Path):
     data = json.loads(out_manifest.read_text())
     validate_manifest_dict(data)  # re-validate the emitted file with the shared validator
     assert data["kernel_tag"] == "v0.16.4"
-    assert len(data["artifacts"]) == 3
+    assert len(data["artifacts"]) == 2
+    wheel = next(a for a in data["artifacts"] if a["kind"] == "wheel")
+    assert (wheel["python_tag"], wheel["abi_tag"], wheel["platform_tag"]) == ("py3", "none", "any")
     kinds = {a["kind"] for a in data["artifacts"]}
     assert kinds == {"wheel", "sdist"}
 
     sums_text = out_sums.read_text()
     assert "lingtai-0.16.4.tar.gz" in sums_text
-    assert sums_text.count("\n") == 3  # 3 artifacts, trailing newline
+    assert sums_text.count("\n") == 2  # 2 artifacts, trailing newline
 
 
-def test_generate_release_manifest_rejects_plain_fallback_wheel(tmp_path: Path):
+def test_generate_release_manifest_rejects_platform_specific_wheel(tmp_path: Path):
+    """A platform/interpreter-tagged wheel means a native payload crept back in."""
     assets = tmp_path / "assets"
     assets.mkdir()
-    _write_fixture_wheel(assets / "lingtai-0.16.4-py3-none-any.whl", sidecar=False)
+    _write_fixture_wheel(assets / "lingtai-0.16.4-cp312-cp312-macosx_11_0_arm64.whl")
     (assets / "lingtai-0.16.4.tar.gz").write_bytes(b"fake-sdist-bytes")
 
-    result = subprocess.run(
-        [
-            sys.executable, str(GENERATE_SCRIPT),
-            "--assets-dir", str(assets),
-            "--kernel-version", "0.16.4",
-            "--kernel-tag", "v0.16.4",
-            "--commit", "a" * 40,
-            "--generated-at", "2026-07-15T00:00:00Z",
-            "--out-manifest", str(tmp_path / "manifest.json"),
-            "--out-sha256sums", str(tmp_path / "SHA256SUMS"),
-            "--skip-sidecar-check",
-        ],
-        capture_output=True, text=True,
-    )
+    result = _run_generator(assets, tmp_path)
     assert result.returncode != 0
-    assert "py3-none-any" in result.stderr or "py3-none-any" in result.stdout
+    assert "py3-none-any" in result.stderr
+
+
+def test_generate_release_manifest_rejects_universal_wheel_with_native_payload(tmp_path: Path):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    _write_fixture_wheel(assets / "lingtai-0.16.4-py3-none-any.whl", native_payload=True)
+    (assets / "lingtai-0.16.4.tar.gz").write_bytes(b"fake-sdist-bytes")
+
+    result = _run_generator(assets, tmp_path)
+    assert result.returncode != 0
+    assert "lingtai/bin/" in result.stderr
 
 
 def test_generate_release_manifest_rejects_no_wheels(tmp_path: Path):
@@ -377,20 +404,7 @@ def test_generate_release_manifest_rejects_no_wheels(tmp_path: Path):
     assets.mkdir()
     (assets / "lingtai-0.16.4.tar.gz").write_bytes(b"fake-sdist-bytes")
 
-    result = subprocess.run(
-        [
-            sys.executable, str(GENERATE_SCRIPT),
-            "--assets-dir", str(assets),
-            "--kernel-version", "0.16.4",
-            "--kernel-tag", "v0.16.4",
-            "--commit", "a" * 40,
-            "--generated-at", "2026-07-15T00:00:00Z",
-            "--out-manifest", str(tmp_path / "manifest.json"),
-            "--out-sha256sums", str(tmp_path / "SHA256SUMS"),
-            "--skip-sidecar-check",
-        ],
-        capture_output=True, text=True,
-    )
+    result = _run_generator(assets, tmp_path)
     assert result.returncode != 0
     assert "no *.whl" in result.stderr
 
@@ -398,23 +412,10 @@ def test_generate_release_manifest_rejects_no_wheels(tmp_path: Path):
 def test_generate_release_manifest_rejects_multiple_sdists(tmp_path: Path):
     assets = tmp_path / "assets"
     assets.mkdir()
-    _write_fixture_wheel(assets / "lingtai-0.16.4-cp312-cp312-macosx_11_0_arm64.whl", sidecar=True)
+    _write_fixture_wheel(assets / "lingtai-0.16.4-py3-none-any.whl")
     (assets / "lingtai-0.16.4.tar.gz").write_bytes(b"one")
     (assets / "lingtai-0.16.4-take2.tar.gz").write_bytes(b"two")
 
-    result = subprocess.run(
-        [
-            sys.executable, str(GENERATE_SCRIPT),
-            "--assets-dir", str(assets),
-            "--kernel-version", "0.16.4",
-            "--kernel-tag", "v0.16.4",
-            "--commit", "a" * 40,
-            "--generated-at", "2026-07-15T00:00:00Z",
-            "--out-manifest", str(tmp_path / "manifest.json"),
-            "--out-sha256sums", str(tmp_path / "SHA256SUMS"),
-            "--skip-sidecar-check",
-        ],
-        capture_output=True, text=True,
-    )
+    result = _run_generator(assets, tmp_path)
     assert result.returncode != 0
     assert "exactly one sdist" in result.stderr

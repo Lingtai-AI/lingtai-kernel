@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from lingtai.kernel.base_agent import turn
 from lingtai.kernel.base_agent.turn import (
     _process_response,
     _restore_tool_results_after_continuation_failure,
@@ -347,8 +348,151 @@ def test_process_response_third_identical_tool_error_still_continues(tmp_path):
     assert not any(event.startswith("repeated_tool_error") for event, _ in agent.logs)
     assert not (tmp_path / ".notification" / "repeated_tool_error.json").exists()
 
-def test_process_response_logs_cancel_before_tool_dispatch():
-    agent = _FakeAgent()
+
+@pytest.mark.parametrize("tool_name", ["send_message", "send_message_with_attachments"])
+def test_empty_completion_after_sent_and_covered_puffo_reply_settles_turn(
+    tmp_path, tool_name,
+):
+    """A delivered answer followed by Codex's empty final must not AED-retry."""
+    call = ToolCall(
+        id="call_reply",
+        name=tool_name,
+        args={"channel": "ch_test", "text": "42", "covers": ["msg_question"]},
+    )
+    result = ToolResultBlock(
+        id=call.id,
+        name=call.name,
+        content={
+            "status": "success",
+            "text": '[send_result context_version=1 state="sent" attempted=true '
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
+        },
+    )
+    agent = _FakeAgent(working_dir=tmp_path)
+    agent._chat = _FakeChat([
+        ToolCallBlock(id=call.id, name=call.name, args=call.args),
+    ])
+    agent._executor = _ProcessExecutor(result)
+    agent._cancel_event = threading.Event()
+    agent._on_tool_result_hook = None
+    agent._intermediate_text_streamed = True
+    agent._sent_tracker = _NoopSentTracker()
+    agent._session = _ContinuingSession(agent._chat, [
+        LLMResponse(text="", tool_calls=[], thoughts=[]),
+    ])
+
+    outcome = _process_response(
+        agent,
+        LLMResponse(text="", tool_calls=[call]),
+        ledger_source="test",
+    )
+
+    assert outcome == {"text": "", "failed": False, "errors": []}
+    assert len(agent._session.sent) == 1
+    assert not any(event == "empty_llm_response" for event, _ in agent.logs)
+
+
+@pytest.mark.parametrize(
+    ("receipt", "extra_args"),
+    [
+        (
+            '[send_result context_version=1 state="sent" attempted=true '
+            'covers_recorded=["msg_question"] message_id="msg_answer"]',
+            {},
+        ),
+        (
+            '[send_result context_version=1 state="sent" attempted=true '
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=1 message_id="msg_answer"]',
+            {},
+        ),
+        (
+            '[send_result context_version=1 state="held" attempted=true '
+            'covers_recorded=[] covers_dropped=["msg_question"]]',
+            {},
+        ),
+        (
+            '[send_result context_version=1 state="sent" attempted=true '
+            'covers_recorded=[] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
+            {},
+        ),
+        (
+            '[send_result context_version=1 state="sent" attempted=true '
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
+            {"covers": ["msg_question", "msg_second_question"]},
+        ),
+        (
+            '[send_result context_version=1 state="sent" attempted=true '
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
+            {"root_id": "msg_thread", "visibility_level": "default"},
+        ),
+        (
+            '[send_result context_version=1 state="sent" attempted=true '
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
+            {"visibility_level": "agent_only"},
+        ),
+        (
+            '[send_result context_version=1 state="sent" attempted=true '
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]\n'
+            '[note context_version=1] content="sent hidden"',
+            {"visibility_level": "human"},
+        ),
+    ],
+)
+def test_empty_completion_still_retries_without_visible_settled_reply(
+    tmp_path, receipt, extra_args,
+):
+    args = {"channel": "ch_test", "text": "42", "covers": ["msg_question"]}
+    args.update(extra_args)
+    call = ToolCall(id="call_reply", name="send_message", args=args)
+    result = ToolResultBlock(
+        id=call.id,
+        name=call.name,
+        content={"status": "success", "text": receipt},
+    )
+    agent = _FakeAgent(working_dir=tmp_path)
+    agent._chat = _FakeChat([
+        ToolCallBlock(id=call.id, name=call.name, args=call.args),
+    ])
+    agent._executor = _ProcessExecutor(result)
+    agent._cancel_event = threading.Event()
+    agent._on_tool_result_hook = None
+    agent._intermediate_text_streamed = True
+    agent._sent_tracker = _NoopSentTracker()
+    agent._session = _ContinuingSession(agent._chat, [
+        LLMResponse(text="", tool_calls=[], thoughts=[]),
+    ])
+
+    with pytest.raises(turn.EmptyLLMResponseError):
+        _process_response(agent, LLMResponse(tool_calls=[call]), ledger_source="test")
+
+
+def test_concurrent_inbox_admission_invalidates_send_coverage_attestation():
+    send = ToolCall(
+        id="call_reply", name="send_message",
+        args={"channel": "ch_test", "text": "42", "covers": ["msg_question"]},
+    )
+    read = ToolCall(id="call_read", name="read_inbox", args={})
+    receipt = ToolResultBlock(
+        id=send.id, name=send.name,
+        content={
+            "status": "success",
+            "text": '[send_result context_version=1 state="sent" '
+            'covers_recorded=["msg_question"] coverage_turn_id="turn-1" '
+            'active_human_uncovered_count=0 message_id="msg_answer"]',
+        },
+    )
+    assert not turn._settled_visible_puffo_reply([send, read], [receipt])
+
+
+def test_process_response_logs_cancel_before_tool_dispatch(tmp_path):
+    agent = _FakeAgent(working_dir=tmp_path)
     real_result = ToolResultBlock(
         id="call_1",
         name="bash",
@@ -361,6 +505,7 @@ def test_process_response_logs_cancel_before_tool_dispatch():
     agent._on_tool_result_hook = None
     agent._intermediate_text_streamed = True
     agent._sent_tracker = _NoopSentTracker()
+    agent._chat.interface.tool_result_recovery_lookup = lambda _call: real_result
 
     response = LLMResponse(
         text="",
@@ -373,6 +518,18 @@ def test_process_response_logs_cancel_before_tool_dispatch():
     assert agent._executor.calls == []
     assert agent._session.sent == []
     assert agent._cancel_event.is_set()
+    assert not agent._chat.interface.has_pending_tool_calls()
+    assert agent.saved == 1
+    synthetic = agent._chat.interface.entries[-1].content[0]
+    assert synthetic.synthesized is True
+    assert synthetic.content != real_result.content
+    assert "NOT dispatched" in synthetic.content
+    assert "No side effects occurred" in synthetic.content
+    assert "retry" in synthetic.content.lower()
+    restored = ChatInterface.from_dict(json.loads(json.dumps(agent._chat.interface.to_dict())))
+    restored.enforce_tool_pairing()
+    assert not restored.has_pending_tool_calls()
+    assert restored.entries[-1].content[0].content == synthetic.content
 
     names = [name for name, _ in agent.logs]
     assert names == ["tool_calls_not_dispatched"]

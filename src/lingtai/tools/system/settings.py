@@ -127,23 +127,11 @@ SYSTEM_INIT_SETTING_SPECS: tuple[_InitSettingSpec, ...] = (
         comment=_LLM_COMMENT,
         sensitive=True,
     ),
-    _init(
-        "llm.compact_threshold",
-        "/manifest/llm/compact_threshold",
-        None,
-        comment=_LLM_COMMENT,
-    ),
     _init("llm.wire_api", "/manifest/llm/wire_api", None, comment=_LLM_COMMENT),
     _init(
         "llm.inject_reasoning_fallback",
         "/manifest/llm/inject_reasoning_fallback",
         True,
-        comment=_LLM_COMMENT,
-    ),
-    _init(
-        "llm.reasoning_effort_vocab",
-        "/manifest/llm/reasoning_effort_vocab",
-        None,
         comment=_LLM_COMMENT,
     ),
     _init(
@@ -159,7 +147,6 @@ SYSTEM_INIT_SETTING_SPECS: tuple[_InitSettingSpec, ...] = (
         comment=_LLM_COMMENT,
     ),
     _init("llm.thinking", "/manifest/llm/thinking", None, comment=_LLM_COMMENT),
-    _init("llm.api_compat", "/manifest/llm/api_compat", None, comment=_LLM_COMMENT),
     _init(
         "llm.codex_session_anchor",
         "/manifest/llm/codex_session_anchor",
@@ -171,13 +158,6 @@ SYSTEM_INIT_SETTING_SPECS: tuple[_InitSettingSpec, ...] = (
     _init(
         "llm.codex_auth_path",
         "/manifest/llm/codex_auth_path",
-        None,
-        comment=_LLM_COMMENT,
-        sensitive=True,
-    ),
-    _init(
-        "llm.codex_auth_pool_path",
-        "/manifest/llm/codex_auth_pool_path",
         None,
         comment=_LLM_COMMENT,
         sensitive=True,
@@ -216,7 +196,6 @@ SYSTEM_INIT_CONCRETE_TOOL_EXCLUSIONS = frozenset(
         # Email owns these mail-adapter subscription paths. Its owner-local
         # discovery row fully redacts both current and default path lists.
         "/manifest/pseudo_agent_subscriptions",
-        "/manifest/soul",
     }
 )
 SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
@@ -228,8 +207,6 @@ SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
         "/base_prompt_file",
         "/covenant",
         "/covenant_file",
-        "/comment",
-        "/comment_file",
         "/soul",
         "/soul_file",
         "/principle",
@@ -240,6 +217,9 @@ SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
         "/substrate_file",
         "/brief",
         "/brief_file",
+        # The Soul subsystem was removed; ``manifest.soul`` is a recognized-
+        # and-ignored legacy block, never a System row.
+        "/manifest/soul",
         "/manifest/activeness",
         "/manifest/aed_timeout",
         "/manifest/context_limit",
@@ -257,6 +237,15 @@ SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
         "/manifest/stamina",
         "/manifest/llm/codex_thread_salt",
         "/manifest/llm/context_limit",
+        # Retired generic Responses auto-compaction; recognized-and-ignored.
+        "/manifest/llm/compact_threshold",
+        # Retired in-kernel Codex account pool; pooling is external (subs-pool).
+        "/manifest/llm/codex_auth_pool_path",
+        # Retired per-vendor wire routing (four-family collapse); recognized-
+        # and-ignored legacy keys, never System rows.
+        "/manifest/llm/api_compat",
+        "/manifest/llm/reasoning_effort_vocab",
+        "/manifest/llm/use_responses_api",
     }
 )
 
@@ -324,6 +313,12 @@ SYSTEM_ENVIRONMENT_SETTING_SPECS: tuple[_EnvironmentSettingSpec, ...] = (
         ("LINGTAI_TOOL_PROSE_SECTION_ENABLED",),
         False,
         "tool_prose",
+    ),
+    _EnvironmentSettingSpec(
+        "prompt.memory_length_warning_chars",
+        ("LINGTAI_MEMORY_LENGTH_WARNING_CHARS",),
+        50000,
+        "memory_length",
     ),
     _EnvironmentSettingSpec(
         "prompt.system_prompt_pressure_ratio",
@@ -428,14 +423,11 @@ SYSTEM_ENVIRONMENT_CLASSIFICATION: dict[str, frozenset[str]] = {
             "LINGTAI_DAEMON_MAX_TURNS",
             "LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS",
             "LINGTAI_FEISHU_CONFIG",
-            "LINGTAI_FILE_IO_BACKEND",
-            "LINGTAI_FILE_IO_SIDECAR",
             "LINGTAI_IMAP_CONFIG",
             "LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS",
             "LINGTAI_NOTIFICATION_MAX_CHARS",
-            "LINGTAI_SEARCH_SIDECAR",
+            "LINGTAI_PUFFO_V0_REGISTRY",
             "LINGTAI_SHELL",
-            "LINGTAI_SOUL_FLOW_ENABLED",
             "LINGTAI_TASKCARD_POLL_INTERVAL",
             "LINGTAI_TELEGRAM_CONFIG",
             "LINGTAI_TOOL_TIMEOUT_MAX_SECONDS",
@@ -463,12 +455,6 @@ SYSTEM_ENVIRONMENT_CLASSIFICATION: dict[str, frozenset[str]] = {
             "LINGTAI_RUNTIME_VENV",
         }
     ),
-    "build_only": frozenset(
-        {
-            "LINGTAI_REQUIRE_RUST_BUILD",
-            "LINGTAI_SKIP_RUST_BUILD",
-        }
-    ),
     "test_only": frozenset(
         {
             "LINGTAI_AVATAR_BOOT_WAIT_SECONDS",
@@ -478,7 +464,6 @@ SYSTEM_ENVIRONMENT_CLASSIFICATION: dict[str, frozenset[str]] = {
             "LINGTAI_DAEMON_SUPERVISOR_TEST_FAKE_LLM_SLEEP",
             "LINGTAI_FAKE_APP_SERVER_MODE",
             "LINGTAI_FAKE_CLI_REPORT",
-            "LINGTAI_RUN_LIVE_KIMI_CODE",
             "LINGTAI_TEST_CONFIG",
             "LINGTAI_TEST_FAKE_CLAUDE_SIGNAL_RECORD",
         }
@@ -796,7 +781,7 @@ def _policy_defaults() -> dict[str, Any]:
     return {
         "context_limit": defaults.context_limit,
         "max_rpm": DEFAULT_MAX_RPM,
-        "streaming": False,
+        "streaming": True,
         "aed_timeout": defaults.aed_timeout,
         "max_aed_attempts": defaults.max_aed_attempts,
         "snapshot_interval": defaults.snapshot_interval,
@@ -879,37 +864,21 @@ def _openai_adapter_default(parameter: str) -> Any:
     return default
 
 
-def _custom_adapter_default(parameter: str) -> Any:
-    """Read an effective constructor default from the canonical custom adapter."""
-    from inspect import Parameter, signature
-
-    from lingtai.llm.custom.adapter import create_custom_adapter
-
-    default = signature(create_custom_adapter).parameters[parameter].default
-    if default is Parameter.empty:
-        raise RuntimeError("custom adapter setting has no constructor default")
-    return default
-
-
 @dataclass(frozen=True, slots=True)
 class _SelectedLLMRoute:
     factory: str
-    api_compat: Any = None
 
 
 # This narrow classifier covers only selected-factory LLM axes; it reads the
 # actual registered factory identities and never constructs an adapter or
-# reads credentials. That naturally keeps every alias bound to _custom/_codex
-# on the same route without maintaining a second alias registry here.
+# reads credentials. The four registered families are ``openai``,
+# ``anthropic``, ``codex``, and ``claude-code``.
 _SELECTED_FACTORY_LLM_SETTING_KEYS = frozenset(
     {
-        "llm.compact_threshold",
         "llm.wire_api",
         "llm.inject_reasoning_fallback",
-        "llm.reasoning_effort_vocab",
         "llm.prompt_cache_namespace",
         "llm.service_tier",
-        "llm.api_compat",
     }
 )
 
@@ -947,30 +916,9 @@ def _selected_llm_route(
     selected = factories.get(provider)
     if selected is None:
         raise RuntimeError("selected LLM provider has no registered factory")
-    if selected is factories.get("openai"):
-        return _SelectedLLMRoute("openai")
-    if selected is factories.get("custom"):
-        # Runtime drops authored api_compat=null before _custom. Omitted/null
-        # therefore both take its OpenAI default and forward preserved compact
-        # null plus any authored non-null reasoning vocabulary.
-        effective_compat = normalized.get(
-            "api_compat", _custom_adapter_default("api_compat")
-        )
-        if effective_compat == "openai":
-            return _SelectedLLMRoute("custom_openai", effective_compat)
-        if effective_compat == "anthropic" or effective_compat == "gemini":
-            return _SelectedLLMRoute("custom_other", effective_compat)
-        # create_custom_adapter sends every other admitted value (including
-        # non-lowercase/structured values) to OpenAIAdapter, but _register's
-        # _custom does not forward compact/reasoning axes unless compat is the
-        # exact lowercase string "openai".
-        return _SelectedLLMRoute("custom_openai_fallback", "openai")
-    if selected is factories.get("deepseek"):
-        return _SelectedLLMRoute("deepseek")
-    if selected is factories.get("codex"):
-        return _SelectedLLMRoute("codex")
-    if selected is factories.get("mimo"):
-        return _SelectedLLMRoute("mimo")
+    for family in ("openai", "anthropic", "codex", "claude-code"):
+        if selected is factories.get(family):
+            return _SelectedLLMRoute(family)
     return _SelectedLLMRoute("ignored")
 
 
@@ -982,70 +930,24 @@ def _effective_nullable_llm_values(
     """Return selected-route ``(current, default)`` without constructing clients."""
     route = _selected_llm_route(llm, normalized)
 
-    if key == "llm.compact_threshold":
-        if route.factory == "deepseek":
-            # _register._deepseek consumes a positive authored value and
-            # otherwise pins the generic OpenAI adapter to disabled/null.
-            return normalized.get("compact_threshold"), None
-        if route.factory in {"openai", "custom_openai"}:
-            default = _openai_adapter_default("compact_threshold")
-            # _register preserves explicit None on these two forwarding routes.
-            current = normalized.get("compact_threshold", default)
-            return current, default
-        if route.factory == "custom_openai_fallback":
-            default = _openai_adapter_default("compact_threshold")
-            return default, default
-        return None, None
-
-    if key == "llm.reasoning_effort_vocab":
-        if route.factory in {"openai", "custom_openai"}:
-            default = _openai_adapter_default("reasoning_effort_vocab")
-            return normalized.get("reasoning_effort_vocab", default), default
-        if route.factory == "custom_openai_fallback":
-            default = _openai_adapter_default("reasoning_effort_vocab")
-            return default, default
-        # DeepSeek installs a provider-owned reasoning policy; every other
-        # non-OpenAI factory ignores this generic vocabulary setting.
-        return None, None
-
     if key == "llm.inject_reasoning_fallback":
         default = True
-        if route.factory in {
-            "openai",
-            "custom_openai",
-            "custom_openai_fallback",
-        }:
-            if route.factory != "custom_openai_fallback":
-                authored = normalized.get("inject_reasoning_fallback", _MISSING)
-                if authored is not _MISSING:
-                    return authored, default
+        if route.factory == "openai":
+            authored = normalized.get("inject_reasoning_fallback", _MISSING)
+            if authored is not _MISSING:
+                return authored, default
             from lingtai.llm.openai.adapter import _env_bool
 
             return (
                 _env_bool("LINGTAI_INJECT_REASONING_FALLBACK", default=default),
                 default,
             )
-        if route.factory == "deepseek":
-            return normalized.get("inject_reasoning_fallback", default), default
         return None, None
 
     if key == "llm.prompt_cache_namespace":
-        if route.factory in {"openai", "custom_openai"}:
+        if route.factory == "openai":
             default = _openai_adapter_default("prompt_cache_namespace")
             return normalized.get("prompt_cache_namespace", default), default
-        if route.factory == "deepseek":
-            return normalized.get("prompt_cache_namespace", "deepseek"), "deepseek"
-        return None, None
-
-    if key == "llm.api_compat":
-        # _register._custom is the only factory that consumes api_compat. Its
-        # default remains OpenAI even while an authored non-OpenAI route is live.
-        if route.factory in {
-            "custom_openai",
-            "custom_openai_fallback",
-            "custom_other",
-        }:
-            return route.api_compat, _custom_adapter_default("api_compat")
         return None, None
 
     raise RuntimeError("unknown nullable LLM setting")
@@ -1062,22 +964,12 @@ def _effective_wire_api_values(
     # The Codex factory ignores the generic selector and forces Responses.
     if route.factory == "codex":
         return "responses", "responses"
-    # MiMo changes OpenAIAdapter's omitted selector to Responses but forwards
-    # an explicit value, including ``auto``, unchanged.
-    if route.factory == "mimo":
-        default = "responses"
-        return (default if authored is _MISSING else authored), default
-    # These factories forward an explicit selector. With omission, their real
-    # runtime construction has no legacy Responses preference and therefore
-    # selects Chat Completions.
-    if route.factory in {
-        "openai",
-        "custom_openai",
-        "custom_openai_fallback",
-        "deepseek",
-    }:
+    # ``openai`` selects Responses only when explicitly asked; omission and the
+    # legacy ``auto`` both select Chat Completions.
+    if route.factory == "openai":
         default = "chat_completions"
-        return (default if authored is _MISSING else authored), default
+        current = "responses" if authored == "responses" else default
+        return current, default
     return None, None
 
 
@@ -1085,19 +977,23 @@ def _effective_service_tier_values(
     llm: Mapping[str, Any],
     normalized: Mapping[str, Any],
 ) -> tuple[Any, Any]:
-    """Return the Codex-only public tier after its canonical validation."""
-    route = _selected_llm_route(llm, normalized)
-    if route.factory != "codex":
-        return None, None
+    """Return the public tier the selected factory actually forwards.
 
+    Only ``openai`` and ``codex`` forward ``service_tier`` (one normalizer:
+    ``fast`` -> wire ``priority``; standard values verbatim). ``anthropic`` and
+    ``claude-code`` report none.
+    """
+    route = _selected_llm_route(llm, normalized)
     raw = normalized.get("service_tier")
     from lingtai.llm._register import _normalize_service_tier
 
+    if route.factory not in {"openai", "codex"}:
+        return None, None
     wire_value = _normalize_service_tier(raw)
     if wire_value is None:
         return None, None
     # The public setting is the authored vocabulary (``fast``); ``priority``
-    # is the private wire normalization owned by the Codex factory.
+    # is the private wire normalization owned by the factory.
     return str(raw).strip(), None
 
 
@@ -1132,11 +1028,7 @@ def _init_current(spec: _InitSettingSpec, data: dict[str, Any], root: Path) -> A
         configured = llm.get("codex_session_anchor")
         if configured is not None:
             return configured
-        if str(llm.get("provider") or "").lower() in {
-            "codex",
-            "codex-pool",
-            "codex_pool",
-        }:
+        if str(llm.get("provider") or "").lower() == "codex":
             return str((root / "init.json").resolve())
         return None
 
@@ -1203,6 +1095,10 @@ def _environment_current(resolver: str, root: Path) -> Any:
         from lingtai.kernel.config import tool_prose_section_enabled
 
         return tool_prose_section_enabled()
+    if resolver == "memory_length":
+        from lingtai.kernel.config import memory_length_warning_chars
+
+        return memory_length_warning_chars()
     if resolver == "prompt_pressure":
         from lingtai.kernel.config import system_prompt_pressure_ratio
 
@@ -1229,7 +1125,7 @@ def _environment_current(resolver: str, root: Path) -> Any:
 
         return enabled()
     if resolver == "codex_tui_dir":
-        from lingtai.auth.codex_pool import resolve_codex_tui_dir
+        from lingtai.auth.codex import resolve_codex_tui_dir
 
         return str(resolve_codex_tui_dir())
     if resolver in {

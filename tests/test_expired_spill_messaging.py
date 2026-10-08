@@ -5,15 +5,12 @@ Verifies that:
 - ``mark_expired_spill_manifests`` correctly marks missing sidecars as expired
 - Marking is idempotent
 - ``is_spill_manifest`` still recognises updated manifests
-- Non-spill missing files keep the generic "File not found" behaviour
 - No ``archive/tool-results`` directory is ever created
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -203,46 +200,6 @@ def test_recognizer_still_works(tmp_path):
 
     # A non-manifest dict should still be rejected
     assert not is_spill_manifest({"status": "ok", "data": "hello"})
-
-
-# ---------------------------------------------------------------------------
-# 6. Non-spill missing files get generic error
-# ---------------------------------------------------------------------------
-
-def test_generic_missing_file_still_generic(tmp_path):
-    """A missing file NOT under ``tmp/tool-results/`` must produce the
-    standard ``File not found`` message, not the spill-aware one."""
-    # We test the read handler indirectly by calling it in isolation
-    # ``read`` is an action of the one public ``file`` family; the operation
-    # lives in that package and is bound via build_operation().
-    from lingtai.tools.file._read import build_operation as build_read
-
-    mock_agent = MagicMock()
-    mock_agent._working_dir = tmp_path
-    mock_agent._config.language = "en"
-
-    # Make _file_io.read raise FileNotFoundError like a real file service
-    def fake_read(path):
-        raise FileNotFoundError(f"No such file: {path}")
-
-    mock_agent._file_io.read = fake_read
-
-    handler = build_read(
-        SimpleNamespace(path=tmp_path),
-        SimpleNamespace(read=fake_read, max_result_chars=None),
-    )
-
-    # Generic missing file — not under tmp/tool-results/
-    result = handler({"file_path": str(tmp_path / "nonexistent.txt")})
-    assert result["status"] == "error"
-    assert "File not found" in result["message"]
-    assert "spill" not in result["message"].lower()
-
-    # Spill-artifact missing file
-    spill_path = str(tmp_path / "tmp" / "tool-results" / "gone.json")
-    result = handler({"file_path": spill_path})
-    assert result["status"] == "error"
-    assert "Spill artifact expired" in result["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -473,37 +430,3 @@ def test_spill_unavailable_when_write_fails(tmp_path, monkeypatch):
     )
     assert "spill_error" in manifest
     assert "simulated disk full" in manifest["spill_error"]
-
-
-# ---------------------------------------------------------------------------
-# Fix 3 (Low): Normalize read-tool path before classifying as spill
-# ---------------------------------------------------------------------------
-
-def test_read_tool_path_traversal_not_classified_as_spill(tmp_path):
-    """A path like ``tmp/tool-results/../not-a-spill.txt`` must NOT be
-    classified as a spill artifact — the ``..`` escapes the spill
-    directory.  The read handler must return the generic File not found."""
-    from lingtai.tools.file._read import build_operation as build_read
-
-    mock_agent = MagicMock()
-    mock_agent._working_dir = tmp_path
-    mock_agent._config.language = "en"
-
-    def fake_read(path):
-        raise FileNotFoundError(f"No such file: {path}")
-
-    mock_agent._file_io.read = fake_read
-
-    handler = build_read(
-        SimpleNamespace(path=tmp_path),
-        SimpleNamespace(read=fake_read, max_result_chars=None),
-    )
-
-    # Path traverses out of tmp/tool-results/ via ".."
-    traversal_path = str(tmp_path / "tmp" / "tool-results" / ".." / "not-a-spill.txt")
-    result = handler({"file_path": traversal_path})
-    assert result["status"] == "error"
-    assert "Spill artifact expired" not in result["message"], (
-        "Traversal path must not be classified as a spill artifact"
-    )
-    assert "File not found" in result["message"]

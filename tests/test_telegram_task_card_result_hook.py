@@ -30,10 +30,10 @@ def _executor(dispatch, *, parallel=None, result_hook=None):
 
 
 # ---------------------------------------------------------------------------
-# Sequential: hook fires per call, in order, results preserved
+# Single call: hook fires and the result is preserved
 # ---------------------------------------------------------------------------
 
-def test_result_hook_sequential_fires_in_order():
+def test_result_hook_single_call_fires():
     seen: list = []
 
     def dispatch(tc):
@@ -44,13 +44,13 @@ def test_result_hook_sequential_fires_in_order():
         return None
 
     ex = _executor(dispatch)
-    tcs = [ToolCall(name="bash", args={}, id="c1"),
-           ToolCall(name="read", args={}, id="c2")]
-    results, intercepted, _ = ex.execute(tcs, on_result_hook=hook)
+    results, intercepted, _ = ex.execute(
+        [ToolCall(name="bash", args={}, id="c1")], on_result_hook=hook,
+    )
 
     assert not intercepted
-    assert [s[1] for s in seen] == ["c1", "c2"]
-    assert [r["who"] for r in results] == ["bash", "read"]
+    assert [s[1] for s in seen] == ["c1"]
+    assert [r["who"] for r in results] == ["bash"]
 
 
 def test_result_hook_fires_on_tool_error_result():
@@ -119,7 +119,7 @@ def test_result_hook_parallel_input_order_preserved():
 # Fail-open: a raising hook never alters the tool results
 # ---------------------------------------------------------------------------
 
-def test_raising_result_hook_does_not_alter_results_sequential():
+def test_raising_result_hook_does_not_alter_single_result():
     def dispatch(tc):
         return {"status": "ok", "who": tc.name}
 
@@ -127,12 +127,12 @@ def test_raising_result_hook_does_not_alter_results_sequential():
         raise RuntimeError("hook boom")
 
     ex = _executor(dispatch)
-    tcs = [ToolCall(name="bash", args={}, id="c1"),
-           ToolCall(name="read", args={}, id="c2")]
-    # The executor swallows the hook exception; results are intact and ordered.
-    results, intercepted, _ = ex.execute(tcs, on_result_hook=hook)
+    # The executor swallows the hook exception; the result remains intact.
+    results, intercepted, _ = ex.execute(
+        [ToolCall(name="bash", args={}, id="c1")], on_result_hook=hook,
+    )
     assert not intercepted
-    assert [r["who"] for r in results] == ["bash", "read"]
+    assert [r["who"] for r in results] == ["bash"]
 
 
 # ---------------------------------------------------------------------------

@@ -1,58 +1,21 @@
-"""MCP capability — per-agent registry of MCP servers (pure presentation).
+"""Read-only presentation of the per-agent MCP registry.
 
-Symmetric to the ``knowledge`` / ``skills`` capabilities:
+The public ``mcp`` family has strict-empty LTP v2 ``info``, ``settings``, and
+``manual`` actions. ``info`` re-reads registry/identity data, renders this
+plugin's protected prompt section, and reports health; ``settings`` shows only
+safe effective init projections; ``manual`` reads the installed router. None
+registers, activates, configures, troubleshoots, or grants permission to change
+a server. Registry/catalog membership is not proof that a child is active.
 
-- Per-agent registry lives at ``<agent>/mcp_registry.jsonl`` (sibling to
-  ``init.json``). One JSON record per line.
-- The capability scans the registry on setup, validates each line, and renders
-  the registry as XML into the system prompt's ``mcp`` section.
-- Boot-time decompression: any name in ``init.json``'s ``addons: [...]`` list
-  that isn't already in the registry gets appended from the kernel-shipped
-  catalog (``lingtai/mcp_catalog.json``). Append-only, idempotent.
-- All registry mutations (register, deregister, update) happen via file
-  operations from the agent (``write``, ``edit``). The capability provides
-  guidance via the umbrella SKILL.md, with ``info`` re-rendering the prompt
-  section and reporting health while ``manual`` returns the manual body.
+Registry validation, catalog decompression, identity projection, and XML
+rendering belong to ``lingtai.services.mcp_registry``. This module is only the
+agent-callable tool slice and receives the declared host's workdir and protected
+prompt-section ports—not the whole Agent. Registry/config mutations remain
+explicitly authorized ``write``/``edit`` operations outside this tool.
 
-Tool surface: ``info`` returns the current registry and a runtime health
-snapshot without the manual body; ``settings`` shows the two MCP-owned
-top-level init settings; ``manual`` returns the umbrella manual body on demand.
-All three are action children of one LTP v2 ``ToolFamily`` (see
-``lingtai/tools/CONTRACT.md`` "Envelope"): the public tool name stays ``mcp`` and
-the public action values are ``info``/``settings``/``manual``, carried in the
-canonical
-``action`` + ``input`` + ``reasoning`` + ``summarize`` envelope with a strict
-empty ``input`` per action. The existing actions' observable results are
-unchanged.
-
-Ownership: this module is the agent-callable *tool* slice only. The registry
-machinery it renders (validation, JSONL I/O, catalog load, identity projection,
-addon decompression, XML build) is a service and lives at
-``lingtai/services/mcp_registry.py``; it is imported lazily inside ``setup`` and
-the handlers, per the ``lingtai.tools → lingtai`` lazy-back-edge rule.
-
-Declared host plugin: ``mcp`` is the first official family to recut onto the
-kernel-owned declared host-plugin contract
-(``lingtai/kernel/tool_plugin/CONTRACT.md``). :data:`DECLARATION` is a static
-``ToolPluginDeclaration`` built at import, before any Agent exists; ``mcp`` is a
-reserved official name in ``lingtai.kernel.tool_plugin``, so a second
-declaration of it is refused before anything binds or mounts. The family no
-longer receives the whole ``Agent``: :func:`_bind` gets a ``ToolPluginHost``
-granting exactly the two ports this capability actually consumes — ``workdir``
-(read the registry and the installed manual) and ``prompt_section`` (rewrite
-its own protected ``mcp`` section). Nothing about the public tool — name,
-``["info", "settings", "manual"]`` action enum, strict-empty inputs, result shapes
-including the tool-specific ``mcp_manual`` body key — changed with it.
-
-Usage: ``Agent(capabilities=["mcp"])`` or via init.json.
-
-The source package is also an Agent Plugins v1.0.0 *documentation package*: its
-``plugin.json`` and sole owned ``skills/mcp-manual/`` skill are validated by the
-existing plugin-registry reader when Agent installs intrinsic manuals. That
-packaging does not select, register, or activate an external plugin and never
-creates an ``mcp_registry.jsonl`` record; the static declaration above remains
-the only route that mounts this model-facing tool.
-"""
+The package also ships the single ``mcp-manual`` documentation skill through the
+standard plugin reader. Packaging installs that manual but does not select,
+register, activate, or create an ``mcp_registry.jsonl`` record."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Mapping
@@ -149,14 +112,12 @@ def _flatten_manual_result(mcp_result: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 _DESCRIPTION = (
-    "SIGNPOST ONLY: this read-only tool does not register, activate, configure, "
-    "or troubleshoot MCP servers. `info` only re-reads the registry and returns "
-    "health; `settings` shows MCP-owned configuration; `manual` returns the "
-    "mcp-manual body. Before registering, deregistering, updating, or "
-    "troubleshooting, read `mcp-manual` (call `manual` for its body), call "
-    "`info` for the current health snapshot, and obtain explicit authorization. "
-    "Registry changes use "
-    "write/edit on mcp_registry.jsonl followed by system(action=\"refresh\")."
+    "SIGNPOST ONLY: does not register, activate, configure, or troubleshoot MCP servers. "
+    "`info` only re-reads the registry and identity health; `settings` shows MCP-owned configuration; "
+    "`manual` returns the mcp-manual body. All use input={}; routine inspection needs no manual. "
+    "Before changes read manual + exact README, call info, obtain explicit human authorization; "
+    "use file edits then one System refresh. Registration is not active proof. "
+    "Never publish raw registry problems or credentials."
 )
 
 # The owner-defined action and reserved manual action take no arguments; the

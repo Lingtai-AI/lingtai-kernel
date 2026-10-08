@@ -26,7 +26,6 @@ import yaml
 from lingtai.services import plugin_registry as _plugin_registry
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from types import MappingProxyType
@@ -583,17 +582,16 @@ def _parent_host_tool_floor() -> frozenset[str]:
     NOT re-declare the parent's always-on ``CORE_DEFAULTS`` host floor, because
     the TUI preset wizard only writes overrides/opt-ins into
     ``manifest.capabilities``. So those floor tools must still resolve from the
-    parent surface under a preset. But the floor is exactly the host
-    primitives — ``shell`` and ``file`` (the one family whose actions are
-    read/write/edit/glob/grep) — and nothing more: optional/provider parent
-    tools (e.g. ``vision``, ``web_search``) must NOT silently fall back to the
-    parent when a preset omits or fails them.
+    parent surface under a preset. But the floor is exactly the one host
+    primitive — ``shell`` — and nothing more: optional/provider parent tools
+    (e.g. ``vision``, ``web_search``) must NOT silently fall back to the parent
+    when a preset omits or fails them.
 
     This is an explicit contract allowlist. Growing ``CORE_DEFAULTS`` must not
     silently widen what a preset child may borrow from its parent.
-    The result is exactly {shell, file}.
+    The result is exactly {shell}.
     """
-    return frozenset({"shell", "file"})
+    return frozenset({"shell"})
 
 
 # Env vars that override Claude Code's normal first-party OAuth credentials.
@@ -1461,14 +1459,17 @@ class _ToolCollector:
 
 
 _DESCRIPTION = (
-    "Daemon — dispatch disposable subagents for isolated parallel work. "
-    "Read the daemon manual before first use. Put the complete objective, "
-    "authority, safety boundary, collaboration rules, and deliverable in each "
-    "task; tools grant capability only. Terminal outcomes are push-notified, "
-    "so do not poll for completion. After notification, use check and the "
-    "durable result/error paths for full output. LingTai runs may use the "
-    "sole-call compact(action='run', _reason='...') reset; "
-    "compact(action='manual') is read-only."
+    "Daemon — dispatch disposable subagents for bounded parallel work. Before "
+    "the first daemon send/emanate in a session, verify the resident daemon "
+    "manager's version/runtime identity unless already checked in that session, "
+    "to avoid a daemon-runner version mismatch. Use the schema for routine calls; "
+    "read the daemon manual for unfamiliar or "
+    "high-consequence workflows. Put the complete objective, authority, safety "
+    "boundary, collaboration rules, and deliverable in each task; tools grant "
+    "capability only. Terminal outcomes are push-notified; do not poll for completion. "
+    "After notification use check and durable result/error paths. "
+    "Reclaim cancels all running work, not one id. LingTai runs support sole-call "
+    "compact(action='run', _reason='...'); compact(action='manual') is read-only."
 )
 
 
@@ -3049,47 +3050,54 @@ class DaemonManager:
         traffic collide in one REST cache slot.
 
         context_token_limit: the task's optional ``context_token_limit``.
-        Meaningful for a Codex-family provider, where it becomes
+        Meaningful only for the ``codex`` provider, where it becomes
         ``codex_compact_token_limit`` — the standalone-compaction threshold
-        consulted by ``CodexOpenAIAdapter``/``CodexResponsesSession`` — and
-        for the native ``mimo`` provider, where it becomes
-        ``mimo_compact_token_limit`` — the same standalone-compaction axis
-        consulted by ``MimoAdapter``/``MimoResponsesSession`` (see
-        ``src/lingtai/llm/mimo/ANATOMY.md``). Omitted for every other
-        provider so their adapter construction is unaffected.
+        consulted by ``CodexOpenAIAdapter``/``CodexResponsesSession``. Omitted
+        for every other provider so their adapter construction is unaffected.
         """
         provider_key = str(provider).lower()
         bucket = dict(base_defaults or {})
-        if provider_key in ("codex", "codex-pool", "codex_pool"):
+        if provider_key == "codex":
             # Daemon traffic must use the daemon run identity so it gets its own
-            # cache slot, not the parent agent's anchor. ``codex-pool`` reuses the
-            # Codex adapter and also seeds its sticky auth-pool choice off this
-            # anchor, so a daemon run selects independently of its parent.
+            # cache slot, not the parent agent's anchor.
             bucket["codex_session_anchor"] = self._daemon_codex_session_anchor(run_dir)
             if context_token_limit is not None:
                 bucket["codex_compact_token_limit"] = context_token_limit
-        elif provider_key == "mimo" and context_token_limit is not None:
-            bucket["mimo_compact_token_limit"] = context_token_limit
         if not bucket:
             return None
         return {provider_key: bucket}
 
     @staticmethod
     def _llm_defaults_from_manifest(llm: dict) -> dict:
-        """Extract adapter-consulted defaults from a preset ``manifest.llm``."""
-        keys = (
-            "api_compat",
-            "base_url",
-            "codex_auth_path",
-            "codex_auth_pool_path",
-            "codex_session_anchor",
-            "codex_thread_salt",
-            "compact_threshold",
-            "default_headers",
-            "max_rpm",
-            "wire_api",
+        """Extract adapter-consulted defaults from a preset ``manifest.llm``.
+
+        Uses the SAME safelist the main agent boot uses
+        (``lingtai.llm.service.build_provider_defaults_from_manifest_llm``), so
+        a daemon run from a preset forwards every generic knob the adapter
+        factories consult — ``service_tier``, ``wire_api``,
+        ``inject_reasoning_fallback``, ``prompt_cache_namespace``,
+        ``default_headers``, the ``codex_*`` identity/endpoint keys — plus the
+        preset's ``base_url`` and ``max_rpm``. A second hand-maintained key
+        list here previously dropped several of them.
+        """
+        from lingtai.llm.service import build_provider_defaults_from_manifest_llm
+
+        provider = llm.get("provider")
+        if not isinstance(provider, str) or not provider.strip():
+            provider = "_"
+        max_rpm = llm.get("max_rpm")
+        rpm = (
+            max_rpm
+            if isinstance(max_rpm, int) and not isinstance(max_rpm, bool) and max_rpm > 0
+            else 0
         )
-        return {key: llm[key] for key in keys if key in llm}
+        built = build_provider_defaults_from_manifest_llm(
+            {**llm, "provider": provider}, max_rpm=rpm
+        )
+        bucket: dict = dict(next(iter(built.values()))) if built else {}
+        if llm.get("base_url") is not None:
+            bucket["base_url"] = llm["base_url"]
+        return bucket
 
     def _implicit_parent_preset_llm(self) -> dict:
         """Materialize the parent service into an implicit/effective preset.
@@ -3160,10 +3168,9 @@ class DaemonManager:
         preset's pre-instantiated sandbox supplies the child LLM's
         provider-specific capabilities (``preset_surface =
         (schemas_by_name, handlers_by_name)``), but it does NOT replace the
-        parent's always-on host tool floor. Only that narrow floor — ``shell``
-        and ``file`` (whose actions are read/write/edit/glob/grep), which the
-        preset wizard omits from ``manifest.capabilities`` — stays available
-        from the parent,
+        parent's always-on host tool floor. Only that narrow floor — exactly
+        ``shell``, which the preset wizard omits from
+        ``manifest.capabilities`` — stays available from the parent,
         so requested host tools are not rejected as unknown just because a
         preset was supplied. Optional/provider parent tools (vision,
         web_search, …) are NOT borrowable; they must come from the preset's own
@@ -3355,7 +3362,7 @@ class DaemonManager:
             if name in EMANATION_BLACKLIST:
                 continue
             # Tolerate non-capability names (intrinsics like 'psyche',
-            # 'system', 'soul' — kernel always-on, not composable). The TUI
+            # 'system' — kernel always-on, not composable). The TUI
             # preset wizard writes these into manifest.capabilities and the
             # main Agent.__init__ tolerates them via try/except (agent.py:91-94);
             # the daemon sandbox must replicate that tolerance or "full" user
@@ -3697,10 +3704,9 @@ class DaemonManager:
 
         context_token_limit: the task's optional ``context_token_limit``
         (already validated as a positive int by ``_handle_emanate``'s
-        pre-flight gate). Consulted for a Codex-family provider or the native
-        ``mimo`` provider — see ``_daemon_provider_defaults``; every other
-        provider ignores it, and every external CLI backend never reaches
-        this method at all.
+        pre-flight gate). Consulted only for the ``codex`` provider — see
+        ``_daemon_provider_defaults``; every other provider ignores it, and
+        every external CLI backend never reaches this method at all.
         """
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
@@ -3734,9 +3740,9 @@ class DaemonManager:
             # A detached child receives the provider bucket under the public
             # ``provider_defaults`` key (the private ``_provider_defaults`` alias
             # never crosses the process boundary). Merge the nested bucket so
-            # provider-specific fields such as ``wire_api`` / ``api_compat`` /
+            # provider-specific fields such as ``wire_api`` / ``service_tier`` /
             # ``max_rpm`` survive the reconstruction; without this a Responses
-            # provider degrades to ``auto`` and is misrouted to Chat Completions.
+            # provider degrades to the default Chat Completions wire.
             public_defaults = effective_preset_llm.get("provider_defaults")
             if isinstance(public_defaults, dict):
                 nested = public_defaults.get(provider)
@@ -5335,8 +5341,7 @@ class DaemonManager:
         # ``backend_spec.is_cli`` return above). A single bad value refuses the
         # whole batch, consistent with the other pre-flight gates below. Bound
         # to a provider-specific standalone-compaction feature at construction
-        # time (Codex's ``codex_compact_token_limit`` or the native ``mimo``
-        # provider's ``mimo_compact_token_limit`` — see
+        # time (Codex's ``codex_compact_token_limit`` — see
         # ``_daemon_provider_defaults``), but validated generically here so the
         # schema/error shape does not leak provider identity into the daemon
         # tool surface.
@@ -6111,28 +6116,9 @@ class DaemonManager:
         return {k: v for k, v in info.items() if v is not None}
 
     @staticmethod
-    def _utc_iso_from_timestamp(ts: float) -> str:
-        return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    @staticmethod
-    def _started_at_from_run_id(run_id: str) -> str | None:
-        match = re.match(r"^em-\d+-(\d{8}-\d{6})-[0-9a-fA-F]+$", run_id)
-        if not match:
-            return None
-        try:
-            dt = datetime.strptime(match.group(1), "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
-        except ValueError:
-            return None
-        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    @staticmethod
     def _handle_from_run_id(run_id: str) -> str | None:
         match = re.match(r"^(em-\d+)-", run_id)
         return match.group(1) if match else None
-
-    @staticmethod
-    def _atomic_write_daemon_json(path: Path, state: dict) -> None:
-        atomic_write_json(path, state, ensure_ascii=False, indent=2)
 
     @staticmethod
     def _looks_like_daemon_run_dir(run_path: Path) -> bool:
@@ -6149,27 +6135,6 @@ class DaemonManager:
                 or (run_path / "logs" / "events.jsonl").exists()
             )
         )
-
-    def _read_daemon_events_tail(self, run_path: Path, max_lines: int = 80) -> list[dict]:
-        events_path = run_path / "logs" / "events.jsonl"
-        try:
-            size = events_path.stat().st_size
-            with open(events_path, "rb") as f:
-                f.seek(max(0, size - 65536))
-                raw = f.read()
-            text = raw.decode("utf-8", errors="replace")
-            lines = text.splitlines()[-max_lines:]
-        except OSError:
-            return []
-        events: list[dict] = []
-        for line in lines:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(event, dict):
-                events.append(event)
-        return events
 
     def _infer_task_from_prompt(self, run_path: Path) -> str | None:
         prompt_path = run_path / ".prompt"
@@ -6192,33 +6157,6 @@ class DaemonManager:
         if not task:
             return None
         return str(self._truncate_list_string(task, 2000))
-
-    def _infer_terminal_state_from_events(self, events: list[dict]) -> tuple[str | None, str | None, object | None]:
-        for event in reversed(events):
-            name = event.get("event")
-            if name == "daemon_done":
-                return "done", event.get("ts"), None
-            if name == "daemon_error":
-                error = {
-                    "type": event.get("exception") or "DaemonError",
-                    "message": event.get("message") or "daemon failed",
-                }
-                return "failed", event.get("ts"), error
-            if name == "daemon_cancelled":
-                return "cancelled", event.get("ts"), None
-            if name == "daemon_timeout":
-                return "timeout", event.get("ts"), None
-        return None, None, None
-
-    def _result_preview_from_file(self, run_path: Path) -> tuple[str | None, str | None]:
-        result_path = run_path / "result.txt"
-        try:
-            with open(result_path, encoding="utf-8") as f:
-                text = f.read(201)
-        except (OSError, UnicodeDecodeError):
-            return None, None
-        preview = text[:200]
-        return preview, str(result_path)
 
     def _handle_list_from_ledger(
         self,
@@ -6295,17 +6233,6 @@ class DaemonManager:
             "showing": len(selected),
             "warnings": warnings,
         }
-
-    def _handle_list_without_query(
-        self,
-        *,
-        wanted_status: str,
-        include_done: bool,
-        limit_int: int,
-    ) -> dict:
-        return self._handle_list_from_ledger(
-            query="", wanted_status=wanted_status, include_done=include_done, limit_int=limit_int
-        )
 
     def _handle_list(
         self,

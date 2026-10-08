@@ -2,7 +2,10 @@
 
 This is the **only** module that imports the ``anthropic`` package.
 
-Key Anthropic API differences from OpenAI/Gemini:
+Backs the ``anthropic`` provider: the official Anthropic API by default, or
+any Anthropic-compatible (Messages API) endpoint through ``base_url``.
+
+Key Anthropic API differences from OpenAI:
 - System prompt is a separate ``system`` parameter, not a message.
 - Strict user/assistant alternation required — consecutive same-role messages
   must be merged.
@@ -25,6 +28,10 @@ import httpx
 from lingtai.kernel.logging import get_logger
 
 logger = get_logger()
+
+#: The official Anthropic endpoint — the ``anthropic`` provider's default when a
+#: manifest omits ``base_url``.
+ANTHROPIC_OFFICIAL_BASE_URL = "https://api.anthropic.com"
 
 
 _READ_TIMEOUT_ENV = "LINGTAI_LLM_READ_TIMEOUT"
@@ -60,7 +67,19 @@ def _build_http_timeout(request_timeout: float | None):
     """
     if request_timeout is None:
         return None
-    return httpx.Timeout(
+    # Construct the SDK's own ``Timeout`` class, never ``httpx.Timeout`` directly:
+    # anthropic SDKs built on the ``httpx2`` fork do not accept a foreign
+    # ``httpx.Timeout``, and the failure is VERSION-DEPENDENT — e.g. 1.4/1.5
+    # fail-fast with a TypeError before any request, while 1.2.0 does NOT raise
+    # but silently mis-coerces it, stuffing the whole object into every phase
+    # (connect/read/write/pool); either way the per-phase caps are lost.
+    # ``anthropic.Timeout`` re-exports whichever Timeout the installed SDK actually
+    # uses — ``httpx`` for SDKs on plain httpx, ``httpx2`` for SDKs on the fork —
+    # so this keys on what the SDK accepts rather than on which httpx package is
+    # importable (httpx2 is installed across the current range, so "is httpx2
+    # importable" would be a constant-true, useless predicate).
+    timeout_cls = getattr(anthropic, "Timeout", httpx.Timeout)
+    return timeout_cls(
         connect=min(float(request_timeout), 30.0),
         read=min(float(request_timeout), _read_timeout_cap()),
         write=min(float(request_timeout), 30.0),
@@ -74,6 +93,7 @@ from lingtai.kernel.llm.base import (
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    checked_count,
     wire_tool_description,
 )
 from lingtai.kernel.llm.interface import ToolResultBlock
@@ -172,6 +192,27 @@ def _build_system_batches_with_cache(
     return blocks
 
 
+def _anthropic_billing_fields(usage: object) -> dict[str, int]:
+    """Billing evidence the Anthropic wire states explicitly (absent = unknown).
+
+    ``output_tokens`` already includes thinking, so it is the billable output.
+    Cache writes come from ``cache_creation_input_tokens``; the 1h-TTL part
+    only from the ``cache_creation`` breakdown when the wire provides it.
+    """
+    fields: dict[str, int] = {}
+    write = checked_count(getattr(usage, "cache_creation_input_tokens", None))
+    if write is not None:
+        fields["cache_write_tokens"] = write
+        creation = getattr(usage, "cache_creation", None)
+        one_hour = checked_count(getattr(creation, "ephemeral_1h_input_tokens", None))
+        if one_hour is not None and one_hour <= write:
+            fields["cache_write_1h_tokens"] = one_hour
+    output = checked_count(getattr(usage, "output_tokens", None))
+    if output is not None:
+        fields["billable_output_tokens"] = output
+    return fields
+
+
 def _parse_response(raw) -> LLMResponse:
     """Parse an Anthropic Messages response into a provider-agnostic LLMResponse."""
     text_parts: list[str] = []
@@ -198,7 +239,7 @@ def _parse_response(raw) -> LLMResponse:
     # Anthropic's input_tokens only counts tokens AFTER the last cache
     # breakpoint.  The true total is: input_tokens + cache_read + cache_write.
     # We normalise here so the rest of the system sees the same semantics as
-    # OpenAI (prompt_tokens = total) and Gemini (prompt_token_count = total).
+    # OpenAI (prompt_tokens = total).
     usage = UsageMetadata()
     if raw.usage:
         cache_read = getattr(raw.usage, "cache_read_input_tokens", 0) or 0
@@ -209,6 +250,7 @@ def _parse_response(raw) -> LLMResponse:
             output_tokens=getattr(raw.usage, "output_tokens", 0) or 0,
             thinking_tokens=getattr(raw.usage, "thinking_tokens", 0) or 0,
             cached_tokens=cache_read,
+            **_anthropic_billing_fields(raw.usage),
         )
         if cache_read or cache_write:
             logger.debug(
@@ -266,39 +308,6 @@ def _ensure_alternation(messages: list[dict]) -> list[dict]:
             merged.append(dict(msg))
 
     return merged
-
-
-def _response_to_messages(raw) -> list[dict]:
-    """Convert an Anthropic response into message dicts for the history."""
-    result: dict[str, Any] = {"role": "assistant", "content": []}
-
-    for block in raw.content:
-        if block.type == "text":
-            result["content"].append({"type": "text", "text": block.text})
-        elif block.type == "tool_use":
-            result["content"].append(
-                {
-                    "type": "tool_use",
-                    "id": block.id,
-                    "name": block.name,
-                    "input": block.input if isinstance(block.input, dict) else {},
-                }
-            )
-        elif block.type == "thinking":
-            # Include thinking blocks so history round-trips correctly
-            result["content"].append(
-                {
-                    "type": "thinking",
-                    "thinking": getattr(block, "thinking", ""),
-                    # Anthropic requires a signature for thinking blocks in history
-                    "signature": getattr(block, "signature", ""),
-                }
-            )
-
-    if not result["content"]:
-        result["content"] = [{"type": "text", "text": ""}]
-
-    return [result]
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +589,7 @@ class AnthropicChatSession(ChatSession):
                 output_tokens=getattr(u, "output_tokens", 0) or 0,
                 thinking_tokens=getattr(u, "thinking_tokens", 0) or 0,
                 cached_tokens=cache_read,
+                **_anthropic_billing_fields(u),
             )
             if cache_read or cache_write:
                 logger.debug(
@@ -711,6 +721,23 @@ class AnthropicAdapter(LLMAdapter):
         self._client = anthropic.Anthropic(**kwargs)
         self._setup_gate(max_rpm)
 
+    @property
+    def effective_base_url(self) -> str:
+        """The endpoint this adapter's requests actually reach.
+
+        The configured ``base_url`` when set; otherwise the SDK client's
+        resolved endpoint (the official ``https://api.anthropic.com`` unless
+        the SDK's own environment override applies). Credential-reusing
+        capabilities read this instead of the raw manifest ``base_url``.
+        """
+        if self._base_url:
+            return self._base_url
+        try:
+            resolved = str(self._client.base_url).rstrip("/")
+        except Exception:
+            resolved = ""
+        return resolved or ANTHROPIC_OFFICIAL_BASE_URL
+
     # Extended-thinking budget per kernel THINKING_LEVELS tier. Every level a
     # manifest can select is mapped, so a user-chosen effort never silently
     # disables thinking; explicit ``"none"`` is the one level that means off.
@@ -749,7 +776,7 @@ class AnthropicAdapter(LLMAdapter):
         force_tool_call: bool = False,
         interface: ChatInterface | None = None,
         thinking: str = "default",
-        interaction_id: str | None = None,  # ignored — Gemini-specific
+        interaction_id: str | None = None,  # ignored — no server-side resume
         context_window: int = 0,
     ) -> AnthropicChatSession:
         # Create interface from scratch or from history

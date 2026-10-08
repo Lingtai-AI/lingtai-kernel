@@ -5,6 +5,7 @@ All agent code should depend on these types, never on provider-specific SDKs.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -123,8 +124,8 @@ class ToolCall:
         name: Tool/function name.
         args: Parsed arguments dict.
         id: Provider-assigned call ID (e.g. ``call_xxxxx`` for OpenAI,
-            ``toolu_xxxxx`` for Anthropic).  None for Gemini which doesn't
-            use explicit tool-call IDs.
+            ``toolu_xxxxx`` for Anthropic).  None when a provider issues no
+            explicit tool-call ID.
     """
 
     name: str
@@ -143,6 +144,63 @@ class UsageMetadata:
     # Optional safe, provider-specific metadata to merge into token_ledger.jsonl.
     # Do not place request bodies, API keys, or other secrets here.
     extra: dict[str, Any] = field(default_factory=dict)
+    # Optional billing evidence an adapter positively established from its wire
+    # contract. ``None`` means unknown (never zero). ``cache_write_tokens`` is
+    # the part of ``input_tokens`` written to the prompt cache (OpenAI-compatible
+    # wires: ``*_tokens_details.cache_write_tokens`` when reported) (its 1h-TTL part
+    # in ``cache_write_1h_tokens``); ``billable_output_tokens`` is the output
+    # count providers charge, thinking included exactly once.
+    cache_write_tokens: int | None = None
+    cache_write_1h_tokens: int | None = None
+    billable_output_tokens: int | None = None
+    # Optional streaming evidence, in monotonic seconds. First actual text or
+    # tool name/argument payload (not ids, reasoning, lifecycle or empty events);
+    # generation ends at final wire usage. generation_tokens includes text/tool
+    # output, excluding explicit reasoning; missing reasoning count is unknown.
+    first_token_s: float | None = None
+    generation_s: float | None = None
+    generation_tokens: int | None = None
+    # The wire ``service_tier`` this request REQUESTED (e.g. ``priority``), set
+    # by the dispatching adapter from the kwargs it actually sent. ``None``
+    # means none was requested or the adapter does not say; it is never the
+    # tier the provider applied.
+    requested_service_tier: str | None = None
+
+
+def checked_count(value: object) -> int | None:
+    """A wire token count only if it is a real non-negative int (else unknown).
+
+    Absent, ``None``, negative, float and ``bool`` values are all unknown, never
+    zero; adapters use this for the optional billing fields on ``UsageMetadata``.
+    """
+    return value if type(value) is int and value >= 0 else None
+
+
+_SAFE_BILLING_MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}")
+
+
+def safe_billing_model(value: object) -> str | None:
+    """A plain model name (<=128, optionally ``provider/model``) or ``None``.
+
+    No URL, auth, whitespace/newline, query or config text is accepted, so the
+    string is safe to persist in an event and to look up by exact catalog key.
+    """
+    if not isinstance(value, str):
+        return None
+    name = value.strip()
+    if not _SAFE_BILLING_MODEL_RE.fullmatch(name) or "//" in name or ".." in name:
+        return None
+    return name
+
+
+_SAFE_BILLING_TIER_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+
+
+def safe_billing_tier(value: object) -> str | None:
+    """A short lowercase wire service-tier token (``priority``) or ``None``."""
+    if not isinstance(value, str):
+        return None
+    return value if _SAFE_BILLING_TIER_RE.fullmatch(value) else None
 
 
 @dataclass
@@ -155,7 +213,7 @@ class LLMResponse:
         usage: Token usage for this call.
         thoughts: List of thinking/reasoning text blocks (for verbose logging).
         raw: The original provider-specific response object. Use for escape
-            hatches (e.g. Gemini grounding metadata, multimodal parts).
+            hatches (e.g. provider-specific metadata, multimodal parts).
     """
 
     text: str = ""
@@ -276,7 +334,7 @@ class ChatSession(ABC):
     # Optional pre-request hook fired after the message is committed to the
     # canonical ChatInterface but before the API call is made. The kernel
     # installs ``_drain_tc_inbox`` here so involuntary tool-call pairs
-    # (mail notifications, soul.flow voices) splice into the wire chat
+    # (mail notifications) splice into the wire chat
     # mid-turn — between tool rounds within a single _handle_request —
     # rather than waiting for the outer turn to finish.
     #
@@ -287,13 +345,12 @@ class ChatSession(ABC):
     # provider's strict pair-validation invariant.
     #
     # Sessions that don't use the canonical ChatInterface for wire
-    # serialization (OpenAIResponsesSession, GeminiChatSession via
-    # genai SDK) still call the hook for the agent-side drain, but the
-    # spliced pair is only visible to the LLM on the *next* turn (when
-    # the agent re-syncs from interface). For canonical-interface
-    # adapters (anthropic, openai-CC, codex-Responses, deepseek), the
-    # spliced pair is visible in the same API call as the triggering
-    # tool_results.
+    # serialization (a non-replay ``OpenAIResponsesSession``) still call the
+    # hook for the agent-side drain, but the spliced pair is only visible to
+    # the LLM on the *next* turn (when the agent re-syncs from interface).
+    # For canonical-interface sessions (anthropic, openai Chat Completions
+    # and stateless Responses replay, codex-Responses), the spliced pair is
+    # visible in the same API call as the triggering tool_results.
     #
     # Default ``None`` — adapters that don't install a hook treat the
     # call as a no-op, preserving the legacy zero-hook behavior.
@@ -524,16 +581,16 @@ class ChatSession(ABC):
         only the underlying HTTP client is recreated.
 
         Default: no-op.  Override in session types backed by a persistent
-        HTTP client (Anthropic, OpenAI).  Gemini sessions with server-side
-        state (Interactions API) cannot be meaningfully reset this way.
+        HTTP client (Anthropic, OpenAI).
         """
 
     @property
     def interaction_id(self) -> str | None:
-        """Return the current Interactions API interaction ID, or None.
+        """Return a provider-side interaction ID, or None.
 
-        Only meaningful for Gemini ``InteractionsChatSession`` which chains
-        calls via ``previous_interaction_id``.  Other session types return None.
+        Only meaningful for a session that chains calls through server-side
+        interaction state. No current adapter does (every wire replays the
+        canonical interface), so the default returns None.
         """
         return None
 

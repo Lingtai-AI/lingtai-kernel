@@ -10,13 +10,13 @@ import lingtai.intrinsic_skills as intrinsic_skills_pkg
 import lingtai.tools as tools_pkg
 from lingtai.kernel.tool_plugin import ToolPluginHost
 from lingtai.tools.context import DECLARATION, get_schema
-from tests._service_helpers import make_gemini_mock_service
+from tests._service_helpers import make_mock_llm_service
 
 
 @pytest.fixture
 def context_agent(tmp_path):
     agent = Agent(
-        service=make_gemini_mock_service(),
+        service=make_mock_llm_service(),
         agent_name="declared-context",
         working_dir=tmp_path / "agent",
         capabilities={},

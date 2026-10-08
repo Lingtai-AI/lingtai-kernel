@@ -27,6 +27,8 @@ receipts and through a recording stub manager, never by starting a run.
 """
 from __future__ import annotations
 
+from lingtai.tools.tool_family import _without_descriptions
+
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -186,11 +188,17 @@ def test_registered_description_is_a_concise_first_use_contract():
     description = get_description()
 
     assert len(description) < 943
-    assert "Read the daemon manual before first use" in description
+    assert "Use the schema for routine calls" in description
+    assert (
+        "Before the first daemon send/emanate in a session, verify the resident "
+        "daemon manager's version/runtime identity unless already checked in that "
+        "session, to avoid a daemon-runner version mismatch."
+    ) in description
+    assert "unfamiliar or high-consequence workflows" in description
     assert "complete objective" in description
     assert "tools grant capability only" in description
     assert "Terminal outcomes are push-notified" in description
-    assert "do not poll for completion" in description
+    assert "do not poll" in description
     assert "check" in description and "durable result/error" in description
     assert "compact(action='run'" in description
     assert "daemon(action='" not in description
@@ -289,7 +297,7 @@ def test_root_allof_correlates_each_action_const_to_its_own_input_schema():
         correlated = condition["then"]["properties"]["input"]
         # Same canonical child schema the ``anyOf`` branch embeds, minus the
         # presentational ``title`` the branch adds.
-        assert correlated == {k: v for k, v in branch.items() if k != "title"}
+        assert correlated == _without_descriptions({k: v for k, v in branch.items() if k != "title"})
 
 
 def test_composed_schema_branches_are_mutation_isolated():
@@ -401,7 +409,7 @@ def test_emanate_forwards_the_full_nested_task_batch_verbatim(tmp_path):
     tasks = [
         {
             "task": "audit the parser",
-            "tools": ["file", "shell"],
+            "tools": ["shell"],
             "skills": ["./skills/audit"],
             "mcp": [{"name": "svc", "transport": "stdio", "command": "x"}],
             "preset": "~/.lingtai-tui/presets/saved/cheap.json",
@@ -632,7 +640,7 @@ def test_emanate_validation_refusal_is_returned_verbatim(tmp_path):
         {
             "action": "emanate",
             "input": {
-                "tasks": [{"task": "t", "tools": ["file"], "system_prompt": "old"}],
+                "tasks": [{"task": "t", "tools": ["shell"], "system_prompt": "old"}],
                 "backend": None, "max_turns": None, "timeout": None,
             },
             "reasoning": "r",

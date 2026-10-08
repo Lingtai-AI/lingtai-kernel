@@ -8,7 +8,7 @@ description: >
   `system-manual` when it is unclear whether this is the right node.
 version: 1.5.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
-last_changed_at: "2026-09-08T00:00:00Z"
+last_changed_at: "2026-09-09T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -69,7 +69,7 @@ settings without another concrete tool owner. Follow `comment` to the owning
 manual before an authorized change; a SHOW result grants no mutation authority.
 Do not reproduce adjustable numeric defaults in general workflow guidance.
 
-`context-manual` → `reference/summarize-manual/SKILL.md` §3a owns reconstruction
+`context-manual` → `reference/summarize-manual/SKILL.md` (Apply and recover) owns reconstruction
 mechanics and boundaries. Follow the current runtime pressure guidance instead
 of duplicating thresholds here: pending summaries are normal, `refresh` is not
 an apply-summary shortcut, and rebuild/summarize must not become a loop.
@@ -185,9 +185,9 @@ notifications is the normal wait, not a fallback — do not layer a default
 self-wake on top of every async child. A backgrounded `shell(async=true)` job's
 own completion notification and reminder backstop are owned by `shell-manual`.
 A daemon emanation's terminal notification already covers every finish state;
-`daemon-manual` → `reference/inspection/SKILL.md` owns the narrower
+`daemon-manual` → `reference/forensics/SKILL.md` owns the narrower
 defense-in-depth exception (arm one self-wake only when work is pending and
-genuinely unverified-healthy, sized to the task's expected duration) — read it
+completion delivery itself is unverified, sized to the task's expected duration) — read it
 before inventing a parallel policy here. On any such wake, health-check before
 assuming progress: log growing, PID/child/daemon events alive, output
 file/worktree advancing, not stuck on an interactive prompt or a provider/model
@@ -229,8 +229,11 @@ Use existing producer/tool capabilities before inventing workflows. §7 above
 names the owner for web fetching/search/scraping (`web-manual`) and image
 understanding (`vision`). For file-specific detail:
 
-- For tricky file encodings, large files, binary-like data, or careful edit
-  workflows, read `file-manual`.
+- Durable filesystem changes go through `shell`: anchor the authorized working
+  directory, bound output, verify the old text exists exactly once before an
+  exact replacement, verify the mutation after writing, and treat binary or
+  non-UTF-8 content honestly rather than guessing. Platform recipes live in
+  `shell-manual`.
 
 When giving humans local artifacts, include a usable path and a short summary.
 Do not expose private internal IDs as if they are user-accessible artifacts.

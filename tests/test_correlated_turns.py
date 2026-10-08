@@ -4,7 +4,9 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -23,6 +25,9 @@ from lingtai.kernel.message import (
     _make_message,
 )
 from lingtai.kernel.state import AgentState
+from lingtai.kernel.base_agent import BaseAgent
+from lingtai.tools.system.karma import _DirectSleepPort
+from lingtai.adapters.tool_plugin_host import agent_system_runtime
 from lingtai.kernel.turns import (
     TurnOrigin,
     TurnOutcome,
@@ -35,8 +40,22 @@ from lingtai.kernel.turns import (
 )
 from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
 from lingtai.kernel.turn_events import current_turn_tool_observer
+from lingtai.kernel.turn_tool_overlay import current_turn_tool_overlay
+from lingtai.kernel.base_agent.tools import _build_tool_schemas
 from lingtai.kernel.turn_permissions import current_turn_permission_broker
-from lingtai.kernel.provider_admission import current_provider_admission
+from lingtai.kernel.provider_admission import (
+    ConnectionScopedProviderAdmissionPort,
+    ProviderAdmittedLLMService,
+    ProviderAdmissionError,
+    ProviderAdmissionState,
+    ProviderCallDecision,
+    current_provider_admission,
+)
+from tests._workdir_lease_helpers import make_test_lease
+from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
+from tests._notification_store_helpers import notification_store_for
+from tests._agent_presence_helpers import make_test_presence_store
 
 
 def test_canonical_message_type_inventory_is_complete():
@@ -75,7 +94,6 @@ class _LoopAgent:
             _rebuild_session=lambda _interface: None,
         )
         self._config = SimpleNamespace(
-            insights_interval=0,
             max_aed_attempts=10,
             language="en",
             time_awareness=True,
@@ -86,7 +104,6 @@ class _LoopAgent:
         self._preset_fallback_attempted = False
         self._task_card_manager = None
         self._llm_worker_interface_poisoned = False
-        self._insight_turn_counter = 0
         self.logs = []
 
     def _log(self, name, **fields):
@@ -94,9 +111,6 @@ class _LoopAgent:
 
     def _set_state(self, state, reason=""):
         self._state = state
-
-    def _cancel_soul_timer(self):
-        return None
 
     def _reset_uptime(self):
         return None
@@ -107,8 +121,7 @@ class _LoopAgent:
     def _can_fallback_preset(self):
         return False
 
-    def _request_turn_cancel(self):
-        self._cancel_event.set()
+    _request_turn_cancel = BaseAgent._request_turn_cancel
 
     def _wake_nap(self, _reason):
         return None
@@ -139,6 +152,209 @@ def test_correlated_turn_settles_normal_with_collected_text(tmp_path, monkeypatc
 
     assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
     assert handle.result().text == "answer"
+
+
+@pytest.mark.parametrize("sleep_port", ["mounted", "direct"])
+def test_correlated_self_sleep_settles_normal_after_tool_returns(
+    tmp_path, monkeypatch, sleep_port,
+):
+    agent = _agent(tmp_path)
+    handle = submit_turn(agent, "reply then sleep", correlation_id="turn-self-sleep")
+
+    def fake_handle(current, _msg):
+        port = (
+            agent_system_runtime(current)
+            if sleep_port == "mounted"
+            else _DirectSleepPort(current)
+        )
+        port.transition_to_asleep()
+        current._shutdown.set()
+        return {"text": "", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+
+    assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
+
+
+def test_external_cancel_after_self_sleep_still_wins(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    handle = submit_turn(agent, "reply then sleep", correlation_id="turn-sleep-interrupted")
+
+    def fake_handle(current, _msg):
+        _DirectSleepPort(current).transition_to_asleep()
+        current._request_turn_cancel()
+        current._shutdown.set()
+        return {"text": "", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+
+    assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
+
+
+def test_external_cancel_before_self_sleep_still_wins(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    handle = submit_turn(
+        agent, "cancel then sleep", correlation_id="turn-cancel-before-sleep"
+    )
+
+    def fake_handle(current, _msg):
+        current._request_turn_cancel()
+        _DirectSleepPort(current).transition_to_asleep()
+        current._shutdown.set()
+        return {"text": "", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+
+    assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
+
+
+def test_external_cancel_after_cooperative_snapshot_before_settlement_wins(tmp_path):
+    agent = _agent(tmp_path)
+    handle = submit_turn(agent, "race", correlation_id="turn-cancel-settle-gap")
+    control = begin_turn(agent, agent.inbox.get_nowait())
+    assert control is not None
+
+    # The run loop reads this before settle_turn takes the turn lock.
+    cooperative_snapshot = agent._cancel_event.is_set()
+    assert cooperative_snapshot is False
+    agent._request_turn_cancel()
+    assert control.external_cancel_requested is True
+
+    assert settle_turn(
+        agent, control, outcome=TurnOutcome.NORMAL, text="late answer",
+        cooperative_cancelled=cooperative_snapshot,
+    ) is True
+    assert handle.result(timeout=1).outcome is TurnOutcome.CANCELLED
+    assert handle.result().text == ""
+
+
+def test_base_agent_active_handle_cancel_does_not_deadlock(tmp_path):
+    agent = BaseAgent(
+        intrinsics={},
+        service=MagicMock(),
+        agent_name="cancel-lock",
+        working_dir=tmp_path,
+        workdir_lease=make_test_lease(),
+        snapshot_port=make_test_snapshot_port(),
+        agent_presence=make_test_presence_store(),
+        lifecycle_clock=make_test_lifecycle_clock(),
+        source_revision_port=make_test_source_revision_port(),
+        notification_store=notification_store_for(tmp_path),
+    )
+    handle = submit_turn(agent, "cancel", correlation_id="turn-real-lock")
+    begin_turn(agent, agent.inbox.get_nowait())
+    receipts = []
+    canceller = threading.Thread(
+        target=lambda: receipts.append(handle.cancel()), daemon=True
+    )
+    canceller.start()
+    canceller.join(timeout=0.5)
+
+    assert not canceller.is_alive(), "active cancel deadlocked on BaseAgent's turn lock"
+    assert receipts == [True]
+    assert agent._cancel_event.is_set()
+
+
+@pytest.mark.parametrize("granted", [True, False])
+def test_attached_correlated_turn_binds_connection_port_on_real_loop(tmp_path, monkeypatch, granted):
+    agent = _agent(tmp_path)
+    calls = []
+    decisions = []
+
+    class ConnectionPort:
+        def authorize_provider_call(self, parent, call_class):
+            decisions.append((parent, call_class))
+            return ProviderCallDecision(
+                ProviderAdmissionState.GRANTED if granted else ProviderAdmissionState.DENIED,
+                "allowed" if granted else "denied_by_connection",
+            )
+
+    class DerivedPort:
+        def authorize_derived_launch(self, parent, capability):
+            raise AssertionError("not a derived turn")
+
+    class InnerSession:
+        def send(self, message):
+            calls.append(message)
+            return message
+
+    class InnerService:
+        def create_session(self):
+            return InnerSession()
+
+    service = ProviderAdmittedLLMService(InnerService(), ConnectionScopedProviderAdmissionPort())
+    handle = submit_turn(
+        agent, "attached", origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+        connection_provider_port=ConnectionPort(), connection_derived_port=DerivedPort(),
+    )
+
+    def fake_handle(current, msg):
+        try:
+            service.create_session().send(msg.content)
+        except ProviderAdmissionError:
+            pass
+        current._shutdown.set()
+        return {"text": "done", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    turn._run_loop(agent)
+    assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
+    assert len(decisions) == 1
+    assert decisions[0][0].connection_authority_required is True
+    assert calls == (["attached"] if granted else [])
+
+
+def test_attached_tool_overlay_is_bound_for_only_its_correlated_turn(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    agent._intrinsics = {}
+    agent._tool_handlers = {}
+    agent._tool_schemas = []
+    overlay = SimpleNamespace(
+        owner=agent, closed=False, schemas=(), handlers={"puffo_read_inbox": lambda args: args},
+    )
+    tool_resets = []
+    agent._chat = SimpleNamespace(
+        interface=_Interface(), update_tools=lambda schemas: tool_resets.append(schemas),
+    )
+    agent._build_tool_schemas = lambda: _build_tool_schemas(agent)
+
+    class ConnectionPort:
+        def authorize_provider_call(self, parent, call_class):
+            return ProviderCallDecision(ProviderAdmissionState.GRANTED, "allowed")
+
+    class DerivedPort:
+        def authorize_derived_launch(self, parent, capability):
+            raise AssertionError("not a derived turn")
+
+    first = submit_turn(
+        agent, "attached", origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+        connection_provider_port=ConnectionPort(), connection_derived_port=DerivedPort(),
+        connection_tool_overlay=overlay,
+    )
+    entered = threading.Event()
+    seen = []
+
+    def fake_handle(current, msg):
+        seen.append((msg.content, current_turn_tool_overlay(current)))
+        if msg.content == "attached":
+            entered.set()
+        else:
+            current._shutdown.set()
+        return {"text": "done", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    worker = threading.Thread(target=turn._run_loop, args=(agent,))
+    worker.start()
+    assert entered.wait(timeout=5)
+    second = submit_turn(agent, "ordinary")
+    assert first.result(timeout=5).outcome is TurnOutcome.NORMAL
+    assert second.result(timeout=5).outcome is TurnOutcome.NORMAL
+    worker.join(timeout=5)
+    assert seen == [("attached", overlay), ("ordinary", None)]
+    assert tool_resets == [[]]
 
 
 def test_consecutive_correlated_turns_reset_execution_workspace(tmp_path, monkeypatch):
@@ -306,13 +522,15 @@ def test_correlated_turn_abandoned_fact_emitted_on_production_teardown(
     Every unit test in ``test_puffo_admission_witness.py`` calls
     ``end_admission_witness_scope`` by hand; only this drives the real
     ``_run_loop``, so it is the sole check that the production wiring actually
-    emits -- the real bind (``turn.py`` ~1344), the observer bind/reset ordering
-    (~1337 -> ~1930 before the ~1935 teardown), and the teardown itself. Its
-    value is exactly a positive control: without it, "no abandoned events in
-    production" and "the instrument never fires" are indistinguishable in the
-    data, and 甲 is the instrument we told the humans turns the loss rate from a
-    guess into a number. Deleting the bind makes the in-turn scan a no-op (no
-    outstanding) -> no event -> red; deleting the teardown never emits -> red.
+    emits -- the real bind, the observer bind/reset ordering around it, and the
+    teardown itself (function-name anchors in ``base_agent/turn.py``:
+    ``begin_admission_witness_scope`` runs beside the per-turn tool-observer
+    bind, ``end_admission_witness_scope`` beside its reset; line numbers drift
+    with every edit, see ``base_agent/ANATOMY.md``). Its value is exactly a positive
+    control: without it, "no abandoned events in production" and "the
+    instrument never fires" are indistinguishable in the data. Deleting the
+    bind makes the in-turn scan a no-op (no outstanding) -> no event -> red;
+    deleting the teardown never emits -> red.
     """
     from lingtai.kernel.llm.interface import ChatInterface, ToolResultBlock
 
@@ -631,6 +849,172 @@ def test_profile_binds_root_provider_admission_only_for_the_admitted_turn(
     assert handle.result(timeout=1).outcome is TurnOutcome.NORMAL
     assert seen == [("turn-provider-admission", RUNTIME_POLICY.policy_version)]
     assert current_provider_admission() is None
+
+
+@pytest.mark.parametrize("failure", [ConnectionError("Connection reset by peer"), RuntimeError("model failed")])
+def test_authenticated_turn_retries_provider_failure_with_original_admission(
+    tmp_path, monkeypatch, failure
+):
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    handle = submit_turn(
+        agent, "hello", correlation_id="retry-origin",
+        origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+    )
+    seen = []
+
+    def provider(current, msg):
+        parent = current_provider_admission()
+        seen.append((parent.correlation_id, msg.sender))
+        if len(seen) == 1:
+            raise failure
+        return {"text": "recovered", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_request", provider)
+    monkeypatch.setattr(turn, "_compact_history_before_retry", lambda *a, **k: None)
+    monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
+    worker = threading.Thread(target=turn._run_loop, args=(agent,))
+    worker.start()
+    try:
+        result = handle.result(timeout=5)
+        assert result.outcome is TurnOutcome.NORMAL
+        assert result.text == "recovered"
+        assert seen == [("retry-origin", "user"), ("retry-origin", "system")]
+        assert not any(name == "turn_origin_rejected" for name, _ in agent.logs)
+    finally:
+        _stop_loop(agent, worker)
+
+
+@pytest.mark.parametrize("during_backoff", ["recover", "cancel", "revoke_policy"])
+def test_authenticated_429_retry_rechecks_admission_after_backoff(
+    tmp_path, monkeypatch, during_backoff
+):
+    import httpx
+
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    agent._requires_turn_origin_policy = True
+    handle = submit_turn(
+        agent, "hello", correlation_id="rate-limit-origin",
+        origin=TurnOrigin.AUTHENTICATED_ADAPTER,
+    )
+    request = httpx.Request("POST", "https://provider.invalid/messages")
+    response = httpx.Response(429, headers={"Retry-After": "7"}, request=request)
+    failure = httpx.HTTPStatusError("rate limited", request=request, response=response)
+    parents = []
+    waits = []
+
+    def provider(_current, _msg):
+        parent = current_provider_admission()
+        assert parent is not None
+        assert parent.correlation_id == "rate-limit-origin"
+        assert parent.policy_version == RUNTIME_POLICY.policy_version
+        parents.append(parent)
+        if len(parents) == 1:
+            raise failure
+        return {"text": "recovered", "failed": False, "errors": []}
+
+    def backoff(seconds):
+        waits.append(seconds)
+        assert len(parents) == 1
+        if during_backoff == "cancel":
+            handle.cancel()
+        elif during_backoff == "revoke_policy":
+            agent._turn_origin_policy = None
+        return False
+
+    monkeypatch.setattr(turn, "_handle_request", provider)
+    monkeypatch.setattr(agent._shutdown, "wait", backoff)
+    worker = threading.Thread(target=turn._run_loop, args=(agent,))
+    worker.start()
+    try:
+        result = handle.result(timeout=5)
+        assert waits == [7.0]
+        assert sum(name == "aed_rate_limit_retry" for name, _ in agent.logs) == 1
+        assert not any(name in {"aed_transient_retry", "aed_attempt"} for name, _ in agent.logs)
+        if during_backoff == "recover":
+            assert result.outcome is TurnOutcome.NORMAL
+            assert result.text == "recovered"
+            assert len(parents) == 2
+            assert parents[1] is parents[0]
+        else:
+            expected = TurnOutcome.CANCELLED if during_backoff == "cancel" else TurnOutcome.FAILED
+            assert result.outcome is expected
+            assert len(parents) == 1
+            if during_backoff == "revoke_policy":
+                assert result.error == "rate limited"
+        assert handle.result(timeout=0) is result
+    finally:
+        _stop_loop(agent, worker)
+
+
+@pytest.mark.parametrize("invalid", ["forged", "settled", "cancelled", "cross_turn", "policy", "shutdown"])
+def test_retry_cannot_borrow_invalid_turn_control(tmp_path, invalid):
+    from lingtai.kernel.turns import correlated_retry_message
+
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    handle = submit_turn(agent, "hello", origin=TurnOrigin.AUTHENTICATED_ADAPTER)
+    control = begin_turn(agent, agent.inbox.get_nowait())
+    retry = _make_message(MSG_REQUEST, "system", "retry")
+    if invalid == "forged":
+        control = replace(control)  # Even an exact id/origin copy is not authority.
+    elif invalid == "settled":
+        settle_turn(agent, control, outcome=TurnOutcome.NORMAL)
+    elif invalid == "cancelled":
+        handle.cancel()
+    elif invalid == "cross_turn":
+        submit_turn(agent, "other", origin=TurnOrigin.AUTHENTICATED_ADAPTER)
+        begin_turn(agent, agent.inbox.get_nowait())
+    elif invalid == "policy":
+        agent._turn_origin_policy = None
+        agent._requires_turn_origin_policy = True
+    elif invalid == "shutdown":
+        agent._shutdown.set()
+    assert correlated_retry_message(agent, control, retry) is None
+
+
+def test_cancel_during_retry_backoff_prevents_another_provider_call(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    handle = submit_turn(agent, "hello", origin=TurnOrigin.AUTHENTICATED_ADAPTER)
+    calls = []
+
+    def provider(_current, _msg):
+        calls.append(True)
+        raise ConnectionError("Connection reset by peer")
+
+    monkeypatch.setattr(turn, "_handle_request", provider)
+    monkeypatch.setattr(turn, "_compact_history_before_retry", lambda *a, **k: None)
+    monkeypatch.setattr(turn.time, "sleep", lambda _seconds: handle.cancel())
+    worker = threading.Thread(target=turn._run_loop, args=(agent,))
+    worker.start()
+    try:
+        assert handle.result(timeout=5).outcome is TurnOutcome.CANCELLED
+        assert len(calls) == 1
+    finally:
+        _stop_loop(agent, worker)
+
+
+def test_forged_correlated_type_cannot_enter_run_loop(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    agent._turn_origin_policy = RUNTIME_POLICY
+    agent.inbox.put(_make_message(MSG_CORRELATED_TURN, "system", {"correlation_id": "fake"}))
+    handle = submit_turn(agent, "real", origin=TurnOrigin.AUTHENTICATED_ADAPTER)
+    calls = []
+
+    def provider(_current, msg):
+        calls.append(msg.content)
+        return {"text": "ok", "failed": False, "errors": []}
+
+    monkeypatch.setattr(turn, "_handle_request", provider)
+    worker = threading.Thread(target=turn._run_loop, args=(agent,))
+    worker.start()
+    try:
+        assert handle.result(timeout=5).outcome is TurnOutcome.NORMAL
+        assert calls == ["real"]
+    finally:
+        _stop_loop(agent, worker)
 
 
 def test_cancel_and_terminal_settlement_linearize_exactly_once(tmp_path):

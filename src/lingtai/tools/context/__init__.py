@@ -57,7 +57,7 @@ from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration, T
 
 # --- Re-exports from sub-modules for backward compatibility ---
 
-# Snapshots (used by consultation, inquiry, etc.)
+# Molt archive helpers.
 from ._snapshots import SNAPSHOT_SCHEMA_VERSION, _write_molt_snapshot, _write_molt_summary  # noqa: F401
 
 # Molt (the public surface and kernel-facing forced-molt hook)
@@ -89,11 +89,11 @@ _MOLT_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "summary": {
             "type": "string",
-            "description": 'Your session retrospective (~10,000 tokens). Write as a record — what happened, what you learned, what remains. The four stores must be tended BEFORE molt. Saved to `system/summaries/molt_<count>_<ts>.md` and replayed to the next you. See context-manual for full writing guidance. This is domain input the molt itself consumes, not the root `summarize` post-processing control.',
+            "description": 'Your shortest sufficient successor briefing: active task/state, verified results, pending authority, next steps, live job/thread IDs, artifact or evidence paths, blockers, and essential lessons. Update only durable stores that changed and write the required session journal BEFORE molt. The briefing is saved to `system/summaries/molt_<count>_<ts>.md` and replayed to the next you. See context-manual for handoff guidance. This is domain input the molt itself consumes, not the root `summarize` result-presentation control.',
         },
         "session_journal_path": {
             "type": "string",
-            "description": 'REQUIRED. The path to the session-journal entry you wrote for the just-finished segment BEFORE molting: knowledge/session-journal/<entry>/KNOWLEDGE.md (a per-segment sub-entry, NOT the parent index). Must be inside your workdir, exist, be non-empty UTF-8, have valid YAML frontmatter with `name` and `description`, and identify itself as session knowledge via `type: session-journal` or `session_journal: true`. The molt is refused before any context is shed if this is missing or invalid. See context-manual §4.',
+            "description": 'REQUIRED. The path to the session-journal entry you wrote for the just-finished segment BEFORE molting: knowledge/session-journal/<entry>/KNOWLEDGE.md (a per-segment sub-entry, NOT the parent index). Must be inside your workdir, exist, be non-empty UTF-8, have valid YAML frontmatter with `name` and `description`, and identify itself as session knowledge via `type: session-journal` or `session_journal: true`. The molt is refused before any context is shed if this is missing or invalid. See context-manual: Shortest useful path.',
         },
         "keep_tool_calls": {
             "type": ["array", "null"],
@@ -159,13 +159,17 @@ _SUMMARIZE_ITEMS_DESCRIPTION = (
     "block) and 'summary' (your agent-authored text). Supports multiple items "
     "per call. The original is NOT deleted — it remains retrievable from "
     "events.jsonl by tool_call_id. Pick targets from "
-    "`_meta.agent_meta.agent_state.current_tool_result_chars.top_results`. "
+    "`current_tool_result_chars.top_results` IDs from `system(action=\"meta\", input={})`. "
+    "The item `tool_call_id` is the producer call ID, not the visible `_tool_call_id` "
+    "event reference; preserve any `raw_locator` or spill path for recovery. "
     "This action RECORDS ONLY: the active provider context may still carry "
-    "the old raw results until context(action='rebuild') applies them."
+    "the old raw results until a rebuild or molt (or the 1.0 forced boundary) "
+    "supersedes them; prefer molt over a manual rebuild for noisy history."
 )
 
 _REBUILD_ITEMS_DESCRIPTION = (
-    "Optional — omit it entirely for the ordinary call. Every rebuild first "
+    "Rare exception, not routine compaction: prefer molt for substantial or noisy "
+    "history. Optional — omit it entirely for the ordinary call. Every rebuild first "
     "re-reads and recomposes ALL canonical system-prompt sections from durable "
     "and configured sources, then applies summaries, then requests provider "
     "replay with the new prompt/history. context(action='rebuild', input={}) is "
@@ -352,15 +356,21 @@ def _build_family(
 _ACTION_ENUM_DESCRIPTION = (
     'Required operation. '
     'molt: shed your conversation context, keep the durable stores. Requires '
-    '`summary` and a valid `session_journal_path` — tend the four stores '
-    'BEFORE molting. See context-manual.\n'
+    '`summary` and a valid `session_journal_path` — write the journal first and '
+    'update only durable stores that changed. Prefer molt over rebuild for '
+    'substantial or noisy history or context pressure when a fresh briefing is '
+    'worth its cost. See context-manual.\n'
     'summarize: record your own compact replacements for prior tool results in '
     'runtime history. RECORD ONLY — it does not rebuild, so the active '
     'provider context may still carry the old raw results.\n'
     'rebuild: re-read and recompose ALL canonical prompt sources, then apply '
     'pending/new summaries, then replay provider context with the new prompt and '
-    'history. Bare input={} is valid even with zero pending summaries. Prefer '
-    'one tactical rebuild; do not loop rebuild.\n'
+    'history. Strongly discouraged as routine compaction, tool-result cleanup, or '
+    'a step after every durable edit: full replay is costly, can disturb '
+    'prompt-prefix cache reuse, and keeps the bulky history. Use it only as a rare '
+    'exception when new prompt sources or pending summaries must apply in this '
+    'conversation and molt is unsuitable; one targeted call, never a loop. Bare '
+    'input={} is valid even with zero pending summaries.\n'
     'manual: return the installed context-manual skill without performing any '
     'context operation.\n'
     'Identity/lifecycle actions are not here: use '
@@ -369,7 +379,7 @@ _ACTION_ENUM_DESCRIPTION = (
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Your context: shed it, compact it, rebuild it. Four actions, each with its own strict input object. molt (凝蜕): shed the conversation, keep the durable stores; requires a written session journal. summarize: record compact replacements for bulky prior tool results — records only, does NOT rebuild. rebuild: re-read and recompose every canonical prompt source, apply pending/new summaries, then replay provider context with the new prompt/history; bare input={} is valid even with zero pending summaries. manual: return the installed context-manual skill. Identity/lifecycle actions are not here — use system(action=\'name_set\'|\'name_nickname\'). Note the two levels: the ACTION named summarize is this domain operation, while the optional ROOT summarize boolean is the unrelated result-presentation control — leave it false here (results are small), including for manual, so the exact molt procedure is not summarized away.'
+    return 'Your context: shed it, compact it, rebuild it. Four actions, each with its own strict input object. molt (凝蜕): shed the conversation, keep the durable stores; requires a written session journal; the preferred deliberate response to substantial or noisy history or context pressure. summarize: record compact replacements for bulky prior tool results — records only, does NOT rebuild. rebuild: re-read and recompose every canonical prompt source, apply pending/new summaries, then replay provider context with the new prompt/history; strongly discouraged as routine compaction or post-edit ceremony (rare exception, one targeted call, never a loop); bare input={} is valid even with zero pending summaries. manual: return the installed context-manual skill. Identity/lifecycle actions are not here — use system(action=\'name_set\'|\'name_nickname\'). Note the two levels: the ACTION named summarize is this domain operation, while the optional ROOT summarize boolean is the unrelated result-presentation control — leave it false here (results are small), including for manual, so the exact molt procedure is not summarized away.'
 
 
 def get_schema(lang: str = "en") -> dict:

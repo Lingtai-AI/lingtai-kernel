@@ -1,13 +1,12 @@
 [build-system]
-# ``wheel`` is required because setup.py overrides ``bdist_wheel`` to mark
-# the wheel as platform-specific when the bundled Rust sidecar binary is
-# present. See setup.py for the build-time bundle / fallback logic.
+# Pure-Python project: the build is fully described here, with no setup.py
+# hooks. ``wheel`` stays pinned for the setuptools<70 ``bdist_wheel`` path.
 requires = ["setuptools>=68.0", "wheel>=0.41"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "lingtai"
-version = "1.0.3"
+version = "1.0.12"
 description = "Generic research agent with intrinsic tools and MCP-compatible extension interface"
 readme = "README.md"
 # Architecture-specific macOS Python limits are expressed by the uv resolution
@@ -23,7 +22,6 @@ dependencies = [
     "httpx>=0.27",
     "openai>=1.0",
     "anthropic>=0.40",
-    "google-genai>=1.0",
     # Official MCP Python SDK v2 (protocol 2026-07-28). The supported range is
     # the SDK's own published compatibility window; the wheel exact-pins
     # `mcp-types`, so never pin that separately here.
@@ -141,7 +139,7 @@ exclude = [
     "CONTRACT.md",
     "*/CONTRACT.md",
     # Per-tool glossary resources — exactly glossary-{en,zh,wen}.md per
-    # first-party package (21 packages × 3 languages = 63 files). The
+    # first-party package (19 packages × 3 languages = 57 files). The
     # renderer loads them via importlib.resources to append localized
     # terminology bodies to each tool's ## tools description.
     "*/glossary-en.md",
@@ -166,11 +164,6 @@ lingtai = [
     # than the `prompts/*/*.md` glob above, so it needs its own entry).
     # Replaces the legacy prompts/guidance.json packaged resource.
     "prompts/meta_guidance/catalog/*.md",
-    # Rust sidecar binary bundled at build time by setup.py — present in
-    # platform-specific wheels, absent in pure-Python sdist fallback
-    # builds. The glob is non-strict, so missing files don't fail builds.
-    "bin/lingtai-search-sidecar",
-    "bin/lingtai-search-sidecar.exe",
 ]
 "lingtai.mcp_servers.telegram" = ["notification_header.md", "SKILL.md", "reference/**/*", "assets/**/*"]
 # The Telegram-owned programmable Task Card unit is its own subpackage, so its

@@ -57,6 +57,32 @@ def test_posix_launch_propagates_explicit_derived_child_requirement(tmp_path):
     assert popen.call_args.kwargs["env"]["LINGTAI_DERIVED_AVATAR_EXECUTION"] == "1"
 
 
+@pytest.mark.parametrize("derived", [False, True])
+def test_avatar_launch_does_not_inherit_parent_resident_acp_opt_in(
+    tmp_path, monkeypatch, derived,
+):
+    """An enabled parent must not expose an ACP socket on its Avatar child."""
+    parent = tmp_path / "parent"
+    child = tmp_path / "child"
+    monkeypatch.setenv("LINGTAI_ACP_SOCKET_AGENT_DIR", str(parent.resolve()))
+    environment = {"LINGTAI_DERIVED_AVATAR_EXECUTION": "1"} if derived else None
+    request = AvatarLaunchRequest(
+        ("python", "-m", "lingtai", "run", str(child)),
+        tmp_path / "logs" / "spawn.stderr",
+        environment=environment,
+    )
+    process = MagicMock(pid=419)
+    with patch(
+        "lingtai.adapters.posix.avatar_launcher.subprocess.Popen", return_value=process
+    ) as popen:
+        PosixAvatarLauncherAdapter().launch(request)
+    child_environment = popen.call_args.kwargs["env"]
+    assert "LINGTAI_ACP_SOCKET_AGENT_DIR" not in child_environment
+    assert child_environment.get("LINGTAI_DERIVED_AVATAR_EXECUTION") == (
+        "1" if derived else None
+    )
+
+
 def test_derived_avatar_state_probe_keeps_io_failure_distinct_from_absence(
     tmp_path, monkeypatch,
 ):

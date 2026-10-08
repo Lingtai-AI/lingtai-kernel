@@ -16,7 +16,7 @@ def _build_lib(plib: Path):
         "manifest": {
             "llm": {"provider": "p1", "model": "m1",
                     "api_key": None, "api_key_env": "P1KEY"},
-            "capabilities": {"file": {}, "web_search": {"provider": "duckduckgo"}},
+            "capabilities": {"shell": {}, "web_search": {"provider": "duckduckgo"}},
         },
     }))
     (plib / "beta.json").write_text(json.dumps({
@@ -26,7 +26,7 @@ def _build_lib(plib: Path):
         "manifest": {
             "llm": {"provider": "p2", "model": "m2",
                     "api_key": None, "api_key_env": "P2KEY"},
-            "capabilities": {"file": {}, "vision": {"provider": "p2",
+            "capabilities": {"shell": {}, "vision": {"provider": "p2",
                                                     "api_key_env": "P2KEY"}},
         },
     }))
@@ -123,7 +123,7 @@ def test_e2e_boot_with_alpha_then_swap_to_beta(tmp_path, monkeypatch):
     assert "vision" in data2["manifest"]["capabilities"]
     assert data2["manifest"]["agent_name"] == "test"  # identity preserved
     assert data2["manifest"]["admin"]["karma"] is True  # admin preserved
-    assert data2["manifest"]["soul"]["delay"] == 120  # soul preserved
+    assert data2["manifest"]["soul"]["delay"] == 120  # inert legacy block left untouched
     assert "stamina" not in data2["manifest"]  # legacy runtime knob removed
     assert data2["manifest"]["preset"]["active"] == beta_path
     assert data2["manifest"]["preset"]["default"] == alpha_path  # original default preserved
@@ -154,10 +154,10 @@ def test_e2e_inherit_resolves_after_swap(tmp_path, monkeypatch):
         "name": "smart",
         "description": {"summary": "vision via inherit"},
         "manifest": {
-            "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
-                    "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+            "llm": {"provider": "openai", "model": "gpt-5.5",
+                    "api_key": None, "api_key_env": "OPENAI_API_KEY"},
             "capabilities": {
-                "file": {},
+                "shell": {},
                 "web_search": {"provider": "inherit"},
                 "vision": {"provider": "inherit"},
             },
@@ -165,10 +165,10 @@ def test_e2e_inherit_resolves_after_swap(tmp_path, monkeypatch):
     }))
     wd = tmp_path / "agent"
 
-    # Build workdir with stub .env including GEMINI_API_KEY
+    # Build workdir with stub .env including OPENAI_API_KEY
     wd.mkdir(parents=True, exist_ok=True)
     env = wd / ".env"
-    env.write_text("GEMINI_API_KEY=sk-test\n")
+    env.write_text("OPENAI_API_KEY=sk-test\n")
     init = {
         "manifest": {
             "agent_name": "test",
@@ -191,17 +191,17 @@ def test_e2e_inherit_resolves_after_swap(tmp_path, monkeypatch):
     }
     (wd / "init.json").write_text(json.dumps(init))
 
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     agent = _make_probe(wd)
     data = agent._read_init()
     assert data is not None
 
     caps = data["manifest"]["capabilities"]
-    assert caps["web"]["provider"] == "gemini"
-    assert caps["web"]["api_key_env"] == "GEMINI_API_KEY"
-    assert caps["vision"]["provider"] == "gemini"
-    assert caps["vision"]["api_key_env"] == "GEMINI_API_KEY"
+    assert caps["web"]["provider"] == "openai"
+    assert caps["web"]["api_key_env"] == "OPENAI_API_KEY"
+    assert caps["vision"]["provider"] == "openai"
+    assert caps["vision"]["api_key_env"] == "OPENAI_API_KEY"
     # model is NOT inherited
     assert "model" not in caps["web"]
     assert "model" not in caps["vision"]

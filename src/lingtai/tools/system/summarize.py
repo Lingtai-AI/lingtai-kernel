@@ -331,7 +331,7 @@ def _build_rebuild_reconstruction(snapshot: dict, applied_totals, *, requested: 
             "Rebuild requested, but this chat backend has no explicit rebuild hook "
             "(or continuation is disabled), so there may be no provider-context action "
             "to take. Any recorded summaries stay pending; the runtime forces a rebuild "
-            "at the 1.0 hard context boundary regardless. See meta_guidance, substrate, "
+            "at the 1.0 hard context boundary regardless. Read psyche(action=\"instructions\", input={}) for current loaded detail. See meta_guidance, substrate, "
             "and summarize-manual."
         )
     return (
@@ -369,12 +369,14 @@ def _build_summarize_only_reconstruction(snapshot: dict, totals: dict) -> str:
     if _pending_count(totals) > 0:
         body = (
             "Two ways to apply the pending summaries: let the runtime force a rebuild "
-            "at the 1.0 hard context boundary (it applies pending summaries then), OR "
-            "make one tactical context(action='rebuild', input={}, reasoning='...') "
-            "call proactively — that applies what is already pending, no new items "
-            "needed — preferably when context is high (>=0.85 / the runtime rebuild "
-            "hint) or a fresh context is worth the cache-miss cost. Proactive is "
-            "better: the 1.0 forced path is the emergency boundary. "
+            "at the 1.0 hard context boundary (it applies pending summaries then), OR, "
+            "as a rare exception when they must apply in this conversation and a molt "
+            "is unsuitable, make one targeted "
+            "context(action='rebuild', input={}, reasoning='...') call — that applies "
+            "what is already pending, no new items needed. A manual rebuild is "
+            "strongly discouraged as routine compaction: full replay is costly, can "
+            "disturb prompt-prefix cache reuse, and keeps the bulky history; prefer a "
+            "deliberate molt for substantial or noisy history. "
         )
     else:
         body = (
@@ -385,7 +387,7 @@ def _build_summarize_only_reconstruction(snapshot: dict, totals: dict) -> str:
     return (
         f"{prefix}{body}Be tactical with token efficiency: do not loop "
         f"rebuild/summarize. If rebuild cannot recover below the 0.75 recovery target, "
-        f"tend durable stores and molt. See meta_guidance, substrate, and "
+        f"tend durable stores and molt. Read psyche(action=\"instructions\", input={{}}) for current loaded detail. See meta_guidance, substrate, and "
         f"summarize-manual."
     )
 

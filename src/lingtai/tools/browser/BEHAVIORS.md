@@ -27,7 +27,7 @@ commands must run from the repo root with the project's Python.
 - **id**: BR001
 - **title**: a fresh browse success never exposes only a first page or partial document
 - **guards**: `browser-internal` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; the `web` capability tests available locally
 - **estimate**: ≈ 20 minutes
 

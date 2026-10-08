@@ -1,6 +1,6 @@
 ---
 name: declared-host-tool-plugin
-contract_version: 5
+contract_version: 7
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
@@ -27,8 +27,6 @@ related_files:
   - src/lingtai/tools/daemon/manual/SKILL.md
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/email/manual/SKILL.md
-  - src/lingtai/tools/file/__init__.py
-  - src/lingtai/tools/file/manual/SKILL.md
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/plugin/manual/SKILL.md
   - src/lingtai/tools/notification/ANATOMY.md
@@ -41,9 +39,6 @@ related_files:
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/bash/manual/SKILL.md
-  - src/lingtai/tools/soul/__init__.py
-  - src/lingtai/tools/soul/CONTRACT.md
-  - src/lingtai/tools/soul/manual/SKILL.md
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/CONTRACT.md
   - src/lingtai/tools/system/plugin.py
@@ -66,7 +61,6 @@ related_files:
   - tests/test_context_declared_tool_plugin.py
   - tests/test_daemon.py
   - tests/test_email_official_tool_plugin.py
-  - tests/test_file_tool_plugin_package.py
   - tests/test_notification_settings.py
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
@@ -114,14 +108,13 @@ It owns exactly four things:
 
 1. `ToolPluginDeclaration` — the static declaration shape and its
    construction-time validation.
-2. The kernel host Ports (`WorkdirPort`, `PromptSectionPort`, `FileIOPort`,
+2. The kernel host Ports (`WorkdirPort`, `PromptSectionPort`,
    `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
    read-only `PluginCatalogPort`, Shell's `NotificationPort` and
    `ConfigurationPort`, Task Card's `ShutdownPort`, `TaskCardLifecyclePort`,
    and closed operation-native `TaskCardNotificationsPort`, Vision's
    read-through `ActiveProviderPort`, Web's narrow read-only
-   `ProviderIdentityPort`, `ToolMountPort`),
-   File's structural match/traversal result Protocols, and the two
+   `ProviderIdentityPort`, `ToolMountPort`) and the two
    family-owned grant names Email's `EmailRuntimePort` (`email_runtime`) and
    Web's `WebCompositionPort` (`web_runtime`), through which a plugin receives
    only its capability-native view of the live Agent body, plus the
@@ -134,6 +127,12 @@ It owns exactly four things:
    list of official plugin names.
 4. `register_official_tool_plugins` — the fail-fast registrar and its ordering
    promise.
+
+**contract_version 6** is a breaking Port-contract change: the `file_io`
+grant name, `FileIOPort`, and the `FileGrepMatch`/`FileTraversalStats` result
+Protocols were removed together with the `file` family and its
+`AgentFileIOAdapter`, so a declaration that names `file_io` now fails at
+import. Durable filesystem changes go through the Shell slice.
 
 It owns none of the following, and adding any of them here is a defect:
 declaration *content* for any family; a module path, import, or behavioral
@@ -175,7 +174,7 @@ Coding agents and LingTai agents MUST observe the following.
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
   vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
-  `daemon`, `email`, `file`, `plugin`, `notification`, `shell`, `soul`,
+  `daemon`, `email`, `plugin`, `psyche`, `notification`, `shell`,
   `system`, `task_card`, `vision`, and `web` are declared, in that official
   order; the former later-family target register is now empty. Task Card is a
   channel-neutral intrinsic dynamic capability: its one `TaskCardManager` is
@@ -195,7 +194,7 @@ Coding agents and LingTai agents MUST observe the following.
   `web_runtime` composition value (browser transport, immutable engine specs,
   and default provenance, composed by its own `setup` and granted to the `web`
   declaration alone through `extra_ports_for`), and the narrow read-only
-  `provider_identity` label that gates its explicit Anthropic/Gemini opt-in;
+  `provider_identity` label that gates its backend-gated OpenAI/Anthropic engines;
   its bind fails closed on a missing or mistyped `web_runtime`, and no
   provider/browser fallback is ever automatic beyond the family's one
   documented OpenAI→DuckDuckGo runtime fallback (see
@@ -230,47 +229,41 @@ capability.
 |---|---|---|
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
-| `FileIOPort` | `read`, `write`, `glob`, `grep`, `last_traversal`, `max_result_chars` | File-only bounded UTF-8 text operations and concrete match/traversal facts. It exposes neither the backing generic service nor the Agent; path rooting remains the separate `WorkdirPort`. |
 | `AvatarParentPort` | `parent_name`, `venv_path` | Avatar-only parent context: the identity placed in a newborn prompt and optional runtime location inherited into its init. It grants no mutable admin/configuration surface or Agent reference. Avatar owns no rules-distribution action, so this port no longer carries an authorization-bit method for one (**contract_version 4**, breaking: `has_rule_privilege()` removed). |
 | `ContextRuntimePort` | `molt(args)`, `summarize(args)`, `rebuild(args)` | Context-only lifecycle-operation boundary. It preserves the live molt, record-only summary, and reconstruction/replay engines without granting Context the Agent or unrelated private state. |
 | `DaemonRuntimePort` | named model/tool/preset-policy/notification/log operations | Daemon-only host-runtime boundary: optional inherited service and regular tool snapshots, explicit-preset requirement + authorization, preset sandbox/load, notification route, time, Task Card, logging, and resolved manager options. Agent composition authorizes through its allowlist; standalone composition requires and directly loads caller-supplied preset paths. It never grants an Agent or a mount operation. |
-| `NotificationStatePort` | `dismiss(channel, *, force, reason, event_id=None, ref_id=None)`, `delay(channel, seconds)`, hook operations, `read_settings() -> tuple[int, int]`, bounded `log` | Notification-only Core delegation. `read_settings` returns the fresh effective payload cap and delay ceiling through canonical resolvers; it grants no configuration object or writer. `AgentNotificationStateAdapter` owns only callbacks bound to the live Agent; it hands the family no Agent, Store, fingerprint, producer state, generic dispatch, or mount seam. Notification Core retains dismissal authorization, stale-delivery comparison, producer guards, acknowledgement, delay/timer, hook-manifest, and logging policy. |
+| `NotificationStatePort` | `delay(channel, seconds)`, hook operations (no dismissal operation: notification delivery is one-shot), `read_settings() -> tuple[int, int]`, bounded `log` | Notification-only Core delegation. `read_settings` returns the fresh effective payload cap and delay ceiling through canonical resolvers; it grants no configuration object or writer. `AgentNotificationStateAdapter` owns only callbacks bound to the live Agent; it hands the family no Agent, Store, fingerprint, producer state, generic dispatch, or mount seam. Notification Core retains delay/timer, hook-manifest, and logging policy. |
 | `EmailRuntimePort` (Email-owned) | `handle_email(EmailRuntimeRequest) -> EmailResult` | Email-only manager boundary. The host `AgentEmailRuntimeAdapter` rejects foreign declared actions, reads the current `agent._email_manager` at call time, and invokes it once with already-normalized `{'action': request.action, **dict(request.input)}`; it neither captures `_intrinsics` nor recurses through an official handler. |
 | `PluginCatalogPort` | `read_state() -> PluginCatalogState` | Return a detached read-only projection of Agent Plugins registration/discovery facts: boot snapshot, configured plugin paths, inherited skill paths, and skills availability. It cannot validate, register, prune, launch, write, or mount. |
-| `PsycheSettingsPort` | `read_snapshot() -> PsycheSettingsSnapshotPort` | Return only Psyche's last completely applied immutable structural snapshot: `pad` / `pad_file` plus `base_prompt`, `covenant`, and `comment` with their file pointers. It grants no Agent, owner-source read, prompt mutation, reconstruction, or settings write. |
+| `PsycheSettingsPort` | `read_snapshot() -> PsycheSettingsSnapshotPort`, `read_covenant() -> str`, `read_instructions() -> str` | Return only Psyche's last completely applied immutable structural snapshot: `pad` / `pad_file` plus `base_prompt` and `covenant` with their file pointers. Additionally disclose the current loaded fixed instructions and effective Covenant body (including mirror fallback), without ambient rereads. It grants no Agent, owner-source read, prompt mutation, reconstruction, or settings write. |
 | `NotificationPort` | `publish_system(...) -> bool`; `publish_channel(channel, payload, ref_id=...) -> bool` | Publish an idempotent durable system event or a latest-channel payload without reaching an Agent/store. Shell uses exactly these two operations for its existing async watchdog and completion wake semantics. It is distinct from `NotificationStatePort`, which grants Notification Core's mirror/hook administration. |
 | `ConfigurationPort` | `values -> Mapping[str, Any]` | Immutable copied values explicitly selected by capability setup for this one bind (Shell policy and dialect override, and Vision's `VisionConfiguration` snapshot fields, today); no Agent configuration lookup or write operation. |
-| `SoulRuntimePort` | bounded self-state, consultation, cadence, and Soul-notification operations | Soul's explicit live-self vocabulary; no Agent, generic attribute escape hatch, tool mount, or unrelated capability API. |
-| `SystemRuntimePort` | Read/query `admin`, `language`, `token_usage()`, `load_preset()`; act through `log()`, preset activation, `retry_failed_mcps()`, `perform_refresh()`, `resuscitate()`; sleep evidence/effects via `sleep_attention_fingerprints()`, `transition_to_asleep()`, `sleep_alarm_lock()`, `arm_sleep_alarm()` | System's bounded runtime/lifecycle vocabulary. The four sleep members are translation-only evidence/effects: the one sleep policy (fingerprint comparison, refusal/force, receipts, audit) lives in `lingtai.tools.system.karma.sleep_use_case`, never in this port or its adapter. Identity is deliberately absent. |
+| `SystemRuntimePort` | Read/query `admin`, `language`, `token_usage()`, `runtime_meta()` (read-only complete runtime diagnostics; never refreshes or consumes one-shot events), `load_preset()`; act through `log()`, preset activation, `retry_failed_mcps()`, `perform_refresh()`, `resuscitate()`; sleep evidence/effects via `sleep_attention_fingerprints()`, `transition_to_asleep()`, `sleep_alarm_lock()`, `arm_sleep_alarm()` | System's bounded runtime/lifecycle vocabulary. The four sleep members are translation-only evidence/effects: the one sleep policy (fingerprint comparison, refusal/force, receipts, audit) lives in `lingtai.tools.system.karma.sleep_use_case`, never in this port or its adapter. Identity is deliberately absent. |
 | `IdentityPort` | Read `name`; durably write `set_name()` and `set_nickname()` | System's separate naming vocabulary. The current name is read-only through the port; its two explicit writes may update durable identity, but cannot mutate address, workdir, or general runtime state. |
 | `ShutdownPort` | `is_set() -> bool` | Observe only whether the current Agent is stopping, so a Task Card watch thread ends promptly. It grants no lifecycle transition, join, or event mutation. |
 | `TaskCardLifecyclePort` | `current_manager()`, `retain_manager(manager)`, `report_resume_failure(error)` | The one current-Agent Task Card manager slot and its bounded resume diagnostic. It preserves the existing agent-stop, completed-work reminder, and Daemon `has_active_task_card_watch` hooks over the same retained manager without becoming a generic state bag. |
 | `TaskCardNotificationsPort` | `publish_error(watch_id, body, code, retryable, idempotency_key, last_valid_body_at=None)`, `publish_recovered(watch_id, body, idempotency_key)`, `publish_limit(watch_id, body, idempotency_key, used, max_refreshes, last_valid_body_at=None)`, `submit_reminder(turns)`, `clear_reminder()` | Exactly the Task Card producer's established error/recovered/limit and absent-or-stale reminder operations, as five closed scalar-signature methods. There is no generic enqueue, `**kwargs`, `source`, `channel`, `priority`, or `extra` argument: the production adapter pins the `task_card.error`/`task_card.limit` sources, the `system` channel, priority, idempotency skip, and the bounded `extra` projection internally, and holds the Agent's generic publisher privately. A holder cannot publish a foreign source or address another channel (guarded by Task Card's [TK002](../../tools/task_card/BEHAVIORS.md#behavior-tk002)). |
 | `ActiveProviderPort` | `service -> Any` | Read only the current active provider service, read through on every access so a refresh never leaves a stale provider identity. The consuming family (Vision today) may inspect that one service's provider/model/credential route but receives neither the Agent, its capability map, nor a generic provider/capability lookup (guarded by Vision's [VN006](../../tools/vision/BEHAVIORS.md#behavior-vn006)). |
-| `ProviderIdentityPort` | `provider -> str \| None` | Read only the current canonical provider *label*, read through on every access. Narrower than `ActiveProviderPort` by design: Web consumes this one string for its explicit Anthropic/Gemini eligibility gate and receives neither the provider service, credentials, model configuration, the Agent, nor any provider registry; a non-string read is reported as `None`, never coerced. |
+| `ProviderIdentityPort` | `provider -> str \| None` | Read only the current canonical provider *label*, read through on every access. Narrower than `ActiveProviderPort` by design: Web consumes this one string for its explicit backend-gated OpenAI/Anthropic engine eligibility and receives neither the provider service, credentials, model configuration, the Agent, nor any provider registry; a non-string read is reported as `None`, never coerced. |
 | `WebCompositionPort` (Web-owned) | `browser_port`, `specs`, `default_engine`, `default_source`, `legacy_fallback_from`, `publish_manager(manager)` | Web-only setup boundary behind the grant name `web_runtime`. The typed `WebComposition` value is composed by `web.setup` from the `BrowserPort` plus immutable engine specs and default provenance, granted to the `web` declaration alone through `extra_ports_for`, and never built in the standard table; the bind publishes its `WebManager` back through it exactly once. It exposes no Agent, LLM service, or credential. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-exactly twenty-one grantable names: `workdir`, `prompt_section`, `avatar_parent`,
+exactly twenty grantable names: `workdir`, `prompt_section`, `avatar_parent`,
 `context_runtime`,
-`daemon_runtime`, `email_runtime`, `file_io`, `plugin_catalog`,
-`psyche_settings`, `notification_state`, `notifications`, `configuration`, `soul_runtime`,
+`daemon_runtime`, `email_runtime`, `plugin_catalog`,
+`psyche_settings`, `notification_state`, `notifications`, `configuration`,
 `system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
 `task_card_notifications`, `active_provider`, `web_runtime`, and
-`provider_identity`: `mcp`
+`provider_identity` (`file_io` is no longer grantable): `mcp`
 consumes the first two as its base reference; Avatar, Context, and Daemon
 consume their respective narrow runtime ports; Email consumes `workdir` plus its
-Email-owned `email_runtime`; File consumes exactly `workdir`, kernel-owned
-`file_io`, and the setup-selected immutable `configuration` port carrying its
-bounded factory snapshot (the sensitive sidecar value is private and redacted
-before projection); and Plugin consumes `workdir`, its own
+Email-owned `email_runtime`; and Plugin consumes `workdir`, its own
 `prompt_section`, and the
 read-only `plugin_catalog` projection; Psyche consumes `workdir` plus only the
 read-only `psyche_settings` snapshot; Shell consumes `workdir` plus
 `notifications` and `configuration` for its existing durable async execution
-semantics; Soul consumes `workdir` plus its explicit `soul_runtime`
-live-self operations vocabulary; System consumes `workdir` plus its
+semantics; System consumes `workdir` plus its
 `system_runtime` lifecycle vocabulary and the durable naming `identity`
 port; Task Card consumes `workdir` plus `shutdown`,
 `task_card_lifecycle`, and `task_card_notifications`, built in the standard
@@ -324,19 +317,13 @@ state retryable rather than reporting a stale callback as published.
 `AgentEmailRuntimeAdapter` holds only a manager reader, performs the
 Email-owned action check before a single flattened manager call, and reads a
 replacement manager live; it never uses `_intrinsics` or a tool-handler route.
-`AgentFileIOAdapter` holds only typed read/write/glob/grep callbacks plus
-traversal and result-cap readers. It has no `Any`-typed File surface, generic
-forwarding/dispatch, whole-Agent reference, or mount operation. File's `setup`
-captures the service and executor separately before supplying the adapter only
-through `extra_ports_for`.
 `AgentPluginCatalogAdapter` is a read-only value projection: it holds one
 registration reader and one capability reader, deep-copies the registration
 snapshot on every `read_state()`, and returns a frozen `PluginCatalogState`. A
 tool result mutated by a caller therefore cannot reach the Agent's snapshot or
 capability configuration, and the adapter exposes no registration, prune,
 launch, config-write, or mount operation.
-`AgentNotificationStateAdapter` holds only Notification Core callbacks: a
-`dismiss_channel(..., invoked_by="notification")` partial, delay, hook, fresh
+`AgentNotificationStateAdapter` holds only Notification Core callbacks: delay, hook, fresh
 effective-settings read, and bounded logging operations. The payload cap uses
 the live Agent hook so System-v2 file precedence is preserved; the delay ceiling
 uses the same live environment resolver without a logging callback, keeping SHOW
@@ -386,10 +373,6 @@ an existing official claim; same-name replacement for nonreserved tools remains.
 The Composition Root stays `src/lingtai/agent.py`: dynamic capability `setup()`
 hooks and injected official-family `boot()` hooks select when a declaration is
 registered. Email is the latter: its boot creates/replaces its real manager,
-then uses `extra_ports_for` to grant `email_runtime`. File remains a dynamic
-capability and uses the same per-declaration seam for `file_io`. The Agent manual
-installer maps File's package-owned body to the established `file-manual`
-destination. This component never selects.
 then uses `extra_ports_for` to grant `email_runtime`. Notification is also a
 mandatory injected official family, registered through that existing route with
 its static `DECLARATION` and canonical package-owned manual; capability null and
@@ -488,14 +471,12 @@ installer-collision proof; `tests/test_daemon.py` preserves Daemon manager
 lifecycle coverage, including terminal-notification retry behavior;
 `tests/test_email_official_tool_plugin.py` supplies Email's manager/port,
 no-row/one-mount, and refresh-replacement proof; and
-`tests/test_file_tool_plugin_package.py` supplies File's typed port/adapter,
-two-port grant, one-body manual, one-mount, and packaging proof; and
 `tests/test_plugin_tool.py` supplies Plugin's read-only action boundary,
 protected-field projection, closed vanilla-skills namespace, and detached
 catalog-state proof:
 
 - declaration staticness and the
-  `mcp`/`avatar`/`context`/`daemon`/`email`/`file`/`plugin`
+  `mcp`/`avatar`/`context`/`daemon`/`email`/`plugin`
   declared-versus-composed surfaces, including the official Daemon binding
   manager's live notification-route retry regression, and the standard-table
   proof that `plugin_catalog`/`avatar_parent` stay unreachable for a
@@ -546,16 +527,12 @@ preserve Notification Core delay/timer and Store behavior:
 - Email's static declaration, canonical package manual, one mounted schema, no
   capability/manifest manager row, null/disable parity, and a production adapter
   that observes a replaced manager at call time without intrinsic dispatch;
-- File's exact `workdir`/`file_io`/`configuration` grant, typed adapters without
-  Agent/generic dispatch/mount authority, unchanged five operations plus
-  generic SHOW-only settings immediately before reserved manual,
-  established `file-manual` runtime destination with no second `file` install,
-  and one live registrar mount.
 - Notification's static `DECLARATION`, exact `workdir`/`notification_state`
   grant, no-Agent/no-Store/no-writer boundary, package-owned canonical manual,
   exact two-row fresh settings projection, unchanged `check` placeholder, one
   claimed/mounted schema and handler under both capability opt-out forms on
-  construction and refresh, and real Core-backed `dismiss_channel` behavior.
+  construction and refresh, and the closed schema's rejection of the removed
+  `dismiss_channel` action.
 - Task Card's static `DECLARATION`, exact
   `workdir`/`shutdown`/`task_card_lifecycle`/`task_card_notifications` grant,
   one retained `TaskCardManager` that survives refresh and is rebound, one

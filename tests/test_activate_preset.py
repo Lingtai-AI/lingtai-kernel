@@ -14,18 +14,20 @@ def _make_workdir_and_lib(tmp_path: Path) -> tuple[Path, Path]:
         "name": "deepseek",
         "description": {"summary": "DeepSeek V4"},
         "manifest": {
-            "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
+            "llm": {"provider": "openai", "model": "deepseek-v4-flash",
+                    "base_url": "https://api.deepseek.com",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-            "capabilities": {"file": {}, "web_search": {"provider": "duckduckgo"}},
+            "capabilities": {"shell": {}, "web_search": {"provider": "duckduckgo"}},
         },
     }))
     (plib / "minimax.json").write_text(json.dumps({
         "name": "minimax",
         "description": {"summary": "MiniMax M2.7"},
         "manifest": {
-            "llm": {"provider": "minimax", "model": "MiniMax-M2.7-highspeed",
+            "llm": {"provider": "anthropic", "model": "MiniMax-M2.7-highspeed",
+                    "base_url": "https://api.minimax.io/anthropic",
                     "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
-            "capabilities": {"file": {}, "vision": {"provider": "minimax",
+            "capabilities": {"shell": {}, "vision": {"provider": "anthropic",
                                                     "api_key_env": "MINIMAX_API_KEY"}},
         },
     }))
@@ -41,9 +43,10 @@ def _make_workdir_and_lib(tmp_path: Path) -> tuple[Path, Path]:
                 "active": str(plib / "deepseek.json"),
                 "default": str(plib / "deepseek.json"),
             },
-            "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
+            "llm": {"provider": "openai", "model": "deepseek-v4-flash",
+                    "base_url": "https://api.deepseek.com",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-            "capabilities": {"file": {}, "web_search": {"provider": "duckduckgo"}},
+            "capabilities": {"shell": {}, "web_search": {"provider": "duckduckgo"}},
             "soul": {"delay": 120},
             "stamina": 3600,
             "molt_pressure": 0.8,
@@ -80,7 +83,7 @@ def test_activate_preset_substitutes_llm_and_capabilities(tmp_path):
 
     # init.json on disk now reflects minimax
     data = json.loads((wd / "init.json").read_text())
-    assert data["manifest"]["llm"]["provider"] == "minimax"
+    assert data["manifest"]["llm"]["provider"] == "anthropic"
     assert data["manifest"]["llm"]["model"] == "MiniMax-M2.7-highspeed"
     assert "vision" in data["manifest"]["capabilities"]
     assert data["manifest"]["preset"]["active"] == minimax_path
@@ -88,7 +91,7 @@ def test_activate_preset_substitutes_llm_and_capabilities(tmp_path):
 
 
 def test_activate_preset_preserves_other_manifest_fields(tmp_path):
-    """admin, soul, agent_name, etc. survive; legacy stamina is removed."""
+    """admin, agent_name, and the inert legacy soul block survive; legacy stamina is removed."""
     wd, plib = _make_workdir_and_lib(tmp_path)
     a = _make_probe_agent(wd)
     a._activate_preset(str(plib / "minimax.json"))
@@ -161,9 +164,9 @@ def test_activate_preset_uses_default_path_when_unset(tmp_path, monkeypatch):
         "name": "minimax",
         "description": {"summary": "MiniMax"},
         "manifest": {
-            "llm": {"provider": "minimax", "model": "x",
+            "llm": {"provider": "anthropic", "model": "x",
                     "api_key": None, "api_key_env": "MINIMAX_API_KEY"},
-            "capabilities": {"file": {}},
+            "capabilities": {"shell": {}},
         },
     }))
 
@@ -190,4 +193,4 @@ def test_activate_preset_uses_default_path_when_unset(tmp_path, monkeypatch):
     a._activate_preset("~/.lingtai-tui/presets/minimax.json")
 
     data = json.loads((wd / "init.json").read_text())
-    assert data["manifest"]["llm"]["provider"] == "minimax"
+    assert data["manifest"]["llm"]["provider"] == "anthropic"

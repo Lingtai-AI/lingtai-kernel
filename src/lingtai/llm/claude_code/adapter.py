@@ -23,6 +23,7 @@ from lingtai.kernel.llm.base import (
     LLMResponse,
     ToolCall,
     UsageMetadata,
+    checked_count,
 )
 from lingtai.kernel.llm.reasoning_effort import (
     ReasoningEffortCapability,
@@ -173,6 +174,10 @@ def _map_usage(usage: dict | None) -> UsageMetadata:
         output_tokens=int(usage.get("output_tokens", 0) or 0),
         thinking_tokens=0,
         cached_tokens=cache_read,
+        # Anthropic-style wire: explicit write count when present; output_tokens
+        # already includes thinking. Absent fields stay unknown (None), not 0.
+        cache_write_tokens=checked_count(usage.get("cache_creation_input_tokens")),
+        billable_output_tokens=checked_count(usage.get("output_tokens")),
     )
 
 
@@ -686,7 +691,10 @@ class ClaudeCodeAdapter(LLMAdapter):
         self._context_window = context_window
         self._setup_gate(max_rpm)
         # Neutral, empty cwd so the CLI does not load a project's CLAUDE.md,
-        # settings, or MCP servers (which could inject context or extra tools).
+        # settings, or *project*-level MCP servers (which could inject context
+        # or extra tools). User/global config and account-level MCP connectors
+        # ignore cwd; those are isolated separately by the --strict-mcp-config
+        # + empty --mcp-config pair emitted when the command is built.
         self._cwd = Path(tempfile.gettempdir()) / "lingtai-claude-brain"
         try:
             self._cwd.mkdir(parents=True, exist_ok=True)
@@ -889,6 +897,20 @@ class ClaudeCodeAdapter(LLMAdapter):
             cmd += ["--tools", ""]
         elif self._disallowed:
             cmd += ["--disallowedTools", *self._disallowed]
+        # Isolate the CLI from ALL ambient MCP. The neutral cwd (see __init__)
+        # only blocks *project*-level MCP; user/global config and account
+        # connectors otherwise load and inject host tools the model could call
+        # outside LingTai's JSON-action loop. ``--strict-mcp-config`` restricts
+        # the CLI to servers from ``--mcp-config``; the inline empty map supplies
+        # none. Emitted unconditionally (not gated on the built-in-tools branch
+        # above) so the ``--disallowedTools`` path is isolated too. Verified: the
+        # session ``mcp_servers`` is empty with these flags on Claude Code 2.1.260
+        # and 2.1.265 (the empty ``tools`` seen on 2.1.260 is the ``--tools ""``
+        # default path, not a strict guarantee — strict isolates MCP only). On
+        # 2.1.265 an unrecognized flag errors (exit 1), so a CLI lacking the flag
+        # is expected to fail loud rather than silently re-leak; older versions
+        # are not verified.
+        cmd += ["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
         if system_prompt_file is _UNSET:
             system_prompt_file = self._system_prompt_file
         if system_prompt_file:

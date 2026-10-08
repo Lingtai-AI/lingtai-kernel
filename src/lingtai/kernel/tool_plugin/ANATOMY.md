@@ -30,9 +30,6 @@ related_files:
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/email/manual/SKILL.md
-  - src/lingtai/tools/file/ANATOMY.md
-  - src/lingtai/tools/file/__init__.py
-  - src/lingtai/tools/file/manual/SKILL.md
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/plugin/manual/SKILL.md
@@ -49,9 +46,6 @@ related_files:
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/bash/manual/SKILL.md
-  - src/lingtai/tools/soul/ANATOMY.md
-  - src/lingtai/tools/soul/__init__.py
-  - src/lingtai/tools/soul/manual/SKILL.md
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/karma.py
@@ -75,13 +69,11 @@ related_files:
   - tests/test_context_declared_tool_plugin.py
   - tests/test_daemon.py
   - tests/test_email_official_tool_plugin.py
-  - tests/test_file_tool_plugin_package.py
   - tests/test_plugin_tool.py
   - tests/test_notification_settings.py
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
   - tests/test_shell_tool_plugin_declaration.py
-  - tests/test_soul_runtime_port_ab.py
   - tests/test_system_declared_plugin.py
   - tests/test_task_card_controller.py
   - tests/test_task_card_notifications.py
@@ -94,7 +86,7 @@ maintenance: |
   Keep this component's ANATOMY.md, CONTRACT.md, and BEHAVIORS.md reciprocal and
   keep parent/child anatomy links bidirectional (src/lingtai/kernel/ANATOMY.md
   upward; src/lingtai/tools/ANATOMY.md and the MCP, Avatar, Context, Daemon,
-  Email, File, Plugin, Task Card, Vision, and Web owner Anatomies across to the declaring side). Code is the
+  Email, Plugin, Task Card, Vision, and Web owner Anatomies across to the declaring side). Code is the
   structural source of truth: update
   upward; src/lingtai/tools/ANATOMY.md, src/lingtai/tools/mcp/ANATOMY.md, and
   src/lingtai/tools/daemon/ANATOMY.md, src/lingtai/tools/email/ANATOMY.md, and
@@ -127,13 +119,13 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the twenty-one kernel host/value Port Protocols `WorkdirPort`,
-    `PromptSectionPort`, `FileIOPort`, `AvatarParentPort`, `ContextRuntimePort`,
+  - the kernel host/value Port Protocols `WorkdirPort`,
+    `PromptSectionPort`, `AvatarParentPort`, `ContextRuntimePort`,
     `DaemonRuntimePort` (including host-selected explicit-preset requirement and authorization operations), read-only `PluginCatalogPort` (with detached
     `PluginCatalogState`), read-only `PsycheSettingsPort` (returning the
-    structural `PsycheSettingsSnapshotPort`),
+    structural `PsycheSettingsSnapshotPort` and current loaded Covenant body),
     `NotificationStatePort`, Shell's narrow durable `NotificationPort` and
-    setup-only `ConfigurationPort`, Soul's explicit live-self `SoulRuntimePort`,
+    setup-only `ConfigurationPort`,
     System's bounded lifecycle `SystemRuntimePort` and durable naming
     `IdentityPort`, Task Card's one-predicate `ShutdownPort`, current-Agent
     `TaskCardLifecyclePort`, and closed operation-native
@@ -145,10 +137,11 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     for its setup snapshot), Web's narrower read-only `ProviderIdentityPort`
     (one `provider` string-or-`None` read of the current canonical provider
     label, never the service),
-    and host-only `ToolMountPort`, plus File's
-    structural `FileGrepMatch`/`FileTraversalStats` result Protocols;
-    `email_runtime` and `web_runtime` are also grantable (twenty-one grant names
-    in `GRANTABLE_HOST_PORTS`) but their Protocols remain family-owned —
+    and host-only `ToolMountPort`;
+    `email_runtime` and `web_runtime` are also grantable (twenty grant names
+    in `GRANTABLE_HOST_PORTS`; the former `file_io` grant and its
+    `FileIOPort`/result Protocols left with the removed `file` family) but
+    their Protocols remain family-owned —
     Email's `EmailRuntimePort` and Web's `WebCompositionPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
@@ -169,14 +162,12 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     body — check every name, then bind/activate/mount — is the ordering promise
     (guarded by TP002).
 - `src/lingtai/adapters/tool_plugin_host.py` — the production Adapter set,
-  outside the kernel package. It supplies callback-only adapters for File's
-  concrete operations/facts, Plugin's detached read-only catalog projection,
-  and Notification Core's dismissal, delay, hook, and logging operations,
+  outside the kernel package. It supplies callback-only adapters for
+  Plugin's detached read-only catalog projection
+  and Notification Core's delay, hook, and logging operations (no dismissal),
   alongside the existing MCP, Avatar, Context, Daemon, and Email adapters,
   plus `AgentPsycheSettingsAdapter` for the one read-through applied Psyche
-  owner-input snapshot, and `AgentSoulRuntimeAdapter`/`agent_soul_runtime` for
-  Soul's explicit
-  live-self runtime operations and
+  owner-input snapshot, and
   `AgentSystemRuntimeAdapter`/`AgentIdentityAdapter`/`agent_system_runtime`
   for System's lifecycle and naming vocabularies (whose sleep members are
   translation-only evidence/effects for `karma.sleep_use_case`), and
@@ -203,8 +194,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 - `src/lingtai/tools/mcp/__init__.py` — the current base reference slice.
   Its static declaration opts into the reserved SHOW-only settings child and
   binds the per-host family and protected prompt
-  section; Avatar, Context, Daemon, Email, File, Plugin, Psyche, Notification, Shell,
-  Soul, System, Task Card, Vision, and Web are separately accepted vertical
+  section; Avatar, Context, Daemon, Email, Plugin, Psyche, Notification, Shell,
+  System, Task Card, Vision, and Web are separately accepted vertical
   slices. The later-family target register is now empty; the reserved list is
   not an admission path.
 - `src/lingtai/tools/avatar/__init__.py` — separately landed vertical evidence,
@@ -228,18 +219,9 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `AgentEmailRuntimeAdapter(lambda: getattr(agent, "_email_manager", None))`.
   The adapter flattens an already-normalized request into one manager call and
   reads the manager at call time; Email has no dynamic `setup()` bridge.
-- `src/lingtai/tools/file/__init__.py` is the sixth accepted vertical slice. Its
-  static `DECLARATION` preserves `read | write | edit | glob | grep`, opts into
-  generic `settings` immediately before `manual`, and binds only `workdir`, the
-  earned `file_io` port, and a setup-selected `configuration` snapshot.
-  `setup(agent)` captures
-  the live File service and executor as separate narrow objects, builds
-  `AgentFileIOAdapter`, captures the canonical File factory's bounded backend
-  construction snapshot in `StaticConfigurationAdapter`, and grants both only
-  through `extra_ports_for`; the adapters
-  own no Agent, `Any` surface, generic dispatch, or mount authority. The package
-  manual is the sole body and installs at the established `file-manual` path;
-  no File settings file or writer is introduced.
+- The former sixth slice, `lingtai.tools.file`, was removed together with its
+  `file_io` port and `AgentFileIOAdapter`; durable filesystem changes go
+  through the Shell slice below.
 - `src/lingtai/tools/plugin/__init__.py` is the seventh accepted vertical slice.
   Its static `DECLARATION` preserves the read-only `info | manual` family and
   binds only `workdir`, its own `prompt_section`, and the earned
@@ -253,8 +235,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   slice. Its static `DECLARATION` preserves the LTP envelope, adds the reserved
   read-only `settings` action immediately before `manual`, and binds only
   `workdir` plus `notification_state`. The callback-only adapter delegates every
-  dismissal, stale-delivery comparison, producer guard, delay, timer,
-  hook-manifest, logging decision, and fresh two-scalar effective-settings read
+  delay, timer, hook-manifest, logging decision (it exposes no dismissal), and fresh two-scalar effective-settings read
   to the canonical owners; the family receives no Agent, Store, fingerprint,
   configuration object, writer, or local parallel state machine. Its
   package-owned `manual/SKILL.md` is the one canonical installed
@@ -270,21 +251,15 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `StaticConfigurationAdapter` carries only copied setup values.
   `bash/__init__.py` `setup(agent, ...)` only supplies that configuration through
   `extra_ports_for` and calls the registrar.
-- `src/lingtai/tools/soul/__init__.py` is the tenth accepted vertical slice.
-  Its static `DECLARATION` preserves the public
-  `inquiry | flow | config | voice | dismiss | manual` family and binds the
-  five operational children only to the earned, explicit `soul_runtime` port;
-  the reserved manual child receives only the granted `workdir`.
-  `AgentSoulRuntimeAdapter` stores individual read closures and bound
-  operations — never the Agent — for Soul's real conversation, cadence,
-  consultation-lock, and notification semantics. Soul stays an injected
-  intrinsic for kernel lifecycle hooks while its model-facing root mounts only
-  through the registrar; the package manual is the sole operational body,
-  installed at the historical `soul-manual` destination.
+- The tenth accepted vertical slice was the `soul` family; the Soul subsystem
+  was removed outright, taking its declaration, `SoulRuntimePort`,
+  `AgentSoulRuntimeAdapter`, and `soul_runtime` grant with it. Its slot is not
+  reused and nothing about the removal widened another family's grant.
 - `src/lingtai/tools/system/__init__.py` is the eleventh accepted vertical
   slice. Its static `DECLARATION` preserves the public
   `refresh | sleep | lull | interrupt | suspend | cpr | clear | nirvana |
-  presets | name_set | name_nickname | manual` family (no public `summarize`)
+  presets | name_set | name_nickname | meta | manual` family (no public `summarize`;
+  read-only `meta` returns `SystemRuntimePort.runtime_meta()`)
   and binds the retained handlers through the private `_SystemHandlerHost`
   bridge to exactly `workdir`, `system_runtime`, and `identity`. The one
   self-sleep policy — fingerprint comparison, refusal/force, receipts, audit
@@ -348,14 +323,14 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `host.web_runtime` is granted and is a typed `WebComposition` — there is no
   fallback carrier, default transport, or default engine set at bind. The
   manager retains only the granted workdir and provider-identity ports;
-  `_same_provider_identity` compares the port's label exactly for the explicit
-  Anthropic/Gemini opt-in. The package manual installs at
+  `_same_provider_identity` compares the port's label exactly for the backend-gated
+  OpenAI/Anthropic engines. The package manual installs at
   `capabilities/web/SKILL.md`.
 
 ## Connections
 
 - `lingtai.tools.mcp`, `lingtai.tools.avatar`, `lingtai.tools.context`,
-  `lingtai.tools.daemon`, `lingtai.tools.email`, `lingtai.tools.file`,
+  `lingtai.tools.daemon`, `lingtai.tools.email`,
   `lingtai.tools.plugin`, and `lingtai.tools.notification` import
   `lingtai.kernel.tool_plugin` (declarations depend on the shape). The kernel
   `lingtai.tools.daemon`, `lingtai.tools.email`, and
@@ -367,11 +342,6 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   lazy `_bind` sees a `ToolPluginHost`, never an Agent. The retained Shell
   manager receives only the granted workdir/notification ports, while copied
   setup values arrive through `ConfigurationPort`.
-- `lingtai.tools.soul` imports `lingtai.kernel.tool_plugin`; its `_bind` sees a
-  `ToolPluginHost`, never an Agent, and its five operational children receive
-  only the granted `SoulRuntimePort`. `Agent` re-mounts the declaration through
-  `override_intrinsic("soul")` plus `soul.setup(agent)` on construction and on
-  every refresh.
 - `lingtai.tools.system` imports `lingtai.kernel.tool_plugin`; its `_bind` sees
   a `ToolPluginHost`, never an Agent, and its handlers reach the body only
   through the granted `system_runtime`/`identity` ports (plus `workdir` for the
@@ -413,12 +383,12 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   provenance, not an absolute defense against deliberate private-state mutation.
 - `lingtai.tools.mcp.setup()`, `lingtai.tools.avatar.setup()`,
   `lingtai.tools.context.setup()`, `lingtai.tools.daemon.setup()`,
-  `lingtai.tools.file.setup()`, `lingtai.tools.plugin.setup()`,
+  `lingtai.tools.plugin.setup()`,
   `lingtai.tools.task_card.setup()`, `lingtai.tools.vision.setup()`, and
   `lingtai.tools.web_search.setup()` call
   `lingtai.adapters.tool_plugin_host.register_agent_tool_plugins` through the
-  ordinary capability boot loop. Daemon and File add their capability-native
-  ports through `extra_ports_for`, Vision adds its setup-selected
+  ordinary capability boot loop. Daemon adds its capability-native
+  port through `extra_ports_for`, Vision adds its setup-selected
   `configuration` snapshot the same way, and Web adds its typed
   `web_runtime` composition the same way; Plugin needs no factory because its
   read-only `plugin_catalog` projection is built in the standard table and is
@@ -441,16 +411,13 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `lingtai.tools.tool_family.manual.build_manual_child`, which reads the
   installed manual through `src/lingtai/tools/_manual.py`. That loader accepts
   the live Agent (private `_working_dir`) or a `WorkdirPort` (`path`), so
-  migrated and unmigrated families share one loader. File keeps a local manual
-  child that reads the same installed body at `file-manual`; the installer maps
-  the package body to that destination, so the runtime has one body and one
-  destination.
+  migrated and unmigrated families share one loader.
 
 ## Composition
 
 `import lingtai.tools.mcp`, `import lingtai.tools.avatar`,
 `import lingtai.tools.context`, `import lingtai.tools.daemon`,
-`import lingtai.tools.email`, `import lingtai.tools.file`,
+`import lingtai.tools.email`,
 `import lingtai.tools.plugin`, `import lingtai.tools.task_card`,
 `import lingtai.tools.vision`, or `import lingtai.tools.web_search` →
 `import lingtai.tools.email`, or `import lingtai.tools.notification` →
@@ -546,8 +513,8 @@ component does not own.
   reviewed contract change), build its module-level `DECLARATION`, and route
   its approved composition hook through `register_agent_tool_plugins`; do not
   infer that every official family must be a dynamic `setup()` capability.
-  The fifteen actual slices are `mcp`, `avatar`, `context`, `daemon`, `email`,
-  `file`, `plugin`, `psyche`, `notification`, `shell`, `soul`, `system`, `task_card`,
+  The thirteen actual slices are `mcp`, `avatar`, `context`, `daemon`, `email`,
+  `plugin`, `psyche`, `notification`, `shell`, `system`, `task_card`,
   `vision`, and `web`;
   Notification demonstrates an always-on injected family rather than a
   later-family target or normal opt-in capability, Task Card demonstrates a

@@ -1,6 +1,6 @@
 ---
 name: init-reader
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/ANATOMY.md
@@ -75,10 +75,18 @@ v2 System settings, or fixed defaults.
 
 Compatibility exists to keep older local files readable while agents/humans
 repair them. Retired prompt fields and ignored runtime knobs are never new-write
-shapes. The six former init prompt fields (`base_prompt`, `base_prompt_file`,
-`covenant`, `covenant_file`, `comment`, `comment_file`) are compatibility-known
+shapes. The four former init prompt fields (`base_prompt`, `base_prompt_file`,
+`covenant`, `covenant_file`) are compatibility-known
 but inert: this reader does not type-check, path-resolve, or consume them.
-Psyche owns the active six-field surface through its independent strict
+The retired `manifest.capabilities.daemon.max_emanations` option fails validation
+with its exact path and migration instructions. Passing it to daemon setup would
+silently leave the daemon capability absent; `manager_pool_size` has different
+semantics and requires an explicit owner choice (see `migration/migration.md`).
+For this exact boot failure, the CLI prints a short, static, secret-free
+`error:` line after its structured JSON error. Older ACP drivers select the
+last error line and truncate it; this line carries the full repair route even
+before their structured-error display is updated.
+Psyche owns the active four-field surface through its independent strict
 `settings/psyche.json` v1 reader at Agent reconstruction. Live refresh resolves
 one immutable Psyche prompt plan exactly once immediately after a successful init
 read and before any destructive teardown, then passes that same candidate through
@@ -133,6 +141,9 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
    `LINGTAI_NUDGE_ENABLED` / `LINGTAI_NUDGE_REPEAT_INTERVAL` policy. The goal
    reminder is explicitly a separate protected-goal system notification, not a
    declared Nudge kind, and is therefore not part of Nudge dispatch/docs.
+   Updating an existing kind preserves its first position; only new kinds
+   append. Identical findings leave the transport payload and publication time
+   unchanged (guarded by `tests/test_nudge_policy.py`).
 7. Every declared Nudge kind is additionally bound by the shared
    `nudge.upsert` hard inline cap: the fully assembled entry (producer body
    plus `kind` and the policy fields from rule 6) may be at most
@@ -156,17 +167,16 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
    producer, including `nudge/init_config.py`, individually re-implements
    truncation, externalization, or kind validation.
 8. `manifest.llm.thinking` accepts explicit
-   `none|minimal|low|medium|high|xhigh|max` only for thinking-capable
-   providers: the Codex family, `anthropic`, `openai`, `deepseek`, and any
-   block with `api_compat="openai"` (either `wire_api`). Non-Codex omission
-   keeps the existing `high` runtime default; Codex omission keeps its
-   existing adapter-owned `xhigh` default. DeepSeek is provider-owned: its
-   accepted values are validated per model and wire by its own policy
-   (`src/lingtai/llm/deepseek/policy.py`) rather than against the global
-   seven-level vocabulary, aliases such as `medium`/`xhigh` may normalize,
-   and omission sends no reasoning field so DeepSeek's own default applies.
-   Invalid values or scopes fail validation rather than being normalized
-   silently.
+   `none|minimal|low|medium|high|xhigh|max` for every provider family
+   (`openai`, `anthropic`, `codex`, `claude-code`); any other value fails
+   validation rather than being normalized silently. Omission hydrates the
+   `default` sentinel for `openai` (no reasoning field is sent) and `codex`
+   (the adapter-owned explicit `xhigh`), and the existing `high` runtime
+   default for `anthropic` and `claude-code`. `manifest.llm.service_tier`
+   accepts `fast` (sent as `priority`) or the standard `auto`, `default`,
+   `flex`, `priority`; any other value fails validation. A non-`auto`
+   `manifest.llm.wire_api` is valid only for provider `openai` and must be
+   `chat_completions` or `responses`; legacy `auto` is inert.
 9. `manifest.cache_miss_budget` is schema-unknown legacy input: it is reported
    and ignored without writeback, never hydrated, and cannot override the
    System-owned effective setting.
@@ -178,9 +188,23 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
     them. Their live owner is valid environment > valid closed-v2
     `settings/system.json` field > fixed default.
 11. `manifest.disable` is a `list[str]`; the validator never stringifies or
-    drops malformed entries. `manifest.llm.api_compat` remains deliberately
-    value-tolerant for adapter fallback, but every nested float in its canonical
-    JSON containers must be finite before the effective mapping is accepted.
+    drops malformed entries. The retired `manifest.llm.api_compat`,
+    `reasoning_effort_vocab`, and `use_responses_api` keys (with
+    `compact_threshold` and `codex_auth_pool_path`) are recognized-and-ignored
+    (`LLM_LEGACY_IGNORED`): never type-checked, warned about, or forwarded.
+12. A removed LLM provider name (`init_schema.REMOVED_LLM_PROVIDERS`:
+    `deepseek`, `zhipu`, `glm`, `mimo`, `minimax`, `openrouter`, `grok`,
+    `qwen`, `kimi`, `gemini`, `kimi-code`, `kimi_code`, `custom`,
+    `claude_code`, `codex-pool`, `codex_pool`) on `manifest.llm.provider`, or
+    on any `manifest.capabilities.<cap>.provider` that names an LLM route,
+    fails validation with a message pointing at provider `openai`
+    (OpenAI-compatible `base_url` + `wire_api`), `anthropic`
+    (Anthropic-compatible `base_url`), or an external pool such as
+    sub2api/subs-pool. `web`/`web_search` provider values are search-engine
+    names and are exempt; non-LLM values such as `duckduckgo`, `local`, `mlx`,
+    `inherit`, or `whisper` are never rejected. The lingtai-layer preset loader
+    (`agent.load_preset`) applies the same rejection and standard-parameter
+    rules to presets.
 
 ## Contract tests
 
@@ -201,10 +225,11 @@ the sidecar write fails and when `kind` is oversized or escape-heavy, and
 dismissal/repeat semantics for a capped finding.
 `tests/test_init_schema.py`, `tests/test_presets.py`,
 `tests/test_agent_config_hydration.py`, and
-`tests/test_preset_materialization.py` prove the accepted custom Responses
-scope, rejected out-of-scope values, finite canonical-number boundaries,
-`disable` element typing, and the distinct custom/Codex omission defaults
-through real config and session materialization.
+`tests/test_preset_materialization.py` prove removed-provider rejection
+(LLM and capability routes), the standard `thinking`/`service_tier`/`wire_api`
+values and scopes, legacy-ignored keys, `disable` element typing, and the
+distinct `openai`/`codex` omission defaults through real config and session
+materialization.
 
 ## Maintenance
 
@@ -214,3 +239,14 @@ both composition roots, focused tests, and the environment/manual route in one
 candidate. Files that are only legacy migration machinery are not a runtime
 registry for this Contract; if later retirement requires deletion, report the
 exact path and obtain path-scoped authorization first.
+
+## Unified instructions and retired inputs
+
+The resident kernel prefix is one short entry. Current loaded full fixed owners
+are disclosed read-only by `psyche.instructions`, including assembled catalog,
+_meta readme and adapter static rules. Base prompt remains resident after the
+entry; dynamic memories and full effective `psyche.covenant` remain separate.
+Comment/comment_file now receive the existing unknown-field diagnostic with
+migrate-to-Pad guidance (strict rejection in the Psyche owner, warning in init).
+Old configs must remove those fields and use authorized Pad edits. No `.rules`
+consumer or `system/rules.md` injection exists; old files are left untouched.

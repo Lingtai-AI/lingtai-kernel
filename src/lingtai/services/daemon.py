@@ -37,7 +37,6 @@ class _StandaloneDaemonRuntime:
         self._manager_options = dict(manager_options)
         self._notification_store = PosixNotificationStoreAdapter(state_root)
         self._tool_call_guard = ToolCallGuard([build_risky_action_check(state_root)])
-        self._file_io = None
         self._config = SimpleNamespace(language="en", max_aed_attempts=3)
         self._session = None
         self._intrinsics: dict[str, Any] = {}
@@ -92,10 +91,6 @@ class _StandaloneDaemonRuntime:
         from lingtai.tools.daemon import _ToolCollector
         from lingtai.tools.registry import setup_capability
 
-        if self._file_io is None and name == "file":
-            from lingtai.services.file_io_sidecar import default_file_io_service
-
-            self._file_io = default_file_io_service(self._working_dir)
         collector = _ToolCollector(self)
         setup_capability(collector, name, **dict(kwargs))
         return collector.schemas, collector.handlers
@@ -135,6 +130,16 @@ class _StandaloneDaemonRuntime:
             extra=dict(extra),
             channel=channel,
         )
+
+    def _enqueue_system_notification(self, **kwargs: Any) -> Any:
+        """Durable system-event route for host tools mounted on this runtime.
+
+        Shell's declared official binding earns a narrow notification port
+        built from this callable (``AgentNotificationAdapter``); the
+        standalone runtime publishes into its own state-root notification
+        store exactly as ``enqueue_daemon_notification`` does.
+        """
+        return _enqueue_system_notification(self, **kwargs)
 
     def has_active_task_card_watch(self) -> bool | None:
         return None

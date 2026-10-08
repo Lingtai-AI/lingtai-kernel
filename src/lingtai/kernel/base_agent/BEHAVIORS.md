@@ -5,6 +5,7 @@ labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - tests/test_lifecycle_clock.py
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/kernel/base_agent/lifecycle.py
@@ -21,6 +22,7 @@ related_files:
   - src/lingtai/tools/system/karma.py
   - tests/test_aed_recovery.py
   - tests/test_notification_sync.py
+  - tests/test_notification_one_shot.py
   - tests/test_cli_worker_poison_recovery.py
   - tests/test_worker_hang_aed_redo.py
   - tests/test_silence_kill.py
@@ -53,7 +55,7 @@ must run from the repo root with the project's Python.
 - **id**: BA001
 - **title**: stop retains ownership until execution quiescence, then orders manifest-persist → heartbeat-withdraw → lease-release
 - **guards**: `agent-runtime` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; no other agent process sharing the scratch working directory
 - **estimate**: ≈ 20 minutes
 
@@ -78,7 +80,7 @@ Pass when both suites pass, non-quiescent stop releases nothing, the typed publi
 - **title**: a refresh that fails before the watcher handoff stays retryable, and only a completed handoff is terminal
 - **guards**: `agent-runtime` § Contract rules, rule 5 (`agent-runtime.refresh.v1`) — see [CONTRACT.md](CONTRACT.md#contract-rules)
 - **supersedes**: `tests/test_perform_refresh_handshake.py::test_base_agent_constructs_shared_refresh_singleflight_gate`, `tests/test_perform_refresh_handshake.py::test_launch_cmd_exception_releases_single_flight_slot_for_retry`, `tests/test_perform_refresh_handshake.py::test_raising_spawn_releases_slot_without_shutdown_and_retry_is_not_coalesced`, `tests/test_perform_refresh_handshake.py::test_poison_guard_retries_every_pre_handoff_refresh_failure`, `tests/test_perform_refresh_handshake.py::test_concurrent_poison_refresh_requests_use_lifecycle_singleflight`, `tests/test_perform_refresh_handshake.py::test_successful_handoff_keeps_slot_claimed_even_if_post_handoff_logging_raises` (kept as bottom asserts)
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` containing an empty `logs/` subdirectory; no other agent process sharing `<scratch>`
 - **estimate**: ≈ 20 minutes
 - **motivation**: production defects 2026-08-24 and 2026-09-08 — lifecycle first fixed a slot retained by a raising launch-command builder; the worker-poison wrapper then added a second pre-call latch that swallowed every later poison-guard retry after any ordinary pre-handoff failure. Separately, post-handoff event logging preceded cancel/shutdown and could strand the watcher behind the old process lease.
@@ -108,19 +110,19 @@ Pass when every failure before `spawn_detached` returns leaves the slot released
 - **id**: BA003
 - **title**: one cooperative turn-cancel latch survives ACTIVE work and is consumed only by a fresh dequeue
 - **guards**: `agent-runtime.turn-cancel-latch.v1`
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; no live agent process sharing any pytest scratch working directory
 - **estimate**: ≈ 10 minutes
 
 ### Steps
 1. From `<repo>`, run `python -m pytest -q -x tests/test_tool_result_restore_after_continuation_failure.py tests/test_aed_recovery.py tests/test_notification_sync.py tests/test_silence_kill.py`.
 2. Run `python -m pytest -q -x tests/test_system.py tests/test_system_declared_plugin.py tests/test_karma.py tests/test_perform_refresh_handshake.py`.
-3. Inspect `BaseAgent._request_turn_cancel`, both `_run_loop` dequeue branches, `_sync_notifications`, and `_process_response`; confirm producer writes route through the helper, only the two post-shutdown fresh-dequeue sites clear, the awake clear precedes concatenation, and inner consumers never clear.
+3. Inspect `BaseAgent._request_turn_cancel`, `request_cooperative_cancel`, both `_run_loop` dequeue branches, `_sync_notifications`, and `_process_response`; confirm producer writes route through the helper, only the two post-shutdown fresh-dequeue sites clear, the awake clear precedes concatenation, and inner consumers never clear.
 
 ### Expected evidence
-- [ ] Step 1: a normal preset `threading.Event` prevents tool dispatch and continuation while remaining set; awake and ASLEEP fresh dequeues clear stale state; an event-barrier cancellation during concatenation survives; an ASLEEP notification wake preserves the latch; repeated helper calls are harmless.
+- [ ] Step 1: a normal preset `threading.Event` prevents tool dispatch and continuation while remaining set; a response cancelled after proposing a tool call persists a paired result that certifies no dispatch and permits a later retry only if the request remains active; awake and ASLEEP fresh dequeues clear stale state; an event-barrier cancellation during concatenation survives; an ASLEEP notification wake preserves the latch; repeated helper calls are harmless.
 - [ ] Step 2: official and direct System self-sleep publish ASLEEP state/event before latching; heartbeat interrupt/sleep consume their signal file before latching; successful refresh spawns its watcher before latching and sets shutdown afterward; failed setup remains unsignaled.
-- [ ] Step 3: source inspection finds one direct `.set()` inside the helper and exactly two `.clear()` calls in fresh-dequeue ownership. No provider abort, running-tool preemption, request identity, stop-drain guarantee, or terminal cancellation result has been introduced.
+- [ ] Step 3: source inspection finds one direct `.set()` in the helper's Core delegation and exactly two `.clear()` calls in fresh-dequeue ownership. No provider abort, running-tool preemption, request identity, or stop-drain guarantee has been introduced.
 
 ### Pass / Fail
 Pass when both focused groups pass and source ownership matches the contract. Fail if an async notification wake or inner response consumer clears cancellation, if merge-time cancellation is lost, if a producer bypasses the helper, or if the cooperative latch is represented as hard/per-request cancellation; record the evidence trail in the task report.
@@ -148,10 +150,21 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
    not alter tool execution or settlement.
 8. Inspect permission tests: absent brokerage passes through; a bound broker sees
    only safe identity; exceptions/invalid decisions deny; consecutive turns reset scope.
+9. Inspect the authenticated retry tests: provider failure followed by recovery
+   settles the same handle normally with the original provider-admission parent;
+   cancellation during backoff prevents another provider call. Copied, settled,
+   cancelled, cross-turn and policy-revoked controls cannot authorize retries,
+   and a forged correlated message cannot reach provider dispatch.
+10. Inspect self-sleep tests: mounted and direct System transitions stop model
+    continuation yet settle their own completed correlated turn normally; a
+    external cancellation before or after self-sleep still wins. Verify that
+    active handle cancellation completes using the production BaseAgent lock.
 
 ### Expected evidence
 - [ ] All focused tests pass without a provider or network call.
 - [ ] Active cancellation wins before settlement, emits no late text, and a later cancel returns false.
+- [ ] External cancellation between the run loop's cooperative-latch snapshot and the settlement lock claim still wins.
+- [ ] Mounted and direct self-sleep end their own completed correlated turn normally; an external cancellation before or after self-sleep still settles cancelled. Active handle cancellation does not deadlock on the production BaseAgent lock.
 - [ ] Pending cancellation leaves the process-global latch clear while the first turn is current; the first settles normal and only the second settles cancelled without provider dispatch.
 - [ ] Failure and shutdown each settle rather than leaving a waiter blocked; a terminal stale envelope never reaches provider work.
 - [ ] Pre-bind and post-provider unexpected exceptions both re-raise, leave no live control, and settle the affected waiter cancelled/failed respectively without requiring `Agent.stop()`.
@@ -161,8 +174,9 @@ Pass when both focused groups pass and source ownership matches the contract. Fa
 ### Pass / Fail
 Pass when every handle settles exactly once with the expected correlation and the
 pending-cancel isolation assertion proves the turn ahead was untouched. Fail on
-a hanging/duplicate result, merged correlation, cancellation leaking to a later
-or earlier turn, failure represented as normal, or any hard provider-abort claim;
+a hanging/duplicate result, merged correlation, self-sleep represented as
+cancelled, cancellation leaking to a later or earlier turn, failure represented
+as normal, or any hard provider-abort claim;
 record the evidence trail in the task report.
 
 ## Behavior BA005 — every provider request is freshly admitted and a derived child cannot mint another child
@@ -171,7 +185,7 @@ record the evidence trail in the task report.
 - **title**: every provider request is freshly admitted and a derived child cannot mint another child
 - **guards**: `agent-runtime.provider-admission.v1` in [CONTRACT.md](CONTRACT.md#contract-rules)
 - **supersedes**: `tests/test_provider_admission.py` (kept as bottom asserts)
-- **runner**: any LingTai coding agent with `shell` and `file` access to this repository
+- **runner**: any LingTai coding agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>` and the project Python with pytest; no live provider credentials are required
 - **estimate**: ≈ 5 minutes
 
@@ -199,7 +213,7 @@ Pass when the focused suite proves fresh fail-closed admission and the one-hop l
 - **title**: a poison-recovery relaunch redoes the interrupted turn from the recovery artifact, never in-process, and otherwise stays ASLEEP
 - **guards**: `agent-runtime` § Contract rules, rule 5 (`agent-runtime.refresh.v1`), poison-recovery paragraph — see [CONTRACT.md](CONTRACT.md#contract-rules)
 - **pinned by**: `tests/test_worker_hang_aed_redo.py` (all tests), `tests/test_cli_worker_poison_recovery.py::test_refresh_boot_with_pending_worker_recovery_stays_asleep_without_kickstart`, `tests/test_notification_sync.py::test_start_with_pending_worker_recovery_does_not_self_wake_on_first_sync`, `tests/test_notification_sync.py::test_baseline_refuses_when_external_notification_already_pending`, `tests/test_aed_recovery.py::test_worker_hang_request_artifact_is_bounded_and_redacted`
-- **runner**: any LingTai coding agent with `shell` and `file` access to this repository
+- **runner**: any LingTai coding agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>` and the project Python with pytest; no live agent sharing pytest scratch state
 - **estimate**: ≈ 10 minutes
 - **motivation**: production defect 2026-09-08 (Runyuan). After a 300 s provider timeout plus grace (`WorkerStillRunningError`) the agent was force-relaunched to discard the poisoned interface; #1663 stopped the relaunch from self-waking but the interrupted LLM call was never redone ("at 300s the agent SHOULD go to aed mode and REDO the llm call"). The 11:38Z recurrence was a `tc_wake_wire` turn with no notification sources, so a passive resync could not redrive it.
@@ -214,3 +228,45 @@ Pass when the focused suite proves fresh fail-closed admission and the one-hop l
 
 ### Pass / Fail
 Pass when the suite is green and the inspection matches the Contract. Fail if the poisoned process retries, if a refresh-success request is sent while a redo is enqueued, if a `provider_started` record is replayed, if a `continuation` redo carries the original text, if a `tc_wake` hang is left to notification resync, or if replay text survives a terminal status; record the evidence trail in the task report.
+
+## Behavior BA007 — empty continuation after a settled visible Puffo reply ends the turn
+
+- **id**: BA007
+- **title**: empty continuation after a settled visible Puffo reply ends the turn
+- **guards**: `agent-runtime.puffo-post-send-completion.v1` in [CONTRACT.md](CONTRACT.md#contract-rules)
+- **pinned by**: `tests/test_tool_result_restore_after_continuation_failure.py::test_empty_completion_after_sent_and_covered_puffo_reply_settles_turn` and `::test_empty_completion_still_retries_without_visible_settled_reply`
+- **runner**: any LingTai coding agent with `shell` access to this repository
+- **prerequisites**: the project Python with pytest; no provider or Puffo credentials are required
+
+### Steps
+
+1. Run `python -m pytest -q tests/test_tool_result_restore_after_continuation_failure.py -k empty_completion`.
+2. Inspect the positive case for a `sent` receipt with every cover recorded and a zero-uncovered active-turn attestation. Inspect negative cases for missing or positive attestation, held, uncovered, hidden threaded, and `agent_only` sends, plus a concurrent admission call.
+
+### Expected evidence
+
+- [ ] The positive case returns normally after one continuation with no `empty_llm_response` event.
+- [ ] Each negative case raises `EmptyLLMResponseError`, preserving AED recovery.
+
+### Pass / Fail
+
+Pass when both assertions hold and no test sends a real message. Fail if a hidden, partially covered, or unattested reply settles the turn, or if a fully attested visible reply causes an AED retry.
+
+
+## Behavior BA008 — IDLE exit records only measured IDLE seconds
+
+- **id**: BA008
+- **title**: IDLE exit records only measured IDLE seconds
+- **guards**: `agent-runtime` § [Contract rules](CONTRACT.md#contract-rules), `agent_state.idle_elapsed_s`
+- **runner**: any LingTai agent with shell access
+- **prerequisites**: checkout of this repository and its test Python
+- **estimate**: ≈ 1 minute
+
+### Steps
+1. Run `python -m pytest -q tests/test_lifecycle_clock.py` from the repository root.
+
+### Expected evidence
+- [ ] IDLE exit to ACTIVE, ASLEEP or STUCK records monotonic duration despite a wall-clock jump; time spent in those other states and a missing anchor produce no duration.
+
+### Pass / Fail
+Pass when the focused producer tests pass; fail on inferred duration or wall-time subtraction.

@@ -12,6 +12,7 @@ import pytest
 
 from lingtai.adapters.acp.puffo_v0 import RUNTIME_POLICY
 from lingtai.kernel.provider_admission import (
+    ConnectionScopedProviderAdmissionPort,
     DerivedLaunchAdmissionError,
     DerivedLaunchCapability,
     DerivedLaunchDecision,
@@ -24,13 +25,14 @@ from lingtai.kernel.provider_admission import (
     RootProviderAdmission,
     begin_derived_provider_admission,
     bind_provider_admission,
+    bind_connection_admission_ports,
+    clear_connection_admission_ports,
     clear_provider_admission,
     require_derived_launch_admission,
 )
 from lingtai.kernel.llm_utils import send_with_timeout, send_with_timeout_stream
 from lingtai.llm.api_gate import APICallGate
 from lingtai.llm.base import _GatedSession
-from lingtai.tools.soul.consultation import _send_with_timeout as soul_send_with_timeout
 
 
 class _InnerSession:
@@ -107,6 +109,100 @@ class _RecordingDerivedLaunchPort:
             ),
             audit_id="audit-derived-test",
         )
+
+
+@pytest.mark.parametrize("state", [ProviderAdmissionState.GRANTED, ProviderAdmissionState.DENIED])
+def test_resident_attach_provider_call_uses_connection_authority(state):
+    """A permissive resident service cannot bypass a denied attach authority."""
+    inner = _InnerService()
+    session = ProviderAdmittedLLMService(
+        inner, ConnectionScopedProviderAdmissionPort()
+    ).create_session()
+    port = _RecordingAdmissionPort(state=state)
+    parent = RootProviderAdmission("attached-turn", "attach-v1", True)
+    root_token = bind_provider_admission(parent)
+    connection_tokens = bind_connection_admission_ports(port, _RecordingDerivedLaunchPort())
+    try:
+        if state is ProviderAdmissionState.GRANTED:
+            assert session.send("hello") == "hello"
+            assert inner.session.calls == [("send", "hello")]
+        else:
+            with pytest.raises(ProviderAdmissionError):
+                session.send("hello")
+            assert inner.session.calls == []
+        assert port.calls == [(parent, ProviderCallClass.ROOT)]
+    finally:
+        clear_connection_admission_ports(connection_tokens)
+        clear_provider_admission(root_token)
+
+
+def test_resident_attach_missing_connection_authority_fails_closed():
+    inner = _InnerService()
+    session = ProviderAdmittedLLMService(
+        inner, ConnectionScopedProviderAdmissionPort()
+    ).create_session()
+    token = bind_provider_admission(RootProviderAdmission("turn", "attach-v1", True))
+    try:
+        with pytest.raises(ProviderAdmissionError, match="connection_authority_unavailable"):
+            session.send("hello")
+        assert inner.session.calls == []
+    finally:
+        clear_provider_admission(token)
+
+
+@pytest.mark.parametrize("state", [ProviderAdmissionState.GRANTED, ProviderAdmissionState.DENIED])
+def test_resident_attach_authority_reaches_real_provider_worker(state):
+    inner = _InnerService()
+    session = ProviderAdmittedLLMService(
+        inner, ConnectionScopedProviderAdmissionPort()
+    ).create_session()
+    port = _RecordingAdmissionPort(state=state)
+    parent = RootProviderAdmission("attached-worker", "attach-v1", True)
+    root_token = bind_provider_admission(parent)
+    connection_tokens = bind_connection_admission_ports(port, _RecordingDerivedLaunchPort())
+    try:
+        with ThreadPoolExecutor(max_workers=1) as timeout_pool:
+            if state is ProviderAdmissionState.GRANTED:
+                assert send_with_timeout(
+                    session, "through-worker", timeout_pool, retry_timeout=1.0,
+                    agent_name="resident-attach-test", logger=None,
+                ) == "through-worker"
+            else:
+                with pytest.raises(ProviderAdmissionError):
+                    send_with_timeout(
+                        session, "through-worker", timeout_pool, retry_timeout=1.0,
+                        agent_name="resident-attach-test", logger=None,
+                    )
+    finally:
+        clear_connection_admission_ports(connection_tokens)
+        clear_provider_admission(root_token)
+    assert len(port.calls) == 1
+    assert inner.session.calls == (
+        [("send", "through-worker")] if state is ProviderAdmissionState.GRANTED else []
+    )
+
+
+def test_resident_attach_derived_launch_uses_connection_port():
+    parent = RootProviderAdmission("attached-turn", "attach-v1", True)
+    derived = _RecordingDerivedLaunchPort()
+    root_token = bind_provider_admission(parent)
+    connection_tokens = bind_connection_admission_ports(
+        _RecordingAdmissionPort(), derived
+    )
+    try:
+        decision = require_derived_launch_admission(None, DerivedLaunchCapability.DAEMON)
+        assert decision.allowed
+        assert derived.calls == [(parent, DerivedLaunchCapability.DAEMON)]
+    finally:
+        clear_connection_admission_ports(connection_tokens)
+        clear_provider_admission(root_token)
+
+    root_token = bind_provider_admission(parent)
+    try:
+        with pytest.raises(DerivedLaunchAdmissionError):
+            require_derived_launch_admission(None, DerivedLaunchCapability.DAEMON)
+    finally:
+        clear_provider_admission(root_token)
 
 
 def test_raw_provider_service_construction_inventory_is_explicit():
@@ -418,8 +514,6 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
         {
             ("src/lingtai/kernel/session.py", "SessionManager.__init__",
              "ThreadPoolExecutor"): 1,
-            ("src/lingtai/tools/soul/consultation.py", "_send_with_timeout",
-             "Thread"): 1,
         }
     )
     post_admission_provider_dispatch = collections.Counter(
@@ -431,6 +525,8 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
     )
     outside_root_provider_dispatch = collections.Counter(
         {
+            ("src/lingtai/adapters/acp/resident_socket.py", "ResidentAcpSocket.start", "Thread"): 1,
+            ("src/lingtai/adapters/acp/resident_socket.py", "ResidentAcpSocket._serve", "Thread"): 1,
             ("src/lingtai/adapters/acp/server.py", "AcpStdioServer.__init__",
              "Thread"): 1,
             ("src/lingtai/adapters/acp/server.py", "AcpStdioServer.serve",
@@ -445,8 +541,6 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
              "_DaemonManagerProcess.start_capsule_server", "Thread"): 1,
             ("src/lingtai/adapters/posix/mail.py",
              "PosixFilesystemMailAdapter.listen", "Thread"): 1,
-            ("src/lingtai/kernel/base_agent/lifecycle.py", "_heartbeat_loop",
-             "Thread"): 1,
             ("src/lingtai/kernel/base_agent/lifecycle.py", "_start", "Thread"): 1,
             ("src/lingtai/kernel/base_agent/lifecycle.py", "_start_heartbeat",
              "Thread"): 1,
@@ -459,11 +553,9 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
             ("src/lingtai/kernel/preset_connectivity.py", "check_many",
              "ThreadPoolExecutor"): 1,
             ("src/lingtai/kernel/session_stats/__init__.py",
-             "RecentDaemonSnapshot.schedule", "Thread"): 1,
+             "RecentAsyncWorkSnapshot.schedule", "Thread"): 1,
             ("src/lingtai/kernel/tool_executor.py",
              "ToolExecutor._execute_parallel", "ThreadPoolExecutor"): 1,
-            ("src/lingtai/llm/openai/codex_quota.py", "_stdout_reader_thread",
-             "Thread"): 1,
             ("src/lingtai/mcp_servers/cloud_mail/manager.py",
              "CloudMailManager.start", "Thread"): 1,
             ("src/lingtai/mcp_servers/cloud_mail/server.py",
@@ -537,9 +629,6 @@ def test_provider_dispatch_concurrency_inventory_is_explicit():
              "WindowsDaemonProcessPort.drain_stderr", "Thread"): 1,
             ("src/lingtai/tools/email/manager.py", "EmailManager._send",
              "Thread"): 1,
-            ("src/lingtai/tools/soul/__init__.py", "_handle_flow", "Thread"): 1,
-            ("src/lingtai/tools/soul/consultation.py",
-             "_run_consultation_batch", "Thread"): 1,
             ("src/lingtai/tools/task_card/__init__.py", "TaskCardManager._spawn",
              "Thread"): 1,
         }
@@ -658,29 +747,6 @@ def test_root_admission_reaches_rate_gated_provider_io_worker():
     assert inner.session._inner.calls == [("send", "through-rate-gate")]
     assert port.calls == [(root, ProviderCallClass.ROOT)]
 
-
-def test_root_admission_reaches_soul_consultation_worker_thread():
-    """Soul's production daemon-thread dispatch retains the admitted root."""
-
-    class _SoulRuntime:
-        config = SimpleNamespace(retry_timeout=1.0)
-
-        def log(self, *_args, **_kwargs):
-            return None
-
-    inner = _InnerService()
-    port = _RecordingAdmissionPort()
-    session = ProviderAdmittedLLMService(inner, port).create_session("system")
-    root = RootProviderAdmission("turn-soul-worker", "puffo-v0.test")
-    token = bind_provider_admission(root)
-    try:
-        result = soul_send_with_timeout(_SoulRuntime(), session, "soul-worker")
-    finally:
-        clear_provider_admission(token)
-
-    assert result == "soul-worker"
-    assert inner.session.calls == [("send", "soul-worker")]
-    assert port.calls == [(root, ProviderCallClass.ROOT)]
 
 
 def test_provider_worker_does_not_retain_admission_between_reused_tasks():

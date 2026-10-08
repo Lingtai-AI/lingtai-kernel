@@ -62,13 +62,14 @@ log = logging.getLogger("lingtai.mcp_servers.wechat")
 
 
 _SERVER_INSTRUCTIONS = (
-    "lingtai-wechat: WeChat client via iLink Bot API. "
-    "Configure via the LINGTAI_WECHAT_CONFIG env var pointing at config.json "
-    "(credentials.json must live in the same directory; produced by the "
-    "QR-code login flow). "
-    "Inbound messages flow into the host agent's inbox via LICC. "
-    "Setup, config schema, and troubleshooting: "
-    "https://github.com/Lingtai-AI/lingtai-wechat"
+    "Standalone WeChat/iLink client. When a CURRENT notification carries "
+    "exact IDs and complete required content, do not call check/read/search merely to "
+    "reread it or refetch an id already present there — use them only when "
+    "that id or content is actually missing, never to guess one. send/reply "
+    "are real external effects: verify content, treat acceptance as not "
+    "delivery, and never replay an accepted request. Media may be partial; "
+    "one poller consumes each bot account. Login/config belongs to the owner "
+    "setup procedure."
 )
 
 

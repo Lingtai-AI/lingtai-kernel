@@ -315,9 +315,6 @@ class LocalCommandCore:
             else 0
         )
         language = agent_meta.get("language") or manifest.get("language", "?")
-        soul_delay = agent_meta.get("soul_delay") or manifest.get("soul", {}).get(
-            "delay", 0
-        )
         created_at = agent_meta.get("created_at")
         started_at = agent_meta.get("started_at")
         agent_id = agent_meta.get("agent_id") or "?"
@@ -493,7 +490,6 @@ class LocalCommandCore:
             "ctx": ctx,
             "context_limit": context_limit,
             "language": language,
-            "soul_delay": soul_delay,
             "knowledge_count": knowledge_count,
             "skill_count": skill_count,
             "delegate_count": delegate_count,

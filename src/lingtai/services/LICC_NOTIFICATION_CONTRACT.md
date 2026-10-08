@@ -91,7 +91,7 @@ Scope:
   channel without changing its LICC event/inbox/producer file or persistent state.
 
 Non-scope: the low-level Telegram Bot API, IMAP protocol semantics, frontend UI
-rendering, and unrelated notification producers such as `soul` or `goal` except
+rendering, and unrelated notification producers such as `daemon` or `goal` except
 where they share the `.notification/` filesystem protocol.
 
 ## Components
@@ -114,10 +114,13 @@ where they share the `.notification/` filesystem protocol.
    it atomically (`src/lingtai/kernel/notifications.py:260-275`,
    `src/lingtai/kernel/notifications.py:1054-1087`).
 4. **Model-visible transient hook.** `_meta.agent_meta.notifications.attention`
-   is re-stamped on every eligible tool batch and every IDLE/ASLEEP
-   synthesized pair: `attach_active_notifications` copies UNCHANGED ACTIVE
-   attention payloads to every eligible final carrier (it does not move them
-   only on change), so the transient lane must stay small by construction
+   is delivered ONCE per event: `attach_active_notifications` (ACTIVE final
+   carrier) and the IDLE/ASLEEP synthesized pair share one delivered identity
+   (per `event_id` in system/daemon, per email ID, and per message/update ID
+   plus material content in known IM; ID-less hooks remain versioned snapshots), so an
+   unchanged event is never attached again while a new or changed one is. A
+   deliberate `notification(action="check")` still reads the complete current
+   mirrors. The lane must still stay small by construction
    (`src/lingtai/kernel/meta_block.py:3873`). For IM channels with a persistent
    lane (Telegram, WeChat, Feishu, WhatsApp), the shared
    `_sanitize_im_notification_after_persistent` (via the per-channel
@@ -150,7 +153,7 @@ where they share the `.notification/` filesystem protocol.
    retained) so the envelope always satisfies the cap
    (`src/lingtai/kernel/meta_block.py:3266`), or the block carries
    producer-tool guidance when the spill failed.
-5. **Model-visible persistent communication context.** When structured IM metadata is available, `build_notification_persistent_payload` emits `_meta.agent_meta.notifications.persistent.mcp.<channel>` with `messages`, `events`, and comments through the shared `_ImPersistentLane` machinery. Delta lanes (Telegram, WeChat, Feishu) also carry `previous_block`; WhatsApp is snapshot/no-previous-block because the producer sends the current bounded conversation window per event. Telegram additionally carries full out-of-window reply targets under `referenced_messages`. For built-in email it emits `_meta.agent_meta.notifications.persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate) The whole persistent envelope is capped at 10,000 serialized characters by default (`NOTIFICATION_PERSISTENT_MAX_CHARS` in `meta_block.py`; live-configurable via the `LINGTAI_NOTIFICATION_MAX_CHARS` environment variable, a positive integer clamped to [2048, 10,000] — the 2048 floor is shared with the attention lane so the terminal recovery envelope always fits): when a busy hub exceeds the cap, the full block is spilled to `<agent workdir>/logs/notification-overflow-<ts>.json`, the model-visible copy is compacted (heavy message bodies truncated, message ids always preserved so delivery tracking still records every message), and the block carries `persistent.overflow = {path, full_chars, truncated}` as the recovery handle; when even id-only stubs exceed the cap, a marker-only envelope with the exact spill basename (`path_omitted` + `spill_file`) is returned BY CONSTRUCTION. The attention lane shares the same env bar and spills content-addressed (see item 4).
+5. **Model-visible persistent communication context.** When structured IM metadata is available, `build_notification_persistent_payload` emits `_meta.agent_meta.notifications.persistent.mcp.<channel>` with `messages`, `events`, and comments through the shared `_ImPersistentLane` machinery. Delta lanes (Telegram, WeChat, Feishu) also carry `previous_block`; WhatsApp has no `previous_block` provider-context hook, but the shared event ledger projects automatic message deltas from its bounded source window. Full deliberate reads may carry the full source window. Telegram additionally carries full out-of-window reply targets under `referenced_messages`. For built-in email it emits `_meta.agent_meta.notifications.persistent.email` with `email_ids` plus bodies for new/materially changed unread mail records (or the complete current unread snapshot on a deliberate check) (ordinary sends are capped at 50,000 characters so the notification layer does not truncate) The whole persistent envelope is capped at 10,000 serialized characters by default (`NOTIFICATION_PERSISTENT_MAX_CHARS` in `meta_block.py`; live-configurable via the `LINGTAI_NOTIFICATION_MAX_CHARS` environment variable, a positive integer clamped to [2048, 10,000] — the 2048 floor is shared with the attention lane so the terminal recovery envelope always fits): when a busy hub exceeds the cap, the full block is spilled to `<agent workdir>/logs/notification-overflow-<ts>.json`, the model-visible copy is compacted (heavy message bodies truncated, message ids always preserved so delivery tracking still records every message), and the block carries `persistent.overflow = {path, full_chars, truncated}` as the recovery handle; when even id-only stubs exceed the cap, a marker-only envelope with the exact spill basename (`path_omitted` + `spill_file`) is returned BY CONSTRUCTION. The attention lane shares the same env bar and spills content-addressed (see item 4).
    (`src/lingtai/kernel/meta_block.py:1857-2489`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`
    metadata. Every Telegram message object in those fields carries the explicit
@@ -270,7 +273,7 @@ means:
         "mcp.telegram": {
           "header": "Telegram event",
           "data": {"message_ids": ["mimo-1:6859932159:6281"]},
-          "instructions": "High-attention Telegram hook: use the persistent notification context for content; when handled, dismiss this notification."
+          "instructions": "High-attention Telegram hook: use the persistent notification context for content; this event is delivered once and is not re-attached automatically; act through the Telegram tool."
         }
       },
       "persistent": {
@@ -289,8 +292,9 @@ the producer's landed local message ids and content/context living in
 
 Feishu follows the same delta-lane shape at `mcp.feishu`. WhatsApp follows the
 same transient identity-hook shape at `mcp.whatsapp`, but its persistent lane is
-snapshot-style: every material block carries the producer's current bounded
-conversation context and deliberately has no `previous_block`.
+rendered without a `previous_block` hook. The source window is snapshot-shaped,
+but automatic delivery projects only new/materially changed messages first. A
+deliberate check can reread the current complete window.
 
 The transient hook may keep generic notification scaffolding (`header`, `icon`,
 `priority`, `published_at`) but not body text, previews, sender/subject,
@@ -317,9 +321,9 @@ still applies when no structured messages survive.
 
 ### 4. Persistent blocks are context, not unread state
 
-`_meta.agent_meta.notifications.persistent` can remain in history after the transient hook is
-handled. It is a communication-context lane, not a notification action channel.
-Do not dismiss it, do not mutate producer state from it, and do not treat its
+`_meta.agent_meta.notifications.persistent` remains in history after delivery.
+It is a communication-context lane, not a notification action channel.
+Do not mutate producer state from it, and do not treat its
 presence as proof that there is still an unhandled event. Telegram persistent
 blocks must keep `previous_block` hooks so later deltas can point at earlier
 context without re-sending all history.
@@ -327,12 +331,12 @@ context without re-sending all history.
 ### 5. Producer tools own side effects and clearing
 
 The producer tool remains the source of truth for exact reads, replies, and
-state-clearing side effects. Generic notification dismissal only clears the
-notification mirror/hook; it must not be used to pretend producer state changed.
-For source-of-truth mirrors (email today), prefer producer-specific
-`read`/`dismiss` verbs. For content-free LICC hooks whose event was handled via
-the producer tool, generic `notification.dismiss_channel("mcp.<name>")` may clear
-the high-attention hook.
+state-clearing side effects. There is no public generic notification dismiss
+action: delivery is one-shot, never clears the notification mirror/hook or
+producer state, and must not be treated as handling. For source-of-truth mirrors
+(email today), use producer-specific `read`/`dismiss` verbs, which are the
+producer's own business operations. A content-free LICC hook is delivered once
+and simply persists on disk until its producer updates or removes it.
 
 ### 6. Consumer delay never changes LICC production or authority
 
@@ -342,7 +346,7 @@ coherent transient delivery/fingerprint while the delay is live. It does not
 rewrite `.mcp_inbox/`, the coalesced `.notification/mcp.<server>.json` producer
 mirror, persistent message context, read state, event identity, or producer tool
 authority. On expiry/recovery the target is re-projected and a separate,
-dismissable high-priority `delay-alarm` mirror is delivered in the same sync. The
+high-priority `delay-alarm` mirror is delivered (once) in the same sync. The
 alarm's counts are explicitly conservative current-mirror observations, never a
 LICC total. Thus delay is an intentional temporary consumer visibility exception,
 not a loss, acknowledgement, or source-of-truth transition.
@@ -369,6 +373,26 @@ only the existing primary-media summary. The complete raw Feishu event and
 normalized content union remain in the producer's durable message record/read
 surface; they MUST NOT be copied into bounded LICC preview metadata or the
 transient attention hook.
+
+### 8. A full current message with its exact id is not a reread trigger
+
+When `data.previews`, the transient attention hook, or the persistent lane
+already carries a record's full current content plus the exact routing id
+needed to act, the agent MUST NOT call the producer's read/check/search
+action merely to reread that same content or re-fetch an id already present —
+"full" is a delivery fact, not a trust/authority override, so sender/account,
+recipient/target, and other producer/manual safeguards still apply when
+acting. Recovery through the producer is for content actually missing, capped,
+or omitted (a record's own `*_truncated` flag true, an id-only/marker-only
+stub, or needed media/attachment data not present), never for a lane-level
+`overflow` marker alone: the persistent lane's overflow/drop order is oldest
+context compacted first, then oldest context stubbed, then (only if nothing
+else makes the block fit) the current message compacted, and only as a last
+resort the current message stubbed — so a history-level `overflow` marker
+does not by itself mean the current message's own content is missing. Each
+`*_truncated`/`message_truncated` flag is forced true only when that specific
+field was actually shortened, so it stays a truthful per-record signal rather
+than a blanket instruction to reread.
 
 ## State
 
@@ -416,10 +440,19 @@ Persistent/on-disk state involved in this contract:
 In-memory state involved in this contract:
 
 - `agent._notification_live_holder` and `_notification_payload_signature` control
-  which carrier carries the transient notification payload; ACTIVE copies the
-  current notification state onto EVERY eligible final ToolResultBlock, and
-  the live-holder/signature is bookkeeping that describes the copy, not the
-  attachment gate.
+  which carrier carries the transient notification payload (bookkeeping that
+  describes the latest delivery, not an attachment gate).
+- `agent._notification_delivered_source_signatures` /
+  `_notification_delivered_system_events` / `_notification_delivered_events` are the shared one-shot delivered
+  identity: ACTIVE stamps (and the IDLE/ASLEEP pair injects) only channels/events
+  not yet delivered, committed from the same coherent observation after a
+  successful delivery. Known aggregate identity is per event/message and material
+  source content, not a whole-channel hash; derived current flags, relative age,
+  counts and cursors alone do not replay records. Required reply targets may
+  accompany a new reply as context. Already delivered identity survives ordinary
+  same-process molt/rebuild/redacted-replay resync. These ledgers are
+  in-memory only: a new Agent/process restart may re-show surviving files;
+  no cross-crash exactly-once guarantee exists.
 - `agent._notification_persistent_telegram_message_ids` /
   `_notification_persistent_telegram_last_tool_id`, the WeChat counterparts
   `agent._notification_persistent_wechat_message_ids` /
@@ -427,8 +460,8 @@ In-memory state involved in this contract:
   `agent._notification_persistent_feishu_message_ids` /
   `_notification_persistent_feishu_last_tool_id` track per-channel delivery into
   the current provider context (reset on molt), keyed by per-update
-  `event_id` when present and by compound message id otherwise. WhatsApp is snapshot-only and
-  keeps no agent-side delivery tracker.
+  `event_id` when present and by compound message id otherwise. WhatsApp keeps no provider-context `previous_block` tracker, but participates
+  in the shared process-local event/message ledger above.
 
 ## Review triggers
 

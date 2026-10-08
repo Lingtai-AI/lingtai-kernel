@@ -399,7 +399,7 @@ def test_lingtai_backend_ignores_env_overlay(tmp_path):
         "action": "emanate",
         "tasks": [{
             "task": "lingtai task",
-            "tools": ["file"],
+            "tools": ["shell"],
             # Invalid for a CLI backend; the lingtai backend never reads it.
             "backend_options": {"env": {"9BAD": 7}},
         }],
@@ -428,7 +428,7 @@ def test_lingtai_backend_ignores_backend_options(tmp_path):
         # backend defaults to "lingtai"
         "tasks": [{
             "task": "lingtai task",
-            "tools": ["file"],
+            "tools": ["shell"],
             # This must be ignored, not validated. Even an "invalid" object
             # would be accepted because the lingtai backend never reads it.
             "backend_options": {"effort": "high"},
@@ -701,31 +701,16 @@ def test_backend_schema_enum_matches_ordered_contract():
     )
 
 
-@pytest.mark.parametrize(
-    ("backend_label", "expected"),
-    [
-        ("MiMo Code", True),
-        ("Qwen Code", True),
-        ("Kimi Code", True),
-        ("Oh-My-Pi", True),
-        ("DeepSeek Harness", True),
-        ("cursor", True),
-        ("opencode", True),
-        ("claude-p", True),
-        ("claude-code", True),
-        ("claude-interactive", False),
-        ("interactive", False),
-    ],
-)
-def test_backend_schema_description_matches_supported_surface(
-    backend_label, expected,
-):
+def test_backend_schema_description_is_a_short_routing_hint():
     from tests._daemon_helpers import daemon_action_input_schema
 
     description = daemon_action_input_schema(
         "emanate", "en"
     )["properties"]["backend"]["description"]
-    assert (backend_label.lower() in description.lower()) is expected
+    assert "Execution backend" in description
+    assert "lingtai" in description
+    assert "CLI reference" in description
+    assert "claude-interactive" not in description
 
 
 def test_backend_metadata_consistency_keeps_hidden_legacy_claude():

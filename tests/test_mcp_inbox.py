@@ -31,7 +31,7 @@ from lingtai.services.mcp_inbox import (
     _scan_once,
     validate_event,
 )
-from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 
@@ -269,6 +269,33 @@ def test_scan_coalesces_multiple_events_into_one_notification(tmp_path):
         assert p["preview"] not in notif["instructions"]
 
 
+
+
+def test_dispatch_summary_instructions_do_not_require_reread_of_full_content(tmp_path):
+    """The instructions string must tell the agent not to reread content or an
+    id already fully present in the preview — only actually missing content
+    (capped/omitted) is a recovery trigger. Regression for a prior wording
+    that told the agent to read whenever the preview was merely ambiguous or
+    media/callback-heavy, contradicting the shared no-reread contract."""
+    import json as _json
+
+    agent, workdir = _mk_agent(tmp_path)
+    _write_event(workdir, "telegram", "ev1", {
+        "from": "alice", "subject": "s1", "body": "hello",
+    })
+
+    _scan_once(agent, workdir / INBOX_DIRNAME)
+    notif = _json.loads((workdir / ".notification" / "mcp.telegram.json").read_text(encoding="utf-8"))
+    instructions = " ".join(notif["instructions"].split())
+
+    assert "do NOT call the MCP" in instructions
+    assert "reread that same content" in instructions
+    assert "re-fetch an id already present" in instructions
+    assert "actually missing, capped, or omitted" in instructions
+    assert "not by themselves reasons to reread" in instructions
+    # Old contradictory phrasing (read whenever ambiguous/media-heavy) is gone.
+    assert "media/callback-heavy" not in instructions
+    assert "the agent may reply directly" not in instructions
 
 
 def test_scan_truncates_long_body_into_preview_snippet(tmp_path):

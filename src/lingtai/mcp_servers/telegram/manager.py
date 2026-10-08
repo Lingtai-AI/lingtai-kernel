@@ -21,6 +21,7 @@ import socket
 import tempfile
 import time
 from datetime import datetime, timezone
+from html import escape as html_escape
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -30,9 +31,12 @@ import logging
 import threading
 
 from lingtai.kernel._frontmatter import strip_frontmatter
-from lingtai.kernel.session_stats import query_published_agent_liveness, read_agent_record
+from lingtai.kernel.session_stats import (
+    query_published_agent_liveness,
+    query_published_async_work,
+    read_agent_record,
+)
 from lingtai.kernel.state import AgentState
-from lingtai.tools.bash._async_supervisor import load_state
 from lingtai.mcp_servers.task_card import (
     TaskCardEventProjection,
     TaskCardResident,
@@ -45,7 +49,9 @@ from .._outbound_files import OutboundFileError, resolve_outbound_file
 from . import _family
 from . import updates as tg_updates
 from .plugin import TELEGRAM_PLUGIN
+from .task_card import api_cost as _api_cost
 from .account import TelegramRateLimitError
+from .service import _TASKCARD_DEFAULT_NORMAL_ROWS
 
 if TYPE_CHECKING:
     from lingtai.kernel.notification_store import NotificationStorePort
@@ -141,6 +147,17 @@ _TASK_CARD_DELETE_NONDELETABLE_DESCRIPTIONS = frozenset({
     "bad request: message can't be deleted for everyone",
     "bad request: message can not be deleted for everyone",
 })
+_TELEGRAM_TASK_CARD_PARSE_MODE = "HTML"
+_TELEGRAM_TASK_CARD_PROGRAMMABLE_HEADER = "🎯 <b>TASK CARD</b>"
+_TASK_CARD_MARKDOWN_HEADING_RE = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*$")
+_TASK_CARD_MARKDOWN_UNORDERED_RE = re.compile(r"^([ \t]*)[-+*][ \t]+(.+?)$")
+_TASK_CARD_MARKDOWN_ORDERED_RE = re.compile(r"^([ \t]*)([0-9]{1,9})[.)][ \t]+(.+?)$")
+_TASK_CARD_MARKDOWN_CHECKBOX_RE = re.compile(r"^\[([ xX])\][ \t]+(.+?)$")
+_TASK_CARD_MARKDOWN_RULE_RE = re.compile(
+    r"^[ \t]{0,3}(?:\*[ \t]*){3,}$"
+    r"|^[ \t]{0,3}(?:-[ \t]*){3,}$"
+    r"|^[ \t]{0,3}(?:_[ \t]*){3,}$"
+)
 
 # Fixed human warning shown on every Task Card render (running and frozen
 # last-behavior). Jason: never reply to the card; point directly to the local
@@ -149,11 +166,7 @@ _TASK_CARD_DELETE_NONDELETABLE_DESCRIPTIONS = frozenset({
 # "current: X" suffix is appended per-render from the manager's live
 # normal-row setting; see ``_task_card_footer``.
 _TASK_CARD_FOOTER = TaskCardEventProjection.FOOTER
-_TASK_CARD_DEFAULT_NORMAL_ROWS = TaskCardEventProjection.DEFAULT_NORMAL_ROWS
-_TASK_CARD_METADATA_MAX_CHARS = TaskCardEventProjection.METADATA_MAX_CHARS
-_TASK_CARD_ASYNC_TERMINAL_WINDOW_SECONDS = 600
-_TASK_CARD_ASYNC_STATUS_KEYS = ("running", "done", "failed", "cancelled", "timeout", "unknown")
-_TASK_CARD_DAEMON_TERMINAL_STATUS = frozenset({"done", "failed", "cancelled", "timeout"})
+_TASK_CARD_DEFAULT_NORMAL_ROWS = _TASKCARD_DEFAULT_NORMAL_ROWS
 
 # Canonical AgentState values that render without a /refresh hint; "stuck" is
 # the exact same enum plus the hint, and "offline" is not an AgentState value
@@ -170,77 +183,6 @@ _TASK_CARD_AGENT_STATES = TaskCardEventProjection.AGENT_STATES
 _TASK_CARD_TIME_PREFIX = TaskCardEventProjection.TIME_PREFIX
 
 
-def _task_card_nonnegative_count(value: object) -> int:
-    """Coerce finite non-negative numeric counters without accepting bool."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return 0
-    try:
-        number = float(value)
-    except (TypeError, ValueError, OverflowError):
-        return 0
-    if not math.isfinite(number) or number < 0:
-        return 0
-    return int(number)
-
-
-def _task_card_parse_daemon_finished_at(value: object, now: datetime) -> bool:
-    """Return whether an ISO daemon terminal timestamp is in the strict window."""
-    if not isinstance(value, str) or not value.strip():
-        return False
-    try:
-        text = value.strip()
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-        finished = datetime.fromisoformat(text)
-        if finished.tzinfo is None:
-            finished = finished.replace(tzinfo=timezone.utc)
-        else:
-            finished = finished.astimezone(timezone.utc)
-        age = (now.astimezone(timezone.utc) - finished).total_seconds()
-    except (TypeError, ValueError, OverflowError, OSError):
-        return False
-    return math.isfinite(age) and 0 <= age <= _TASK_CARD_ASYNC_TERMINAL_WINDOW_SECONDS
-
-
-def _task_card_shell_status(state: object) -> str | None:
-    """Classify durable async-shell truth without probing processes or mutating state."""
-    if not isinstance(state, dict):
-        return None
-    raw = state.get("status")
-    if raw in ("launching", "running"):
-        return "running"
-    if raw == "unrecoverable":
-        return "failed"
-    if raw == "completed":
-        if state.get("cancellation_outcome") == "group_cancelled":
-            return "cancelled"
-        if state.get("exit_status_known") is True:
-            exit_code = state.get("exit_code")
-            if type(exit_code) is int:
-                return "done" if exit_code == 0 else "failed"
-        return "unknown"
-    # A non-empty status other than the known nonterminal states is terminal
-    # truth we cannot explain exactly; retain it as unknown inside its window.
-    if isinstance(raw, str) and raw.strip():
-        return "unknown"
-    return None
-
-
-def _task_card_shell_in_window(state: object, now_epoch: float) -> bool:
-    """Nonterminal shell jobs are always visible; terminal jobs need epoch time."""
-    if not isinstance(state, dict):
-        return False
-    if state.get("status") in ("launching", "running"):
-        return True
-    finished = state.get("finished_at")
-    if isinstance(finished, bool) or not isinstance(finished, (int, float)):
-        return False
-    if not math.isfinite(float(finished)) or not math.isfinite(float(now_epoch)):
-        return False
-    age = float(now_epoch) - float(finished)
-    return 0 <= age <= _TASK_CARD_ASYNC_TERMINAL_WINDOW_SECONDS
-
-
 def _task_card_footer(normal_rows: int, locale: str = "en") -> str:
     """Build the fixed footer with the live normal-row setting appended.
 
@@ -250,6 +192,233 @@ def _task_card_footer(normal_rows: int, locale: str = "en") -> str:
     """
     return TaskCardEventProjection.footer(normal_rows, locale)
 
+
+def _telegram_task_card_inline_html(text: str, *, strong: bool = True) -> str:
+    """Render the resident card's bounded inline Markdown with escape-first HTML.
+
+    Only markup Telegram supports is emitted, and it is generated here rather
+    than accepted from the producer. Unmatched delimiters remain escaped literal
+    text, so malformed Markdown cannot create an unbalanced provider tag.
+    """
+    rendered: list[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] == "\\" and index + 1 < len(text):
+            escaped = text[index + 1]
+            if escaped in r"\\`*#_+-.[\]()":
+                rendered.append(html_escape(escaped, quote=False))
+                index += 2
+                continue
+
+        if text[index] == "`":
+            run_end = index + 1
+            while run_end < len(text) and text[run_end] == "`":
+                run_end += 1
+            delimiter = text[index:run_end]
+            close = text.find(delimiter, run_end)
+            if close > run_end:
+                code = text[run_end:close]
+                rendered.append(f"<code>{html_escape(code, quote=False)}</code>")
+                index = close + len(delimiter)
+                continue
+
+        if strong and text.startswith("**", index):
+            close = text.find("**", index + 2)
+            if close > index + 2:
+                content = text[index + 2:close]
+                rendered.append(
+                    f"<b>{_telegram_task_card_inline_html(content, strong=False)}</b>"
+                )
+                index = close + 2
+                continue
+
+        rendered.append(html_escape(text[index], quote=False))
+        index += 1
+    return "".join(rendered)
+
+
+def _telegram_programmable_task_card_html(markdown: str) -> str:
+    """Render safe Task Card Markdown to Telegram's supported HTML subset."""
+    rendered: list[str] = []
+    for line in markdown.splitlines():
+        heading = _TASK_CARD_MARKDOWN_HEADING_RE.fullmatch(line)
+        if heading is not None:
+            rendered.append(
+                f"<b>{_telegram_task_card_inline_html(heading.group(1))}</b>"
+            )
+            continue
+
+        if _TASK_CARD_MARKDOWN_RULE_RE.fullmatch(line):
+            rendered.append(TaskCardResident.API_CALL_DIVIDER)
+            continue
+
+        unordered = _TASK_CARD_MARKDOWN_UNORDERED_RE.fullmatch(line)
+        ordered = _TASK_CARD_MARKDOWN_ORDERED_RE.fullmatch(line)
+        if unordered is not None or ordered is not None:
+            match = unordered or ordered
+            assert match is not None
+            indent = match.group(1).expandtabs(2)
+            item = match.group(2) if unordered is not None else match.group(3)
+            checkbox = _TASK_CARD_MARKDOWN_CHECKBOX_RE.fullmatch(item)
+            if checkbox is not None:
+                checked, item = checkbox.groups()
+                marker = "☑" if checked.casefold() == "x" else "☐"
+            elif unordered is not None:
+                marker = "•"
+            else:
+                marker = f"{match.group(2)}."
+            rendered.append(
+                f"{indent}{marker} {_telegram_task_card_inline_html(item)}"
+            )
+            continue
+
+        rendered.append(_telegram_task_card_inline_html(line))
+    return "\n".join(rendered)
+
+
+def _telegram_resident_task_card_html(text: str) -> str:
+    """Render only the raw programmable slot in one composed resident message."""
+    leading = f"{_TELEGRAM_TASK_CARD_PROGRAMMABLE_HEADER}\n"
+    separator = f"\n\n{_TELEGRAM_TASK_CARD_PROGRAMMABLE_HEADER}\n"
+    if text.startswith(leading):
+        return leading + _telegram_programmable_task_card_html(text[len(leading):])
+    automatic, marker, programmable = text.partition(separator)
+    if marker:
+        return automatic + marker + _telegram_programmable_task_card_html(programmable)
+    return text
+
+
+def _telegram_task_card_html(text: str) -> str:
+    """Escape one shared frame, then add Telegram's exact static HTML styling."""
+    rendered: list[str] = []
+    headers = {"📋 ACTIVITIES": "ACTIVITIES", "📋 活动": "活动"}
+    asks = {
+        'Ask agent for "Task Card"': 'Ask agent for "Task Card"',
+        '向 agent 询问 "Task Card"': '向 agent 询问 "Task Card"',
+    }
+    settings_hints = {
+        'Ask agent for "Task Card"': 'Settings: /taskcard on|off · /taskcard N (1-10)',
+        '向 agent 询问 "Task Card"': '设置: /taskcard on|off · /taskcard N (1-10)',
+    }
+    metadata_prefixes = (
+        ("Session · ", "📊 <b>SESSION</b>", "session"),
+        ("会话 · ", "📊 <b>SESSION</b>", "session"),
+        ("Identity · ", "🪪 <b>IDENTITY</b>", "identity"),
+        ("身份 · ", "🪪 <b>IDENTITY</b>", "identity"),
+        ("Async Work · ", "<b>ASYNC WORK</b>", "async"),
+        ("异步工作 · ", "<b>异步工作</b>", "async"),
+    )
+    stats_en = TaskCardEventProjection.daemon_stats_label("en")
+    stats_zh = TaskCardEventProjection.daemon_stats_label("zh")
+    async_row_prefixes = (
+        ("Scope · ", "Scope"),
+        ("范围 · ", "范围"),
+        ("Daemons · ", "Daemons"),
+        ("守护进程 · ", "守护进程"),
+        ("Backends · ", "Backends"),
+        ("后端 · ", "后端"),
+        ("Shell · ", "Shell"),
+        (f"{stats_en} · ", stats_en),
+        (f"{stats_zh} · ", stats_zh),
+    )
+    def session_rows(payload: str) -> list[str]:
+        parts = payload.split(" · ")
+        cache_at = next(
+            (i for i, part in enumerate(parts) if part.startswith(("cache ", "miss ", "calls "))),
+            len(parts),
+        )
+        context_at = next(
+            (
+                i
+                for i, part in enumerate(parts[:cache_at])
+                if part.startswith(("ctx ", "tokens ", "out "))
+            ),
+            cache_at,
+        )
+        agent_parts = parts[:context_at]
+        if agent_parts[:1] == ["agent"]:
+            agent_parts = agent_parts[1:]
+        groups = (
+            ("Agent", agent_parts),
+            ("Context", parts[context_at:cache_at]),
+            ("Cache", parts[cache_at:]),
+        )
+        rows = [
+            f"<b>{label}</b> · {html_escape(' · '.join(values), quote=False)}"
+            for label, values in groups
+            if values
+        ]
+        return rows or [html_escape(payload, quote=False)]
+
+    def identity_rows(payload: str) -> list[str]:
+        if payload.startswith("device · "):
+            device, separator, path = payload[len("device · "):].partition(" | path · ")
+            rows = [f"<b>Device</b> · {html_escape(device, quote=False)}"]
+            if separator:
+                rows.append(f"<b>Path</b> · <code>{html_escape(path, quote=False)}</code>")
+            return rows
+        if payload.startswith("path · "):
+            path = payload[len("path · "):]
+            return [f"<b>Path</b> · <code>{html_escape(path, quote=False)}</code>"]
+        return [html_escape(payload, quote=False)]
+
+    metadata_started = False
+    previous_metadata_section: str | None = None
+    for line in text.splitlines():
+        if line == TaskCardEventProjection.METADATA_DIVIDER:
+            metadata_started = True
+            continue
+        if metadata_started:
+            metadata = next(
+                (
+                    (prefix, heading, section)
+                    for prefix, heading, section in metadata_prefixes
+                    if line.startswith(prefix)
+                ),
+                None,
+            )
+            if metadata is not None:
+                prefix, heading, section = metadata
+                if previous_metadata_section not in {None, section}:
+                    rendered.append("")
+                payload = line[len(prefix):]
+                if section == "session":
+                    rows = session_rows(payload)
+                elif section == "identity":
+                    rows = identity_rows(payload)
+                else:
+                    rows = [f"<b>Status</b> · {html_escape(payload, quote=False)}"]
+                rendered.extend((f"⚙️ {heading}" if section == "async" else heading, *rows))
+                previous_metadata_section = section
+                continue
+            if previous_metadata_section == "session" and line.startswith("Cost · "):
+                cost = html_escape(line[len("Cost · "):], quote=False)
+                rendered.append(f"<b>Cost</b> · {cost}")
+                continue
+            if previous_metadata_section == "async":
+                async_row = next(
+                    (
+                        (prefix, label)
+                        for prefix, label in async_row_prefixes
+                        if line.startswith(prefix)
+                    ),
+                    None,
+                )
+                if async_row is not None:
+                    prefix, label = async_row
+                    payload = html_escape(line[len(prefix):], quote=False)
+                    rendered.append(f"<b>{label}</b> · {payload}")
+                    continue
+        safe = html_escape(line, quote=False)
+        if line in headers:
+            safe = f"📋 <b>{headers[line]}</b>"
+        elif line in asks:
+            rendered.append(f"💬 <i>{html_escape(asks[line], quote=False)}</i>")
+            safe = f"⚙️ <i>{html_escape(settings_hints[line], quote=False)}</i>"
+        elif line.startswith(("Last Updated: ", "最后更新: ")):
+            safe = f"🕒 {safe}"
+        rendered.append(safe)
+    return "\n".join(rendered)
 
 def _format_task_card_current_time(now: datetime) -> str:
     """Render a render-time instant as ``HH:MM:SS UTC±HH`` (hour-only offset).
@@ -713,21 +882,26 @@ SCHEMA = {
 }
 
 DESCRIPTION = (
-    "Telegram Bot API client. Use the strict `telegram` family envelope: put the "
-    "selected action's fields inside `input` and provide `reasoning`; call the "
-    "packaged `manual` action for detailed operation guidance. For inbound work, "
-    "start read-only with `check`, `read`, or `search`. Use `send` only for an "
-    "authorized new outbound message to a known numeric chat_id, or `reply` to a "
-    "compound message_id from `read`/`search`. Content-bearing send/reply/edit defaults to Markdown; use "
-    "media.type='document' for generated files the user should open intact and "
-    "'photo' only for an inline preview. `placeholder` is progress-only: edit "
-    "meaningful phases, then send the final answer separately. `read` marks "
-    "returned messages read; `check` shows incoming unread counts; `search` uses "
-    "a regex. `delete` and `edit` are external message side effects. Contacts "
-    "are local aliases, not inbound permission. `settings` is read-only. "
-    "Automatic Task Card projection is a separate channel-neutral intrinsic "
-    "producer and Telegram read-only projector. MCP setup/configuration is "
-    "orchestrator-owned; avatars must not reconfigure it."
+    "Telegram Bot API client. Use the strict `telegram` envelope: put the selected "
+    "action's fields in `input` and provide `reasoning`. A current notification's "
+    "own (non-synthetic) compound message id is a valid `reply` target directly; "
+    "do not call `check`/`read`/`search` merely to reread that same text or to "
+    "obtain an id already given. Otherwise, for inbound work, start with `check`, "
+    "`read`, or `search`; `read` recovers required content absent from all "
+    "available current copies, not a `text_truncated` preview when full raw "
+    "content is already present. Needed media without a path or download_error "
+    "can require read; recorded download_error needs a resend. Use `send` only "
+    "for an authorized new message to a real numeric chat_id, or `reply` with a "
+    "copied compound message_id from the current notification or `read`/`search`. "
+    "Content-bearing send/reply/edit defaults to "
+    "Markdown; choose `rendering_mode` to fit the scenario; use `media.type='document'` for generated files and `photo` only "
+    "for an inline preview. `placeholder` is progress-only: edit phases, then "
+    "send the final answer separately. `read` marks returned records read; "
+    "`check` counts incoming unread; `search` uses a regex. `edit` and `delete` "
+    "are external side effects; contacts are local aliases, not permission; "
+    "`settings` is read-only. The intrinsic Task Card producer is separate; "
+    "Telegram is its read-only projector. MCP setup/configuration is "
+    "orchestrator-owned; avatars must not reconfigure it. Use `manual` for depth."
 )
 
 # Public callers receive the strict LTP-v2 family schema. Manager dispatch
@@ -788,6 +962,7 @@ class TelegramManager:
         self._task_card_pending_edit_stop = threading.Event()
         self._resident = TaskCardResident(
             enabled=self._raw_taskcard_enabled(),
+            programmable_header=_TELEGRAM_TASK_CARD_PROGRAMMABLE_HEADER,
             transport=TaskCardResidentTransport(
                 get_resident=lambda route: self._get_resident_task_card(
                     route.account,
@@ -837,10 +1012,18 @@ class TelegramManager:
         self._task_card_event_identity: tuple[str, float | int] | None = None
         # Grouped by provider call; the compatibility row view is derived.
         self._task_card_event_groups: list[dict] = []
-        # The current telemetry snapshot is carried only by the latest final
-        # ``notification_block_injected`` event. ``None`` means no such carrier has been seen;
-        # an empty dict is a seen-but-malformed carrier and deliberately clears
-        # any older snapshot.
+        # Exact per-API usage facts keyed by api/tool call id, carried across
+        # incremental polls so a response read before its rows still reaches
+        # them. In-memory only, bounded, reset with the tail window.
+        self._task_card_call_usages: dict[str, dict] = {}
+        # Shared reducer state makes every fresh versioned ``llm_response``
+        # authoritative for SESSION telemetry.  Legacy notification carriers are
+        # fallback only; generation/order fences remain hidden in this state.
+        self._task_card_session_usage_state: dict | None = None
+        self._task_card_idle_state: dict | None = None
+        # Since-molt per-response bill facts folded beside that reducer; priced
+        # only at render into the SESSION ``Cost`` row (see ``api_cost``).
+        self._task_card_session_cost_state: dict | None = None
         self._task_card_event_metadata: dict | None = None
         self._task_card_event_lock = threading.Lock()
         # Blanket-delivery dedupe: the last automatic frame fingerprint seen per
@@ -2210,8 +2393,9 @@ class TelegramManager:
         try:
             acct = self._service.get_account(account_alias)
             result = acct.send_message(
-                chat_id, text,
+                chat_id, _telegram_resident_task_card_html(text),
                 reply_to_message_id=reply_to_message_id,
+                parse_mode=_TELEGRAM_TASK_CARD_PARSE_MODE,
             )
         except Exception as e:
             log.debug("Failed to send progress message: %s", e)
@@ -2301,7 +2485,10 @@ class TelegramManager:
                     return _TASK_CARD_EDIT_THROTTLED, None
                 self._task_card_last_edit_at[key] = now
             acct = self._service.get_account(account)
-            acct.edit_message(chat_id, tg_msg_id, text)
+            acct.edit_message(
+                chat_id, tg_msg_id, _telegram_resident_task_card_html(text),
+                parse_mode=_TELEGRAM_TASK_CARD_PARSE_MODE,
+            )
             return _TASK_CARD_EDIT_OK, None
         except Exception as exc:
             outcome = self._task_card_edit_error_outcome(exc)
@@ -2340,20 +2527,20 @@ class TelegramManager:
     # Overall render ceiling, safely below Telegram's 4096-char message limit.
     _TASK_CARD_TEXT_LIMIT = TaskCardEventProjection.TEXT_LIMIT
     # Header shown at the top of every card.
-    _TASK_CARD_HEADER = TaskCardEventProjection.HEADER
+    _TASK_CARD_HEADER = "📋 <b>ACTIVITIES</b>"
     # The two composed channels of the single resident card (Jason #7258/#7259).
     _TASK_CARD_CHANNELS = ("automatic", "programmable")
     _TASK_CARD_DEFAULT_CHANNEL = "automatic"
     # Header for the appended programmable section; keeps the composed message
     # legible when both channels are present. English-only (Jason #7175/#7205).
-    _TASK_CARD_PROGRAMMABLE_HEADER = "— TASK CARD —"
+    _TASK_CARD_PROGRAMMABLE_HEADER = _TELEGRAM_TASK_CARD_PROGRAMMABLE_HEADER
     # Terminal presentation delivered when clearing a programmable-ONLY resident
     # would otherwise compose to empty text. Telegram cannot edit a message to
     # empty text, so a stable, nonempty, English-only marker is shown instead,
     # leaving the one resident message reusable by a later automatic or
     # programmable frame. It is presentation-only: the committed programmable slot
     # is still cleared, so it never persists as stored channel state.
-    _TASK_CARD_WATCH_STOPPED = "— TASK CARD STOPPED —"
+    _TASK_CARD_WATCH_STOPPED = "✅ <b>TASK CARD STOPPED</b>"
 
     def _channel_key(self, account: str, chat_id: int) -> str:
         return self._resident.key(account, chat_id)
@@ -2602,7 +2789,7 @@ class TelegramManager:
         """Render retained legacy programmable-card JSON for compatibility tests.
 
         The retired Telegram-owned controller supplied this validated schema
-        object. The current public intrinsic instead emits a full text/Markdown
+        object. The current public intrinsic instead emits a full authored text
         body through the agent-local file artifact, and Telegram's read-only file
         projector does not use this JSON formatter. When retained compatibility
         code invokes it, secret redaction still runs on every free-text field
@@ -2635,7 +2822,7 @@ class TelegramManager:
         text = "\n".join(parts)
         if len(text) > cls._TASK_CARD_TEXT_LIMIT:
             text = text[:cls._TASK_CARD_TEXT_LIMIT]
-        return text
+        return _telegram_task_card_html(text)
 
     # ------------------------------------------------------------------
     # Automatic Task Card event tail (agent-behavior broadcast)
@@ -2738,6 +2925,9 @@ class TelegramManager:
         with self._task_card_event_lock:
             metadata = self._task_card_event_metadata
             snapshot = dict(metadata) if isinstance(metadata, dict) else {}
+            session_cost = _api_cost.session_cost_text(self._task_card_session_cost_state)
+        if session_cost:
+            snapshot["session_cost"] = session_cost
         lifecycle = self._task_card_agent_lifecycle_status()
         if lifecycle is not None:
             snapshot["agent_lifecycle"] = lifecycle
@@ -2784,145 +2974,16 @@ class TelegramManager:
             snapshot["async_work"] = async_work
         return snapshot or None
 
-    def _task_card_daemon_snapshot(self) -> dict | None:
-        """Read a bounded daemon lane snapshot from dispatch-ledger membership.
-
-        Task Card rendering is automatic presentation work, never a reason to
-        enumerate a lifetime ``daemons/`` directory.  The ledger's newest tail
-        provides the only candidates; each selected ``daemon.json`` remains
-        authoritative for its current state and accounting.
-        """
-        from ...kernel.daemon_dispatch import read_recent_daemon_states
-
-        try:
-            _, rows, _warnings = read_recent_daemon_states(self._working_dir, limit=1000)
-        except Exception:
-            return None
-        now = datetime.now(timezone.utc)
-        counts = {key: 0 for key in _TASK_CARD_ASYNC_STATUS_KEYS}
-        totals = {"input": 0, "output": 0, "cached": 0}
-        cli_calls = 0
-        backend_counts: dict[str, int] = {}
-        model_counts: dict[str, int] = {}
-        included = False
-        for _, _, state in rows:
-            try:
-                raw_status = state.get("state")
-                if raw_status in ("running", "active"):
-                    status = "running"
-                    in_window = True
-                elif raw_status in _TASK_CARD_DAEMON_TERMINAL_STATUS:
-                    status = raw_status
-                    in_window = _task_card_parse_daemon_finished_at(
-                        state.get("finished_at"), now
-                    )
-                else:
-                    continue
-                if not in_window:
-                    continue
-                included = True
-                counts[status] += 1
-                backend = state.get("backend")
-                backend = (
-                    backend.strip()
-                    if isinstance(backend, str) and backend.strip()
-                    else "unknown"
-                )
-                backend = TaskCardEventProjection.machine_identifier(backend, limit=48) or "unknown"
-                backend_counts[backend] = backend_counts.get(backend, 0) + 1
-                if state.get("backend") == "lingtai":
-                    model = TaskCardEventProjection.machine_identifier(
-                        state.get("model"), limit=128
-                    )
-                    if model is not None and model != "unknown":
-                        model_counts[model] = model_counts.get(model, 0) + 1
-
-                tokens = state.get("tokens")
-                cli_tokens = state.get("cli_tokens")
-                if not isinstance(tokens, dict):
-                    tokens = None
-                if not isinstance(cli_tokens, dict):
-                    cli_tokens = None
-                backend_name = state.get("backend")
-                if backend_name == "lingtai":
-                    usage = tokens
-                elif isinstance(backend_name, str) and backend_name.strip():
-                    usage = cli_tokens or tokens
-                else:
-                    # Legacy records had no backend marker. Prefer a non-zero
-                    # external CLI ledger, then fall back to kernel tokens.
-                    cli_nonzero = (
-                        cli_tokens is not None
-                        and any(_task_card_nonnegative_count(cli_tokens.get(k)) > 0
-                                for k in ("input", "output", "thinking", "cached", "calls"))
-                    )
-                    usage = cli_tokens if cli_nonzero else (tokens or cli_tokens)
-                if isinstance(usage, dict):
-                    for source_key, total_key in (("input", "input"), ("output", "output"), ("cached", "cached")):
-                        totals[total_key] += _task_card_nonnegative_count(usage.get(source_key))
-                    # API calls come from the same selected ledger as the displayed
-                    # token totals. daemon tool_call_count is deliberately not substituted.
-                    cli_calls += _task_card_nonnegative_count(usage.get("calls"))
-            except (ValueError, TypeError):
-                continue
-        if not included:
-            return None
-        snapshot = {
-            **counts,
-            "backend_counts": backend_counts,
-            "input_tokens": totals["input"],
-            "output_tokens": totals["output"],
-            "cached_tokens": totals["cached"],
-            "cli_calls": cli_calls,
-        }
-        if model_counts:
-            snapshot["model_counts"] = model_counts
-        return snapshot
-
-    def _task_card_async_shell_snapshot(self) -> dict | None:
-        """Read-only async-shell lane using only durable ``state.json`` files."""
-        jobs_dir = self._working_dir / "system" / "jobs"
-        try:
-            if jobs_dir.is_symlink() or not jobs_dir.is_dir():
-                return None
-            children = list(jobs_dir.iterdir())
-        except OSError:
-            return None
-        now_epoch = time.time()
-        counts = {key: 0 for key in _TASK_CARD_ASYNC_STATUS_KEYS}
-        included = False
-        for job_dir in children:
-            try:
-                if job_dir.is_symlink() or not job_dir.is_dir():
-                    continue
-                state = load_state(job_dir)
-                if not isinstance(state, dict):
-                    continue
-                status = _task_card_shell_status(state)
-                if status is None or not _task_card_shell_in_window(state, now_epoch):
-                    continue
-                counts[status] += 1
-                included = True
-            except (OSError, ValueError, TypeError, UnicodeDecodeError):
-                continue
-        return counts if included else None
-
     def _task_card_async_work_snapshot(self) -> dict | None:
-        daemon = self._task_card_daemon_snapshot()
-        shell = self._task_card_async_shell_snapshot()
-        if daemon is None and shell is None:
-            return None
-        lanes = [lane for lane in (daemon, shell) if lane is not None]
-        combined = {
-            key: sum(_task_card_nonnegative_count(lane.get(key)) for lane in lanes)
-            for key in _TASK_CARD_ASYNC_STATUS_KEYS
-        }
-        result: dict = {**combined}
-        if daemon is not None:
-            result["daemon"] = daemon
-        if shell is not None:
-            result["shell"] = shell
-        return result
+        """Read the kernel-owned, versioned recent async-work snapshot.
+
+        Missing, malformed, future-dated, or older-than-window records produce
+        no rows. Telegram never falls back to daemon/Shell state collection.
+        """
+        return query_published_async_work(
+            read_agent_record(self._working_dir),
+            wall_now=time.time(),
+        )
 
     def _task_card_current_model(self) -> str | None:
         """Read the agent's current LLM model from ``.agent.json``.
@@ -3045,12 +3106,33 @@ class TelegramManager:
         )
 
     @staticmethod
+    def _annotate_pending_shell_activity(
+        event: dict, row: dict | None,
+    ) -> dict | None:
+        """Attach Telegram's safe foreground/async-dispatch wording only."""
+        if not isinstance(row, dict) or event.get("tool_name") != "shell":
+            return row
+        tool_args = event.get("tool_args")
+        if not isinstance(tool_args, dict) or tool_args.get("action") != "run":
+            return row
+        action_input = tool_args.get("input")
+        is_async = (
+            isinstance(action_input, dict)
+            and action_input.get("async") is True
+        )
+        row["_pending_activity"] = (
+            "dispatching async job" if is_async else "foreground"
+        )
+        return row
+
+    @staticmethod
     def _project_task_card_event(event: dict) -> dict | None:
-        return TaskCardEventProjection.project_event(
+        row = TaskCardEventProjection.project_event(
             event,
             text_cap=TelegramManager._TASK_CARD_EVENT_TEXT_CAP,
             reasoning_cap=TelegramManager._TASK_CARD_EVENT_REASONING_CAP,
         )
+        return TelegramManager._annotate_pending_shell_activity(event, row)
 
     @staticmethod
     def _event_group_id(event: dict, fallback: int) -> str:
@@ -3073,10 +3155,11 @@ class TelegramManager:
 
     @staticmethod
     def _project_tool_call_row(event: dict) -> dict | None:
-        return TaskCardEventProjection.project_tool_call_row(
+        row = TaskCardEventProjection.project_tool_call_row(
             event,
             reasoning_cap=TelegramManager._TASK_CARD_EVENT_REASONING_CAP,
         )
+        return TelegramManager._annotate_pending_shell_activity(event, row)
 
     @staticmethod
     def _project_final_carrier_metadata(event: dict) -> dict | None:
@@ -3119,6 +3202,27 @@ class TelegramManager:
                 return ("btime", ctime)
         return None
 
+    def _remember_call_usages(self, usages: dict[str, dict]) -> None:
+        """Merge exact per-call usage facts into the bounded in-memory cache.
+
+        Caller holds ``_task_card_event_lock``. A later carrier without pricing
+        facts never erases an earlier ``bill`` for the same id. Oldest ids are
+        evicted past a cap proportional to the event window.
+        """
+        cache = self._task_card_call_usages
+        for call_id, usage in usages.items():
+            previous = cache.pop(call_id, None)
+            if (
+                "bill" not in usage
+                and isinstance(previous, dict)
+                and previous.get("bill")
+            ):
+                usage = {**usage, "bill": previous["bill"]}
+            cache[call_id] = usage
+        limit = self._TASK_CARD_EVENT_WINDOW * 4
+        while len(cache) > limit:
+            del cache[next(iter(cache))]
+
     def _init_event_tail(self) -> None:
         """Rehydrate the latest-N window and forward offset from the file tail.
 
@@ -3142,6 +3246,10 @@ class TelegramManager:
                 self._task_card_event_inode = None
                 self._task_card_event_identity = None
                 self._task_card_event_groups = []
+                self._task_card_call_usages = {}
+                self._task_card_session_usage_state = None
+                self._task_card_idle_state = None
+                self._task_card_session_cost_state = None
                 self._task_card_event_metadata = None
             return
 
@@ -3158,9 +3266,13 @@ class TelegramManager:
                 self._task_card_event_inode = None
                 self._task_card_event_identity = None
                 self._task_card_event_groups = []
+                self._task_card_call_usages = {}
+                self._task_card_session_usage_state = None
+                self._task_card_idle_state = None
+                self._task_card_session_cost_state = None
                 self._task_card_event_metadata = None
             return
-        rows, offset, metadata, usages = result
+        rows, offset, session_state, usages, cost_state = result
         with self._task_card_event_lock:
             self._task_card_event_path = path
             self._task_card_event_offset = offset
@@ -3169,25 +3281,34 @@ class TelegramManager:
             self._task_card_event_identity = self._event_file_identity(stat)
             projected = [({"api_call_id": row.get("group_id")}, dict(row)) for row in rows]
             self._task_card_event_groups = self._group_task_card_events(projected)
+            self._task_card_call_usages = {}
+            self._remember_call_usages(usages)
             TaskCardEventProjection.apply_tool_usages(
-                self._task_card_event_groups, usages,
+                self._task_card_event_groups, self._task_card_call_usages,
             )
-            self._task_card_event_metadata = metadata
+            self._task_card_session_usage_state = session_state
+            self._task_card_session_cost_state = cost_state
+            metadata = TaskCardEventProjection.session_usage_metadata(session_state)
+            self._task_card_event_metadata = metadata or None
 
     def _reverse_tail_latest_rows(
         self, path: Path, size: int,
-    ) -> tuple[list[dict], int, dict | None, dict[str, dict]] | None:
+    ) -> tuple[list[dict], int, dict | None, dict[str, dict], dict | None] | None:
         """Reverse-scan bounded chunks from EOF to collect the latest-N matches.
 
         Reads growing chunks backward from the end of the file until either
-        ``_TASK_CARD_EVENT_WINDOW`` matching rows are found or the file start is
-        reached — never a full read of a large (e.g. multi-hundred-MB) log.
+        ``_TASK_CARD_EVENT_WINDOW`` activity groups or SESSION events are found,
+        or the file start is reached.  SESSION-only histories therefore obey the
+        same existing tail window instead of forcing a full history scan.
         The tail chunk may start mid-line; the leading partial fragment is
         discarded (its predecessor chunk will complete it on the next round).
 
-        Returns ``(rows, offset, metadata, usages)`` where ``offset`` is the forward
-        byte offset the poller should resume from and ``metadata`` is the latest
-        final-carrier session projection (or ``None`` when no carrier exists)
+        Returns ``(rows, offset, session_state, usages, cost_state)`` where
+        ``offset`` is the
+        forward byte offset the poller should resume from and ``session_state`` is
+        the shared journal-ordered SESSION reducer state (or ``None`` when no
+        relevant event exists); ``cost_state`` holds only the bill facts of the
+        same bounded window, so an older unseen response stays partial
         — ``size`` unless the file's final line
         has no trailing newline yet (writer mid-append), in which case it is
         the start of that incomplete tail so the poller re-reads it whole once
@@ -3197,7 +3318,8 @@ class TelegramManager:
         """
         window = self._TASK_CARD_EVENT_WINDOW
         projected_events: list[tuple[dict, dict]] = []
-        latest_metadata: dict | None = None
+        idle_events: list[dict] = []
+        session_events: list[dict] = []
         per_call_usages: dict[str, dict] = {}
         tool_results: dict[str, dict] = {}
         summary_times: dict[str, float] = {}
@@ -3208,11 +3330,17 @@ class TelegramManager:
                 chunk_size = self._TASK_CARD_EVENT_TAIL_CHUNK
                 carry = b""
                 first_chunk = True
-                # Reverse order means the first recognized carrier in the
-                # bounded tail is the latest one available to this rehydrate.
-                # Keep the existing latest-row bound; a log without a nearby
-                # carrier must not turn startup into an unbounded full scan.
-                while end > 0 and len({self._event_group_id(event, i) for i, (event, _row) in enumerate(projected_events)}) < window:
+                # Keep the existing tail window for both visible activity
+                # groups and SESSION events.  Either kind of current evidence
+                # is enough to bound restart work; older visible rows should
+                # not force a full scan through a SESSION-only recent history.
+                while end > 0 and max(
+                    len({
+                        self._event_group_id(event, i)
+                        for i, (event, _row) in enumerate(projected_events)
+                    }),
+                    len(session_events),
+                ) < window:
                     start = max(0, end - chunk_size)
                     f.seek(start)
                     data = f.read(end - start)
@@ -3237,12 +3365,24 @@ class TelegramManager:
                     # are already at the start of the file.
                     carry = lines[0] if start > 0 else b""
                     complete = lines[1:] if start > 0 else lines
+                    round_idle_events: list[dict] = []
                     round_projected: list[tuple[dict, dict]] = []
-                    round_metadata: dict | None = None
+                    round_session_events: list[dict] = []
                     for raw in complete:
                         event = self._decode_event_line(raw)
                         if event is None:
                             continue
+                        if event.get("type") in {
+                            "agent_state", "heartbeat_start", "heartbeat_stop",
+                            "agent_stop", "tool_call", "diary",
+                        }:
+                            round_idle_events.append(event)
+                        if event.get("type") in {
+                            "llm_response",
+                            "notification_block_injected",
+                            "psyche_molt",
+                        }:
+                            round_session_events.append(event)
                         call_id = event.get("tool_call_id")
                         if (
                             event.get("type") == "tool_result"
@@ -3265,19 +3405,23 @@ class TelegramManager:
                         if llm_usage is not None:
                             llm_call_id, usage = llm_usage
                             per_call_usages[llm_call_id] = usage
-                        candidate = self._project_final_carrier_metadata(event)
-                        if candidate is not None:
-                            # ``complete`` is oldest-to-newest within this
-                            # chunk; the last candidate is the newest here.
-                            round_metadata = candidate
-                    if latest_metadata is None and round_metadata is not None:
-                        latest_metadata = round_metadata
+                    session_events = (
+                        round_session_events + session_events
+                    )[-window:]
                     projected_events = round_projected + projected_events
+                    idle_events = round_idle_events + idle_events
                     chunk_size *= 2
         except OSError:
             return None
         # Chunks were prepended above, so projected events are already in
         # journal order before grouping; one API call receives one divider.
+        idle_state = None
+        idle_rows = {id(event): row for event, row in projected_events}
+        for event in idle_events:
+            idle_state = TaskCardEventProjection.reduce_idle_event(
+                idle_state, event, idle_rows.get(id(event)),
+            )
+        self._task_card_idle_state = idle_state
         groups = self._group_task_card_events(projected_events)
         TaskCardEventProjection.apply_tool_results(groups, tool_results)
         TaskCardEventProjection.apply_tool_usages(groups, per_call_usages)
@@ -3285,9 +3429,16 @@ class TelegramManager:
         TaskCardEventProjection.apply_apriori_summary_metrics(
             groups, summary_times, summary_usages,
         )
+        session_state = None
+        cost_state = None
+        for event_order, event in enumerate(session_events):
+            session_state = TaskCardEventProjection.reduce_session_usage_event(
+                session_state, event, event_order=event_order,
+            )
+            cost_state = _api_cost.fold_session_cost(cost_state, session_state, event)
         return self._flatten_task_card_groups(
             groups, include_group_id=True,
-        ), tail_offset, latest_metadata, per_call_usages
+        ), tail_offset, session_state, per_call_usages, cost_state
 
     @staticmethod
     def _decode_event_line(raw: bytes) -> dict | None:
@@ -3313,7 +3464,7 @@ class TelegramManager:
             self._init_event_tail()
             with self._task_card_event_lock:
                 rehydrated_rows = bool(self._task_card_event_groups)
-                rehydrated_metadata = self._task_card_event_metadata is not None
+                rehydrated_metadata = self._task_card_session_usage_state is not None
             if rehydrated_rows or rehydrated_metadata:
                 self._broadcast_task_card_event_window()
             return
@@ -3384,14 +3535,21 @@ class TelegramManager:
         new_offset = offset + len(complete)
 
         projected_events: list[tuple[dict, dict]] = []
-        latest_metadata: dict | None = None
+        session_events: list[dict] = []
         tool_results: dict[str, dict] = {}
         per_call_usages: dict[str, dict] = {}
         summary_times: dict[str, float] = {}
+        idle_state = getattr(self, "_task_card_idle_state", None)
         for raw in complete.split(b"\n"):
             event = self._decode_event_line(raw)
             if event is None:
                 continue
+            if event.get("type") in {
+                "llm_response",
+                "notification_block_injected",
+                "psyche_molt",
+            }:
+                session_events.append(event)
             call_id = event.get("tool_call_id")
             if event.get("type") == "tool_result" and isinstance(call_id, str) and call_id:
                 tool_results[call_id] = event
@@ -3408,22 +3566,26 @@ class TelegramManager:
                 llm_call_id, usage = llm_usage
                 per_call_usages[llm_call_id] = usage
             row = self._project_task_card_event(event)
+            idle_state = TaskCardEventProjection.reduce_idle_event(idle_state, event, row)
             if row is not None:
                 projected_events.append((event, row))
-            candidate = self._project_final_carrier_metadata(event)
-            if candidate is not None:
-                # Forward append order is oldest-to-newest, so the last
-                # candidate is the only current snapshot.
-                latest_metadata = candidate
 
         summary_usages = self._read_apriori_summary_usages(set(summary_times))
         with self._task_card_event_lock:
-            metadata_changed = (
-                latest_metadata is not None
-                and latest_metadata != self._task_card_event_metadata
-            )
-            if latest_metadata is not None:
-                self._task_card_event_metadata = latest_metadata
+            self._task_card_idle_state = idle_state
+            session_state = self._task_card_session_usage_state
+            cost_state = self._task_card_session_cost_state
+            for event in session_events:
+                session_state = TaskCardEventProjection.reduce_session_usage_event(
+                    session_state, event,
+                )
+                cost_state = _api_cost.fold_session_cost(cost_state, session_state, event)
+            metadata = TaskCardEventProjection.session_usage_metadata(session_state)
+            rendered_metadata = metadata or None
+            metadata_changed = rendered_metadata != self._task_card_event_metadata
+            self._task_card_session_usage_state = session_state
+            self._task_card_session_cost_state = cost_state
+            self._task_card_event_metadata = rendered_metadata
             self._task_card_event_offset = new_offset
             self._task_card_event_size = size
             if projected_events:
@@ -3439,9 +3601,10 @@ class TelegramManager:
                 self._task_card_event_groups,
                 tool_results,
             )
+            self._remember_call_usages(per_call_usages)
             usage_changed = TaskCardEventProjection.apply_tool_usages(
                 self._task_card_event_groups,
-                per_call_usages,
+                self._task_card_call_usages,
             )
             summary_changed = TaskCardEventProjection.apply_apriori_summary_metrics(
                 self._task_card_event_groups, summary_times, summary_usages,
@@ -3591,11 +3754,18 @@ class TelegramManager:
         session_prefixes = ("Session · ", "会话 · ")
         stable_lines: list[str] = []
         for line in automatic.splitlines():
-            if line.startswith(time_prefixes):
+            if line.removeprefix("🕒 ").startswith(time_prefixes):
                 continue
             if line.startswith(session_prefixes):
                 line = re.sub(
                     r"(?<= · )active \(\d+s\)(?= · |$)",
+                    "active",
+                    line,
+                    count=1,
+                )
+            elif line.startswith("<b>Agent</b> · "):
+                line = re.sub(
+                    r"(?<=<b>Agent</b> · )active \(\d+s\)(?= · |$)",
                     "active",
                     line,
                     count=1,
@@ -3625,13 +3795,15 @@ class TelegramManager:
         if not force:
             self._flush_pending_task_card_edits()
         normal_rows = self._taskcard_normal_rows()
-        automatic = TaskCardEventProjection.render_event_groups(
+        automatic = _telegram_task_card_html(TaskCardEventProjection.render_event_groups(
             self._task_card_event_groups_snapshot(),
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=normal_rows,
             locale=self._taskcard_locale(),
             display_expression=self._taskcard_display_expression(),
-        )
+            usage_line=_api_cost.usage_line,
+            stream_metrics=True,
+        ))
         fingerprint = self._task_card_automatic_fingerprint(automatic)
         for account, chat_id in self._resident_task_card_targets():
             key = (account, chat_id)
@@ -3804,13 +3976,15 @@ class TelegramManager:
         the first card a human sees is already complete; the 5s blanket keeps
         it fresh from there.
         """
-        automatic = TaskCardEventProjection.render_event_groups(
+        automatic = _telegram_task_card_html(TaskCardEventProjection.render_event_groups(
             self._task_card_event_groups_snapshot(),
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=self._taskcard_normal_rows(),
             locale=self._taskcard_locale(),
             display_expression=self._taskcard_display_expression(),
-        )
+            usage_line=_api_cost.usage_line,
+            stream_metrics=True,
+        ))
         return self._deliver_channel_frame(
             account,
             chat_id,
@@ -4216,16 +4390,18 @@ class TelegramManager:
         Secret redaction always runs on each row's reasoning *before* any
         excerpt or length trim, so a secret can never survive truncation, and
         every row is always represented even under length pressure — rows are
-        never dropped to fit; only per-row excerpts shrink.  The
-        ``_TASK_CARD_TEXT_LIMIT`` budget governs that reasoning-excerpt
-        shrinkage only; it is not a guarantee that the whole render stays under
-        the limit.  Fixed per-row scaffolding is unbounded in the number of
-        rows, so many selected rows can still produce a render above the budget
-        (and above Telegram's transport limit).  The durable ``/taskcard N``
-        control bounds the latest API-call groups to 1-10; it does not truncate
-        fixed row scaffolding.  See ``_format_rows_task_card_text``.
+        never dropped to fit; only per-row excerpts shrink.
+        The shared ``_TASK_CARD_TEXT_LIMIT`` budget governs the source frame.
+        The Telegram adapter trims only escaped dynamic line content when the
+        source frame is within that budget, accounting for its fixed HTML tags
+        and emojis without dropping rows. Fixed per-row scaffolding is unbounded
+        in the number of rows, so a source frame already above the budget can
+        still exceed the budget (and Telegram's transport limit). The durable
+        ``/taskcard N`` control bounds the latest API-call groups to 1-10; it
+        does not truncate fixed row scaffolding. See
+        ``_format_rows_task_card_text``.
         """
-        return TaskCardEventProjection.format_task_card_text(
+        return _telegram_task_card_html(TaskCardEventProjection.format_task_card_text(
             tool,
             action,
             reasoning,
@@ -4233,12 +4409,12 @@ class TelegramManager:
             metadata=metadata,
             normal_rows=normal_rows,
             now=now,
-        )
+        ))
 
     @classmethod
     def _format_scalar_task_card_text(cls, tool: str, action: str, reasoning: str) -> str:
-        return TaskCardEventProjection.format_scalar_task_card_text(
-            tool, action, reasoning,
+        return _telegram_task_card_html(
+            TaskCardEventProjection.format_scalar_task_card_text(tool, action, reasoning)
         )
 
     @staticmethod
@@ -4257,13 +4433,13 @@ class TelegramManager:
         now: datetime | None = None,
         locale: str = "en",
     ) -> str:
-        return TaskCardEventProjection.format_rows_task_card_text(
+        return _telegram_task_card_html(TaskCardEventProjection.format_rows_task_card_text(
             rows,
             metadata=metadata,
             normal_rows=normal_rows,
             now=now,
             locale=locale,
-        )
+        ))
 
     @staticmethod
     def _task_card_render_time(now: datetime | None) -> str:

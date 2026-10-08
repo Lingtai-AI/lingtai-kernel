@@ -75,11 +75,11 @@ def test_emanate_task_schema_declares_optional_task_files():
 
 
 def test_omitting_task_files_keeps_old_behavior(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     captured = _capture_lingtai_spawn(monkeypatch, mgr)
 
-    result = _dispatch(mgr, [{"task": "clean the repo", "tools": ["file"]}])
+    result = _dispatch(mgr, [{"task": "clean the repo", "tools": ["shell"]}])
 
     assert result["status"] == "dispatched"
     assert not (agent._working_dir / "daemons" / "_task_files").exists()
@@ -106,12 +106,12 @@ def test_omitting_task_files_keeps_old_behavior(tmp_path, monkeypatch):
 def test_task_files_malformed_entries_refuse_whole_batch(
     tmp_path, monkeypatch, task_files, message_part
 ):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [
-        {"task": "t", "tools": ["file"], "task_files": task_files},
+        {"task": "t", "tools": ["shell"], "task_files": task_files},
     ])
 
     assert result["status"] == "error"
@@ -122,14 +122,14 @@ def test_task_files_malformed_entries_refuse_whole_batch(
 
 
 def test_task_files_out_of_root_path_refuses(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     outside = tmp_path / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [{
-        "task": "t", "tools": ["file"],
+        "task": "t", "tools": ["shell"],
         "task_files": [{"path": str(outside)}],
     }])
 
@@ -139,14 +139,14 @@ def test_task_files_out_of_root_path_refuses(tmp_path, monkeypatch):
 
 
 def test_task_files_relative_escape_refuses(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     outside = tmp_path / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [{
-        "task": "t", "tools": ["file"],
+        "task": "t", "tools": ["shell"],
         "task_files": [{"path": "../outside.txt"}],
     }])
 
@@ -156,12 +156,12 @@ def test_task_files_relative_escape_refuses(tmp_path, monkeypatch):
 
 
 def test_task_files_missing_path_refuses(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [{
-        "task": "t", "tools": ["file"],
+        "task": "t", "tools": ["shell"],
         "task_files": [{"path": "inputs/absent.txt"}],
     }])
 
@@ -171,14 +171,14 @@ def test_task_files_missing_path_refuses(tmp_path, monkeypatch):
 
 
 def test_task_files_oversize_refuses(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     monkeypatch.setattr(daemon_pkg, "TASK_FILE_MAX_BYTES", 8)
     _write_input(agent, "inputs/big.txt", "x" * 9)
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [{
-        "task": "t", "tools": ["file"],
+        "task": "t", "tools": ["shell"],
         "task_files": [{"path": "inputs/big.txt"}],
     }])
 
@@ -188,13 +188,13 @@ def test_task_files_oversize_refuses(tmp_path, monkeypatch):
 
 
 def test_task_files_non_utf8_refuses(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     _write_input(agent, "inputs/binary.bin", b"\xff\xfe\x00\x01")
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [{
-        "task": "t", "tools": ["file"],
+        "task": "t", "tools": ["shell"],
         "task_files": [{"path": "inputs/binary.bin"}],
     }])
 
@@ -204,7 +204,7 @@ def test_task_files_non_utf8_refuses(tmp_path, monkeypatch):
 
 
 def test_task_files_too_many_files_refuses(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     monkeypatch.setattr(daemon_pkg, "TASK_FILES_MAX_PER_TASK", 2)
     for i in range(3):
@@ -212,7 +212,7 @@ def test_task_files_too_many_files_refuses(tmp_path, monkeypatch):
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [{
-        "task": "t", "tools": ["file"],
+        "task": "t", "tools": ["shell"],
         "task_files": [{"path": f"inputs/f{i}.txt"} for i in range(3)],
     }])
 
@@ -222,14 +222,14 @@ def test_task_files_too_many_files_refuses(tmp_path, monkeypatch):
 
 
 def test_task_files_oversized_label_refuses(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     monkeypatch.setattr(daemon_pkg, "_TASK_FILES_ANNOTATION_MAX_CHARS", 5)
     _write_input(agent, "inputs/a.txt", "body")
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [{
-        "task": "t", "tools": ["file"],
+        "task": "t", "tools": ["shell"],
         "task_files": [{"path": "inputs/a.txt", "label": "way too long"}],
     }])
 
@@ -240,15 +240,15 @@ def test_task_files_oversized_label_refuses(tmp_path, monkeypatch):
 
 def test_task_files_later_task_failure_refuses_whole_batch_without_store(tmp_path, monkeypatch):
     """A bad entry in a later task refuses the batch with zero store side effects."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     _write_input(agent, "inputs/ok.txt", "fine body")
     _write_input(agent, "inputs/bad.txt", b"\x00\x01\x02")
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [
-        {"task": "t1", "tools": ["file"], "task_files": [{"path": "inputs/ok.txt"}]},
-        {"task": "t2", "tools": ["file"], "task_files": [{"path": "inputs/bad.txt"}]},
+        {"task": "t1", "tools": ["shell"], "task_files": [{"path": "inputs/ok.txt"}]},
+        {"task": "t2", "tools": ["shell"], "task_files": [{"path": "inputs/bad.txt"}]},
     ])
 
     assert result["status"] == "error"
@@ -263,7 +263,7 @@ def test_task_files_later_task_failure_refuses_whole_batch_without_store(tmp_pat
 # ---------------------------------------------------------------------------
 
 def test_task_files_snapshot_once_per_group_and_durable_rows(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     content = "alpha input body\n"
     src = _write_input(agent, "inputs/alpha.txt", content)
@@ -271,11 +271,11 @@ def test_task_files_snapshot_once_per_group_and_durable_rows(tmp_path, monkeypat
 
     result = _dispatch(mgr, [
         {
-            "task": "t1", "tools": ["file"],
+            "task": "t1", "tools": ["shell"],
             "task_files": [{"path": "inputs/alpha.txt", "label": "spec", "role": "input"}],
         },
         {
-            "task": "t2", "tools": ["file"],
+            "task": "t2", "tools": ["shell"],
             "task_files": [{"path": str(src), "label": "spec2"}],
         },
     ])
@@ -320,13 +320,13 @@ def test_task_files_snapshot_once_per_group_and_durable_rows(tmp_path, monkeypat
 
 
 def test_task_files_preserves_distinct_attachment_rows_for_one_path(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     _write_input(agent, "inputs/spec.txt", "same bytes")
     captured = _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [{
-        "task": "compare inputs", "tools": ["file"],
+        "task": "compare inputs", "tools": ["shell"],
         "task_files": [
             {"path": "inputs/spec.txt", "label": "before", "role": "baseline"},
             {"path": "inputs/spec.txt", "label": "after", "role": "target"},
@@ -343,13 +343,13 @@ def test_task_files_preserves_distinct_attachment_rows_for_one_path(tmp_path, mo
 
 
 def test_task_files_relaunch_reads_snapshot_not_original(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     src = _write_input(agent, "inputs/alpha.txt", "original bytes v1")
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [{
-        "task": "t", "tools": ["file"],
+        "task": "t", "tools": ["shell"],
         "task_files": [{"path": "inputs/alpha.txt"}],
     }])
     assert result["status"] == "dispatched"
@@ -372,17 +372,17 @@ def test_task_files_relaunch_reads_snapshot_not_original(tmp_path, monkeypatch):
 
 
 def test_task_files_shared_blob_across_dispatches_deduplicates(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     _write_input(agent, "inputs/alpha.txt", "same bytes")
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     first = _dispatch(mgr, [{
-        "task": "t1", "tools": ["file"],
+        "task": "t1", "tools": ["shell"],
         "task_files": [{"path": "inputs/alpha.txt"}],
     }])
     second = _dispatch(mgr, [{
-        "task": "t2", "tools": ["file"],
+        "task": "t2", "tools": ["shell"],
         "task_files": [{"path": "inputs/alpha.txt"}],
     }])
     assert first["status"] == second["status"] == "dispatched"
@@ -399,13 +399,13 @@ def test_task_files_shared_blob_across_dispatches_deduplicates(tmp_path, monkeyp
 # ---------------------------------------------------------------------------
 
 def test_task_files_store_is_never_listed_as_a_run(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     _write_input(agent, "inputs/alpha.txt", "x")
     _capture_lingtai_spawn(monkeypatch, mgr)
 
     result = _dispatch(mgr, [{
-        "task": "t", "tools": ["file"],
+        "task": "t", "tools": ["shell"],
         "task_files": [{"path": "inputs/alpha.txt"}],
     }])
     assert result["status"] == "dispatched"
@@ -422,7 +422,7 @@ def test_task_files_store_is_never_listed_as_a_run(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_task_files_reach_cli_backend_prompt_and_durable_rows(tmp_path, monkeypatch):
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["shell", "daemon"])
     mgr = agent.get_capability("daemon")
     # This test observes the classic detached CLI payload. Disable the manager
     # path explicitly rather than coupling its assertion to manager routing.
@@ -435,7 +435,7 @@ def test_task_files_reach_cli_backend_prompt_and_durable_rows(tmp_path, monkeypa
         "action": "emanate",
         "backend": "opencode",
         "tasks": [{
-            "task": "run with input", "tools": ["file"],
+            "task": "run with input", "tools": ["shell"],
             "task_files": [{"path": "inputs/cli.txt", "label": "spec", "role": "input"}],
         }],
     })

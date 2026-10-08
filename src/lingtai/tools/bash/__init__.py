@@ -5,8 +5,8 @@ because not every agent should have shell access — it's a powerful
 capability that should be explicitly opted into.
 
 Usage:
+    agent.add_capability("shell")  # omitted config: yolo, no restrictions
     agent.add_capability("shell", policy_file="path/to/policy.json")
-    agent.add_capability("shell", yolo=True)  # no restrictions
 """
 from __future__ import annotations
 
@@ -72,10 +72,10 @@ _DEFAULT_ASYNC_REMINDER_SECONDS = 1800.0
 _AGENT_ASYNC_HANDOFF = (
     "While waiting, go idle or call system(action='sleep'); the terminal result "
     "will arrive and wake you as a notification; read shell-manual and "
-    "notification-manual for details. If Telegram is connected and a Task Card "
-    "is available for the current turn, use it to report progress; call "
-    "`telegram(action='manual')` and follow its `Programmable Task Card` "
-    "section for details."
+    "notification-manual for details. If a Task Card is available and useful "
+    "for the current turn, use it only for progress; read the intrinsic "
+    "`task_card(action='manual', input={}, reasoning='...')` manual for its "
+    "channel-neutral lifecycle."
 )
 _DETACHED_DAEMON_ASYNC_HANDOFF = (
     "While this daemon is still running, Shell reminder and completion events "
@@ -740,8 +740,11 @@ class ShellManager:
                     )
                 ),
             }
-        if not all(self._policy._check_single(cmd, case_insensitive=case_insensitive) for cmd in commands):
-            denied = commands
+        denied = list(dict.fromkeys(
+            cmd for cmd in commands
+            if not self._policy._check_single(cmd, case_insensitive=case_insensitive)
+        ))
+        if denied:
             return {
                 "status": "error",
                 "message": f"Command not allowed by policy. "
@@ -2221,7 +2224,7 @@ def _mount_declared_shell(
 def setup(
     agent: "BaseAgent",
     policy_file: str | None = None,
-    yolo: bool = False,
+    yolo: bool | None = None,
     shell_kind: "ShellKind | str | None" = None,
     **unsupported: object,
 ) -> ShellManager:

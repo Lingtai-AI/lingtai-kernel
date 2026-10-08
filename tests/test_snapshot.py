@@ -20,7 +20,7 @@ GITIGNORE_BASELINE = (
     ".secrets/\n\n"
     "# Transient lifecycle signal files\n"
     ".sleep\n.suspend\n.agent.heartbeat\n"
-    ".refresh\n.refresh.taken\n.prompt\n.clear\n.inquiry\n.inquiry.taken\n.rules\n.interrupt\n"
+    ".refresh\n.refresh.taken\n.prompt\n.clear\n.rules\n.interrupt\n"
 )
 SYSTEM_BASELINE = {"covenant.md": "", "principle.md": "", "pad.md": ""}
 
@@ -196,8 +196,6 @@ LIFECYCLE_SIGNAL_FILES = (
     ".refresh.taken",
     ".prompt",
     ".clear",
-    ".inquiry",
-    ".inquiry.taken",
     ".rules",
     ".interrupt",
 )

@@ -116,9 +116,10 @@ def _valid_preset(name: str = "test") -> dict:
         "name": name,
         "description": {"summary": "test preset"},
         "manifest": {
-            "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
+            "llm": {"provider": "openai", "model": "deepseek-v4-flash",
+                    "base_url": "https://api.deepseek.com",
                     "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
-            "capabilities": {"file": {}, "email": {}},
+            "capabilities": {"shell": {}, "email": {}},
         },
     }
 
@@ -184,7 +185,7 @@ def test_load_preset_jsonc_strips_comments(tmp_path):
       "description": {"summary": "tests JSONC"},
       "manifest": {
         "llm": {"provider": "x", "model": "y"},
-        "capabilities": {"file": {}},   // trailing comma here
+        "capabilities": {"shell": {}},   // trailing comma here
       },
     }'''
     p = tmp_path / "withcomments.jsonc"
@@ -390,29 +391,29 @@ def test_load_preset_accepts_thinking_for_anthropic(tmp_path, value):
 @pytest.mark.parametrize(
     "llm",
     [
-        # Custom OpenAI-compatible on either wire — Responses sends
-        # reasoning.effort, Chat Completions sends reasoning_effort.
-        {"provider": "custom", "model": "m", "api_compat": "openai"},
+        # Every family accepts the standard level vocabulary; the endpoint
+        # (official or a compatible base_url) does not change that.
+        {"provider": "openai", "model": "m"},
+        {"provider": "openai", "model": "m", "wire_api": "responses"},
         {
-            "provider": "custom",
+            "provider": "openai",
             "model": "m",
-            "api_compat": "openai",
+            "base_url": "https://compat.example/v1",
             "wire_api": "chat_completions",
         },
-        # Built-in OpenAI-wire providers, with api_compat left implicit.
-        {"provider": "openai", "model": "m", "wire_api": "responses"},
-        {"provider": "openai", "model": "m"},
-        {"provider": "deepseek", "model": "deepseek-reasoner"},
+        {"provider": "anthropic", "model": "m", "base_url": "https://compat.example"},
+        {"provider": "codex", "model": "gpt-5.5"},
+        {"provider": "claude-code", "model": "sonnet"},
     ],
 )
-def test_load_preset_accepts_thinking_for_openai_compatible(tmp_path, llm):
+def test_load_preset_accepts_thinking_for_every_family(tmp_path, llm):
     llm["thinking"] = "high"
     p = {
-        "name": "openai-compatible",
+        "name": "family",
         "description": _DESC,
         "manifest": {"llm": llm, "capabilities": {}},
     }
-    f = tmp_path / "openai-compatible.json"
+    f = tmp_path / "family.json"
     f.write_text(json.dumps(p))
 
     loaded = load_preset(str(f))
@@ -420,50 +421,50 @@ def test_load_preset_accepts_thinking_for_openai_compatible(tmp_path, llm):
     assert loaded["manifest"]["llm"]["thinking"] == "high"
 
 
-@pytest.mark.parametrize(
-    "llm",
-    [
-        {"provider": "gemini", "model": "m"},
-        {"provider": "minimax", "model": "m"},
-        {
-            "provider": "custom",
-            "model": "m",
-            "api_compat": "gemini",
-            "wire_api": "auto",
-        },
-    ],
-)
-def test_load_preset_rejects_thinking_outside_thinking_capable_scope(tmp_path, llm):
-    llm["thinking"] = "high"
+@pytest.mark.parametrize("provider", ["deepseek", "gemini", "custom", "codex-pool", "claude_code"])
+def test_wrapper_load_preset_rejects_removed_llm_provider(tmp_path, provider):
+    """The lingtai-layer preset loader (CLI, Agent hooks) applies the same
+    removed-provider rule ``init.json`` validation does; the kernel loader stays
+    provider-agnostic."""
+    from lingtai.agent import load_preset as wrapper_load_preset
+
     p = {
-        "name": "bad-scope",
-        "description": _DESC,
-        "manifest": {"llm": llm, "capabilities": {}},
-    }
-    f = tmp_path / "bad-scope.json"
-    f.write_text(json.dumps(p))
-
-    with pytest.raises(ValueError, match="thinking-capable providers"):
-        load_preset(str(f))
-
-
-@pytest.mark.parametrize("provider", ["codex-pool", "codex_pool"])
-def test_load_preset_accepts_thinking_for_codex_pool(tmp_path, provider):
-    """A saved/builtin-style codex-pool preset may carry thinking."""
-    p = {
-        "name": "pool",
+        "name": "removed",
         "description": _DESC,
         "manifest": {
-            "llm": {"provider": provider, "model": "gpt-5.5", "thinking": "xhigh"},
+            "llm": {"provider": provider, "model": "m", "thinking": "high"},
             "capabilities": {},
         },
     }
-    f = tmp_path / "pool.json"
+    f = tmp_path / "removed.json"
     f.write_text(json.dumps(p))
 
-    loaded = load_preset(str(f))
+    with pytest.raises(ValueError, match="was removed from LingTai"):
+        wrapper_load_preset(str(f))
 
-    assert loaded["manifest"]["llm"]["thinking"] == "xhigh"
+
+@pytest.mark.parametrize(
+    ("llm_patch", "caps", "match"),
+    [
+        ({"service_tier": "turbo"}, {}, "service_tier"),
+        ({"wire_api": "responses", "provider": "anthropic"}, {}, "only for provider openai"),
+        ({}, {"vision": {"provider": "mimo"}}, "capabilities.vision.provider"),
+    ],
+)
+def test_wrapper_load_preset_applies_standard_llm_rules(tmp_path, llm_patch, caps, match):
+    from lingtai.agent import load_preset as wrapper_load_preset
+
+    llm = {"provider": "openai", "model": "m", **llm_patch}
+    p = {
+        "name": "rules",
+        "description": _DESC,
+        "manifest": {"llm": llm, "capabilities": caps},
+    }
+    f = tmp_path / "rules.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match=match):
+        wrapper_load_preset(str(f))
 
 
 def test_preset_context_limit_reads_from_llm_block():
@@ -485,20 +486,20 @@ def test_preset_context_limit_returns_none_when_unset():
 
 def test_expand_inherit_resolves_to_main_llm():
     main_llm = {
-        "provider": "gemini", "model": "gemini-2.5-pro",
-        "api_key": None, "api_key_env": "GEMINI_API_KEY",
+        "provider": "openai", "model": "gpt-5.5",
+        "api_key": None, "api_key_env": "OPENAI_API_KEY",
         "base_url": None,
     }
     caps = {
         "web_search": {"provider": "inherit"},
         "vision":     {"provider": "inherit"},
-        "file":       {},
+        "shell":      {},
     }
     expand_inherit(caps, main_llm)
-    assert caps["web_search"]["provider"] == "gemini"
-    assert caps["web_search"]["api_key_env"] == "GEMINI_API_KEY"
-    assert caps["vision"]["provider"] == "gemini"
-    assert caps["file"] == {}
+    assert caps["web_search"]["provider"] == "openai"
+    assert caps["web_search"]["api_key_env"] == "OPENAI_API_KEY"
+    assert caps["vision"]["provider"] == "openai"
+    assert caps["shell"] == {}
 
 
 def test_expand_inherit_does_not_inherit_model():
@@ -512,7 +513,7 @@ def test_expand_inherit_does_not_inherit_model():
 
 
 def test_expand_inherit_no_op_for_explicit_provider():
-    main_llm = {"provider": "gemini", "model": "x", "api_key_env": "GEMINI_API_KEY"}
+    main_llm = {"provider": "openai", "model": "x", "api_key_env": "OPENAI_API_KEY"}
     caps = {"web_search": {"provider": "duckduckgo"}}
     expand_inherit(caps, main_llm)
     assert caps["web_search"] == {"provider": "duckduckgo"}
@@ -526,46 +527,45 @@ def test_expand_inherit_handles_missing_main_llm_creds():
     assert caps["web_search"].get("api_key_env") is None
 
 
-def test_expand_inherit_propagates_api_compat():
-    # Custom anthropic-compat proxy (e.g. local GLM-5.1 via JoyCodeProxy).
-    # Vision capability fallback dispatches on api_compat — if it isn't
-    # inherited, the capability silently routes through the OpenAI adapter
-    # and chokes on the response shape.
+def test_expand_inherit_does_not_propagate_retired_api_compat():
+    # ``api_compat`` is a retired, recognized-and-ignored manifest key: the
+    # ``anthropic`` family (with a compatible base_url) is how an
+    # Anthropic-compatible proxy is configured now, so nothing copies it.
     main_llm = {
-        "provider": "custom",
+        "provider": "anthropic",
         "api_compat": "anthropic",
         "model": "GLM-5.1",
-        "api_key_env": "CUSTOM_6_API_KEY",
+        "api_key_env": "PROXY_API_KEY",
         "base_url": "http://127.0.0.1:34891",
     }
     caps = {"vision": {"provider": "inherit"}}
     expand_inherit(caps, main_llm)
-    assert caps["vision"]["api_compat"] == "anthropic"
+    assert "api_compat" not in caps["vision"]
+    assert caps["vision"]["provider"] == "anthropic"
     assert caps["vision"]["base_url"] == "http://127.0.0.1:34891"
 
 
 def test_expand_inherit_propagates_wire_api():
     # An OpenAI-compatible capability that explicitly selects the Responses or
     # Chat Completions wire must keep that selection on the fallback — otherwise
-    # a custom base URL silently drops back to Chat Completions.
+    # it silently drops back to Chat Completions.
     main_llm = {
-        "provider": "custom",
-        "api_compat": "openai",
+        "provider": "openai",
         "wire_api": "responses",
         "model": "GLM-5.1",
-        "api_key_env": "CUSTOM_6_API_KEY",
+        "api_key_env": "PROXY_API_KEY",
         "base_url": "https://openrouter.example/v1",
     }
     caps = {"vision": {"provider": "inherit"}}
     expand_inherit(caps, main_llm)
     assert caps["vision"]["wire_api"] == "responses"
-    assert caps["vision"]["api_compat"] == "openai"
+    assert "api_compat" not in caps["vision"]
 
 
 def test_expand_inherit_omits_wire_api_when_main_llm_unset():
     # When the main LLM does not select a wire, the capability must not gain a
     # fabricated ``wire_api=None`` entry that downstream code might misread.
-    main_llm = {"provider": "custom", "api_compat": "openai"}
+    main_llm = {"provider": "openai"}
     caps = {"vision": {"provider": "inherit"}}
     expand_inherit(caps, main_llm)
     assert "wire_api" not in caps["vision"]
@@ -931,7 +931,7 @@ def test_materialize_init_capability_overrides_win_per_key(tmp_path):
         tmp_path, "GLM5.1",
         _preset_content(
             "GLM5.1",
-            llm={"provider": "custom", "api_compat": "anthropic", "model": "GLM-5.1"},
+            llm={"provider": "anthropic", "base_url": "http://127.0.0.1:34891", "model": "GLM-5.1"},
             capabilities={"vision": {"provider": "inherit"}},
         ),
     )
@@ -941,8 +941,7 @@ def test_materialize_init_capability_overrides_win_per_key(tmp_path):
             # user hand-edited init.json to point vision at a different model
             "capabilities": {
                 "vision": {
-                    "provider": "custom",
-                    "api_compat": "openai",
+                    "provider": "openai",
                     "model": "Kimi-K2.6",
                     "base_url": "http://127.0.0.1:34891/v1",
                 },
@@ -952,11 +951,10 @@ def test_materialize_init_capability_overrides_win_per_key(tmp_path):
     materialize_active_preset(data, working_dir=tmp_path)
 
     # init.json's per-key overrides win — vision keeps the user's model/base_url
-    # and overrides the preset's provider:"inherit" with provider:"custom".
+    # and overrides the preset's provider:"inherit" with provider:"openai".
     assert data["manifest"]["capabilities"] == {
         "vision": {
-            "provider": "custom",
-            "api_compat": "openai",
+            "provider": "openai",
             "model": "Kimi-K2.6",
             "base_url": "http://127.0.0.1:34891/v1",
         },

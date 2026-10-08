@@ -26,16 +26,13 @@ class MailTransportPort(ABC):
         self,
         address: str,
         message: dict,
-        *,
-        mode: str = "peer",
     ) -> str | None:
         """Deliver ``message`` to ``address``; return ``None`` on success.
 
         Fire-and-forget — it does not wait for a response. On failure it returns
         a human-readable error string (never raises for an addressing/liveness
-        failure). ``mode`` selects how the transport interprets ``address``:
-        ``"peer"`` (default) or ``"abs"``. The ``address`` vocabulary is the
-        transport's; Core passes it through opaquely.
+        failure). ``address`` is an absolute agent-workdir path; the vocabulary
+        is the transport's, Core passes it through opaquely.
         """
         ...
 

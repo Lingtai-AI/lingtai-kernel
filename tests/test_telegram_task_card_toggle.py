@@ -90,8 +90,11 @@ def test_taskcard_state_defaults_true_and_is_shared_across_accounts(tmp_path: Pa
     service = _service(tmp_path, "one", "two")
 
     assert service.taskcard_enabled() is True
+    assert service.taskcard_normal_rows() == 3
     assert service.get_account("one")._taskcard_enabled() is True
+    assert service.get_account("one")._taskcard_normal_rows() == 3
     assert service.get_account("two")._taskcard_enabled() is True
+    assert service.get_account("two")._taskcard_normal_rows() == 3
     assert not (tmp_path / "telegram" / "taskcard.json").exists()
 
 
@@ -110,7 +113,7 @@ def test_taskcard_state_persists_false_and_true_across_service_instances(tmp_pat
     state_path = tmp_path / "telegram" / "taskcard.json"
     assert json.loads(state_path.read_text(encoding="utf-8")) == {
         "taskcard": False,
-        "normal_rows": 1,
+        "normal_rows": 3,
         "max_refreshes": 1000,
         "locale": "en",
         "display_expression": None,
@@ -120,7 +123,7 @@ def test_taskcard_state_persists_false_and_true_across_service_instances(tmp_pat
     service.set_taskcard_enabled(True)
     assert json.loads(state_path.read_text(encoding="utf-8")) == {
         "taskcard": True,
-        "normal_rows": 1,
+        "normal_rows": 3,
         "max_refreshes": 1000,
         "locale": "en",
         "display_expression": None,
@@ -729,7 +732,7 @@ def test_old_message_projection_changes_with_current_state_without_record_rewrit
 
 def test_taskcard_normal_rows_persist_and_are_shared_across_accounts(tmp_path: Path) -> None:
     service = _service(tmp_path, "one", "two")
-    assert service.taskcard_normal_rows() == 1
+    assert service.taskcard_normal_rows() == 3
     service.set_taskcard_normal_rows(7)
     assert service.taskcard_normal_rows() == 7
     assert service.get_account("one")._taskcard_normal_rows() == 7
@@ -768,13 +771,13 @@ def test_taskcard_normal_rows_write_failure_preserves_memory_and_file(
     assert state_path.read_bytes() == before
 
 
-def test_taskcard_legacy_boolean_state_defaults_normal_rows_to_one(tmp_path: Path) -> None:
+def test_taskcard_legacy_boolean_state_defaults_normal_rows_to_three(tmp_path: Path) -> None:
     state_path = tmp_path / "telegram" / "taskcard.json"
     state_path.parent.mkdir(parents=True)
     state_path.write_text('{"taskcard": false}', encoding="utf-8")
     service = _service(tmp_path, "main")
     assert service.taskcard_enabled() is False
-    assert service.taskcard_normal_rows() == 1
+    assert service.taskcard_normal_rows() == 3
 
 
 def test_taskcard_numeric_command_is_strict_and_does_not_toggle(

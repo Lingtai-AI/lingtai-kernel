@@ -275,8 +275,7 @@ def _create_codex_session(events: list[Event], *, thinking: str = "high"):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
+        wire_api="responses",
     )
     adapter._client = FakeClient(events)
     return adapter.create_chat(
@@ -290,7 +289,7 @@ def _create_codex_session(events: list[Event], *, thinking: str = "high"):
 
 @pytest.mark.parametrize("thinking", ["none", "minimal", "low", "medium", "high", "xhigh"])
 def test_openai_responses_sends_exact_reasoning_effort(thinking):
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+    adapter = OpenAIAdapter(api_key="fake", wire_api="responses")
     adapter._client = FakeClient([_completed()])
     session = adapter.create_chat("gpt-5.5", "system prompt", thinking=thinking)
 
@@ -318,42 +317,6 @@ def test_codex_responses_default_thinking_sends_xhigh(thinking_kwargs):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
-        use_responses=True,
-        force_responses=True,
-    )
-    adapter._client = FakeClient([_completed()])
-    session = adapter.create_chat("gpt-5.5", "system prompt", **thinking_kwargs)
-
-    session.send_stream("hello")
-
-    sent = adapter._client.responses.kwargs[-1]
-    assert sent["reasoning"] == {"effort": "xhigh"}
-    assert "reasoning_effort" not in sent
-
-
-@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}, {"thinking": None}])
-def test_openai_responses_default_thinking_sends_xhigh(thinking_kwargs):
-    """Generic OpenAI Responses maps an omitted/``default`` thinking level to
-    explicit ``reasoning.effort = "xhigh"`` on the wire (the Responses
-    semantics: the user did not specify an effort, so xhigh is sent)."""
-    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
-    adapter._client = FakeClient([_completed()])
-    session = adapter.create_chat("gpt-5.5", "system prompt", **thinking_kwargs)
-
-    session.send_stream("hello")
-
-    sent = adapter._client.responses.kwargs[-1]
-    assert sent["reasoning"] == {"effort": "xhigh"}
-    assert "reasoning_effort" not in sent
-
-
-@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}])
-def test_custom_openai_responses_default_thinking_sends_xhigh(thinking_kwargs):
-    """Custom/OpenAI-compatible Responses (base_url + ``wire_api="responses"``)
-    shares the same explicit ``xhigh`` default as generic OpenAI."""
-    adapter = OpenAIAdapter(
-        api_key="fake",
-        base_url="https://custom.example/v1",
         wire_api="responses",
     )
     adapter._client = FakeClient([_completed()])
@@ -366,15 +329,33 @@ def test_custom_openai_responses_default_thinking_sends_xhigh(thinking_kwargs):
     assert "reasoning_effort" not in sent
 
 
+@pytest.mark.parametrize("thinking_kwargs", [{}, {"thinking": "default"}, {"thinking": None}])
+@pytest.mark.parametrize("base_url", [None, "https://custom.example/v1"])
+def test_openai_responses_default_thinking_omits_reasoning(thinking_kwargs, base_url):
+    """``openai`` Responses sends ``thinking`` verbatim as the standard
+    ``reasoning.effort`` field and omits it for an omitted/``default`` level
+    (the endpoint's own default applies) — on the official endpoint and a
+    compatible ``base_url`` alike. Only Codex substitutes an explicit ``xhigh``."""
+    adapter = OpenAIAdapter(api_key="fake", base_url=base_url, wire_api="responses")
+    adapter._client = FakeClient([_completed()])
+    session = adapter.create_chat("gpt-5.5", "system prompt", **thinking_kwargs)
+
+    session.send_stream("hello")
+
+    sent = adapter._client.responses.kwargs[-1]
+    assert "reasoning" not in sent
+    assert "reasoning_effort" not in sent
+
+
 @pytest.mark.parametrize("adapter_cls", [OpenAIAdapter, CodexOpenAIAdapter])
 def test_responses_rejects_unsupported_thinking(adapter_cls):
-    kwargs = {"api_key": "fake", "use_responses": True}
+    kwargs = {"api_key": "fake", "wire_api": "responses"}
     if adapter_cls is CodexOpenAIAdapter:
-        kwargs.update({"base_url": "http://fake", "force_responses": True})
+        kwargs["base_url"] = "http://fake"
     adapter = adapter_cls(**kwargs)
     adapter._client = FakeClient([_completed()])
 
-    with pytest.raises(ValueError, match="OpenAI Responses thinking"):
+    with pytest.raises(ValueError, match="thinking must be one of"):
         adapter.create_chat("gpt-5.5", "system prompt", thinking="ultra")
 
 
@@ -721,3 +702,118 @@ def test_openai_responses_stream_captures_summary_thoughts():
     result = session.send_stream("think")
 
     assert result.thoughts == ["I should call the report tool."]
+
+
+@pytest.mark.parametrize("cached", ["absent", None, 0, 8192])
+@pytest.mark.parametrize("wire", ["sdk", "forced_sse"])
+def test_responses_stream_preserves_original_completion_metadata(cached, wire):
+    from openai._models import construct_type
+    from openai.types.responses import Response
+    from lingtai.llm.openai.adapter import (
+        _consume_responses_stream, _decode_responses_sse_text,
+        _parse_responses_api_response,
+    )
+
+    details = {} if cached == "absent" else {"cached_tokens": cached}
+    body = {
+        "id": "resp_metadata", "status": "completed", "model": "returned-model",
+        "service_tier": "default", "metadata": {"probe": "not logged"},
+        "output": [{"type": "message", "role": "assistant", "content": [
+            {"type": "output_text", "text": "hello", "annotations": []},
+        ]}],
+        "usage": {
+            "input_tokens": 10000, "output_tokens": 32, "total_tokens": 10032,
+            "input_tokens_details": details,
+            "output_tokens_details": {"reasoning_tokens": 11},
+            "provider_extension": {"sentinel": 17},
+        },
+    }
+    if wire == "sdk":
+        raw = construct_type(type_=Response, value=body)
+        events = [Event("response.completed", response=raw)]
+    else:
+        events = _decode_responses_sse_text(
+            "event: response.completed\ndata: "
+            + json.dumps({"type": "response.completed", "response": body}) + "\n\n"
+        )
+        raw = events[0].response
+    response, response_id = _consume_responses_stream(events)
+    nonstream = _parse_responses_api_response(raw)
+    assert response.raw is raw
+    assert response.raw is nonstream.raw
+    assert response_id == raw.id
+    assert response.usage == nonstream.usage
+    assert response.usage.cached_tokens == (8192 if cached == 8192 else 0)
+    assert response.usage.thinking_tokens == 11
+    assert response.raw.usage.total_tokens == 10032
+    assert response.raw.model == "returned-model"
+    assert response.raw.service_tier == "default"
+    detail = response.raw.usage.input_tokens_details
+    if cached == "absent":
+        fields = getattr(detail, "model_fields_set", vars(detail))
+        assert "cached_tokens" not in fields
+    else:
+        assert detail.cached_tokens == cached
+    # Original metadata stays transient: never copy raw response/request data
+    # into the safe per-call token-ledger extension or canonical replay items.
+    assert response.usage.extra == {}
+    assert "usage" not in response._openai_responses_output_items[0]
+
+
+def test_responses_stream_without_completion_does_not_invent_raw_response():
+    from lingtai.llm.openai.adapter import _consume_responses_stream
+
+    response, response_id = _consume_responses_stream([
+        Event("response.created", response=SimpleNamespace(id="resp_partial")),
+        Event("response.output_text.delta", delta="partial"),
+    ])
+    assert response.text == "partial"
+    assert response_id == "resp_partial"
+    assert response.raw is None
+
+
+@pytest.mark.parametrize("output_kind", ["text", "tool", "mixed"])
+@pytest.mark.parametrize("reasoning", [20, None, True, -1])
+def test_responses_real_dispatch_visible_text_timing(monkeypatch, reasoning, output_kind):
+    now = [10.0]
+    monkeypatch.setattr("lingtai.llm.openai.adapter.time.monotonic", lambda: now[0])
+
+    class TimedResponses:
+        def create(self, **kwargs):
+            assert kwargs["stream"] is True
+            assert now[0] == 10.0
+            def events():
+                now[0] = 11.0
+                yield Event("response.created")
+                yield Event("heartbeat")
+                yield Event("response.output_text.delta", delta="")
+                yield Event("response.reasoning_summary_text.delta", delta="thought")
+                now[0] = 12.0
+                if output_kind in ("tool", "mixed"):
+                    yield Event("response.output_item.added", item=SimpleNamespace(
+                        type="function_call", call_id="call_timed", name="read",
+                    ))
+                    yield Event("response.function_call_arguments.delta", delta="{}")
+                    yield Event("response.output_item.done", item=SimpleNamespace(
+                        type="function_call", arguments="{}",
+                    ))
+                if output_kind in ("text", "mixed"):
+                    now[0] = 13.0 if output_kind == "mixed" else 12.0
+                    yield Event("response.output_text.delta", delta="hello")
+                now[0] = 16.0
+                wire_usage = _usage()
+                wire_usage.output_tokens = 200
+                wire_usage.output_tokens_details.reasoning_tokens = reasoning
+                yield Event("response.completed", response=SimpleNamespace(
+                    id="resp_timed", usage=wire_usage,
+                ))
+            return events()
+
+    session = OpenAIResponsesSession(
+        client=SimpleNamespace(responses=TimedResponses()), model="gpt-test",
+        instructions=None, tools=None, tool_choice=None, extra_kwargs={},
+    )
+    response = session.send_stream("hello")
+    assert response.usage.first_token_s == 2.0
+    assert response.usage.generation_s == 4.0
+    assert response.usage.generation_tokens == (180 if reasoning == 20 else None)

@@ -2,16 +2,17 @@
 
 The notification tool is the **only** agent-callable home for the notification
 verbs.  ``system`` exposes no notification or dismiss verb — there are no
-compatibility aliases.  Dismissal is **atomic**:
+compatibility aliases.  Notification delivery is one-shot and the public
+``dismiss_channel``/``dismiss_event``/``dismiss_ref`` actions are gone (closed
+schema, no side effects when called):
 
 * ``check`` returns a placeholder dict that the meta-block later stamps the
-  live payload onto;
-* ``dismiss_channel`` (``input={"channel": ...}``) clears one channel whole
-  and refuses ``event_id``/``ref_id``;
-* ``dismiss_event`` (``input={"event_id": ..., "channel": ...}``) removes one
-  ``system`` event;
-* ``dismiss_ref`` (``input={"ref_id": ..., "channel": ...}``) removes
-  ``system`` event(s) by ``ref_id``.
+  complete current mirrors onto (a deliberate read, never a replay);
+* ``add``/``drop``/``edit``/``list``/``delay`` manage hooks and consumer delay.
+
+The Core ``dismiss_channel`` helper in ``lingtai.kernel.notifications`` remains
+as a private/compatibility function; the tests below that exercise it call it
+directly rather than through the tool.
 
 Since the LTP v2 migration the tool is a ``ToolFamily``: every call is the
 closed ``action`` + ``input`` + ``reasoning`` (+ optional ``summarize``)
@@ -23,11 +24,9 @@ fields are exercised explicitly where the nullable representation matters.
 ``summarize`` is NOT an action here — it stays a ``system`` action.  The root
 ``summarize`` boolean is the cross-cutting LTP v2 post-processing control.
 
-``large_tool_result`` reminders are dismissable as an escape hatch (#430,
-superseding the original #424 "undismissable" rule): every atomic notification
-action — with or without ``force`` — clears such a reminder and acks its
-``ref_id``.  ``system(action="summarize")`` remains the preferred discharge and
-still auto-clears the matching reminder on success.
+``context(action="summarize")`` remains the discharge for legacy
+``large_tool_result`` reminders and still auto-clears the matching reminder on
+success.
 """
 from __future__ import annotations
 
@@ -106,9 +105,9 @@ def test_notification_module_has_no_direct_agent_entrypoint() -> None:
 
 
 _ACTIONS = [
-    "check", "dismiss_channel", "dismiss_event", "dismiss_ref", "add", "drop",
-    "edit", "list", "delay", "settings", "manual",
+    "check", "add", "drop", "edit", "list", "delay", "settings", "manual",
 ]
+_REMOVED_DISMISS_ACTIONS = ("dismiss_channel", "dismiss_event", "dismiss_ref")
 _ACTION_TITLES = [
     "settings inventory input" if action == "settings" else f"{action} input"
     for action in _ACTIONS
@@ -133,9 +132,6 @@ def test_notification_action_order_is_pinned() -> None:
 
     assert ACTION_ORDER == (
         "check",
-        "dismiss_channel",
-        "dismiss_event",
-        "dismiss_ref",
         "add",
         "drop",
         "edit",
@@ -201,9 +197,6 @@ def test_each_action_input_branch_is_strict_and_exact() -> None:
         "delay": {"channel", "seconds"},
         "settings": set(),
         "check": set(),
-        "dismiss_channel": {"channel", "force", "reason"},
-        "dismiss_event": {"event_id", "channel", "force", "reason"},
-        "dismiss_ref": {"ref_id", "channel", "force", "reason"},
         "manual": set(),
     }
     for action, branch in zip(_ACTIONS, branches):
@@ -274,13 +267,16 @@ def test_notification_schema_is_canonical_english() -> None:
     assert "notification(action='manual'" in adesc
     assert "read-only" in adesc.casefold()
     # Per-action prose now lives on each action's own input branch.
-    dismiss_channel_branch = next(
+    delay_branch = next(
         branch
         for branch in base_schema["properties"]["input"]["anyOf"]
-        if branch["title"] == "dismiss_channel input"
+        if branch["title"] == "delay input"
     )
-    cdesc = dismiss_channel_branch["properties"]["channel"]["description"]
-    assert cdesc and "channel" in cdesc.casefold()
+    cdesc = delay_branch["properties"]["channel"]["description"]
+    assert cdesc and "target" in cdesc.casefold()
+    # No public dismiss wording survives in the model-facing description/schema.
+    assert "dismiss" not in base_desc.casefold()
+    assert "dismiss" not in adesc.casefold()
 
 
 # ---------------------------------------------------------------------------
@@ -310,13 +306,13 @@ def test_system_rejects_notification_action(tmp_path: Path) -> None:
 
 def test_system_rejects_dismiss_action(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(tmp_path, "cron", {"header": "cron"})
     _mark_delivered(agent)
-    res = sys_intrinsic.handle(agent, {"action": "dismiss", "input": {"channel": "soul"}})
+    res = sys_intrinsic.handle(agent, {"action": "dismiss", "input": {"channel": "cron"}})
     assert res["status"] == "error"
     assert "Unknown system action" in res["message"]
     # The channel was NOT cleared — system can't dismiss anything.
-    assert "soul" in snapshot_notifications(tmp_path)
+    assert "cron" in snapshot_notifications(tmp_path)
 
 
 def test_system_module_has_no_dismiss_callable() -> None:
@@ -405,70 +401,84 @@ def test_check_returns_placeholder_dict(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# dismiss_channel.
+# Removed public dismiss actions: closed schema, no alias, no side effects.
 # ---------------------------------------------------------------------------
 
 
-def test_dismiss_channel_clears_surface(tmp_path: Path) -> None:
+@pytest.mark.parametrize("action", _REMOVED_DISMISS_ACTIONS)
+def test_removed_dismiss_actions_are_rejected_without_side_effects(
+    tmp_path: Path, action: str
+) -> None:
     agent = _StubAgent(tmp_path)
-    publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
+    publish_test_payload(
+        tmp_path,
+        "system",
+        {"data": {"events": [{"event_id": "evt_a", "source": "daemon", "ref_id": "a"}]}},
+    )
+    publish_test_payload(tmp_path, "cron", {"header": "cron"})
     _mark_delivered(agent)
-
-    res = _call(agent, "dismiss_channel", channel="soul")
-
-    assert res == {"status": "ok", "channel": "soul", "cleared": True, "forced": False}
-    assert snapshot_notifications(tmp_path) == {}
-    # Provenance: invoked_by="notification"; no system_dismiss line.
-    assert _events(agent, "notification_dismiss")[0]["invoked_by"] == "notification"
-    assert _events(agent, "system_dismiss") == []
-
-
-def test_dismiss_channel_missing_channel(tmp_path: Path) -> None:
-    agent = _StubAgent(tmp_path)
-    res = _call(agent, "dismiss_channel")
-    assert res["status"] == "error"
-    assert res["reason"] == "missing_channel"
-
-
-def test_dismiss_channel_rejects_event_target_before_any_io(tmp_path: Path) -> None:
-    """event_id/ref_id are not in dismiss_channel's branch → rejected at dispatch.
-
-    Pre-migration these keys reached ``_dismiss_channel``, which refused them
-    with ``channel_dismiss_rejects_event_target``. Under LTP v2 they are absent
-    from this action's own strict ``input_schema``, so the family dispatcher
-    rejects the cross-action pairing *before* the handler runs — strictly
-    earlier, and with no notification I/O. The published channel must survive
-    untouched.
-    """
-    agent = _StubAgent(tmp_path)
-    publish_test_payload(tmp_path, "system", {"header": "keep me"})
     before = snapshot_notifications(tmp_path)
+    before_fp = fingerprint_notifications(tmp_path)
     before_logs = list(agent._logs)
 
-    for action_input in ({"event_id": "evt_a"}, {"ref_id": "goal:current"}):
-        res = _call(agent, "dismiss_channel", channel="system", **action_input)
-        assert res["status"] == "failed", action_input
-        assert res["error_code"] == "INVALID_ARGUMENT", action_input
-        assert snapshot_notifications(tmp_path) == before, action_input
-        assert agent._logs == before_logs, action_input
+    for action_input in (
+        {"channel": "cron"},
+        {"event_id": "evt_a"},
+        {"ref_id": "a", "channel": "system", "force": None, "reason": None},
+    ):
+        res = _call(agent, action, **action_input)
+        assert res.get("status") in ("error", "failed"), (action, action_input, res)
+        assert snapshot_notifications(tmp_path) == before
+        assert fingerprint_notifications(tmp_path) == before_fp
+        assert agent._logs == before_logs
+
+    assert action not in NOTIFICATION_DECLARATION.public_actions
+    assert action not in notif_intrinsic.INPUT_SCHEMAS
+    assert not hasattr(notif_intrinsic, f"_{action}")
+    assert action not in notif_intrinsic.get_schema("en")["properties"]["action"]["enum"]
 
 
 def test_notification_action_handlers_receive_a_state_port_not_agent() -> None:
     """Internal action adaptations accept the declared state port, never Agent."""
     import inspect
 
-    assert tuple(inspect.signature(notif_intrinsic._dismiss_channel).parameters) == (
+    assert tuple(inspect.signature(notif_intrinsic._delay).parameters) == (
         "state",
         "args",
     )
 
 
+def test_state_port_exposes_no_dismiss_operation() -> None:
+    from lingtai.adapters.tool_plugin_host import AgentNotificationStateAdapter
+    from lingtai.kernel.tool_plugin import NotificationStatePort
+
+    assert not hasattr(AgentNotificationStateAdapter, "dismiss")
+    assert not hasattr(NotificationStatePort, "dismiss")
+
+
 # ---------------------------------------------------------------------------
-# dismiss_event.
+# Core dismiss helper (private/compatibility): behavior unchanged, producer
+# state untouched. Called directly — it is no longer reachable from the tool.
 # ---------------------------------------------------------------------------
 
 
-def test_dismiss_event_removes_one(tmp_path: Path) -> None:
+def _core_dismiss(agent: Any, channel: str, **kwargs: Any) -> dict:
+    return dismiss_channel(agent, channel, invoked_by="notification", **kwargs)
+
+
+def test_core_dismiss_channel_clears_surface(tmp_path: Path) -> None:
+    agent = _StubAgent(tmp_path)
+    publish_test_payload(tmp_path, "cron", {"header": "cron"})
+    _mark_delivered(agent)
+
+    res = _core_dismiss(agent, "cron")
+
+    assert res == {"status": "ok", "channel": "cron", "cleared": True, "forced": False}
+    assert snapshot_notifications(tmp_path) == {}
+    assert _events(agent, "notification_dismiss")[0]["invoked_by"] == "notification"
+
+
+def test_core_dismiss_event_and_ref_remove_system_events(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
     publish_test_payload(
         tmp_path,
@@ -485,91 +495,29 @@ def test_dismiss_event_removes_one(tmp_path: Path) -> None:
     )
     _mark_delivered(agent)
 
-    res = _call(agent, "dismiss_event", event_id="evt_b")
-
-    assert res["status"] == "ok"
-    assert res["removed"] == 1
+    res = _core_dismiss(agent, "system", event_id="evt_b")
+    assert res["status"] == "ok" and res["removed"] == 1
     events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
     assert [e["event_id"] for e in events] == ["evt_a"]
 
-
-def test_dismiss_event_missing_event_id(tmp_path: Path) -> None:
-    agent = _StubAgent(tmp_path)
-    res = _call(agent, "dismiss_event")
-    assert res["status"] == "error"
-    assert res["reason"] == "missing_event_id"
-
-
-def test_dismiss_event_defaults_to_system_channel(tmp_path: Path) -> None:
-    """No channel given → operates on the 'system' channel."""
-    agent = _StubAgent(tmp_path)
-    publish_test_payload(
-        tmp_path,
-        "system",
-        {"data": {"events": [{"event_id": "evt_a", "source": "daemon", "ref_id": "a"}]}},
-    )
     _mark_delivered(agent)
-    res = _call(agent, "dismiss_event", event_id="evt_a")
-    assert res["status"] == "ok"
-    assert res["channel"] == "system"
-    assert res["removed"] == 1
-
-
-# ---------------------------------------------------------------------------
-# dismiss_ref.
-# ---------------------------------------------------------------------------
-
-
-def test_dismiss_ref_removes_by_ref(tmp_path: Path) -> None:
-    agent = _StubAgent(tmp_path)
-    publish_test_payload(
-        tmp_path,
-        "system",
-        {"data": {"events": [{"event_id": "evt_a", "source": "goal.reminder", "ref_id": "goal:current"}]}},
-    )
-    _mark_delivered(agent)
-
-    res = _call(agent, "dismiss_ref", ref_id="goal:current")
-
-    assert res["status"] == "ok"
-    assert res["removed"] == 1
+    res = _core_dismiss(agent, "system", ref_id="a")
+    assert res["status"] == "ok" and res["removed"] == 1
     assert not (tmp_path / ".notification" / "system.json").exists()
 
 
-def test_dismiss_ref_missing_ref_id(tmp_path: Path) -> None:
-    agent = _StubAgent(tmp_path)
-    res = _call(agent, "dismiss_ref")
-    assert res["status"] == "error"
-    assert res["reason"] == "missing_ref_id"
-
-
-# ---------------------------------------------------------------------------
-# large_tool_result escape hatch (#430): every atomic dismiss action — with or
-# without force — now clears a large_tool_result reminder and acks its ref_id.
-# (Supersedes the original #424 "undismissable" guard.)  The per-action matrix
-# below is the single source of truth; there are no per-action singletons.
-# ---------------------------------------------------------------------------
-
-
-def test_large_result_guard_every_atomic_action(tmp_path: Path) -> None:
-    """All atomic actions — channel/event/ref, with or without force — now succeed
-    for large_tool_result reminders (escape-hatch behaviour from #430): each
-    returns status=ok, reports ``acked_large_result_refs``, and removes the
-    reminder from the channel."""
-    cases = [
-        ("dismiss_channel", {"channel": "system"}),
-        ("dismiss_channel", {"channel": "system", "force": True}),
-        ("dismiss_event", {"event_id": "evt_lr"}),
-        ("dismiss_event", {"event_id": "evt_lr", "force": True}),
-        ("dismiss_ref", {"ref_id": "large_tool_result:toolu_big"}),
-        ("dismiss_ref", {"ref_id": "large_tool_result:toolu_big", "force": True}),
-    ]
-    for action, action_input in cases:
-        kwargs = {"action": action, **action_input}
+def test_core_large_result_reminder_is_still_clearable(tmp_path: Path) -> None:
+    """The private helper keeps its legacy large_tool_result escape hatch."""
+    for kwargs in (
+        {},
+        {"force": True},
+        {"event_id": "evt_lr"},
+        {"ref_id": "large_tool_result:toolu_big", "force": True},
+    ):
         agent = _StubAgent(tmp_path / json.dumps(kwargs, sort_keys=True))
         _publish_large_result_reminder(agent._working_dir)
         _mark_delivered(agent)
-        res = _call(agent, action, **action_input)
+        res = _core_dismiss(agent, "system", **kwargs)
         assert res["status"] == "ok", (kwargs, res)
         assert "acked_large_result_refs" in res, (kwargs, res)
         notifs = snapshot_notifications(agent._working_dir)
@@ -699,7 +647,7 @@ def test_guarded_channel_refuses_without_force(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
     publish_test_payload(tmp_path, "email", {"header": "1 unread"})
 
-    res = _call(agent, "dismiss_channel", channel="email")
+    res = _core_dismiss(agent, "email")
 
     assert res["status"] == "error"
     assert res["reason"] == "guarded"
@@ -714,7 +662,7 @@ def test_stale_channel_refused_without_force(tmp_path: Path) -> None:
     _mark_delivered(agent)
     publish_test_payload(tmp_path, "system", {"header": "two", "data": {"events": ["old", "new"]}})
 
-    res = _call(agent, "dismiss_channel", channel="system")
+    res = _core_dismiss(agent, "system")
 
     assert res["status"] == "error"
     assert res["reason"] == "stale_channel_version"
@@ -727,7 +675,7 @@ def test_force_bypasses_stale_on_allowed_channel(tmp_path: Path) -> None:
     _mark_delivered(agent)
     publish_test_payload(tmp_path, "system", {"header": "two", "data": {"events": ["old", "new"]}})
 
-    res = _call(agent, "dismiss_channel", channel="system", force=True)
+    res = _core_dismiss(agent, "system", force=True)
 
     assert res["status"] == "ok"
     assert res["forced"] is True
@@ -739,7 +687,7 @@ def test_protected_goal_channel_refused(tmp_path: Path) -> None:
     publish_test_payload(tmp_path, "goal", {"data": {"status": "active"}})
     agent._notification_fp = fingerprint_notifications(tmp_path)
 
-    res = _call(agent, "dismiss_channel", channel="goal", force=True)
+    res = _core_dismiss(agent, "goal", force=True)
 
     assert res["status"] == "error"
     assert res["reason"] == "protected_channel"
@@ -750,13 +698,11 @@ def test_post_molt_dismiss_requires_reason(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
     publish_test_payload(tmp_path, "post-molt", {"header": "continue?"})
     _mark_delivered(agent)
-    res = _call(agent, "dismiss_channel", channel="post-molt")
+    res = _core_dismiss(agent, "post-molt")
     assert res["status"] == "error"
     assert res["reason"] == "missing_ack_reason"
 
-    res2 = _call(
-        agent, "dismiss_channel", channel="post-molt", reason="continue: done"
-    )
+    res2 = _core_dismiss(agent, "post-molt", reason="continue: done")
     assert res2["status"] == "ok"
     assert res2["reason"] == "continue: done"
 
@@ -844,61 +790,6 @@ def test_tc_id_injection_does_not_break_dispatch(tmp_path: Path) -> None:
     assert res["_notification_placeholder"] is True
 
 
-def test_null_optionals_are_treated_as_absent(tmp_path: Path) -> None:
-    """Strict schemas send optionals as explicit nulls; defaulting must survive.
-
-    ``dismiss_event``'s ``channel`` defaults to ``system``. The model sends
-    ``channel=None`` for "not supplied", so null must become *absent* before
-    the handler's ``args.get("channel", "system")`` runs — otherwise Core would
-    receive ``channel=None``.
-    """
-    agent = _StubAgent(tmp_path)
-    publish_test_payload(
-        tmp_path,
-        "system",
-        {"data": {"events": [{"event_id": "evt_a", "source": "daemon", "ref_id": "a"}]}},
-    )
-    _mark_delivered(agent)
-
-    res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
-        agent,
-        {
-            "action": "dismiss_event",
-            "input": {
-                "event_id": "evt_a",
-                "channel": None,
-                "force": None,
-                "reason": None,
-            },
-            "reasoning": "r",
-        },
-    )
-
-    assert res["status"] == "ok"
-    assert res["channel"] == "system"
-    assert res["removed"] == 1
-
-
-def test_null_force_and_reason_match_omission(tmp_path: Path) -> None:
-    """``force=None`` must not become a truthy force, nor ``reason=None`` an ack."""
-    agent = _StubAgent(tmp_path)
-    publish_test_payload(tmp_path, "post-molt", {"header": "continue?"})
-    _mark_delivered(agent)
-
-    res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
-        agent,
-        {
-            "action": "dismiss_channel",
-            "input": {"channel": "post-molt", "force": None, "reason": None},
-            "reasoning": "r",
-        },
-    )
-
-    # Null reason is absent, so the post-molt ack requirement still bites.
-    assert res["status"] == "error"
-    assert res["reason"] == "missing_ack_reason"
-
-
 def test_check_and_manual_perform_no_mutation(tmp_path: Path) -> None:
     """The two read-only actions leave notification state and logs untouched."""
     agent = _StubAgent(tmp_path)
@@ -970,19 +861,9 @@ def test_every_action_dispatches_through_the_family(tmp_path: Path) -> None:
 
     assert _call(agent, "check")["_notification_placeholder"] is True
     assert _call(agent, "manual")["status"] == "degraded"
-    assert _call(agent, "dismiss_event", event_id="e1")["status"] == "ok"
-
-    publish_test_payload(
-        tmp_path,
-        "system",
-        {"data": {"events": [{"event_id": "e2", "source": "daemon", "ref_id": "r2"}]}},
-    )
-    _mark_delivered(agent)
-    assert _call(agent, "dismiss_ref", ref_id="r2")["status"] == "ok"
-
-    publish_test_payload(tmp_path, "soul", {"header": "x"})
-    _mark_delivered(agent)
-    assert _call(agent, "dismiss_channel", channel="soul")["status"] == "ok"
+    assert _call(agent, "list")["status"] == "ok"
+    # Delivery/reads left the published event untouched.
+    assert "system" in snapshot_notifications(tmp_path)
 
 
 def test_reserved_manual_collision_fails_loudly() -> None:
@@ -1901,7 +1782,6 @@ class TestWorkdirAwareHookPredicates:
         "site_name",
         [
             "karma_sleep",
-            "soul_flow",
             "nudge_current_entries",
             "nudge_goal_check",
             "worker_recovery",
@@ -1914,7 +1794,7 @@ class TestWorkdirAwareHookPredicates:
         monkeypatch: pytest.MonkeyPatch,
         site_name: str,
     ) -> None:
-        """R1/R5/R6/R7: each of the six call sites must consult the channel
+        """R1/R5/R6/R7: each of the five call sites must consult the channel
         allow predicate with the agent's workdir. A spy records the
         ``workdir`` argument; a reverted workdir-less predicate records
         ``None`` and fails this test."""
@@ -1928,20 +1808,6 @@ class TestWorkdirAwareHookPredicates:
 
         if site_name == "karma_sleep":
             agent = self._make_sleep_sync_agent(workdir)
-        elif site_name == "soul_flow":
-            agent = SimpleNamespace(
-                _state=AgentState.IDLE,
-                _soul_timer=None,
-                _working_dir=workdir,
-                _notification_store=notification_store_for(workdir),
-                _notification_fp=(),
-                _logs=[],
-            )
-            agent._log = lambda event_type, **fields: agent._logs.append(
-                (event_type, fields)
-            )
-            agent._sync_notifications = lambda: None
-            agent._run_consultation_fire = lambda: None
         elif site_name == "nudge_current_entries":
             agent = SimpleNamespace(
                 _working_dir=workdir,
@@ -1988,7 +1854,7 @@ class TestWorkdirAwareHookPredicates:
             seen.append(workdir)
             return real_gap(workdir)
 
-        if site_name in ("karma_sleep", "soul_flow", "telegram_task_card"):
+        if site_name in ("karma_sleep", "telegram_task_card"):
             monkeypatch.setattr(notif_mod, "is_channel_allowed", _spy_ica)
         elif site_name == "nudge_goal_check":
             # goal.py binds _get_allow_predicate at module import time.
@@ -2000,11 +1866,6 @@ class TestWorkdirAwareHookPredicates:
             from lingtai.tools.system.karma import _sleep as karma_sleep
 
             karma_sleep(agent, {"reason": "test"})
-        elif site_name == "soul_flow":
-            from lingtai.tools.soul.flow import _soul_whisper
-            from lingtai.adapters.tool_plugin_host import agent_soul_runtime
-
-            _soul_whisper(agent_soul_runtime(agent))
         elif site_name == "nudge_current_entries":
             from lingtai.kernel.nudge import _current_entries
 
@@ -2099,97 +1960,78 @@ def _shipped_post_molt_instructions(tmp_path: Path) -> str:
     return published["instructions"]
 
 
-def test_post_molt_instruction_template_round_trips_through_dispatcher(
-    tmp_path: Path,
-) -> None:
-    """The literal post-molt ack instruction must actually dismiss post-molt.
+def test_post_molt_instructions_teach_one_shot_not_dismiss(tmp_path: Path) -> None:
+    """Post-molt guidance fits one-shot delivery and keeps recovery knowledge.
 
-    This is the highest-severity guidance path in the kernel: the reminder
-    re-injects every session until dismissed, so if its own dismissal
-    instruction teaches a rejected shape the agent is stuck in a loop it cannot
-    exit. The template is read from the shipped source string, not restated
-    here, so editing the instruction without re-checking it fails this test.
+    The reminder is delivered once and never auto-cleared; no generic dismiss or
+    synthetic "task completed" acknowledgement is taught, while the
+    reconstruct-from-pad/summary/journal guidance is preserved.
     """
     instructions = _shipped_post_molt_instructions(tmp_path)
-    assert "notification(action='dismiss_channel'" in instructions, (
-        "post-molt ack instruction no longer contains a dismissal template"
-    )
-    args = _parse_taught_call(instructions)
+    lowered = instructions.lower()
+    assert "dismiss" not in lowered
+    assert "notification(action='dismiss" not in lowered
+    assert "delivered once" in lowered
+    assert "does not mean the task is complete" in lowered
+    for kept in ("pad.md", "summary_path", "journal", "continue", "defer", "obsolete"):
+        assert kept in lowered, kept
 
-    assert args["action"] == "dismiss_channel"
-    assert args["input"]["channel"] == "post-molt"
-    assert "reasoning" in args, "taught call must supply the required reasoning"
 
-    # A real reason is required; the template teaches one.
-    assert isinstance(args["input"].get("reason"), str) and args["input"]["reason"]
-    args["input"]["reason"] = "continue: finished the pending work"
-    args["reasoning"] = "acknowledge the post-molt continuation"
-
+def test_post_molt_publication_is_not_cleared_by_rejected_dismiss(
+    tmp_path: Path,
+) -> None:
+    """The removed dismiss action cannot clear post-molt; the record persists."""
     agent = _StubAgent(tmp_path)
     publish_test_payload(tmp_path, "post-molt", {"header": "continue?"})
     _mark_delivered(agent)
-
-    result = dispatch_declared_tool(NOTIFICATION_DECLARATION, agent, args)
-
-    assert result["status"] == "ok", result
-    assert result["channel"] == "post-molt"
-    assert result["reason"] == "continue: finished the pending work"
-    assert "post-molt" not in snapshot_notifications(tmp_path)
-
-
-def test_post_molt_template_without_reason_still_refuses(tmp_path: Path) -> None:
-    """The taught shape must not accidentally bypass the ack-reason guard."""
-    agent = _StubAgent(tmp_path)
-    publish_test_payload(tmp_path, "post-molt", {"header": "continue?"})
-    _mark_delivered(agent)
+    before = snapshot_notifications(tmp_path)
 
     res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {
             "action": "dismiss_channel",
-            "input": {"channel": "post-molt", "force": None, "reason": None},
+            "input": {"channel": "post-molt", "force": None, "reason": "continue: x"},
             "reasoning": "acknowledge",
         },
     )
 
-    assert res["status"] == "error"
-    assert res["reason"] == "missing_ack_reason"
-    assert "post-molt" in snapshot_notifications(tmp_path)
+    assert res.get("status") in ("error", "failed")
+    assert snapshot_notifications(tmp_path) == before
 
 
-def test_runtime_producer_instruction_templates_are_dispatchable(
+def test_runtime_producer_instructions_do_not_teach_removed_dismiss(
     tmp_path: Path,
 ) -> None:
-    """Every runtime ``instructions`` string teaches an accepted call shape.
+    """Shipped runtime ``instructions`` strings never teach a dismiss call.
 
-    Covers the four producer strings the migration would otherwise strand:
-    post-molt (psyche), tool_loop_guard (turn loop), nudge, and btw (soul).
-    Each taught call is dispatched against its own published channel and must
-    succeed — proving the guidance and the envelope agree.
+    Covers the producer strings that used to demand generic dismissal:
+    tool_loop_guard (turn loop), nudge, and delay-alarm.
     """
-    cases = [
-        ("tool_loop_guard", "handled"),
-        ("nudge", None),
-        ("btw", None),
-    ]
-    for channel, reason in cases:
-        workdir = tmp_path / f"producer-{channel}"
-        workdir.mkdir(parents=True, exist_ok=True)
-        agent = _StubAgent(workdir)
-        publish_test_payload(workdir, channel, {"header": channel})
-        _mark_delivered(agent)
+    from lingtai.kernel.base_agent import turn as turn_module
+    from lingtai.kernel.notifications import _delay_alarm_payload
 
-        res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
-            agent,
-            {
-                "action": "dismiss_channel",
-                "input": {"channel": channel, "force": None, "reason": reason},
-                "reasoning": "acknowledge the producer notification",
-            },
-        )
+    alarm = _delay_alarm_payload(
+        {
+            "target": "email",
+            "expired_at": "2026-10-02T00:00:00Z",
+            "request_id": "r1",
+            "requested_seconds": 5,
+            "actual_seconds": 5,
+            "changed": False,
+            "initial": {},
+            "current": {},
+        }
+    )
+    assert "dismiss" not in alarm["instructions"].lower()
 
-        assert res["status"] == "ok", (channel, res)
-        assert channel not in snapshot_notifications(agent._working_dir), channel
+    import inspect
+
+    for module in (turn_module,):
+        assert "notification(action='dismiss" not in inspect.getsource(module)
+
+    from lingtai.kernel import nudge as nudge_module
+
+    assert "notification(action='dismiss" not in inspect.getsource(nudge_module)
 
 
 def test_no_shipped_guidance_teaches_the_rejected_flat_shape() -> None:
@@ -2222,3 +2064,19 @@ def test_no_shipped_guidance_teaches_the_rejected_flat_shape() -> None:
             if flat.search(line) and rel not in allowed:
                 offenders.append(f"{rel}:{line_no}")
     assert not offenders, "flat-shape notification guidance survives:\n" + "\n".join(offenders)
+
+
+def test_no_shipped_guidance_teaches_removed_dismiss_actions() -> None:
+    """No agent-facing source or manual teaches a removed notification dismiss call."""
+    import re
+
+    repo = Path(__file__).resolve().parents[1] / "src" / "lingtai"
+    taught = re.compile(r"notification\(\s*action=['\"]dismiss(_channel|_event|_ref)?['\"]")
+    offenders = []
+    for path in sorted(repo.rglob("*")):
+        if path.suffix not in {".py", ".md", ".yaml"} or not path.is_file():
+            continue
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if taught.search(line):
+                offenders.append(f"{path.relative_to(repo.parent.parent)}:{line_no}")
+    assert not offenders, "removed dismiss guidance survives:\n" + "\n".join(offenders)

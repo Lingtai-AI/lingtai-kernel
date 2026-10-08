@@ -7,7 +7,10 @@ separate approval/replay worker can consume those records later.
 
 Opt-in is the presence of ``<working_dir>/.security/gate_config.json``. This
 keeps existing agents unchanged while giving a deployment a mechanical,
-fail-closed boundary for the first-class ``file`` and ``shell`` surfaces.
+fail-closed boundary for the first-class ``shell`` surface. The former
+``file`` family is gone, so ``local_write_roots`` no longer constrains
+anything: it is still parsed and merged for config compatibility, but no
+classifier consults it.
 """
 from __future__ import annotations
 
@@ -277,12 +280,11 @@ def _resolve(path: str | os.PathLike[str]) -> str:
 
 
 def _canonical_target(target: str | None, base_cwd: str | None) -> str | None:
-    """Resolve a shell/file target against the executor's effective cwd.
+    """Resolve a shell script target against the executor's effective cwd.
 
-    The gate and the executors must agree on where a relative target lands.
-    Shell omits ``working_dir`` -> executor uses the agent workdir; file
-    resolves relative ``file_path`` against the agent workdir. Using a bare
-    ``Path(...).resolve()`` here would resolve against the *process* cwd,
+    The gate and the executor must agree on where a relative target lands.
+    Shell omits ``working_dir`` -> executor uses the agent workdir. Using a
+    bare ``Path(...).resolve()`` here would resolve against the *process* cwd,
     which can differ from the executor's effective cwd and let an approved
     target point outside the approved root at execution time.
     """
@@ -294,15 +296,6 @@ def _canonical_target(target: str | None, base_cwd: str | None) -> str | None:
     return str((Path(base_cwd) / path).resolve())
 
 
-def _is_within_roots(path: str | os.PathLike[str], roots: list[str]) -> bool:
-    resolved = _resolve(path)
-    for root in roots:
-        root_resolved = _resolve(root)
-        if resolved == root_resolved or resolved.startswith(root_resolved.rstrip(os.sep) + os.sep):
-            return True
-    return False
-
-
 def _list_value(config: dict[str, Any], key: str) -> list[str]:
     value = config.get(key, [])
     return [item for item in value if isinstance(item, str) and item] if isinstance(value, list) else []
@@ -312,8 +305,8 @@ def _list_value(config: dict[str, Any], key: str) -> list[str]:
 # without ``LINGTAI_RISKY_ACTION_GATE`` set (or a ``.security/gate_config.json``
 # present) existing agents see zero behavior change. Set it to a truthy value
 # (``1``/``true``/``yes``/``on``) to enable the gate even without a config file;
-# an empty config then denies every file write and every unclassified shell
-# command until the deployment adds allowlists.
+# an empty config then denies every unclassified shell command until the
+# deployment adds allowlists.
 _GATE_OPT_IN_ENV = "LINGTAI_RISKY_ACTION_GATE"
 _TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 
@@ -755,34 +748,10 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
     return None
 
 
-def _file_risk_reason(args: dict[str, Any], config: dict[str, Any], *, base_cwd: str | None = None) -> tuple[str, str] | None:
-    action = args.get("action")
-    if action not in {"write", "edit"}:
-        return None
-    action_input = args.get("input")
-    if not isinstance(action_input, dict):
-        return "file action input is invalid", ""
-    target = action_input.get("file_path")
-    if not isinstance(target, str) or not target:
-        return "file target is missing", ""
-    canonical = _canonical_target(target, base_cwd)
-    if _is_within_roots(canonical, _list_value(config, "local_write_roots")):
-        return None
-    return f"file.{action} target is outside local_write_roots", canonical
-
-
 def _operation(proposal: ToolProposal, reason: str) -> dict[str, Any]:
     args = dict(proposal.tool_args)
     operation: dict[str, Any] = {
-        "kind": (
-            "file_write"
-            if proposal.tool_name == "file" and args.get("action") == "write"
-            else "file_edit"
-            if proposal.tool_name == "file" and args.get("action") == "edit"
-            else "shell_command"
-            if proposal.tool_name == "shell"
-            else "tool_call"
-        ),
+        "kind": "shell_command" if proposal.tool_name == "shell" else "tool_call",
         "tool_name": proposal.tool_name,
         "args": args,
         "reason": reason,
@@ -791,10 +760,6 @@ def _operation(proposal: ToolProposal, reason: str) -> dict[str, Any]:
         operation["command"] = args["input"].get("command")
         operation["cwd"] = args["input"].get("working_dir") or None
         operation["effective_cwd"] = args["input"].get("working_dir") or None
-    if proposal.tool_name == "file" and isinstance(args.get("input"), dict):
-        target = args["input"].get("file_path")
-        if isinstance(target, str) and target:
-            operation["target"] = _canonical_target(target, None)
     return operation
 
 
@@ -839,13 +804,7 @@ def build_risky_action_check(working_dir: str | os.PathLike[str]):
         if config is None:
             return GuardDecision.allow()
         reason: str | None = None
-        if proposal.tool_name == "file":
-            file_result = _file_risk_reason(
-                proposal.tool_args, config, base_cwd=str(execution_root)
-            )
-            if file_result is not None:
-                reason = file_result[0]
-        elif proposal.tool_name in ("shell", "bash"):
+        if proposal.tool_name in ("shell", "bash"):
             # ``bash`` is the legacy compatibility name that the registry maps
             # to the ``shell`` capability after guard evaluation; treating it
             # as shell here prevents a compat-named shell call from bypassing

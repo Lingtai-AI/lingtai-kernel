@@ -15,7 +15,6 @@ from lingtai.tools.web_search.settings import (
     API_KEY,
     DEFAULT_ENGINE_NAMES,
     ENGINES_KEY,
-    GEMINI_API_KEY,
     MODEL_KEY,
     OPENAI_API_KEY,
     OUTPUT_MAX_CHARS_KEY,
@@ -30,7 +29,6 @@ _WEB_ENV = (
     WEB_MAX_CHARS_ENV,
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
-    "GEMINI_API_KEY",
 )
 _ROW_KEYS = (
     PROVIDER_KEY,
@@ -41,7 +39,6 @@ _ROW_KEYS = (
     OUTPUT_MAX_CHARS_KEY,
     OPENAI_API_KEY,
     ANTHROPIC_API_KEY,
-    GEMINI_API_KEY,
 )
 _COMMENTS = {
     PROVIDER_KEY: "web-manual#provider",
@@ -52,13 +49,11 @@ _COMMENTS = {
     OUTPUT_MAX_CHARS_KEY: "web-manual#output-max-chars",
     OPENAI_API_KEY: "web-manual#openai-api-key",
     ANTHROPIC_API_KEY: "web-manual#anthropic-api-key",
-    GEMINI_API_KEY: "web-manual#gemini-api-key",
 }
 _SENSITIVE_KEYS = (
     API_KEY,
     OPENAI_API_KEY,
     ANTHROPIC_API_KEY,
-    GEMINI_API_KEY,
 )
 
 
@@ -333,3 +328,38 @@ def test_unavailable_current_returns_one_fixed_failure_without_rows(
         "error_code": "SETTINGS_UNAVAILABLE",
         "message": "settings inventory is unavailable",
     }
+
+
+def test_web_manual_keeps_resolvable_operation_links():
+    import re
+    root = Path(__file__).parents[1] / "src/lingtai/tools/web_search/manual"
+    text = (root / "SKILL.md").read_text()
+    operation = (root / "reference/operation-contract.md").read_text()
+    headings = {re.sub(r"[^a-z0-9 -]", "", h.lower()).replace(" ", "-")
+                for h in re.findall(r"^#{1,6} (.+)$", operation, re.M)}
+    for anchor in re.findall(r"operation-contract.md#([a-z-]+)", text):
+        assert anchor in headings
+
+
+def test_web_guidance_distinguishes_hot_show_and_cached_services():
+    root = Path(__file__).parents[1] / "src/lingtai/tools/web_search/manual"
+    operation = (root / "reference/operation-contract.md").read_text()
+    for phrase in ("LINGTAI_WEB_PROVIDER", "LINGTAI_WEB_MODEL", "cached service",
+                   "does not change SHOW", "before applying", "SETTINGS_UNAVAILABLE"):
+        assert phrase in operation
+
+
+def test_web_legacy_helper_limitations_are_explicit():
+    root = Path(__file__).parents[1] / "src/lingtai/tools/web_search/manual"
+    maintenance = (root / "reference/maintenance-bundles/SKILL.md").read_text()
+    for phrase in ("AttributeError", "extraction-pipeline.json", "not valid JSON",
+                   "WEB_BROWSING_CACHE_DIR", "clear_cache", "no automatic purge",
+                   "--fallback", "Jina", "preview", "authorization"):
+        assert phrase.lower() in " ".join(maintenance.lower().split())
+
+
+def test_default_engine_inventory_is_exactly_three_engines() -> None:
+    # The admitted-engine default and the credential rows cover exactly the
+    # three built-in engines; the removed ``gemini`` engine has neither.
+    assert DEFAULT_ENGINE_NAMES == ("anthropic", "duckduckgo", "openai")
+    assert all("gemini" not in key for key in _ROW_KEYS)

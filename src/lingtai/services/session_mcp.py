@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from lingtai.kernel.llm import FunctionSchema
@@ -75,6 +76,91 @@ class SessionMCPLease:
                 client.close()
             except Exception:
                 pass
+
+
+class ConnectionMCPLease:
+    """An MCP tool view owned by one ACP connection, not Agent globals."""
+
+    def __init__(self, agent, clients, schemas, handlers):
+        self.owner = agent
+        self._clients = clients
+        self.schemas = tuple(schemas)
+        self.handlers = MappingProxyType(dict(handlers))
+        self._lock = threading.Lock()
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        with self._lock:
+            return self._closed
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+        for client in reversed(self._clients):
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
+def open_connection_mcp_stdio(agent, configs: tuple[StdioMCPServerConfig, ...]) -> ConnectionMCPLease:
+    """Preflight one connection's tools without publishing them globally."""
+    clients: list[Any] = []
+    schemas: list[FunctionSchema] = []
+    handlers: dict[str, Any] = {}
+    try:
+        for config in configs:
+            client = MCPClient(
+                command=config.command,
+                args=list(config.args),
+                env=dict(config.env),
+                name=config.name,
+            )
+            clients.append(client)
+            client.start()
+            tools = client.list_tools()
+            if not isinstance(tools, list):
+                raise ValueError("MCP tools/list result must be an array")
+            for tool in tools:
+                if not isinstance(tool, dict):
+                    raise ValueError("MCP tool records must be objects")
+                name = tool.get("name")
+                schema = tool.get("schema", {})
+                description = tool.get("description", "")
+                if not isinstance(name, str) or not name:
+                    raise ValueError("MCP tool name must be a non-empty string")
+                if name in handlers:
+                    raise ValueError(f"duplicate connection MCP tool name: {name}")
+                if not isinstance(schema, dict) or not isinstance(description, str):
+                    raise ValueError(f"malformed MCP tool record: {name}")
+
+                def handler(args: dict, *, c=client, n=name, s=schema):
+                    return c.call_tool(n, mcp_service.prepare_mcp_tool_arguments(args, s))
+
+                handlers[name] = handler
+                schemas.append(FunctionSchema(name=name, description=description, parameters=schema))
+
+        names = set(handlers)
+        with _surface_lock(agent):
+            collisions = names.intersection(
+                set(agent._intrinsics)
+                | set(agent._tool_handlers)
+                | {schema.name for schema in agent._tool_schemas}
+                | set(OFFICIAL_TOOL_PLUGIN_NAMES)
+            )
+        if collisions:
+            raise ValueError("connection MCP tool name collision: " + ", ".join(sorted(collisions)))
+        return ConnectionMCPLease(agent, clients, schemas, handlers)
+    except Exception:
+        for client in reversed(clients):
+            try:
+                client.close()
+            except Exception:
+                pass
+        raise
 
 
 def _surface_lock(agent) -> threading.RLock:
@@ -203,4 +289,7 @@ def mount_session_mcp_stdio(
         raise
 
 
-__all__ = ["SessionMCPLease", "StdioMCPServerConfig", "mount_session_mcp_stdio"]
+__all__ = [
+    "ConnectionMCPLease", "SessionMCPLease", "StdioMCPServerConfig",
+    "mount_session_mcp_stdio", "open_connection_mcp_stdio",
+]

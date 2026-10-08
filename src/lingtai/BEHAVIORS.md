@@ -28,7 +28,7 @@ must run from the repo root with the project's Python.
 - **id**: IR001
 - **title**: the reader never modifies init.json and returns typed outcomes instead of fabricated success
 - **guards**: `init-reader` § Behavior
-- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **runner**: any LingTai agent with `shell` access to this repository
 - **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` with an `init.json`
 - **estimate**: ≈ 20 minutes
 

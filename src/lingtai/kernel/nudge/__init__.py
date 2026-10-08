@@ -15,7 +15,7 @@ Channel ``.notification/nudge.json`` carries a list of active nudges:
       "header": "<rendered by _render_header — e.g. '2 nudges'>",
       "icon": "🔔",
       "priority": "low",
-      "instructions": "Call notification(action='dismiss_channel', input={'channel': 'nudge', ...}, reasoning='...') ...",
+      "instructions": "These nudges are delivered once and are not re-attached automatically ...",
       "data": {"nudges": [{"kind": "kernel_version", "nudge_channel": "release_version", ...}, ...]}
     }
 
@@ -23,10 +23,9 @@ Each check identifies its slot by a unique ``kind`` string. Built-in producers
 are classified by fixed Core-owned kind mapping; unrelated legacy/unknown
 entries remain channel-less. ``upsert`` replaces (or appends) one entry;
 ``remove`` deletes one. When the last entry leaves, the channel file is cleared
-so the agent's wire surface drops the notification entirely. The agent
-dismisses everything at once with
-``notification(action='dismiss_channel', input={'channel': 'nudge',
-'force': null, 'reason': null}, reasoning='...')``.
+so the agent's wire surface drops the notification entirely. Delivery is
+one-shot and never clears the channel; there is no public dismiss action, so
+the record persists until the check resolves it or its findings change.
 
 To add a new nudge: drop ``nudge/<name>.py`` exposing ``check(agent)``,
 then add an import + dispatch line to :func:`run_checks` below. No
@@ -173,9 +172,14 @@ def _parse_duration(value: str) -> float | None:
 
 
 def _format_duration(seconds: float) -> str:
-    # Preserve the product default's documented spelling (`24h`) while using
-    # day units for intervals longer than one day.
-    if seconds % 3600 == 0 and seconds > 86400:
+    # Zero is a degenerate interval, but it is still rendered in the smallest
+    # unit rather than looking like a one-hour policy value. Preserve the
+    # product default's documented spelling (`24h`) for positive values. Use
+    # day units only for an exact whole-day interval; 25h/36h/47h must not lose
+    # their remaining hours through floor-to-days truncation.
+    if seconds == 0:
+        return "0s"
+    if seconds % 86400 == 0 and seconds > 86400:
         return f"{int(seconds // 86400)}d"
     if seconds % 3600 == 0:
         return f"{int(seconds // 3600)}h"
@@ -745,10 +749,19 @@ def _safe_log(agent, event: str, **fields: Any) -> None:
 
 
 def _replace_kind(entries: list, kind: str, body: dict) -> list:
-    out = [e for e in entries if e.get("kind") != kind]
     entry = dict(body)
     entry["kind"] = kind
-    out.append(entry)
+    out = []
+    replaced = False
+    for existing in entries:
+        if existing.get("kind") == kind:
+            if not replaced:
+                out.append(entry)
+                replaced = True
+        else:
+            out.append(existing)
+    if not replaced:
+        out.append(entry)
     return out
 
 
@@ -779,9 +792,8 @@ def _modify(agent, mutate) -> None:
             "priority": "low",
             "published_at": published_at,
             "instructions": (
-                "Call notification(action='dismiss_channel', input={'channel': "
-                "'nudge', 'force': null, 'reason': null}, reasoning='...') to "
-                "acknowledge and clear ALL nudges at once. Individual nudges "
+                "These nudges are delivered once and are not re-attached "
+                "automatically until the findings change. Individual nudges "
                 "may also describe a specific action to take (e.g. "
                 "system(action='refresh') for a kernel upgrade)."
             ),

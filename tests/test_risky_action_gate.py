@@ -20,41 +20,47 @@ def _proposal(tool_name: str, args: dict) -> ToolProposal:
     return ToolProposal(tool_name=tool_name, tool_args=args, tool_call_id="tc-1")
 
 
-def _file_config(root, *, local_write_roots=None):
+def _gate_config(root, **extra):
+    """Opt the gate in with an (optionally extended) empty config."""
     security = root / ".security"
     security.mkdir(parents=True, exist_ok=True)
     (security / "gate_config.json").write_text(
-        json.dumps({"local_write_roots": local_write_roots or []}),
+        json.dumps(dict(extra)),
         encoding="utf-8",
     )
+
+
+def _shell(command: str, working_dir=None) -> ToolProposal:
+    return _proposal("shell", {"action": "run", "input": {
+        "command": command, "working_dir": working_dir,
+        "timeout": None, "async": False, "reminder": None,
+    }})
 
 
 def test_gate_is_zero_behavior_change_without_opt_in(tmp_path):
     check = build_risky_action_check(tmp_path)
 
-    decision = check(_proposal("file", {"action": "write", "input": {
-        "file_path": str(tmp_path / "outside.txt"), "content": "x"
-    }}))
+    decision = check(_shell("rm -f outside.txt"))
 
     assert decision.allowed
     assert not (tmp_path / ".security").exists()
 
 
 def test_executor_blocks_before_dispatch_when_gate_denies(tmp_path):
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     dispatched = []
     executor = ToolExecutor(
         dispatch_fn=lambda tool_call: dispatched.append(tool_call) or {"status": "ok"},
         make_tool_result_fn=lambda name, result, **kwargs: {"name": name, "result": result},
         guard=LoopGuard(max_total_calls=10),
-        known_tools={"file"},
+        known_tools={"shell"},
         working_dir=tmp_path,
         tool_call_guard=ToolCallGuard([build_risky_action_check(tmp_path)]),
     )
     results, intercepted, _ = executor.execute([ToolCall(
-        name="file",
-        args={"action": "write", "input": {
-            "file_path": str(tmp_path / "outside.txt"), "content": "x"
+        name="shell",
+        args={"action": "run", "input": {
+            "command": "rm -f outside.txt", "working_dir": str(tmp_path),
         }},
         id="blocked-file",
     )])
@@ -65,15 +71,11 @@ def test_executor_blocks_before_dispatch_when_gate_denies(tmp_path):
     assert results[0]["result"]["guard_decision"]["metadata"]["pending_request_id"]
 
 
-def test_file_write_outside_allowlist_is_denied_and_recorded(tmp_path):
-    allowed = tmp_path / "allowed"
-    allowed.mkdir()
-    _file_config(tmp_path, local_write_roots=[str(allowed)])
+def test_shell_write_is_denied_and_recorded_as_shell_command(tmp_path):
+    _gate_config(tmp_path)
     check = build_risky_action_check(tmp_path)
 
-    proposal = _proposal("file", {"action": "write", "input": {
-        "file_path": str(tmp_path / "outside.txt"), "content": "exact content"
-    }})
+    proposal = _shell("cp exact.txt outside.txt", str(tmp_path))
     decision = check(proposal)
 
     assert not decision.allowed
@@ -83,33 +85,42 @@ def test_file_write_outside_allowlist_is_denied_and_recorded(tmp_path):
     payload = json.loads(request_path.read_text(encoding="utf-8"))
     assert payload["status"] == "pending"
     assert payload["approvals"] == {"telegram": None, "wechat": None}
-    assert payload["operation"]["tool_name"] == "file"
+    assert payload["operation"]["tool_name"] == "shell"
+    assert payload["operation"]["kind"] == "shell_command"
     assert payload["operation"]["args"] == proposal.tool_args
     assert not (tmp_path / "outside.txt").exists()
 
 
-def test_allowlisted_file_write_and_read_only_shell_pass(tmp_path):
+def test_local_write_roots_no_longer_grants_anything(tmp_path):
+    """``local_write_roots`` is parsed for compatibility but constrains nothing.
+
+    The File family that consulted it is gone. A Shell write under a listed
+    root is still classified by the unchanged Shell command classifier, so it
+    is denied exactly as it would be without the key.
+    """
     allowed = tmp_path / "allowed"
     allowed.mkdir()
-    _file_config(tmp_path, local_write_roots=[str(allowed)])
+    _gate_config(tmp_path, local_write_roots=[str(allowed)])
     check = build_risky_action_check(tmp_path)
 
-    file_decision = check(_proposal("file", {"action": "edit", "input": {
-        "file_path": str(allowed / "x.txt"), "old_string": "a",
-        "new_string": "b", "replace_all": False,
-    }}))
-    shell_decision = check(_proposal("shell", {"action": "run", "input": {
-        "command": "printf hello", "working_dir": None,
-        "timeout": None, "async": False, "reminder": None,
-    }}))
+    assert load_gate_config(tmp_path)["local_write_roots"] == [str(allowed)]
+    decision = check(_shell(f"cp {allowed / 'a.txt'} {allowed / 'b.txt'}"))
+    assert not decision.allowed
+    assert "destination-writing" in decision.reason
 
-    assert file_decision.allowed
+
+def test_read_only_shell_passes_without_pending_record(tmp_path):
+    _gate_config(tmp_path)
+    check = build_risky_action_check(tmp_path)
+
+    shell_decision = check(_shell("printf hello"))
+
     assert shell_decision.allowed
     assert not list((tmp_path / ".security" / "pending").glob("*.json"))
 
 
 def test_shell_unknown_command_is_denied_and_exact_command_is_recorded(tmp_path):
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     check = build_risky_action_check(tmp_path)
     command = "python3 -c 'open(\"outside.txt\", \"w\").write(\"x\")'"
     proposal = _proposal("shell", {"action": "run", "input": {
@@ -128,7 +139,7 @@ def test_shell_unknown_command_is_denied_and_exact_command_is_recorded(tmp_path)
 
 
 def test_expired_request_is_denied_even_if_approval_arrives_later(tmp_path):
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     decision = build_risky_action_check(tmp_path)(_proposal("shell", {
         "action": "run", "input": {"command": "rm -f x"}
     }))
@@ -156,9 +167,7 @@ def test_shared_config_grants_are_unioned_and_two_approvals_transition_status(tm
     assert config["ssh_hosts"] == ["cluster"]
 
     check = build_risky_action_check(agent)
-    proposal = _proposal("file", {"action": "write", "input": {
-        "file_path": str(agent / "not-ok.txt"), "content": "x"
-    }})
+    proposal = _shell("rm -f not-ok.txt", str(agent))
     decision = check(proposal)
     request_path = agent / ".security" / "pending" / f"{decision.metadata['pending_request_id']}.json"
     assert mark_approval(request_path, "telegram", "approve")["status"] == "pending"
@@ -167,7 +176,7 @@ def test_shared_config_grants_are_unioned_and_two_approvals_transition_status(tm
 
 def test_glued_redirection_is_denied(tmp_path):
     """`printf pwn>/tmp/x` must not be unwrapped into read-only printf."""
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     decision = build_risky_action_check(tmp_path)(_proposal("shell", {
         "action": "run", "input": {"command": "printf pwn>/tmp/x"}
     }))
@@ -175,7 +184,7 @@ def test_glued_redirection_is_denied(tmp_path):
 
 
 def test_glued_append_redirection_is_denied(tmp_path):
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     decision = build_risky_action_check(tmp_path)(_proposal("shell", {
         "action": "run", "input": {"command": "echo hi >>/tmp/x"}
     }))
@@ -184,7 +193,7 @@ def test_glued_append_redirection_is_denied(tmp_path):
 
 def test_path_form_executable_is_denied(tmp_path):
     """`./ls` must not be trusted as the read-only system ``ls``."""
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     decision = build_risky_action_check(tmp_path)(_proposal("shell", {
         "action": "run", "input": {"command": "./ls"}
     }))
@@ -197,7 +206,7 @@ def test_any_path_form_executable_is_denied(tmp_path):
     Regression for Fable batch-A cross-check P0: /tmp/ls, ../ls, bin/ls and
     /usr/bin/printf all reduce to allowlisted basenames and were allowed.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "/tmp/ls",
         "../ls",
@@ -221,7 +230,7 @@ def test_any_path_form_executable_is_denied(tmp_path):
 
 def test_env_path_override_is_denied(tmp_path):
     """`env PATH=/attacker ls` must not unwrap into read-only ls."""
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "env PATH=/attacker ls",
         "env LD_PRELOAD=/attacker.so ls",
@@ -234,7 +243,7 @@ def test_env_path_override_is_denied(tmp_path):
 
 
 def test_git_list_only_subcommands_reject_positional_mutation(tmp_path):
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in ("git branch pwn", "git tag v1", "git remote add x y"):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
@@ -259,7 +268,7 @@ def test_git_list_only_option_mutations_are_denied(tmp_path):
     counted. Unknown options on list-only subcommands fail closed; read-only
     query forms stay allowed.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "git branch --unset-upstream",
         "git branch --set-upstream-to=origin/main",
@@ -296,7 +305,7 @@ def test_git_option_only_mutations_denied_but_git_write_flag_is_denied(tmp_path)
     ``continue`` skipped the generic write-flag check, so ``git diff
     --output=/tmp/x`` etc. were allowed despite writing a file.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "git diff --output=/tmp/fable-never-created",
         "git diff --output /tmp/fable-never-created",
@@ -333,7 +342,7 @@ def test_mark_approval_cannot_overwrite_denied_or_expired(tmp_path, monkeypatch)
     from lingtai.kernel.risky_action_gate import expire_pending, mark_approval
     import json, shutil, threading
 
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     pending_dir = tmp_path / ".security" / "pending"
     pending_dir.mkdir(parents=True, exist_ok=True)
     req = pending_dir / "race.json"
@@ -373,7 +382,7 @@ def test_mark_approval_cannot_overwrite_denied_or_expired(tmp_path, monkeypatch)
 
 
 def test_read_only_verb_with_write_flag_is_denied(tmp_path):
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in ("sort -o /tmp/x input", "curl -o /tmp/x https://example.com", "wget -O /tmp/x https://example.com"):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
@@ -387,7 +396,7 @@ def test_read_only_verb_with_joined_write_flag_is_denied(tmp_path):
     Regression for Fable batch-A cross-check P0: `sort -o/tmp/x input`
     was allowed because only the standalone ``-o`` token was matched.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "sort -o/tmp/fable-never-executed input",
         "sort -o/tmp/x input",
@@ -407,7 +416,7 @@ def test_read_only_verb_option_allowlist_denies_helper_execution(tmp_path):
     arbitrary preprocessor, date <new_date> sets the system clock, and both
     were previously allowed because only the verb name was classified.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "rg --pre /tmp/fable-never-executed needle .",
         "rg --pre-glob '*.rs' /tmp/fable-never-executed needle .",
@@ -437,7 +446,7 @@ def test_git_external_exec_options_are_denied(tmp_path):
     execute external programs yet were allowed because only output flags and
     list-only subcommands were checked.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "git diff --ext-diff",
         "git diff --textconv",
@@ -474,7 +483,7 @@ def test_git_ambient_helper_execution_requires_explicit_disable(tmp_path):
     explicit --no-textconv --no-ext-diff / -c core.fsmonitor=false prove no
     external helper can run.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "git diff",
         "git log -1",
@@ -510,7 +519,7 @@ def test_git_multi_c_and_remote_show_helpers_denied(tmp_path):
     pass (whole-args fsmonitor check); git remote show without -n queries a
     remote transport/helper; --exec-path global was unparsed.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "git -ccore.fsmonitor=false -ccore.fsmonitor=/tmp/fable-never-executed status",
         "git -ccore.fsmonitor=/tmp/fable-never-executed -ccore.fsmonitor=false status",
@@ -548,7 +557,7 @@ def test_git_status_requires_no_optional_locks(tmp_path):
     core.fsmonitor=false; subcommand-after spellings and any form without the
     global flag fail closed.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "git status",
         "git status -c core.fsmonitor=false",
@@ -586,7 +595,7 @@ def test_git_signature_pretty_atoms_denied(tmp_path):
     config. Those forms fail closed; safe pretty atoms (%% %h %s ...) stay
     allowed.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "git log --no-textconv --no-ext-diff --show-signature -1",
         "git show --no-textconv --no-ext-diff --show-signature HEAD",
@@ -625,7 +634,7 @@ def test_git_positive_query_grammar_denies_unknown_and_remerge(tmp_path):
     audit-proof, so diff/log/show now accept ONLY the allowlisted read-only
     query options; any unknown long/short option fails closed.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "git log --no-textconv --no-ext-diff --remerge-diff -1",
         "git show --no-textconv --no-ext-diff --remerge-diff HEAD",
@@ -667,7 +676,7 @@ def test_git_trace_env_sinks_denied(tmp_path):
     nominally read-only git query could write files or connect to a local
     socket without dual approval. Fail closed by exact key and prefix.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "env GIT_TRACE=/tmp/fable-never-written git log --no-textconv --no-ext-diff -1",
         "env GIT_TRACE_PACKET=/tmp/fable-never-written git log --no-textconv --no-ext-diff -1",
@@ -692,33 +701,16 @@ def test_git_trace_env_sinks_denied(tmp_path):
 
 
 def test_effective_cwd_binds_relative_targets_to_agent_workdir(tmp_path):
-    """Omitted/empty cwd and relative file targets resolve to the agent workdir.
+    """Omitted/empty cwd and relative script targets resolve to the agent workdir.
 
-    Regression for Fable final P1: the shell/file executors run with the
-    agent workdir when cwd is omitted, so the gate must resolve relative
-    targets and trusted scripts against the same base instead of the gate
-    process cwd. A relative file write is therefore checked against the
-    workdir-relative path, and a relative trusted script must match the
-    workdir-relative canonical path.
+    Regression for Fable final P1: the shell executor runs with the agent
+    workdir when cwd is omitted, so the gate must resolve trusted scripts
+    against the same base instead of the gate process cwd. A relative
+    trusted script must match the workdir-relative canonical path.
     """
-    _file_config(tmp_path)
     approved = tmp_path / "approved"
     approved.mkdir()
-    security = tmp_path / ".security"
-    (security / "gate_config.json").write_text(json.dumps({
-        "local_write_roots": [str(approved)],
-        "trusted_scripts": [str(approved / "run.py")],
-    }, ensure_ascii=False), encoding="utf-8")
-    # Relative file target inside the approved root (resolved against workdir)
-    # stays allowed; a relative target escaping the approved root is denied.
-    decision = build_risky_action_check(tmp_path)(_proposal("file", {
-        "action": "write", "input": {"file_path": "approved/out.txt"}
-    }))
-    assert decision.allowed
-    decision = build_risky_action_check(tmp_path)(_proposal("file", {
-        "action": "write", "input": {"file_path": "../outside.txt"}
-    }))
-    assert not decision.allowed
+    _gate_config(tmp_path, trusted_scripts=[str(approved / "run.py")])
     # Relative trusted script resolves against the workdir, not process cwd.
     decision = build_risky_action_check(tmp_path)(_proposal("shell", {
         "action": "run", "input": {"command": "python approved/run.py", "working_dir": None}
@@ -767,7 +759,7 @@ def test_path_form_executable_denied_across_all_fast_paths(tmp_path):
     /tmp/git status, ../python <trusted>, and wrapper-wrapped variants all
     passed while /tmp/ls was denied.
     """
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     for command in (
         "/tmp/git status",
         "../git status",
@@ -794,7 +786,7 @@ def test_path_form_executable_denied_across_all_fast_paths(tmp_path):
 
 def test_bash_compat_name_is_treated_as_shell(tmp_path):
     """A compat ``bash`` tool call must hit the same shell gate as ``shell``."""
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     decision = build_risky_action_check(tmp_path)(_proposal("bash", {
         "action": "run", "input": {"command": "rm -f x"}
     }))
@@ -803,7 +795,7 @@ def test_bash_compat_name_is_treated_as_shell(tmp_path):
 
 def test_daemon_stub_wires_risky_action_gate(tmp_path):
     """Detached daemon stub must not bypass an opted-in gate."""
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     from lingtai.kernel.daemon_supervisor.agent_stub import DaemonSupervisorAgentStub
     stub = DaemonSupervisorAgentStub(tmp_path)
     assert stub._tool_call_guard is not None
@@ -815,7 +807,7 @@ def test_daemon_stub_wires_risky_action_gate(tmp_path):
 
 def test_mark_approval_refuses_expired_inline(tmp_path):
     """mark_approval itself must refuse an already-expired pending request."""
-    _file_config(tmp_path)
+    _gate_config(tmp_path)
     decision = build_risky_action_check(tmp_path)(_proposal("shell", {
         "action": "run", "input": {"command": "rm -f x"}
     }))
@@ -835,9 +827,6 @@ def test_env_opt_in_default_closed(tmp_path, monkeypatch):
     assert check(_proposal("shell", {
         "action": "run", "input": {"command": "rm -f x"}
     })).allowed
-    assert check(_proposal("file", {
-        "action": "write", "input": {"file_path": str(tmp_path / "x"), "content": "x"}
-    })).allowed
 
 
 def test_env_opt_in_enables_gate_without_config(tmp_path, monkeypatch):
@@ -846,9 +835,6 @@ def test_env_opt_in_enables_gate_without_config(tmp_path, monkeypatch):
     check = build_risky_action_check(tmp_path)
     assert not check(_proposal("shell", {
         "action": "run", "input": {"command": "rm -f x"}
-    })).allowed
-    assert not check(_proposal("file", {
-        "action": "write", "input": {"file_path": str(tmp_path / "x"), "content": "x"}
     })).allowed
     # A bare read-only shell command stays allowed under the empty strict config.
     assert check(_proposal("shell", {
