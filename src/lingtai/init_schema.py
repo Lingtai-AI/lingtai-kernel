@@ -478,10 +478,24 @@ def validate_init(data: dict) -> list[str]:
                 "(Agent Plugin package directories)"
             )
 
-    # Validate manifest.capabilities.skills shape if present.
     caps = manifest.get("capabilities") or {}
     if isinstance(caps, dict):
         validate_capability_providers(caps, prefix="manifest.capabilities")
+
+        # This retired daemon option is not equivalent to manager_pool_size.  If
+        # forwarded to daemon.setup it disables the entire capability after boot;
+        # require an explicit owner choice before accepting this configuration.
+        daemon_cfg = caps.get("daemon")
+        if isinstance(daemon_cfg, dict) and "max_emanations" in daemon_cfg:
+            raise ValueError(
+                "manifest.capabilities.daemon.max_emanations was retired; "
+                "remove it, then explicitly choose whether to use the "
+                "default manager_pool_size=100 or set daemon.manager_pool_size "
+                "in init.json. These settings are not equivalent; see "
+                "migration/migration.md"
+            )
+
+        # Validate manifest.capabilities.skills shape if present.
         cap_name = "skills"
         cfg = caps.get(cap_name)
         if cfg is not None:

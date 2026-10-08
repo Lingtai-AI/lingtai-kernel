@@ -69,6 +69,27 @@ def test_load_init_reads_file(tmp_path):
     assert data["manifest"]["agent_name"] == "test-agent"
 
 
+def test_retired_daemon_boot_error_has_short_last_line_for_old_acp(tmp_path, capsys):
+    from lingtai.cli import load_init
+
+    _write_init(tmp_path, {"manifest": {
+        "capabilities": {"daemon": {"max_emanations": 30}},
+    }})
+    with pytest.raises(SystemExit) as stopped:
+        load_init(tmp_path)
+
+    assert stopped.value.code == 1
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0].startswith("error: {")
+    assert '"read_result": "READ_FAILED"' in lines[0]
+    assert lines[-1].startswith("error: LingTai cannot start:")
+    assert len(lines[-1]) < 300
+    assert "manifest.capabilities.daemon.max_emanations" in lines[-1]
+    assert "manager_pool_size=100" in lines[-1]
+    assert "migration/migration.md" in lines[-1]
+    assert "test-key" not in lines[-1]
+
+
 def test_load_init_missing_file(tmp_path):
     from lingtai.cli import load_init
     with pytest.raises(SystemExit):

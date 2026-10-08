@@ -367,6 +367,7 @@ class ToolFamily:
                 "summarize": {
                     "type": "boolean",
                     "description": (
+                        "Prefer a priori summarize=true for expected bulky output; specify what to retain in reasoning. "
                         "Root, cross-cutting result post-processing control; "
                         "absent or false by default. Not action input."
                     ),

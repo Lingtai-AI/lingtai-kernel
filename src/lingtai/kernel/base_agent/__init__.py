@@ -2248,6 +2248,19 @@ class BaseAgent:
         meta["injection_seq"] = self._notification_inject_seq
 
         notifications_with_guidance = build_notification_payload(notifications)
+
+        def _summary_count(payload: object) -> object | None:
+            if isinstance(payload, dict):
+                data = payload.get("data") or {}
+                if isinstance(data, dict):
+                    count = data.get("count")
+                    if count is None and isinstance(data.get("events"), list):
+                        count = len(data["events"])
+                    if count is None and isinstance(data.get("voices"), list):
+                        count = len(data["voices"])
+                    return count
+            return None
+
         # Keep log-only source counts from the raw canonical payload before the
         # transient lanes are sanitized for model visibility.  For example,
         # email's model-visible hook drops count and keeps only email_ids, but
@@ -2256,20 +2269,7 @@ class BaseAgent:
         raw_notifications = notifications_with_guidance.get("notifications")
         if isinstance(raw_notifications, dict):
             for raw_source, raw_payload in raw_notifications.items():
-                raw_count = None
-                if isinstance(raw_payload, dict):
-                    raw_data = raw_payload.get("data") or {}
-                    if isinstance(raw_data, dict):
-                        raw_count = raw_data.get("count")
-                        if raw_count is None and isinstance(
-                            raw_data.get("events"), list
-                        ):
-                            raw_count = len(raw_data["events"])
-                        if raw_count is None and isinstance(
-                            raw_data.get("voices"), list
-                        ):
-                            raw_count = len(raw_data["voices"])
-                notification_summary_counts[raw_source] = raw_count
+                notification_summary_counts[raw_source] = _summary_count(raw_payload)
 
         # Build the canonical two-axis sidecar. The handler-shaped body remains
         # independent; adapters project this sidecar into model-visible _meta.
@@ -2313,15 +2313,7 @@ class BaseAgent:
         # depending on the producer; fall back to "?" if unparseable.
         summary_parts = []
         for source, payload in notifications_with_guidance["notifications"].items():
-            count = None
-            if isinstance(payload, dict):
-                data = payload.get("data") or {}
-                if isinstance(data, dict):
-                    count = data.get("count")
-                    if count is None and isinstance(data.get("events"), list):
-                        count = len(data["events"])
-                    if count is None and isinstance(data.get("voices"), list):
-                        count = len(data["voices"])
+            count = _summary_count(payload)
             if count is None:
                 raw_count = notification_summary_counts.get(source)
                 if isinstance(raw_count, int):

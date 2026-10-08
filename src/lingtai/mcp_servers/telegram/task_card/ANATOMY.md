@@ -114,9 +114,18 @@ onto its one tracked resident Task Card target per account+chat.
   escaped dynamic content for fixed tag overhead, while Feishu consumes the
   shared frame unchanged. `format_metadata` renders an adapter-supplied,
   preformatted `session_cost` metadata string as one `Cost · …` row inside the
-  Session section (budgeted like Session; absent key means byte-identical
-  output). In Telegram HTML, `_telegram_task_card_html`
-  (`src/lingtai/mcp_servers/telegram/manager.py:292-418`) gives Session the
+  Session section (absent key means byte-identical output). The metadata block
+  has no whole-block character budget; `format_rows_task_card_text` passes
+  `max_chars` only when the overall `TEXT_LIMIT` cannot hold it after excerpts
+  shrink, and `format_metadata` then shortens only the Daemons/Backends lists
+  tails with a `+N omitted` indicator. Any non-empty Async Work block gains a
+  localized `Scope` row (running/queued + finished in last 10m from
+  `ASYNC_WORK_WINDOW_SECONDS`); `daemon_stats_label` supplies the compact
+  Daemon stats label. The row shows `usage n/a (no positive usage reported)`
+  when selected runs report no positive values, but omits the lifetime
+  parenthetical and unavailable-cost suffix; their caveats live in the manual. In
+  Telegram HTML, `_telegram_task_card_html`
+  (`src/lingtai/mcp_servers/telegram/manager.py:291-421`) gives Session the
   cumulative compact `out` value and a bold `Cost` row, puts Async Work in a
   separate icon-free section, and leaves the per-call metrics line as plain
   text. The separate

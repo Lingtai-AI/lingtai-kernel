@@ -183,6 +183,26 @@ semantics live here. The public producer contract lives in
     aggregate and separate daemon/Shell lanes; usage/backend/model detail stays
     daemon-scoped. Telegram's HTML adapter presents this block as its own
     icon-free Async Work section rather than folding it into Session.
+    The metadata block has no whole-block character budget: every Session,
+    Cost, Identity, and Async Work row is kept, each field individually bounded
+    and sanitized. Only the overall `TEXT_LIMIT` frame limit applies; reasoning
+    and preview excerpts shrink first, and only if the block still cannot fit
+    is the tail of the unbounded Daemons/Backends lists replaced by a visible
+    `+N omitted` count (never silently, and never the Scope, stats, or Cost
+    rows). Whenever any Async Work status is non-empty, a `Scope · recorded
+    running/queued + finished in last 10m` row (the snapshot's `window_seconds`, 600) states
+    which recorded jobs are counted, for daemon and Shell lanes alike. The
+    kernel selection is bounded by its record-tail limits, not a whole-ledger
+    census; a truly empty,
+    all-zero, or stale snapshot renders no Async rows and no Scope. The Daemon
+    compact stats row (`Daemon stats`) sums
+    those daemon runs' reported lifetime `in`/`out`/`cache`/`api` — not tokens
+    from the last window and not the whole batch. Selected daemon runs with no
+    positive reported usage show `usage n/a (no positive usage reported)` instead
+    of zeros. The card omits the explanatory lifetime parenthetical and the
+    unavailable-cost suffix; this manual retains their meaning. The snapshot
+    carries no daemon cost: none is priced, shown as `$0`, or folded into
+    Session's Cost row. Shell rows make no usage or billing claim.
 12. A pending canonical `shell.run` automatic row reads only the literal safe
     `input.async` boolean. Sync/default mode renders `foreground`; literal
     `async=true` renders `dispatching async job`. The row retains redacted
@@ -358,8 +378,8 @@ this component.
 - `tests/test_telegram_task_card_api_cost.py` covers per-call estimation and
   catalog behavior plus the Cost row fold/format: replay/carrier dedupe, gaps
   and rejected snapshots, missing model/price/usage/billing as partial, n/a
-  without blocking, and the opt-in shared `session_cost` metadata row within the
-  metadata budget with byte-identical default output.
+  without blocking, and the opt-in shared `session_cost` metadata row without a standalone
+  metadata budget, with byte-identical output when that optional row is absent.
 - `tests/test_telegram_task_card_rows.py` proves strict common `async_work`
   consumption, missing/malformed/stale omission, mixed-lane rendering, and
   pending sync-versus-async Shell wording without raw-argument leakage.
