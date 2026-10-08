@@ -220,7 +220,7 @@ def test_manager_submission_closes_adopted_fd_when_capsule_send_fails(
     run_dir, request = _make_run(tmp_path, "em-send-failure")
     child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     adopted_fd = child_endpoint.detach()
-    monkeypatch.setattr(daemon_manager, "_ensure_manager", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon_manager, "_ensure_manager_locked", lambda *_a, **_k: None)
     monkeypatch.setattr(
         daemon_manager,
         "_send_capsule",
@@ -240,6 +240,52 @@ def test_manager_submission_closes_adopted_fd_when_capsule_send_fails(
         assert peer.recv(1) == b""
     finally:
         peer.close()
+
+
+def test_enqueue_captures_enqueued_at_after_lock_admission_delay(tmp_path, monkeypatch):
+    """``enqueued_at`` must reflect queue-write time, not a pre-lock capture.
+
+    A timestamp taken before ``_ensure_manager``'s serialized ``manager.lock``
+    admission lets lock contention or manager-spawn latency burn the
+    missing-capsule grace before the job is even queue-visible, so the
+    manager's queue consumer (``_missing_capsule_is_terminal``) can judge a
+    capsule handoff terminal while it is still genuinely in flight. This
+    simulates that delay happening inside the lock, before the admission
+    callback that writes the queue job runs, and proves the recorded
+    timestamp — and the grace it anchors — stay fresh regardless.
+    """
+    run_dir, request = _make_run(tmp_path, "em-fresh-grace")
+    now = [1_700_000_000.0]
+    monkeypatch.setattr(
+        daemon_manager,
+        "time",
+        SimpleNamespace(time=lambda: now[0], monotonic=time.monotonic),
+    )
+    start = now[0]
+
+    def slow_ensure_manager_locked(_agent_working_dir, _root, *, pool_size):
+        now[0] += daemon_manager._CAPSULE_SEND_TIMEOUT_S + 1.0
+
+    monkeypatch.setattr(daemon_manager, "_ensure_manager_locked", slow_ensure_manager_locked)
+    monkeypatch.setattr(daemon_manager, "_send_capsule", lambda *_a, **_k: None)
+
+    daemon_manager.enqueue_manager_run(
+        agent_working_dir=run_dir.path.parent.parent,
+        request=request,
+        capsule={"task": "test"},
+        pool_size=1,
+    )
+
+    queue_dir = run_dir.path.parent.parent / MANAGER_DIR / "queue"
+    job = json.loads((queue_dir / f"{request.run_id}.json").read_text(encoding="utf-8"))
+    assert job["enqueued_at"] >= start + daemon_manager._CAPSULE_SEND_TIMEOUT_S
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["owner"] == "manager"
+
+    manager = _DaemonManagerProcess(
+        queue_dir, run_dir.path.parent.parent / MANAGER_DIR / "journal", pool_size=1
+    )
+    manager.started_at = start  # an already-running manager; only enqueued_at should gate the grace
+    assert manager._missing_capsule_is_terminal(job) is False
 
 
 def test_manager_pre_execution_failure_closes_pending_adopted_fd(tmp_path):
@@ -582,6 +628,57 @@ def test_manager_exit_discards_unclaimed_fd(tmp_path):
         peer.close()
 
 
+def test_manager_idle_exit_backs_off_behind_a_held_manager_lock(tmp_path):
+    """A submitter mid-admission must never lose its job to a racing exit.
+
+    Holding ``manager.lock`` (as ``_ensure_manager``'s admit sequence does)
+    forces the manager's non-blocking idle-exit attempt to back off and
+    keep polling instead of stopping underneath it. Only once the lock is
+    free and the queue is genuinely empty does the manager commit: the
+    capsule socket path is unlinked and ``manager.pid`` is marked dead so a
+    later submitter reserves and spawns a fresh manager unambiguously.
+    """
+    import fcntl
+
+    root = tmp_path / "manager"
+    root.mkdir(parents=True)
+    queue_dir = root / "queue"
+    journal_dir = root / "journal"
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=1, root=root)
+    socket_path = daemon_manager._capsule_socket_path(root)
+    manager.start_capsule_server(socket_path)
+    daemon_manager._write_private_json(
+        root / "manager.pid",
+        {
+            "pid": os.getpid(),
+            "started_at": manager.started_at,
+            "pool_size": 1,
+            "state": "running",
+        },
+    )
+    assert socket_path.exists()
+
+    try:
+        lock_path = root / "manager.lock"
+        with open(lock_path, "a", encoding="utf-8") as submitter_handle:
+            fcntl.flock(submitter_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                assert manager._try_exit_idle() is False
+            finally:
+                fcntl.flock(submitter_handle.fileno(), fcntl.LOCK_UN)
+        assert socket_path.exists()
+
+        assert manager._try_exit_idle() is True
+
+        record = json.loads((root / "manager.pid").read_text(encoding="utf-8"))
+        assert record["state"] == "stopped"
+        assert record["pid"] is None
+        assert not socket_path.exists()
+    finally:
+        if manager._capsule_socket is not None:
+            manager._capsule_socket.close()
+
+
 def _wait_state(run_dir: DaemonRunDir, state: str, *, timeout: float = 5.0) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -716,7 +813,7 @@ def test_central_manager_persists_loaded_runtime_identity(tmp_path, monkeypatch)
             pass
 
         def run(self, *, idle_exit_s=None) -> None:
-            assert idle_exit_s is None
+            assert idle_exit_s == daemon_manager._IDLE_EXIT_S
 
     monkeypatch.setattr(daemon_manager, "_DaemonManagerProcess", FakeManager)
     agent_working_dir = tmp_path / "agent"
@@ -791,6 +888,50 @@ def test_central_manager_refuses_mismatched_starting_identity(tmp_path, monkeypa
 
     with pytest.raises(RuntimeError, match="runtime identity.*daemon-manual"):
         daemon_manager._ensure_manager(agent_working_dir, pool_size=1)
+
+
+def test_central_manager_lazy_restarts_after_idle_exit_without_identity_mismatch(
+    tmp_path, monkeypatch
+):
+    """A manager that idle-exited must read as absent, not as a live mismatch.
+
+    ``_try_exit_idle`` marks the dead incarnation with ``pid: None`` and no
+    ``started_at``; the next submitter must therefore reserve and spawn a
+    fresh manager under its own current identity, with no raise, even though
+    the retired record's diagnostic fields describe a different identity.
+    """
+    agent_working_dir = tmp_path / "agent"
+    root = agent_working_dir / MANAGER_DIR
+    root.mkdir(parents=True)
+    (root / "manager.pid").write_text(
+        json.dumps(
+            {
+                "pid": None,
+                "state": "stopped",
+                "stopped_pid": os.getpid(),
+                "stopped_at": time.time(),
+                "manager_runtime_identity": _manager_runtime_identity("old-head"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    expected = _manager_runtime_identity("current-head")
+    monkeypatch.setattr(daemon_manager, "_manager_runtime_identity", lambda: expected)
+
+    spawned_tokens: list[str] = []
+
+    def counting_popen(_argv, **kwargs):
+        spawned_tokens.append(kwargs["env"]["LINGTAI_DAEMON_MANAGER_TOKEN"])
+        return SimpleNamespace(pid=4242)
+
+    monkeypatch.setattr(daemon_manager.subprocess, "Popen", counting_popen)
+
+    daemon_manager._ensure_manager(agent_working_dir, pool_size=1)
+
+    assert len(spawned_tokens) == 1
+    record = json.loads((root / "manager.pid").read_text(encoding="utf-8"))
+    assert record["state"] == "starting"
+    assert record["manager_runtime_identity"] == expected
 
 
 def test_concurrent_ensure_manager_callers_reserve_and_spawn_one_manager(tmp_path, monkeypatch):

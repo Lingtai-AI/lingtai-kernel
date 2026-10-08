@@ -19,7 +19,7 @@ import time
 import uuid
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from lingtai.adapters.posix.daemon_capsule import (
     ReceivedDaemonCapsule,
@@ -41,6 +41,7 @@ _MANAGER_RUNTIME_IDENTITY_SCHEMA = "lingtai.daemon_manager_runtime.v1"
 _DAEMON_NOTIFICATION_PROTOCOL = "per-run-mini-channel.v1"
 _POLL_INTERVAL_S = 0.05
 _PID_STALE_AFTER_S = 2.0
+_IDLE_EXIT_S = 2.0
 _CAPSULE_SOCKET_NAME = "capsule.sock"
 _CAPSULE_SEND_TIMEOUT_S = 5.0
 _MAX_CAPSULE_BYTES = 4 * 1024 * 1024
@@ -194,13 +195,26 @@ def _manager_env() -> dict[str, str]:
     return env
 
 
-def _ensure_manager(agent_working_dir: Path, *, pool_size: int) -> None:
+def _ensure_manager(
+    agent_working_dir: Path,
+    *,
+    pool_size: int,
+    after_locked: Callable[[Path], None] | None = None,
+) -> None:
     """Reuse the agent's resident manager, or reserve and spawn exactly one.
 
     The complete observe/identity/reserve/spawn sequence runs under one
     exclusive ``fcntl.flock`` on ``manager.lock`` so concurrent callers for the
     same agent directory cannot both observe an absent manager and both spawn
     one; the later caller instead sees the ``starting`` reservation.
+
+    ``after_locked``, when given, runs under the same held lock immediately
+    after the ensure step, before the lock is released. The resident
+    manager's own idle-exit commit (``_try_exit_idle``) takes the identical
+    lock non-blockingly, so a caller admitting a run here and a manager
+    deciding to stop can never interleave: whichever acquires the lock first
+    fully completes (admission is durably queued, or the stop is durably
+    committed and the socket is gone) before the other proceeds.
     """
     import fcntl
 
@@ -210,6 +224,8 @@ def _ensure_manager(agent_working_dir: Path, *, pool_size: int) -> None:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         try:
             _ensure_manager_locked(agent_working_dir, root, pool_size=pool_size)
+            if after_locked is not None:
+                after_locked(root)
         finally:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
@@ -303,35 +319,47 @@ def _enqueue_manager_run_owned(
         raise NotImplementedError("central daemon manager is POSIX-only")
     if pool_size <= 0:
         raise ValueError("central daemon manager requires a positive pool size")
-    root = _manager_dir(Path(agent_working_dir))
-    _ensure_manager(Path(agent_working_dir), pool_size=pool_size)
-    queue_dir = root / "queue"
-    _private_dir(queue_dir)
-    _private_dir(root / "journal")
-    _mark_run_manager_owned(request, root)
     payload = {
         "schema": "lingtai.daemon_manager_job.v1",
         "run_id": request.run_id,
         "request": encode_request(request),
         "capsule_in_memory": True,
-        "enqueued_at": time.time(),
     }
-    job_path = queue_dir / f"{request.run_id}.json"
-    _write_private_json(job_path, payload)
-    try:
-        _send_capsule(
-            root,
-            request.run_id,
-            capsule or {},
-            adopted_fd=adopted_fd,
-        )
-    except Exception:
+
+    def _admit_locked(root: Path) -> None:
+        """Durably queue the job and hand off its capsule, still under the
+        manager-ensure lock, so the resident manager cannot commit an
+        idle-exit between "a manager exists" and "the job is visible to it".
+
+        ``enqueued_at`` is stamped here, immediately before the queue write,
+        not earlier: the manager's missing-capsule grace is measured from
+        this timestamp, so capturing it before lock admission would spend
+        part of that grace on lock contention or manager-spawn latency
+        before the job is even queue-visible.
+        """
+        queue_dir = root / "queue"
+        _private_dir(queue_dir)
+        _private_dir(root / "journal")
+        _mark_run_manager_owned(request, root)
+        payload["enqueued_at"] = time.time()
+        job_path = queue_dir / f"{request.run_id}.json"
+        _write_private_json(job_path, payload)
         try:
-            job_path.unlink()
-        except OSError:
-            pass
-        raise
-    _mark_run_manager_owned(request, root)
+            _send_capsule(
+                root,
+                request.run_id,
+                capsule or {},
+                adopted_fd=adopted_fd,
+            )
+        except Exception:
+            try:
+                job_path.unlink()
+            except OSError:
+                pass
+            raise
+        _mark_run_manager_owned(request, root)
+
+    _ensure_manager(Path(agent_working_dir), pool_size=pool_size, after_locked=_admit_locked)
 
 
 def run_manager(agent_working_dir: Path, *, pool_size: int) -> None:
@@ -355,17 +383,25 @@ def run_manager(agent_working_dir: Path, *, pool_size: int) -> None:
             "manager_runtime_identity": _manager_runtime_identity(),
         },
     )
-    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=pool_size)
+    manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=pool_size, root=root)
     manager.start_capsule_server(_capsule_socket_path(root))
     manager.recover_interrupted_active_runs()
-    manager.run(idle_exit_s=None)
+    manager.run(idle_exit_s=_IDLE_EXIT_S)
 
 
 class _DaemonManagerProcess:
-    def __init__(self, queue_dir: Path, journal_dir: Path, *, pool_size: int) -> None:
+    def __init__(
+        self,
+        queue_dir: Path,
+        journal_dir: Path,
+        *,
+        pool_size: int,
+        root: Path | None = None,
+    ) -> None:
         self.queue_dir = queue_dir
         self.journal_dir = journal_dir
         self.pool_size = pool_size
+        self.root = root
         self.active: dict[str, threading.Thread] = {}
         self.capsules: dict[str, ReceivedDaemonCapsule] = {}
         self.lock = threading.Lock()
@@ -482,7 +518,7 @@ class _DaemonManagerProcess:
                     "updated_at": time.time(),
                 })
 
-    def run(self, *, idle_exit_s: float | None = 2.0) -> None:
+    def run(self, *, idle_exit_s: float | None = _IDLE_EXIT_S) -> None:
         idle_since: float | None = None
         try:
             while True:
@@ -499,7 +535,9 @@ class _DaemonManagerProcess:
                     if idle_since is None:
                         idle_since = time.monotonic()
                     elif time.monotonic() - idle_since > idle_exit_s:
-                        return
+                        if self.root is None or self._try_exit_idle():
+                            return
+                        idle_since = None
                 time.sleep(_POLL_INTERVAL_S)
         finally:
             with self.lock:
@@ -507,6 +545,66 @@ class _DaemonManagerProcess:
                 self.capsules.clear()
             for pending in pending_capsules:
                 pending.close()
+
+    def _try_exit_idle(self) -> bool:
+        """Atomically re-confirm idleness and commit to exit, or back off.
+
+        Shares ``manager.lock`` with ``_ensure_manager``'s admit sequence
+        (non-blocking here, since this process must never wait behind a
+        submitter). Losing the race just defers this exit attempt to the
+        next poll tick. Winning it must leave no way for a submitter to
+        reach this process afterward: the capsule socket path is unlinked
+        and ``manager.pid`` is marked dead (``pid: None``, no numeric
+        ``started_at``) before the lock is released, so
+        ``_ensure_manager_locked`` reserves and spawns a fresh manager on its
+        very next observation with no identity check in the way (the record
+        looks absent, not mismatched).
+        """
+        import errno
+        import fcntl
+
+        assert self.root is not None
+        lock_path = self.root / "manager.lock"
+        try:
+            lock_handle = open(lock_path, "a", encoding="utf-8")
+        except OSError:
+            return False
+        try:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+                    return False
+                raise
+            try:
+                self._reap_finished_threads()
+                if self.active or list(self.queue_dir.glob("*.json")):
+                    return False
+                info = _read_manager_pid_info(self.root)
+                if info.get("pid") != os.getpid():
+                    # Some other incarnation owns the slot now; it is not
+                    # ours to retire, and the record/socket must stay put.
+                    return False
+                socket_path = _capsule_socket_path(self.root)
+                try:
+                    socket_path.unlink()
+                except OSError:
+                    pass
+                _write_private_json(
+                    self.root / "manager.pid",
+                    {
+                        "pid": None,
+                        "pool_size": self.pool_size,
+                        "state": "stopped",
+                        "stopped_pid": os.getpid(),
+                        "stopped_at": time.time(),
+                    },
+                )
+                return True
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_handle.close()
 
     def _reap_finished_threads(self) -> None:
         with self.lock:
