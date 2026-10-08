@@ -1,7 +1,7 @@
 ---
 name: email-contract
 tool: email
-contract_version: 3
+contract_version: 4
 related_files:
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
@@ -31,6 +31,8 @@ maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
   same change and bump contract_version on breaking contract edits.
+  contract_version 4 removes the recipient/body repeat heuristic and its SHOW
+  row; repeated authorized sends/replies are permitted.
   contract_version 3 adds Email's generic read-only settings inventory after
   the LTP v2 / ToolFamily envelope migration. The public tool name and all
   operational action/result shapes remain unchanged.
@@ -55,7 +57,7 @@ Guarded by: [EM001](BEHAVIORS.md#behavior-em001), [EM002](BEHAVIORS.md#behavior-
 - You are editing the internal mailbox tool: send/check/read/reply/search/
   archive/delete or the contact book.
 - You are reviewing mailbox on-disk layout, unread digest republishing, the
-  duplicate-send loop guard, or Email's read-only settings inventory.
+  delivery outcomes, or Email's read-only settings inventory.
 - You need return-route reply resolution (`#145`) or the send address rules.
 
 **Do not use this for:**
@@ -124,7 +126,7 @@ action's `input` properties — e.g. `email(action='read', input={'email_id':
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `send` | `address` (str or list; every entry an absolute agent-workdir path) | `subject`, `message`, `cc`, `bcc`, `attachments`, `delay`, `type` | `{status: "sent", to, cc, bcc, delay}` | `{error: "address is required"}`; `{error: "all addresses must be absolute agent-workdir paths: ..."}` for any bare or relative `address`, `cc`, or `bcc` entry; `{error, limit_chars, actual_chars}` on body > 50k chars; `{status: "blocked", warning}` on duplicate loop |
+| `send` | `address` (str or list; every entry an absolute agent-workdir path) | `subject`, `message`, `cc`, `bcc`, `attachments`, `delay`, `type` | `{status: "sent", to, cc, bcc, delay}` | `{error: "address is required"}`; `{error: "all addresses must be absolute agent-workdir paths: ..."}` for any bare or relative `address`, `cc`, or `bcc` entry; `{error, limit_chars, actual_chars}` on body > 50k chars |
 | `check` | — | `folder` (`inbox`/`sent`/`archive`), `n`, `filter{sort,from,subject,contains,after,before,unread_only,has_attachments,truncate}` | `{status: "ok", total, showing, emails: [...]}`, plus `truncated_by_budget` when a 10k-token cap trims | (returns ok with empty list) |
 | `read` | `email_id` (str or list) | `folder` | `{status: "ok", emails: [...]}`, plus `not_found` + `hint` for stale ids | `{error: "email_id is required"}` |
 | `dismiss` | `email_id` (str or list) | — | `{status: "ok", dismissed: [...]}`, plus `already_handled`, `not_found`, `hint` | `{error: "email_id is required"}` |
@@ -181,13 +183,12 @@ authorized external change procedure.
 | Key | Current | Default | Configurable | Comment |
 |---|---:|---:|---|---|
 | `send.body_char_limit` | `50000` | `50000` | `false` | `email-manual#send-body-character-limit` |
-| `send.duplicate_free_passes` | `2` | `2` | `false` | `email-manual#duplicate-send-loop-guard` |
 | `check.result_token_limit` | `10000` | `10000` | `false` | `email-manual#check-result-token-limit` |
 | `unread.max_entries` | `10` | `10` | `false` | `email-manual#unread-notification-entry-limit` |
 | `manifest.pseudo_agent_subscriptions` | `<redacted>` | `<redacted>` | `true` | `email-manual#pseudo-agent-subscriptions` |
 
-The first four rows are installed-code facts consumed by Email operations.
-The fifth reads the actual paths resolved once by
+The first three rows are installed-code facts consumed by Email operations.
+The fourth reads the actual paths resolved once by
 `PosixFilesystemMailAdapter` at construction. Its private sensitive flag fully
 redacts both current and meaningful default (`["../human"]`) and is never
 projected. If applied truth is unavailable or malformed, the provider raises
@@ -307,7 +308,7 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 | `send` routes through the mailman delivery thread | `src/lingtai/tools/email/manager.py:_send` | `tests/test_layers_email.py::test_email_send_through_mailman` |
 | A cc'd send writes exactly one `sent/` record | `src/lingtai/tools/email/manager.py:_send` | `tests/test_layers_email.py::test_email_send_cc_one_sent_record` |
 | Bodies over the 50k-char hard limit are refused at send time | `src/lingtai/tools/email/manager.py:_send` (`EMAIL_BODY_CHAR_LIMIT`) | `tests/test_layers_email.py::test_email_send_rejects_body_over_hard_limit` |
-| Identical consecutive sends are blocked as a loop | `src/lingtai/tools/email/manager.py:_send` | `tests/test_layers_email.py::test_email_blocks_identical_consecutive_send` |
+| Repeated identical authorized sends/replies are not heuristically blocked | `src/lingtai/tools/email/manager.py:_send` | `tests/test_email_official_tool_plugin.py::test_identical_authorized_mail_is_not_blocked` |
 | `read` marks inbox mail read | `src/lingtai/tools/email/manager.py:_read` / `primitives._mark_read` | `tests/test_layers_email.py::test_email_read_marks_as_read` |
 | `dismiss` marks read without returning bodies and rerenders the digest | `src/lingtai/tools/email/manager.py:_dismiss` | `tests/test_layers_email.py::test_email_dismiss_marks_read_and_returns_no_bodies`, `tests/test_layers_email.py::test_email_dismiss_rerenders_notification` |
 | `archive` moves inbox mail into `archive/` | `src/lingtai/tools/email/manager.py:_archive` | `tests/test_layers_email.py::test_email_archive_moves_to_archive` |
@@ -335,7 +336,7 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 | One `email` tool, no `mail` alias | `tests/test_layers_email.py::test_email_intrinsic_no_mail_intrinsic` | Boot an agent and inspect registered tools | Duplicate/ghost mail surface confuses routing |
 | Read-state mutations rerender `.notification/email.json` | `tests/test_layers_email.py::test_email_dismiss_rerenders_notification` | Read a message, inspect `.notification/email.json` | Stale unread badge; dropped-mail illusion |
 | Oversize bodies refused at send, not truncated at read | `tests/test_layers_email.py::test_email_send_rejects_body_over_hard_limit` | Send a >50k-char body | Oversize payloads bloat persistent notifications |
-| Duplicate-send loop guard holds | `tests/test_layers_email.py::test_email_blocks_identical_consecutive_send` | Send the same message twice in a row | Runaway send loops |
+| Repeated identical mail remains deliverable | `tests/test_email_official_tool_plugin.py::test_identical_authorized_mail_is_not_blocked` | Four synthetic same-body sends/replies | Authorized periodic messages falsely rejected |
 | Abs replies do not self-misroute | `tests/test_email_abs_reply_route.py` | Reply to mail from a same-named agent in another network | Replies silently land in own inbox (#145) |
 
 | One model-facing `email` tool; children consume no tool slots | `tests/test_tool_family_email_wire_parity.py::test_email_is_exactly_one_model_facing_tool` | Boot an agent and count built schemas | A child leaking out as its own root would double the mail surface |

@@ -1,7 +1,7 @@
 ---
 name: email-manual-settings-reference
 description: >
-  Focused Email settings reference for the five SHOW rows, installed limits,
+  Focused Email settings reference for the four SHOW rows, installed limits,
   manifest subscription source, redaction, precedence, timing, and the
   read-only boundary. Read when interpreting settings rows.
 version: 1.0.0
@@ -30,7 +30,7 @@ provider row is unavailable, the whole action fails with fixed
 
 ## Installed-code rows
 
-These four values come from Email's installed `settings.py` constants. There is
+These three values come from Email's installed `settings.py` constants. There is
 no environment/owner-file override; changing them needs reviewed code/package
 bytes plus full relaunch, then another SHOW. Their row order is the order below.
 
@@ -39,14 +39,11 @@ bytes plus full relaunch, then another SHOW. Their row order is the order below.
 `send.body_char_limit`: current/default 50,000, configurable false. Counts Unicode
 body characters for send/reply; oversize bodies are refused before scheduling.
 
-## Duplicate send loop guard
+## Repeated authorized mail
 
-`send.duplicate_free_passes`: current/default 2, configurable false. Two consecutive
-same-body calls per recipient are allowed; the next is blocked. Only recipient
-and body are compared: subject and attachment paths are not compared.
-The counter advances after sender persistence/scheduling, not recipient acceptance;
-a later bounce does not undo it. A different body or new EmailManager resets the
-relevant history. `blocked` is not a delivery receipt; do not vary text to bypass it.
+There is no recipient/body repetition heuristic. Identical authorized sends
+and replies remain separate deliveries; elapsed time, body novelty, or manager
+restart is not required. This is not permission for unrequested mail or ACK loops.
 
 ## Check result token limit
 

@@ -206,25 +206,50 @@ def test_reply_falls_back_to_abs_when_from_is_absolute_path(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_reply_to_bare_from_without_route_is_refused(tmp_path):
-    """There is no bare-name reply target: a route-less reply whose ``from`` is
-    a bare name is refused, and nothing is dispatched."""
-    responder_dir = tmp_path / "dev-2" / ".lingtai" / "mimo-1"
+@pytest.mark.parametrize(
+    "responder_root,responder_name,sender,identity",
+    [
+        pytest.param(
+            "dev-2", "mimo-1", "peer-7",
+            {"agent_name": "peer-7", "agent_id": "AGENT-PEER-7", "admin": {}},
+            id="bare_peer_name",
+        ),
+        pytest.param(
+            "dev-2", "mimo-1", "mimo-1",
+            {"agent_name": "mimo-1", "agent_id": "AGENT-DEV-1", "admin": {}},
+            id="self_name_collision_issue_145",
+        ),
+        pytest.param(
+            "project", "orchestrator", "human",
+            {"agent_name": "human", "admin": None},
+            id="human_mail_without_route",
+        ),
+    ],
+)
+def test_reply_without_route_and_bare_from_is_refused(
+    tmp_path, responder_root, responder_name, sender, identity,
+):
+    """There is no bare-name reply target: a route-less reply whose ``from``
+    is a bare (non-absolute) name is always refused and nothing is
+    dispatched — whether that bare name is an unrelated peer, the TUI's
+    human mail writer, or (the exact bug behind issue #145) a name that
+    collides with the responder's own network."""
+    responder_dir = tmp_path / responder_root / ".lingtai" / responder_name
     responder_dir.mkdir(parents=True)
-    agent = Agent(service=make_mock_service(), agent_name="mimo-1",
+    agent = Agent(service=make_mock_service(), agent_name=responder_name,
                   working_dir=responder_dir)
     mock_svc = MagicMock()
-    mock_svc.address = "mimo-1"
+    mock_svc.address = responder_name
     mock_svc.send.return_value = None
     agent._mail_service = mock_svc
 
     eid = _make_inbox_email(
         responder_dir,
-        sender="peer-7",
+        sender=sender,
         subject="hey",
         message="howdy",
-        identity={"agent_name": "peer-7", "agent_id": "AGENT-PEER-7",
-                  "admin": {}},
+        identity=identity,
+        to=[responder_name],
     )
     result = agent._email_manager.handle({
         "action": "reply",
@@ -232,49 +257,12 @@ def test_reply_to_bare_from_without_route_is_refused(tmp_path):
         "message": "back at you",
     })
     assert "error" in result and "not an absolute address" in result["error"], result
-    time.sleep(0.3)
-    assert not mock_svc.send.called
-
-    agent.stop(timeout=1.0)
-
-
-def test_reply_self_route_with_different_agent_id_is_refused(tmp_path):
-    """A route-less reply whose bare ``from`` names the responder's own network
-    must fail loudly rather than self-deliver (the exact bug observed in issue
-    #145)."""
-    responder_dir = tmp_path / "dev-2" / ".lingtai" / "mimo-1"
-    responder_dir.mkdir(parents=True)
-    agent = Agent(service=make_mock_service(), agent_name="mimo-1",
-                  working_dir=responder_dir)
-    mock_svc = MagicMock()
-    mock_svc.address = "mimo-1"
-    mock_svc.send.return_value = None
-    agent._mail_service = mock_svc
-
-    # No ``_return_route`` and a bare ``from`` equal to our own name; the
-    # identity card says a different agent sent it. This is the exact shape
-    # of the dev-1→dev-2 reply that bit us live.
-    eid = _make_inbox_email(
-        responder_dir,
-        sender="mimo-1",
-        subject="cross-project ping",
-        message="please reply",
-        identity={"agent_name": "mimo-1", "agent_id": "AGENT-DEV-1",
-                  "admin": {}},
-    )
-    result = agent._email_manager.handle({
-        "action": "reply",
-        "email_id": [eid],
-        "message": "should be refused",
-    })
-    assert "error" in result, f"expected ambiguity error, got {result!r}"
     assert "email(action='send', input={'address': " in result["error"]
     assert "reasoning=" in result["error"]
     err = result["error"].lower()
     assert "absolute" in err, (
         f"error should name the absolute-route requirement, got: {result['error']!r}"
     )
-    # No outbound dispatch.
     time.sleep(0.3)
     assert not mock_svc.send.called
 
@@ -315,38 +303,6 @@ def test_reply_to_tui_human_mail_uses_stamped_route(tmp_path):
         time.sleep(0.05)
     assert mock_svc.send.called, "reply was never dispatched"
     assert mock_svc.send.call_args[0][0] == str(human_dir)
-
-    agent.stop(timeout=1.0)
-
-
-def test_reply_to_human_mail_without_route_is_refused(tmp_path):
-    """Route-less human mail has only a bare ``from``; the reply is refused
-    rather than guessing a sibling ``human`` directory."""
-    responder_dir = tmp_path / "project" / ".lingtai" / "orchestrator"
-    responder_dir.mkdir(parents=True)
-    agent = Agent(service=make_mock_service(), agent_name="orchestrator",
-                  working_dir=responder_dir)
-    mock_svc = MagicMock()
-    mock_svc.address = "orchestrator"
-    mock_svc.send.return_value = None
-    agent._mail_service = mock_svc
-
-    eid = _make_inbox_email(
-        responder_dir,
-        sender="human",
-        subject="need a hand",
-        message="status?",
-        identity={"agent_name": "human", "admin": None},
-        to=["orchestrator"],
-    )
-    result = agent._email_manager.handle({
-        "action": "reply",
-        "email_id": [eid],
-        "message": "all good",
-    })
-    assert "error" in result and "not an absolute address" in result["error"], result
-    time.sleep(0.3)
-    assert not mock_svc.send.called
 
     agent.stop(timeout=1.0)
 

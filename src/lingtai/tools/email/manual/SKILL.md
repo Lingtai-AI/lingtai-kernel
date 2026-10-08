@@ -76,9 +76,6 @@ not short receipts or procedures being followed.
 ### Send body character limit
 `send.body_char_limit`: [body cap](reference/settings-reference/SKILL.md#send-body-character-limit).
 
-### Duplicate send loop guard
-`send.duplicate_free_passes`: [recipient/body guard](reference/settings-reference/SKILL.md#duplicate-send-loop-guard).
-
 ### Check result token limit
 `check.result_token_limit`: [check budget](reference/settings-reference/SKILL.md#check-result-token-limit).
 
