@@ -4463,12 +4463,12 @@ def _pending_record_payload(agent, source: str, payload: Any) -> Any:
     previews = []
     for preview in _im_preview_list({NOTIFICATIONS_KEY: {source: payload}}, source):
         single = {NOTIFICATIONS_KEY: {source: {"data": {"previews": [preview]}}}}
-        values = _im_persistent_messages_from_notifications(single, source)
-        values = [record for record in values if _im_message_identity(record) in pending]
+        all_values = _im_persistent_messages_from_notifications(single, source)
+        values = [record for record in all_values if _im_message_identity(record) in pending]
         if not values:
             # Preserve omission/ID-less preview records rather than acknowledge
             # content we cannot identify. They retain snapshot semantics.
-            if not _im_persistent_messages_from_notifications(single, source):
+            if not all_values:
                 previews.append(dict(preview))
             continue
         retained = dict(preview)
