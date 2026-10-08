@@ -242,6 +242,52 @@ def test_manager_submission_closes_adopted_fd_when_capsule_send_fails(
         peer.close()
 
 
+def test_enqueue_captures_enqueued_at_after_lock_admission_delay(tmp_path, monkeypatch):
+    """``enqueued_at`` must reflect queue-write time, not a pre-lock capture.
+
+    A timestamp taken before ``_ensure_manager``'s serialized ``manager.lock``
+    admission lets lock contention or manager-spawn latency burn the
+    missing-capsule grace before the job is even queue-visible, so the
+    manager's queue consumer (``_missing_capsule_is_terminal``) can judge a
+    capsule handoff terminal while it is still genuinely in flight. This
+    simulates that delay happening inside the lock, before the admission
+    callback that writes the queue job runs, and proves the recorded
+    timestamp — and the grace it anchors — stay fresh regardless.
+    """
+    run_dir, request = _make_run(tmp_path, "em-fresh-grace")
+    now = [1_700_000_000.0]
+    monkeypatch.setattr(
+        daemon_manager,
+        "time",
+        SimpleNamespace(time=lambda: now[0], monotonic=time.monotonic),
+    )
+    start = now[0]
+
+    def slow_ensure_manager_locked(_agent_working_dir, _root, *, pool_size):
+        now[0] += daemon_manager._CAPSULE_SEND_TIMEOUT_S + 1.0
+
+    monkeypatch.setattr(daemon_manager, "_ensure_manager_locked", slow_ensure_manager_locked)
+    monkeypatch.setattr(daemon_manager, "_send_capsule", lambda *_a, **_k: None)
+
+    daemon_manager.enqueue_manager_run(
+        agent_working_dir=run_dir.path.parent.parent,
+        request=request,
+        capsule={"task": "test"},
+        pool_size=1,
+    )
+
+    queue_dir = run_dir.path.parent.parent / MANAGER_DIR / "queue"
+    job = json.loads((queue_dir / f"{request.run_id}.json").read_text(encoding="utf-8"))
+    assert job["enqueued_at"] >= start + daemon_manager._CAPSULE_SEND_TIMEOUT_S
+    assert DaemonRunDir.read_state_from_disk(run_dir.path)["owner"] == "manager"
+
+    manager = _DaemonManagerProcess(
+        queue_dir, run_dir.path.parent.parent / MANAGER_DIR / "journal", pool_size=1
+    )
+    manager.started_at = start  # an already-running manager; only enqueued_at should gate the grace
+    assert manager._missing_capsule_is_terminal(job) is False
+
+
 def test_manager_pre_execution_failure_closes_pending_adopted_fd(tmp_path):
     run_dir, request = _make_run(tmp_path, "em-owned-failure")
     child_endpoint, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)

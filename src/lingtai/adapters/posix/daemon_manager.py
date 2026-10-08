@@ -324,18 +324,24 @@ def _enqueue_manager_run_owned(
         "run_id": request.run_id,
         "request": encode_request(request),
         "capsule_in_memory": True,
-        "enqueued_at": time.time(),
     }
 
     def _admit_locked(root: Path) -> None:
         """Durably queue the job and hand off its capsule, still under the
         manager-ensure lock, so the resident manager cannot commit an
         idle-exit between "a manager exists" and "the job is visible to it".
+
+        ``enqueued_at`` is stamped here, immediately before the queue write,
+        not earlier: the manager's missing-capsule grace is measured from
+        this timestamp, so capturing it before lock admission would spend
+        part of that grace on lock contention or manager-spawn latency
+        before the job is even queue-visible.
         """
         queue_dir = root / "queue"
         _private_dir(queue_dir)
         _private_dir(root / "journal")
         _mark_run_manager_owned(request, root)
+        payload["enqueued_at"] = time.time()
         job_path = queue_dir / f"{request.run_id}.json"
         _write_private_json(job_path, payload)
         try:
