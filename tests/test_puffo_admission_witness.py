@@ -365,10 +365,11 @@ def _commit_result(iface, call_id, raw=None, *, synthesized=False, name="puffo_t
     return block
 
 
-def _fresh_scope():
+def _fresh_scope(obs=None):
     iface = ChatInterface()
     agent = _FakeAgent(iface)
-    obs = _Observer()
+    if obs is None:
+        obs = _Observer()
     token = bind_turn_tool_observer(obs)
     begin_admission_witness_scope(agent)
     return iface, agent, obs, token
@@ -876,3 +877,141 @@ def test_witness_retries_and_does_not_emit_raw_frame_when_namespacer_raises(
         assert "c1" not in agent._puffo_admission_emitted
     finally:
         reset_turn_tool_observer(token)
+
+
+# --------------------------------------------------------------------------- #
+# 5. 甲 — abandoned-fact diagnostic at scope close.
+#
+# A receipt-bearing fact that was SEEN at a settle point but never delivered
+# (namespacer raised, or notify returned False) is left un-emitted for a later
+# settle-point retry.  When the correlated turn is settled after a worker hang
+# it is never redone, so that retry never comes and the loss is permanent AND
+# invisible in the relaunched process (its entry is below the new watermark).
+# ``begin``/``end_admission_witness_scope`` run once per correlated turn,
+# beside the observer bind/reset (turn.py), and close emits one durable
+# ``puffo_admission_fact_abandoned`` event per still-outstanding
+# fact — the single countable record that makes the loss rate measurable. It
+# must fire ONLY on genuine loss: never on the happy path, never on a fact a
+# later settle point delivered (the retry path), never on a no-receipt
+# result, and never on a receipt that was committed but never reached a
+# settle-point scan before close.
+# --------------------------------------------------------------------------- #
+
+
+def _abandoned(agent):
+    return [
+        fields
+        for name, fields in agent.logs
+        if name == "puffo_admission_fact_abandoned"
+    ]
+
+
+def test_abandoned_facts_reported_at_scope_close_one_event_per_fact():
+    # notify returns False (handler raised) for two receipts => both are
+    # un-emitted for retry; the turn then completes with no further settle
+    # point => scope close reports one event PER fact (not a single
+    # aggregate), each tagged as a not-delivered loss and keyed on its
+    # tool-call id.
+    iface, agent, obs, token = _fresh_scope(_Observer(raises=True))
+    try:
+        _open_call(iface, "tc-a")
+        _open_call(iface, "tc-b")
+        _commit_result(iface, "tc-a", "RA")
+        _commit_result(iface, "tc-b", "RB")
+        scan_and_emit_committed_facts(agent)
+        assert "tc-a" not in agent._puffo_admission_emitted
+        assert "tc-b" not in agent._puffo_admission_emitted
+        end_admission_witness_scope(agent)
+    finally:
+        reset_turn_tool_observer(token)
+    reports = _abandoned(agent)
+    assert len(reports) == 2
+    assert {r["tool_call_id"] for r in reports} == {"tc-a", "tc-b"}
+    assert {r["reason"] for r in reports} == {"not_delivered"}
+
+
+def test_abandoned_fact_reported_on_namespacer_failure():
+    # A namespacer that raises leaves the fact un-emitted with NO wire id;
+    # scope close still reports it, distinguishing the reason and preserving the
+    # kernel block id so the loss is at least attributable.
+    class _RaisingNamespacer(_Observer):
+        def wire_tool_call_id(self, tool_call_id):
+            raise RuntimeError("namespacer boom")
+
+    iface, agent, obs, token = _fresh_scope(_RaisingNamespacer())
+    try:
+        _open_call(iface, "tc-9")
+        _commit_result(iface, "tc-9", "R9")
+        scan_and_emit_committed_facts(agent)
+        assert "tc-9" not in agent._puffo_admission_emitted
+        end_admission_witness_scope(agent)
+    finally:
+        reset_turn_tool_observer(token)
+    reports = _abandoned(agent)
+    assert len(reports) == 1
+    assert reports[0]["reason"] == "namespacer_failed"
+    assert reports[0]["kernel_block_id"] == "tc-9"
+    assert reports[0]["wire_tool_call_id"] is None
+
+
+def test_no_abandoned_report_on_happy_path():
+    # Delivered => nothing outstanding => no diagnostic.
+    iface, agent, obs, token = _fresh_scope()
+    try:
+        _open_call(iface, "tc-1")
+        _commit_result(iface, "tc-1", "R1")
+        scan_and_emit_committed_facts(agent)
+        assert "tc-1" in agent._puffo_admission_emitted
+        end_admission_witness_scope(agent)
+    finally:
+        reset_turn_tool_observer(token)
+    assert _abandoned(agent) == []
+
+
+def test_no_abandoned_report_when_delivered_on_later_settle_point():
+    # First settle point fails (not delivered), a later one self-heals: the
+    # fact is delivered, so it must be discarded from the outstanding set and
+    # NOT reported at close — a diagnostic that fired here would be the
+    # cry-wolf signal the design explicitly avoids.
+    obs = _Observer(raises=True)
+    iface, agent, obs, token = _fresh_scope(obs)
+    try:
+        _open_call(iface, "tc-1")
+        _commit_result(iface, "tc-1", "R1")
+        scan_and_emit_committed_facts(agent)  # fails
+        assert "tc-1" not in agent._puffo_admission_emitted
+        obs.raises = False  # the handler heals before the next settle point
+        scan_and_emit_committed_facts(agent)  # heals, delivers
+        assert "tc-1" in agent._puffo_admission_emitted
+        end_admission_witness_scope(agent)
+    finally:
+        reset_turn_tool_observer(token)
+    assert _abandoned(agent) == []
+
+
+def test_abandoned_map_only_grows_from_a_scanned_non_delivery():
+    # Two negative controls on what may enter the outstanding map, since
+    # ``end_admission_witness_scope`` reads ONLY that in-memory map (never the
+    # wire, never the possibly-poisoned interface):
+    # (1) a result with no receipt at all is not admission-bearing, so a
+    #     failing observer is never even consulted;
+    # (2) a receipt-bearing result committed to the wire but never reached by
+    #     a settle-point scan before scope close is the documented residual
+    #     (adapters/acp/CONTRACT.md: "the process-crash-before-first-scan
+    #     window ... its one uncovered residual") — close must not widen its
+    #     reach by consulting the wire to "catch up" on unscanned entries.
+    iface, agent, obs, token = _fresh_scope(_Observer(raises=True))
+    try:
+        _open_call(iface, "tc-1")
+        _commit_result(iface, "tc-1", raw=None)  # no receipt marker
+        scan_and_emit_committed_facts(agent)
+        assert agent._puffo_admission_outstanding == {}
+
+        _open_call(iface, "tc-2")
+        _commit_result(iface, "tc-2", "R2")  # on the wire, but NO scan runs
+        assert agent._puffo_admission_outstanding == {}
+
+        end_admission_witness_scope(agent)
+    finally:
+        reset_turn_tool_observer(token)
+    assert _abandoned(agent) == []
