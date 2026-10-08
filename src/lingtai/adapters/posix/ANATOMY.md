@@ -154,7 +154,15 @@ co-located owning ANATOMY.md files.
   concurrent submitters cannot both act on the same pre-lock state; each later
   caller re-checks the persisted reservation while stale-start recovery remains
   unchanged
-  (`src/lingtai/adapters/posix/daemon_manager.py:197-273`).
+  (`src/lingtai/adapters/posix/daemon_manager.py:197-273`). `run_manager` hands
+  the resident `_DaemonManagerProcess` its `manager.pid` as `registration_path`;
+  `_registration_withdrawn` lets an idle manager (no active worker, queued job,
+  or pending capsule) return from its resident loop once that record has stayed
+  definitively absent for `_REGISTRATION_GONE_GRACE_S`, so deleting an agent
+  directory retires its otherwise unreachable manager without ever consulting
+  agent-process liveness
+  (`src/lingtai/adapters/posix/daemon_manager.py:341-376`,
+  `src/lingtai/adapters/posix/daemon_manager.py:509-573`).
 - `refresh_watcher_entrypoint.main(argv)` is the owned ordinary
   importable/executable module the launched process runs
   (`src/lingtai/adapters/posix/refresh_watcher_entrypoint.py`). It decodes the
