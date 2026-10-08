@@ -1,6 +1,8 @@
 """Tests for ChatInterface.pop_orphan_tool_call()."""
 from __future__ import annotations
 
+import pytest
+
 from lingtai.kernel.llm.interface import (
     ChatInterface,
     TextBlock,
@@ -173,6 +175,40 @@ def test_remove_pair_by_call_id_only_first_match():
     assert len(iface.entries) == n_before - 2
     # A second matching pair survives — caller can remove it explicitly.
     assert iface.remove_pair_by_call_id("tc_a") is True
+
+
+_PAIR_INTEGRITY_CASES = [
+    ("remove_pair_by_call_id", "tc_match",
+     {"action": "flow"}, "mismatched_ids"),
+    ("remove_pair_by_notif_id", "notif_match",
+     {"action": "notification", "notif_id": "notif_match"}, "mismatched_ids"),
+    ("remove_pair_by_notif_id", "notif_match",
+     {"action": "notification", "notif_id": "notif_match"}, "multiple_calls"),
+]
+
+
+@pytest.mark.parametrize(("method", "requested", "args", "shape"), _PAIR_INTEGRITY_CASES)
+def test_remove_pair_preserves_mismatched_or_ambiguous_pairs(
+    method, requested, args, shape
+):
+    iface = ChatInterface()
+    call = ToolCallBlock(id="tc_match", name="demo", args=args)
+    # tc_other is the call an unguarded multi-call check would keep.
+    result_id = "different" if shape == "mismatched_ids" else "tc_other"
+    result = ToolResultBlock(id=result_id, name="demo", content="ok")
+
+    if shape == "multiple_calls":
+        iface.add_assistant_message([
+            call,
+            ToolCallBlock(id="tc_other", name="demo", args=args),
+        ])
+    else:
+        iface.add_assistant_message([call])
+    iface.add_tool_results([result])
+
+    entry_count_before = len(iface.entries)
+    assert getattr(iface, method)(requested) is False
+    assert len(iface.entries) == entry_count_before
 
 
 def test_remove_pair_by_call_id_empty_interface():
