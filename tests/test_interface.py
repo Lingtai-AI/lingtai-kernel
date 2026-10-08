@@ -178,24 +178,12 @@ def test_remove_pair_by_call_id_only_first_match():
 
 
 _PAIR_INTEGRITY_CASES = [
-    (
-        "remove_pair_by_call_id",
-        "tc_match",
-        {"action": "flow"},
-        "mismatched_ids",
-    ),
-    (
-        "remove_pair_by_notif_id",
-        "notif_match",
-        {"action": "notification", "notif_id": "notif_match"},
-        "mismatched_ids",
-    ),
-    (
-        "remove_pair_by_notif_id",
-        "notif_match",
-        {"action": "notification", "notif_id": "notif_match"},
-        "multiple_calls",
-    ),
+    ("remove_pair_by_call_id", "tc_match",
+     {"action": "flow"}, "mismatched_ids"),
+    ("remove_pair_by_notif_id", "notif_match",
+     {"action": "notification", "notif_id": "notif_match"}, "mismatched_ids"),
+    ("remove_pair_by_notif_id", "notif_match",
+     {"action": "notification", "notif_id": "notif_match"}, "multiple_calls"),
 ]
 
 
@@ -205,7 +193,8 @@ def test_remove_pair_preserves_mismatched_or_ambiguous_pairs(
 ):
     iface = ChatInterface()
     call = ToolCallBlock(id="tc_match", name="demo", args=args)
-    result_id = "different" if shape == "mismatched_ids" else "tc_match"
+    # tc_other is the call an unguarded multi-call check would keep.
+    result_id = "different" if shape == "mismatched_ids" else "tc_other"
     result = ToolResultBlock(id=result_id, name="demo", content="ok")
 
     if shape == "multiple_calls":
