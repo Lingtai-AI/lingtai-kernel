@@ -150,11 +150,21 @@ co-located owning ANATOMY.md files.
   private-mode mismatches before unlink or bind
   (`src/lingtai/adapters/posix/daemon_manager.py:42-116`). `_ensure_manager`
   holds one exclusive `fcntl.flock` on `daemon/manager/manager.lock` around
-  `_ensure_manager_locked`'s complete observe/identity/reserve/spawn sequence so
-  concurrent submitters cannot both act on the same pre-lock state; each later
-  caller re-checks the persisted reservation while stale-start recovery remains
-  unchanged
-  (`src/lingtai/adapters/posix/daemon_manager.py:197-273`).
+  `_ensure_manager_locked`'s complete observe/identity/reserve/spawn sequence,
+  and then (still locked) an optional `after_locked` callback so concurrent
+  submitters cannot both act on the same pre-lock state; each later caller
+  re-checks the persisted reservation while stale-start recovery remains
+  unchanged (`src/lingtai/adapters/posix/daemon_manager.py:198-230`).
+  `_enqueue_manager_run_owned` supplies that callback to admit a run (queue
+  write plus capsule handoff) inside the same held lock
+  (`src/lingtai/adapters/posix/daemon_manager.py:310-358`). On the exit side,
+  `_DaemonManagerProcess.run`'s idle branch calls `_try_exit_idle`, which takes
+  the identical lock non-blockingly: losing it defers to the next poll tick,
+  winning it re-confirms the queue is empty and `manager.pid` still names this
+  process before unlinking the capsule-socket path and marking the record dead
+  (`pid: null`, no numeric `started_at`) so a later submitter lazily reserves
+  and spawns a fresh manager instead of reading a live identity mismatch
+  (`src/lingtai/adapters/posix/daemon_manager.py:543-601`).
 - `refresh_watcher_entrypoint.main(argv)` is the owned ordinary
   importable/executable module the launched process runs
   (`src/lingtai/adapters/posix/refresh_watcher_entrypoint.py`). It decodes the

@@ -700,11 +700,25 @@ notification-protocol identity match. A missing, malformed, or mismatched stamp
 refuses the new submission before it is queue-owned or receives a capsule; it
 does not terminate or take over the old manager's active/capsule-backed runs.
 Concurrent submitters for one agent directory serialize the whole
-observe/identity-check/`starting`-reservation/spawn sequence under one exclusive
-`fcntl.flock` on `daemon/manager/manager.lock`, so later callers re-read
-`manager.pid` instead of acting on the same absent or stale observation. A fresh
-`starting` reservation is reused under the existing grace; stale-start recovery
-remains unchanged.
+observe/identity-check/`starting`-reservation/spawn sequence, and now also the
+job-queue write and capsule handoff, under one exclusive `fcntl.flock` on
+`daemon/manager/manager.lock`, so later callers re-read `manager.pid` instead
+of acting on the same absent or stale observation. A fresh `starting`
+reservation is reused under the existing grace; stale-start recovery remains
+unchanged.
+
+A manager with no active or queued work for a fixed idle grace (2 seconds)
+exits. Before committing, it takes the identical `manager.lock`
+non-blockingly: losing it (a submitter is mid-admission) defers the attempt to
+the next poll tick; winning it, it re-confirms the queue is still empty and
+that `manager.pid` still names its own PID before unlinking its capsule-socket
+path and marking the record dead (`pid: null`, no numeric `started_at`). A
+submitter admitted before that commit is therefore always visible to this
+manager (the lock serializes the two), and a submitter arriving after sees an
+absent-looking record, never a live mismatch, and lazily reserves and spawns a
+fresh manager under its own current identity. Only a genuinely live manager
+with a mismatched identity still refuses new submissions, per the paragraph
+above.
 When the manager's direct Unix-socket path is too long, its capsule transport
 uses `/tmp/lingtai-dm-<uid>-<digest>/capsule.sock`, independent of ambient temp
 variables. Before stale-socket unlink or bind, the fallback parent MUST be a
@@ -1133,6 +1147,7 @@ Re-check this contract when touching:
 | the parent dispatches seven actions; unknown actions error | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/_tool_family.py` | `tests/test_tool_family_daemon_migration.py`, `tests/test_daemon_check.py::test_check_unknown_id_returns_error` |
 | Default `manager_pool_size` is 100 and the config reaches the manager/list output | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_daemon_default_manager_pool_size_is_100`, `::test_daemon_manager_pool_size_config_reaches_manager` |
 | Concurrent submitters for one agent directory serialize manager observe/reserve/spawn under `manager.lock`; later callers re-read the persisted reservation instead of acting on the same absent state | `src/lingtai/adapters/posix/daemon_manager.py` | `tests/test_daemon_central_manager.py::test_concurrent_ensure_manager_callers_reserve_and_spawn_one_manager` |
+| A genuinely idle manager exits only after a non-blocking re-check of `manager.lock` loses to a mid-admission submitter or confirms the queue is empty and the record is still its own; it then unlinks its capsule socket and marks `manager.pid` dead so the next submitter lazily reserves and spawns a fresh manager instead of raising a live-identity mismatch | `src/lingtai/adapters/posix/daemon_manager.py` | `tests/test_daemon_central_manager.py::test_manager_idle_exit_backs_off_behind_a_held_manager_lock`, `::test_central_manager_lazy_restarts_after_idle_exit_without_identity_mismatch` |
 | `max_turns` precedence is valid `LINGTAI_DAEMON_MAX_TURNS`, explicit capability/setup, valid owner file, then 5000; invalid environment input retains the lower valid result | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_daemon_max_turns_env_beats_explicit_and_config`, `::test_daemon_invalid_max_turns_env_keeps_explicit_value` |
 | Per-agent `system_prompt_budget_chars` defaults to 20,000, accepts a positive `daemon/daemon.json` override, and safely falls back for malformed/non-positive values while retaining fail-loud/no-truncation rendering | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/system_prompt.py` | `tests/test_daemon.py::test_daemon_default_system_prompt_budget_is_20000_without_config`, `::test_daemon_config_system_prompt_budget_allows_larger_complete_prompt`, `::test_daemon_invalid_system_prompt_budget_falls_back_to_default` |
 | `settings` returns exactly the four owner rows and five public fields, has no mutation route, and fails as one fixed response when current manager truth is unavailable | `src/lingtai/tools/daemon/settings.py`, `src/lingtai/tools/daemon/_tool_family.py` | `tests/test_daemon_settings.py` |
