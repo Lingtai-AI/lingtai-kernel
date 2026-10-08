@@ -54,7 +54,7 @@ class FakeMailTransport(MailTransportPort):
     def address(self) -> str:
         return self._address
 
-    def send(self, address: str, message: dict, *, mode: str = "peer") -> str | None:
+    def send(self, address: str, message: dict) -> str | None:
         target = self._registry.get(address)
         if target is None:
             return f"No agent at {address}"
@@ -105,10 +105,12 @@ def test_port_exposes_only_send_listen_stop_address():
     )
 
 
-def test_port_send_signature_is_technology_neutral():
-    sig = inspect.signature(MailTransportPort.send)
-    assert list(sig.parameters) == ["self", "address", "message", "mode"]
-    assert sig.parameters["mode"].default == "peer"
+@pytest.mark.parametrize(
+    "transport_type", (MailTransportPort, PosixFilesystemMailAdapter, FakeMailTransport)
+)
+def test_port_send_signature_is_technology_neutral(transport_type):
+    sig = inspect.signature(transport_type.send)
+    assert list(sig.parameters) == ["self", "address", "message"]
     # The Port module names no filesystem vocabulary and never imports pathlib —
     # concrete storage lives only in the adapter.
     import lingtai.kernel.mail_transport as port_mod

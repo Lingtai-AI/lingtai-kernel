@@ -377,7 +377,7 @@ def _build_family(agent) -> ToolFamily:
 
     Every non-``manual`` child re-enters the unchanged ``EmailManager.handle``
     with its historical flat argument shape (``{"action": ..., **input}``),
-    which keeps the whole engine — delivery threads, the duplicate-send guard,
+    which keeps the whole engine — delivery threads,
     read tracking, the digest rerender, reply routing, contacts — untouched by
     this migration. The child's own strict ``input_schema`` is what makes that
     safe: ``ToolFamily.handle()`` has already rejected any key outside the

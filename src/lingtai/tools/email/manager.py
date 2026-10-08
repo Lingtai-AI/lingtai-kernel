@@ -41,7 +41,6 @@ from .primitives import (
 from .settings import (
     EMAIL_BODY_CHAR_LIMIT,
     EMAIL_CHECK_RESULT_TOKEN_LIMIT,
-    EMAIL_DUPLICATE_FREE_PASSES,
 )
 
 if TYPE_CHECKING:
@@ -53,9 +52,6 @@ class EmailManager:
 
     def __init__(self, agent: "BaseAgent"):
         self._agent = agent
-        # Track consecutive identical sends per recipient to block loops.
-        self._last_sent: dict[str, tuple[str, int]] = {}
-        self._dup_free_passes = EMAIL_DUPLICATE_FREE_PASSES
 
     @property
     def _mailbox_path(self) -> Path:
@@ -267,23 +263,6 @@ class EmailManager:
                 )
             }
 
-        duplicates = [
-            addr for addr in all_targets
-            if (prev := self._last_sent.get(addr)) is not None
-            and prev[0] == message_text
-            and prev[1] >= self._dup_free_passes
-        ]
-        if duplicates:
-            return {
-                "status": "blocked",
-                "warning": (
-                    "Identical message already sent to: "
-                    f"{', '.join(duplicates)}. "
-                    "This looks like a repetitive loop — "
-                    "think twice before sending."
-                ),
-            }
-
         sender = str(self._agent._working_dir)
 
         base_payload = {
@@ -341,13 +320,6 @@ class EmailManager:
             json.dumps(sent_record, indent=2, default=str),
             encoding="utf-8",
         )
-
-        for addr in all_recipients:
-            prev = self._last_sent.get(addr)
-            if prev is not None and prev[0] == message_text:
-                self._last_sent[addr] = (message_text, prev[1] + 1)
-            else:
-                self._last_sent[addr] = (message_text, 1)
 
         self._agent._log(
             "email_sent", to=to_list, cc=cc, bcc=bcc,

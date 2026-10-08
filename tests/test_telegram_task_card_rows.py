@@ -13,6 +13,7 @@ import json
 import os
 import time
 
+from lingtai.mcp_servers.task_card import TaskCardEventProjection
 from lingtai.mcp_servers.telegram.manager import TelegramManager, _TASK_CARD_FOOTER
 from tests._notification_store_helpers import FakeNotificationStore
 
@@ -717,6 +718,13 @@ def test_metadata_renders_absolute_path_not_shortened():
     assert "dev-2/.lingtai/mimo-1" not in lines[0].replace("dev-2/.lingtai/mimo-1", "")
 
 
+_SCOPE = "Scope · recorded running/queued + finished in last 10m"
+_NO_USAGE = (
+    f"{TaskCardEventProjection.daemon_stats_label()} · "
+    "usage n/a (no positive usage reported)"
+)
+
+
 def test_metadata_renders_daemon_status_and_stats():
     lines = TelegramManager._format_task_card_metadata({
         "async_work": {
@@ -729,9 +737,11 @@ def test_metadata_renders_daemon_status_and_stats():
     })
     assert lines == [
         "Async Work · running 3 · done 2 · failed 1",
+        _SCOPE,
         "Daemons · running 3 · done 2 · failed 1",
         "Backends · claude-p 1 · lingtai 2",
-        "Daemon stats · in 1.2M · out 340.0k · cache 85.0% · api 12",
+        f"{TaskCardEventProjection.daemon_stats_label()} · in 1.2M · out 340.0k"
+        " · cache 85.0% · api 12",
     ]
 
 
@@ -740,20 +750,22 @@ def test_metadata_renders_backend_stats_only_when_present():
     lines = TelegramManager._format_task_card_metadata({
         "async_work": {"running": 1, "daemon": {"running": 1}},
     })
-    assert lines == ["Async Work · running 1", "Daemons · running 1"]
+    assert lines == ["Async Work · running 1", _SCOPE, "Daemons · running 1", _NO_USAGE]
     # Empty backend_counts -> no backends line.
     lines = TelegramManager._format_task_card_metadata({
         "async_work": {"running": 1, "daemon": {"running": 1, "backend_counts": {}}},
     })
-    assert lines == ["Async Work · running 1", "Daemons · running 1"]
+    assert lines == ["Async Work · running 1", _SCOPE, "Daemons · running 1", _NO_USAGE]
     # Populated backend_counts -> sorted backends line.
     lines = TelegramManager._format_task_card_metadata({
         "async_work": {"running": 1, "daemon": {"running": 1, "backend_counts": {"claude-p": 2, "lingtai": 1}}},
     })
     assert lines == [
         "Async Work · running 1",
+        _SCOPE,
         "Daemons · running 1",
         "Backends · claude-p 2 · lingtai 1",
+        _NO_USAGE,
     ]
 
 
@@ -780,14 +792,16 @@ def test_metadata_section_dividers_between_present_sections():
         "Identity · path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
         "────────",
         "Async Work · running 1",
+        _SCOPE,
         "Daemons · running 1",
         "Backends · lingtai 1",
+        _NO_USAGE,
     ]
     # A single daemon section alone stays clean with no divider.
     lines = TelegramManager._format_task_card_metadata({
         "async_work": {"running": 2, "daemon": {"running": 2}},
     })
-    assert lines == ["Async Work · running 2", "Daemons · running 2"]
+    assert lines == ["Async Work · running 2", _SCOPE, "Daemons · running 2", _NO_USAGE]
 
 
 def test_metadata_omits_daemon_lines_when_no_daemons():
@@ -795,19 +809,29 @@ def test_metadata_omits_daemon_lines_when_no_daemons():
         "working_dir": "/Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
         "async_work": {"running": 0, "failed": 0, "done": 0, "cancelled": 0, "timeout": 0},
     })
+    # Truly empty (all-zero) work: no Async rows, no Scope, no phantom stats.
     assert len(lines) == 1
     assert "Async Work" not in lines[0]
     assert "Daemon stats" not in lines[0]
+    assert not any(line.startswith("Scope") for line in lines)
 
 
-def test_metadata_daemon_stats_require_positive_counts():
+def test_metadata_unreported_daemon_usage_is_unavailable_not_zero():
     lines = TelegramManager._format_task_card_metadata({
         "async_work": {"running": 1, "daemon": {
             "running": 1, "failed": 0, "done": 0, "cancelled": 0,
             "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "cli_calls": 0,
         }},
     })
-    assert lines == ["Async Work · running 1", "Daemons · running 1"]
+    assert lines == ["Async Work · running 1", _SCOPE, "Daemons · running 1", _NO_USAGE]
+    assert not any("$" in line or "in 0" in line for line in lines)
+
+
+def test_metadata_shell_only_work_states_scope_without_daemon_or_billing_rows():
+    lines = TelegramManager._format_task_card_metadata({
+        "async_work": {"shell": {"running": 2}},
+    })
+    assert lines == ["Async Work · running 2", _SCOPE, "Shell · running 2"]
 
 
 def test_metadata_displays_lingtai_daemon_models_compactly_and_deterministically():
@@ -819,7 +843,9 @@ def test_metadata_displays_lingtai_daemon_models_compactly_and_deterministically
     })
     assert single == [
         "Async Work · running 1",
+        _SCOPE,
         "Daemons · running 1 · gpt-5.6",
+        _NO_USAGE,
     ]
 
     multiple = TelegramManager._format_task_card_metadata({
@@ -830,7 +856,9 @@ def test_metadata_displays_lingtai_daemon_models_compactly_and_deterministically
     })
     assert multiple == [
         "Async Work · running 3",
+        _SCOPE,
         "Daemons · running 3 · alpha-1 × 2 · zeta-2 × 1",
+        _NO_USAGE,
     ]
 
 

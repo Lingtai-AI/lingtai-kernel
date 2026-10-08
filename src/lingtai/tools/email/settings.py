@@ -8,7 +8,6 @@ from ..tool_family import SettingRow
 # Installed-code policies. Operational consumers import these constants so
 # SHOW cannot drift from the values that actually govern Email behavior.
 EMAIL_BODY_CHAR_LIMIT = 50_000
-EMAIL_DUPLICATE_FREE_PASSES = 2
 EMAIL_CHECK_RESULT_TOKEN_LIMIT = 10_000
 EMAIL_UNREAD_MAX_ENTRIES = 10
 
@@ -20,13 +19,6 @@ _FIXED_ROWS = (
         EMAIL_BODY_CHAR_LIMIT,
         False,
         "email-manual#send-body-character-limit",
-    ),
-    SettingRow(
-        "send.duplicate_free_passes",
-        EMAIL_DUPLICATE_FREE_PASSES,
-        EMAIL_DUPLICATE_FREE_PASSES,
-        False,
-        "email-manual#duplicate-send-loop-guard",
     ),
     SettingRow(
         "check.result_token_limit",
