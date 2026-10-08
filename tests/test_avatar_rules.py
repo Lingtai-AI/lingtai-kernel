@@ -30,122 +30,24 @@ def _patch_avatar_launch(*, boot_status: str = "ok", boot_error=None):
         yield launch_mock
 
 
-class TestRulesHeartbeatWatch:
-    """Test that the heartbeat loop consumes .rules signal and persists to system/rules.md."""
-
-    def _make_agent(self, tmp_path):
-        from lingtai.agent import Agent
-
-        svc = MagicMock()
-        svc.get_adapter.return_value = MagicMock()
-        svc.provider = "anthropic"
-        svc.model = "claude-test"
-        wd = tmp_path / "agent"
-        agent = Agent(service=svc, agent_name="test", working_dir=wd)
-        return agent
-
-    def test_rules_signal_consumed_and_persisted(self, tmp_path):
-        """Writing .rules should: inject section, persist to system/rules.md, delete .rules."""
-        agent = self._make_agent(tmp_path)
-        wd = agent._working_dir
-
-        # No rules section initially
-        assert agent._prompt_manager.read_section("rules") is None
-
-        # Write .rules signal file
-        (wd / ".rules").write_text("No deleting files.\nAlways log actions.")
-
-        # Simulate one heartbeat tick
-        agent._check_rules_file()
-
-        # Section injected
-        assert agent._prompt_manager.read_section("rules") == "No deleting files.\nAlways log actions."
-        # Persisted to system/rules.md
-        assert (wd / "system" / "rules.md").read_text() == "No deleting files.\nAlways log actions."
-        # Signal file consumed (deleted)
-        assert not (wd / ".rules").is_file()
-
-    def test_rules_diff_skips_identical(self, tmp_path):
-        """If .rules content matches system/rules.md, no prompt refresh."""
-        agent = self._make_agent(tmp_path)
-        wd = agent._working_dir
-
-        # Pre-load rules into section and canonical file
-        agent._prompt_manager.write_section("rules", "No deleting files.", protected=True)
-        system_dir = wd / "system"
-        system_dir.mkdir(parents=True, exist_ok=True)
-        (system_dir / "rules.md").write_text("No deleting files.")
-
-        # Write identical .rules signal
-        (wd / ".rules").write_text("No deleting files.")
-
-        with patch.object(agent, "_flush_system_prompt") as mock_flush:
-            agent._check_rules_file()
-            mock_flush.assert_not_called()
-
-        # Signal still consumed even if content is identical
-        assert not (wd / ".rules").is_file()
-
-    def test_rules_diff_refreshes_on_change(self, tmp_path):
-        """If .rules content differs from system/rules.md, prompt is refreshed."""
-        agent = self._make_agent(tmp_path)
-        wd = agent._working_dir
-
-        # Pre-load old rules
-        agent._prompt_manager.write_section("rules", "Old rules.", protected=True)
-        system_dir = wd / "system"
-        system_dir.mkdir(parents=True, exist_ok=True)
-        (system_dir / "rules.md").write_text("Old rules.")
-
-        # Write new .rules signal
-        (wd / ".rules").write_text("New rules.")
-
-        with patch.object(agent, "_flush_system_prompt") as mock_flush:
-            agent._check_rules_file()
-            mock_flush.assert_called_once()
-
-        assert agent._prompt_manager.read_section("rules") == "New rules."
-        assert (system_dir / "rules.md").read_text() == "New rules."
-        assert not (wd / ".rules").is_file()
-
-    def test_rules_loaded_from_system_on_init(self, tmp_path):
-        """If system/rules.md exists at agent start, rules section should be pre-loaded."""
-        wd = tmp_path / "agent"
-        system_dir = wd / "system"
-        system_dir.mkdir(parents=True, exist_ok=True)
-        (system_dir / "rules.md").write_text("Pre-existing rules.")
-
-        from lingtai.agent import Agent
-        svc = MagicMock()
-        svc.get_adapter.return_value = MagicMock()
-        svc.provider = "anthropic"
-        svc.model = "claude-test"
-        agent = Agent(service=svc, agent_name="test", working_dir=wd)
-
-        # Rules should be loaded from system/rules.md during init
-        assert agent._prompt_manager.read_section("rules") == "Pre-existing rules."
-
-    def test_rules_unlink_failure_skips_processing(self, tmp_path, monkeypatch):
-        """If .rules cannot be unlinked, the function should return WITHOUT calling flush."""
-        agent = self._make_agent(tmp_path)
-        wd = agent._working_dir
-        (wd / ".rules").write_text("Some rules.")
-
-        # Make Path.unlink raise OSError
-        original_unlink = Path.unlink
-        def failing_unlink(self, *args, **kwargs):
-            if self.name == ".rules":
-                raise PermissionError("simulated unlink failure")
-            return original_unlink(self, *args, **kwargs)
-        monkeypatch.setattr(Path, "unlink", failing_unlink)
-
-        with patch.object(agent, "_flush_system_prompt") as mock_flush:
-            agent._check_rules_file()
-            mock_flush.assert_not_called()
-        # File should still exist (we couldn't unlink it)
-        assert (wd / ".rules").is_file()
-
-
+def test_rules_files_are_inert_and_consumer_is_removed(tmp_path):
+    from tests.test_psyche_prompt_settings import _agent, _write_init
+    from lingtai.kernel.base_agent import lifecycle
+    _write_init(tmp_path)
+    (tmp_path / 'system').mkdir()
+    (tmp_path / 'system/rules.md').write_text('OLD RULES')
+    (tmp_path / '.rules').write_text('PENDING RULES')
+    agent = _agent(tmp_path)
+    try:
+        agent._reconstruct_context()
+        assert not hasattr(agent, '_check_rules_file')
+        assert not hasattr(lifecycle, '_check_rules_file')
+        assert agent._prompt_manager.read_section('rules') is None
+        assert 'OLD RULES' not in agent._build_system_prompt()
+        assert (tmp_path / '.rules').read_text() == 'PENDING RULES'
+        assert (tmp_path / 'system/rules.md').read_text() == 'OLD RULES'
+    finally:
+        agent.stop(timeout=1)
 
 
 class TestAvatarRulesActionRemoved:
@@ -279,6 +181,14 @@ class TestSpawnNoAutoRulesDistribution:
     def test_deep_spawn_still_copies_rules_md_but_writes_no_signal(self, tmp_path):
         """Deep copy of system/ (unchanged) supplies rules.md; no .rules signal is added."""
         parent, parent_dir = self._setup_spawnable_parent(tmp_path, with_rules=True)
+        for relative_path, content in (
+            ("knowledge/facts.txt", "parent knowledge"),
+            ("exports/summary.txt", "parent export"),
+            ("logs/parent-only.log", "parent runtime"),
+        ):
+            source_file = parent_dir / relative_path
+            source_file.parent.mkdir(exist_ok=True)
+            source_file.write_text(content)
 
         mgr = parent.get_capability("avatar")
         with _patch_avatar_launch():
@@ -290,6 +200,9 @@ class TestSpawnNoAutoRulesDistribution:
         assert (clone_dir / "system" / "rules.md").read_text() == "Always be concise."
         # No dedicated .rules signal is written anymore.
         assert not (clone_dir / ".rules").exists()
+        assert (clone_dir / "knowledge" / "facts.txt").read_text() == "parent knowledge"
+        assert (clone_dir / "exports" / "summary.txt").read_text() == "parent export"
+        assert not (clone_dir / "logs" / "parent-only.log").exists()
 
 
 class TestSpawnNameValidation:

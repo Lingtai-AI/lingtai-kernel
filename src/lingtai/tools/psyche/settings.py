@@ -28,7 +28,7 @@ __all__ = [
 PSYCHE_SETTINGS_RELATIVE_PATH = Path("settings") / "psyche.json"
 _SCHEMA_VERSION = 1
 _MAX_SETTINGS_BYTES = 64 * 1024
-_PROMPT_FIELDS = ("base_prompt", "covenant", "comment")
+_PROMPT_FIELDS = ("base_prompt", "covenant")
 _OWNER_VALUE_KEYS = tuple(
     field for name in _PROMPT_FIELDS for field in (name, f"{name}_file")
 )
@@ -47,8 +47,6 @@ class PsychePromptInputs:
     base_prompt_file: str | None = None
     covenant: str = ""
     covenant_file: str | None = None
-    comment: str = ""
-    comment_file: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,8 +59,6 @@ class PsycheSettingsSnapshot:
     base_prompt_file: str | None = None
     covenant: str = ""
     covenant_file: str | None = None
-    comment: str = ""
-    comment_file: str | None = None
 
 
 def serialize_prompt_owner_document(
@@ -71,8 +67,6 @@ def serialize_prompt_owner_document(
     base_prompt_file: str | None = None,
     covenant: str | None = None,
     covenant_file: str | None = None,
-    comment: str | None = None,
-    comment_file: str | None = None,
 ) -> str:
     """Serialize one strict v1 Psyche prompt-owner document.
 
@@ -84,8 +78,6 @@ def serialize_prompt_owner_document(
         "base_prompt_file": base_prompt_file,
         "covenant": covenant,
         "covenant_file": covenant_file,
-        "comment": comment,
-        "comment_file": comment_file,
     }
     document: dict[str, int | str] = {"schema_version": _SCHEMA_VERSION}
     for key in _OWNER_VALUE_KEYS:
@@ -199,7 +191,11 @@ def _read_owner_values(working_dir: str | Path) -> dict[str, str]:
     if not isinstance(data, dict):
         raise PsycheSettingsError("Psyche settings top level must be an object")
     if set(data) - _OWNER_KEYS:
-        raise PsycheSettingsError("Psyche settings contains an unknown field")
+        raise PsycheSettingsError(
+            "Psyche settings contains an unknown field; comment/comment_file are "
+            "retired: remove them and put desired instructions in system/pad.md "
+            "through an authorized edit"
+        )
     if "schema_version" not in data:
         raise PsycheSettingsError("Psyche settings requires schema_version")
     if type(data["schema_version"]) is not int or data["schema_version"] != _SCHEMA_VERSION:
@@ -269,19 +265,16 @@ def build_settings_provider(settings: "PsycheSettingsPort") -> SettingsProvider:
                 "base_prompt_file": source.base_prompt_file,
                 "covenant": source.covenant,
                 "covenant_file": source.covenant_file,
-                "comment": source.comment,
-                "comment_file": source.comment_file,
             }
         except (AttributeError, TypeError) as exc:
             raise RuntimeError("Psyche configuration snapshot is unavailable") from exc
-        for key in ("pad", "base_prompt", "covenant", "comment"):
+        for key in ("pad", "base_prompt", "covenant"):
             if not isinstance(values[key], str):
                 raise RuntimeError("Psyche configuration snapshot is unavailable")
         for key in (
             "pad_file",
             "base_prompt_file",
             "covenant_file",
-            "comment_file",
         ):
             if values[key] is not None and not isinstance(values[key], str):
                 raise RuntimeError("Psyche configuration snapshot is unavailable")
@@ -333,22 +326,6 @@ def build_settings_provider(settings: "PsycheSettingsPort") -> SettingsProvider:
                 None,
                 True,
                 "psyche-manual#setting-covenant-file",
-                _sensitive=True,
-            ),
-            SettingRow(
-                "comment",
-                snapshot.comment,
-                "",
-                True,
-                "psyche-manual#setting-comment",
-                _sensitive=True,
-            ),
-            SettingRow(
-                "comment_file",
-                snapshot.comment_file,
-                None,
-                True,
-                "psyche-manual#setting-comment-file",
                 _sensitive=True,
             ),
         ]

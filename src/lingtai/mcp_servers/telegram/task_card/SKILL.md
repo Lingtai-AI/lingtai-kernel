@@ -66,6 +66,12 @@ STUCK do not count. Older events, partial intervals, missing anchors and
 restart-crossing gaps omit coffee; only a witnessed zero-length interval can
 show `☕0.0s`. New complete intervals after a restart can be displayed.
 
+`⏱` is the unrounded `↻` gap minus the same API wait and generation time,
+and minus measured same-gap `☕` when present. Thus `⏱104.3s · ☕102.8s`
+becomes `⏱1.5s · ☕102.8s`, with `↻` unchanged. Missing coffee keeps the
+previous inclusive residual (not a claim of zero idle); negative residuals
+are omitted, not clamped.
+
 `⚡` measures actual stream dispatch to first nonempty **text or tool
 name/argument payload**. Reasoning, ids, lifecycle, heartbeat, usage and empty
 events do not count. `tok/s` uses final provider output (including tools) minus
@@ -84,10 +90,19 @@ $0.0084 · ↓$0.0010 ↑$0.0070 | $0.0004
 
 Reading it:
 
-- **What it is.** The line is a STANDARD public per-token list-price ESTIMATE in
-  USD (LiteLLM prices), not a bill or invoice. It is not the actual subscription/Codex-pool bill, and it
-  does not claim the routed tier, batch/priority pricing or discounts. Search,
+- **What it is.** The line is a public per-token list-price ESTIMATE in USD
+  (LiteLLM prices), not a bill or invoice. It is not the actual subscription/Codex-pool bill, and it
+  does not claim the routed tier, batch pricing or discounts. Search,
   grounding and image fixed fees are not included in `total`.
+- **Requested tier.** Prices are STANDARD unless that round REQUESTED the
+  `priority` tier (authored `service_tier: "fast"`), in which case LiteLLM's
+  `*_priority` rates are used, for the per-call line and the SESSION row alike.
+  Such a line ends `priority est.`, and a SESSION row containing one ends
+  `requested-tier est.`; unlabelled output is standard. This is the
+  tier the request asked for, not proof the provider applied it. Rounds that
+  recorded no tier (older history, or none requested) or `default` stay
+  STANDARD and are not recalculated from current settings; `auto`/`flex` and a
+  missing priority rate show `?` (no guessed multiplier).
 - **Source and basis.** Prices come from LiteLLM's public
   `model_prices_and_context_window.json`, looked up by the EXACT model that
   made that round (no alias or fuzzy match), fetched by this process in the
@@ -143,3 +158,19 @@ priceable it shows `total ? · in ? · write ? · read ? · out ? · partial`. I
 unknown history, and it is still a list-price estimate, not a bill.
 
 The SESSION line splits ordinary input, cache writes, cache reads and output without double charging. Unknown write counts keep input/write allocation unknown even when the combined total is known.
+
+## Async Work Daemon stats row
+
+The card keeps every Session, Cost, Identity and Async Work row; there is no
+500-character metadata budget. Any non-empty Async Work block carries a `Scope`
+row: recorded jobs counted are running/queued plus those finished in the last
+10 minutes (daemon and Shell alike), within the kernel's bounded record-tail
+selection; this is not a whole-ledger census. The Daemon stats row is the sum of those daemon runs'
+*reported lifetime* usage, not tokens from the last 10 minutes; runs that
+report no positive values show `usage n/a (no positive usage reported)`. For
+readability the visible row uses the compact `Daemon stats` label and omits
+the unavailable-cost suffix. That omission does not mean zero cost: daemon
+cost is not reported or priced, never `$0`, and never part of the Session
+Cost row. An empty or stale snapshot shows no Async rows. Only when the whole
+message would exceed its overall limit (after reasoning excerpts shrink) does the
+tail of a long Daemons or Backends list become `+N omitted`.

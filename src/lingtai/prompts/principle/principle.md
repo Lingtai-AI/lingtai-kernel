@@ -29,20 +29,18 @@ maintenance: >
   manifests, or package metadata only when this file actually discusses them or the prompt-source
   relation needs that link.
 ---
-# LingTai System Prompt Map
+# LingTai Fixed Instructions Map
 
-The system prompt is a layered operating contract. This opening section names the map before the territory: each resident section has one job, later layers add detail, and reference manuals carry examples and troubleshooting that do not need to stay in the always-on prompt.
+The resident prefix is one short operating entry. `psyche(action="instructions", input={})` discloses these current loaded fixed owners, including runtime and adapter rules, without source rereads. Read on first orientation and before unfamiliar or consequential work, not routinely. This map names internal owners, not separate resident sections; reference manuals carry examples and troubleshooting.
 
 | Section | Purpose |
 |---|---|
 | `principle` | This map: section purposes, the LingTai operating principle, progressive-disclosure discipline, and token-efficiency boundary. |
-| `covenant` | The shared LingTai constitution: act on need, cultivate capability in order to help, collaborate with peers, and keep durable grain. |
+| `covenant` | Brief route to the current effective LingTai constitution; fulltext is disclosed on demand by `psyche.covenant`. |
 | `tools` | The concrete tool surfaces available now, including mandatory manual-loading rules for tools that need progressive disclosure. |
 | `substrate` | The compact stable model of bodies, lifecycle states, communication, memory, idle behavior, and system operations. |
 | `procedures` | The compact action playbook: tool choice, communication discipline, deliverables, skill routing, and molt boundaries. |
 | `meta_guidance` | Resident static rules for interpreting dynamic runtime `_meta` blocks, notifications, token economy, and adapter guidance. |
-| `comment` | Operator-, recipe-, or project-specific behavior that adapts the general kernel to this network's current mode. |
-| `rules` | Optional network or avatar rules that constrain descendants when present. |
 | `mcp` | Optional external-integration catalog: registered MCP services and their ownership/configuration boundaries. |
 | `skills` | Progressive-disclosure catalog of reusable procedures; load the relevant skill only when the task needs it. |
 | `knowledge` | Private durable memory catalog: project facts, decisions, journals, and local context that survive molt. |

@@ -220,9 +220,9 @@
   // Agent personality & initial state
   // =============================================================
   // Configurable prompt inputs are Psyche-owned in settings/psyche.json:
-  // base_prompt/base_prompt_file, covenant/covenant_file, and
-  // comment/comment_file. That closed v1 document is optional; a missing file
-  // leaves all six values absent. It is deliberately not an init.json layer.
+  // base_prompt/base_prompt_file and covenant/covenant_file. This optional
+  // closed v1 document has four values; it is not an init.json layer.
+  // comment/comment_file are retired: remove old keys and use authorized Pad edits.
   // Principle is kernel-owned prompt content and is not configured here.
 
   // Procedures prompt content is managed by the TUI as system/procedures.md;

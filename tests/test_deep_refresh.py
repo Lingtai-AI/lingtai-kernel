@@ -254,7 +254,9 @@ def test_cli_build_agent_uses_refresh(tmp_path):
     # Covenant is Psyche-owned and the legacy init value is inert.
     covenant_content = agent._prompt_manager.read_section("covenant")
     assert covenant_content is not None
-    assert "Be helpful" in covenant_content
+    assert 'psyche(action="covenant", input={})' in covenant_content
+    assert agent._effective_covenant == "Be helpful."
+    assert "Be helpful" not in agent._build_system_prompt()
     assert "LEGACY INIT COVENANT" not in covenant_content
 
     agent._workdir_lease.release()
@@ -748,7 +750,8 @@ def test_init_procedures_override_is_migrated_not_prompted(tmp_path):
     packaged = _packaged_procedures()
     prompt = agent._prompt_manager.render()
     assert legacy not in prompt
-    assert packaged in prompt
+    assert packaged in agent._prompt_manager.read_instructions()
+    assert packaged not in prompt
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
     # Compatibility is diagnosed/read-only; the reader never rewrites input or
     # creates migration archives/progress.
@@ -863,7 +866,9 @@ def test_psyche_base_prompt_reaches_rendered_prompt_via_boot(tmp_path):
         assert "Recipe-injected base prompt." in prompt
         assert "LEGACY INIT BASE" not in prompt
         assert "LEGACY INIT COVENANT" not in prompt
-        assert prompt.index("Recipe-injected base prompt.") < prompt.index("Be helpful.")
+        assert "Be helpful." not in prompt
+        assert agent._effective_covenant == "Be helpful."
+        assert prompt.index('psyche(action="covenant"') < prompt.index("Recipe-injected base prompt.")
     finally:
         agent._workdir_lease.release()
 
@@ -896,7 +901,9 @@ def test_psyche_base_prompt_file_reaches_rendered_prompt_via_boot(tmp_path):
         assert "Recipe base prompt from file." in prompt
         assert "LEGACY INIT BASE FILE" not in prompt
         assert "LEGACY INIT COVENANT" not in prompt
-        assert prompt.index("Recipe base prompt from file.") < prompt.index("Be helpful.")
+        assert "Be helpful." not in prompt
+        assert agent._effective_covenant == "Be helpful."
+        assert prompt.index('psyche(action="covenant"') < prompt.index("Recipe base prompt from file.")
     finally:
         agent._workdir_lease.release()
 
@@ -927,7 +934,8 @@ def test_init_substrate_override_is_migrated_not_prompted(tmp_path):
 
     prompt = agent._prompt_manager.render()
     assert legacy not in prompt
-    assert _packaged_substrate() in prompt
+    assert _packaged_substrate() in agent._prompt_manager.read_instructions()
+    assert _packaged_substrate() not in prompt
     data = json.loads((tmp_path / "init.json").read_text(encoding="utf-8"))
     assert data["substrate"] == legacy
     assert not (tmp_path / "system" / "migrations").exists()
@@ -974,7 +982,8 @@ def test_reload_keeps_covenant_and_character_separate(tmp_path):
     covenant = agent._prompt_manager.read_section("covenant") or ""
     character = agent._prompt_manager.read_section("character") or ""
 
-    assert "The operator contract." in covenant
+    assert agent._effective_covenant == "The operator contract."
+    assert 'psyche(action="covenant"' in covenant
     assert "I am a meticulous archivist." in character
     # Separation: neither section bleeds into the other.
     assert "I am a meticulous archivist." not in covenant

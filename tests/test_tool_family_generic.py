@@ -701,3 +701,43 @@ def test_diagnostics_do_not_relocate_extra_fields_or_weaken_the_allowed_set():
 
     assert result["status"] == "failed"
     assert calls == []  # the handler never ran — no relocation, no I/O
+
+
+def test_conditional_descriptions_are_deduplicated_without_changing_schema_data():
+    import copy
+
+    canonical = {
+        "type": "object", "description": "Full action instructions",
+        "properties": {
+            "description": {"type": "string", "description": "A real input field"},
+            "payload": {
+                "anyOf": [{"type": "object", "properties": {
+                    "description": {"const": "literal", "description": "nested field"}
+                }}, {"type": "null", "description": "nullable"}],
+                "default": {"description": "data, not an annotation"},
+                "examples": [{"description": "example data"}],
+                "enum": [{"description": "enum data"}],
+            },
+        },
+        "required": ["description"], "additionalProperties": False,
+    }
+    before = copy.deepcopy(canonical)
+    fam = ToolFamily("widget", [ChildTool("spin", canonical, lambda x: dict(x))])
+    schema = fam.build_schema()
+    disclosure = schema["properties"]["input"]["oneOf"][0]
+    assert disclosure == {"title": "spin input", **before}
+    conditional = schema["allOf"][0]["then"]["properties"]["input"]
+    expected = copy.deepcopy(before)
+    expected.pop("description")
+    expected["properties"]["description"].pop("description")
+    payload = expected["properties"]["payload"]
+    payload["anyOf"][0]["properties"]["description"].pop("description")
+    payload["anyOf"][1].pop("description")
+    assert conditional == expected
+    assert canonical == before
+    assert _minimal_evaluate_if_then(schema["allOf"][0], "spin", {"description": "ok"})
+    assert not _minimal_evaluate_if_then(schema["allOf"][0], "spin", {})
+    assert not _minimal_evaluate_if_then(schema["allOf"][0], "spin", {"foreign": 1})
+    conditional["properties"]["description"]["type"] = "integer"
+    assert fam.build_schema()["allOf"][0]["then"]["properties"]["input"] == expected
+    assert canonical == before

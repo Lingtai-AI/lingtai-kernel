@@ -108,8 +108,6 @@ are all handled inside the adapter (see `_register.py` and `service.py`).
 Omitted/`default` thinking sends an explicit `reasoning.effort = "xhigh"`
 (Codex-only default); `service_tier` shares the `openai` normalizer.
 
-### Transport: REST vs WebSocket
-
 ### Purchased credits
 
 In a Codex preset, set `manifest.llm.codex_allow_credits` to the JSON boolean
@@ -132,6 +130,8 @@ credit eligibility, debit, and spending limits. This local check is not an
 atomic billing cap: another client or an in-flight request can cross the
 allowance boundary after the check. There is no credit-first wire flag and
 LingTai never redeems rate-limit-reset vouchers or changes account billing.
+
+### Transport: REST vs WebSocket
 
 Codex supports two transports that run the **same** full→incremental
 continuation planner; the transport only selects how the planned request is

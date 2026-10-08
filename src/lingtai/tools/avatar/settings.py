@@ -5,7 +5,6 @@ from ..tool_family import SettingRow
 
 SPAWN_TYPES = ("shallow", "deep")
 SPAWN_TYPE_DEFAULT = "shallow"
-SPAWN_COMMENT_DEFAULT = ""
 SPAWN_DRY_RUN_DEFAULT = False
 SPAWN_CONFIRM_DEFAULT = False
 
@@ -43,13 +42,6 @@ class AvatarSettingsProvider:
                 list(SPAWN_TYPES),
                 False,
                 _VALIDATION_POLICY,
-            ),
-            SettingRow(
-                "spawn.comment.default",
-                SPAWN_COMMENT_DEFAULT,
-                SPAWN_COMMENT_DEFAULT,
-                False,
-                _CALL_DEFAULTS,
             ),
             SettingRow(
                 "spawn.dry_run.default",
@@ -154,7 +146,6 @@ __all__ = [
     "BOOT_WAIT_SECONDS",
     "MISSION_MIN_CHARACTERS",
     "MISSION_PLACEHOLDER_PREFIXES",
-    "SPAWN_COMMENT_DEFAULT",
     "SPAWN_CONFIRM_DEFAULT",
     "SPAWN_DRY_RUN_DEFAULT",
     "SPAWN_TYPE_DEFAULT",

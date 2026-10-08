@@ -878,7 +878,7 @@ def build_meta_readme_section() -> Dict[str, str]:
     readme = build_meta_readme()
     body_lines = [
         "This section explains the `_meta` envelope carried on tool results.",
-        "These explanations are resident here in the `meta_guidance` system-prompt section; the tail `_meta.agent_meta.guidance` on each tool result carries only a lightweight ref back to this section, not the full body.",
+        "These explanations are current loaded `meta_guidance` disclosed by psyche(action=\"instructions\", input={}); the tail `_meta.agent_meta.guidance` carries a lightweight read route, not the full body.",
         "",
     ]
     body_lines.extend(f"- `{key}`: {value}" for key, value in readme.items())
@@ -929,13 +929,13 @@ META_GUIDANCE_SECTION_ID = "meta_guidance"
 # sentence (not a bare path) pointing at the ``token_efficiency`` subsection of
 # the ``meta_guidance`` system-prompt section.
 TOKEN_USAGE_GUIDANCE_REF = (
-    f"See {META_GUIDANCE_SECTION_ID}.token_efficiency for details."
+    'Read psyche(action="instructions", input={}); see meta_guidance token efficiency for details.'
 )
 
 
 def build_meta_guidance_ref() -> dict:
     """Return the lightweight guidance hook for the current runtime block."""
-    return {"ref": META_GUIDANCE_SECTION_ID}
+    return {"ref": 'psyche(action="instructions", input={}): meta_guidance'}
 
 def _render_guidance_sections_markdown(guidance: dict) -> list[str]:
     """Render guidance.sections (incl. meta_readme) as Markdown subsections."""
@@ -1161,7 +1161,7 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
         "prompt sources must apply in this conversation and a molt is unsuitable. "
         "This is not a requirement; if you do nothing, the runtime "
         "forces a rebuild at the 1.0 hard boundary (full context) regardless. "
-        "See meta_guidance for details."
+        'Read psyche(action="instructions", input={}) for meta_guidance details.'
     )
 
 
@@ -2199,7 +2199,7 @@ def build_notification_payload(notifications: dict) -> dict:
 
     return {
         NOTIFICATION_GUIDANCE_KEY: {
-            "ref": "meta_guidance.notification_handling",
+            "ref": 'psyche(action="instructions", input={}): meta_guidance.notification_handling',
             "sources": sources,
         },
         NOTIFICATIONS_KEY: payloads,

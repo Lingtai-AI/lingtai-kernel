@@ -473,7 +473,7 @@ def render_forced_rebuild_warning(
         f"preparing a deliberate molt over a manual context(action='rebuild'), "
         f"which is strongly discouraged as routine compaction. If the rebuilt context "
         f"is still above the {recovery_text} recovery target, tend durable stores and "
-        f"molt. See meta_guidance, substrate, and procedures."
+        f"molt. Read psyche(action=\"instructions\", input={{}}) for current loaded detail. See meta_guidance, substrate, and procedures."
     )
 
 

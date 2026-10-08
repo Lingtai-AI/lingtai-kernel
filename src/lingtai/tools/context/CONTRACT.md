@@ -167,3 +167,8 @@ Evidence pins public action sets and strict retirement; file and append no-hot-
 load; bare zero-pending reconstruction; compose-before-summary-before-provider
 ordering (including provider replay observing the new prompt); all canonical
 durable sources; one shared refresh/molt hook; manual strictness; provider-wire parity; and existing molt refusal/lifecycle semantics.
+
+Successful agent/system molts also request the host's loaded-memory advisory at
+the shared post-molt publication boundary (see
+[Psyche loaded memory contract](../psyche/CONTRACT.md#loaded-memory-lifecycle-advisory)).
+Refused molts never reach this boundary; it performs no memory editing.

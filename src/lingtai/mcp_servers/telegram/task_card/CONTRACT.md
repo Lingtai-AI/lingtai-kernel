@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 14
+contract_version: 15
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -118,16 +118,33 @@ semantics live here. The public producer contract lives in
     witnessed zero-length interval. Tools, prompt build, queue/network wait,
     ASLEEP and STUCK are not counted. Existing gap, stream timing and speed
     numerator remain unchanged (guarded by [TT002](BEHAVIORS.md#behavior-tt002)).
+    `⏱` subtracts the same API first-output wait, generation duration and
+    any measured same-gap `☕` IDLE from the unrounded progress gap. Negative
+    or incomplete timing omits the residual; unobserved IDLE retains the
+    prior inclusive residual, without claiming zero idle. Coffee is unchanged.
     Other channels keep their existing layout. Telegram alone also opts into
     one extra plain price line immediately after the token metrics line per API call, compact on one line and mirroring that row's
-    symbols: `$<total>[+] · ↓<$> ↑<$> | <$>[ stale prices]` (no tokens/second figure) where
+    symbols: `$<total>[+] · ↓<$> ↑<$> | <$>[ priority est.][ stale prices]` (no tokens/second figure) where
     `↓` prices the billable output, `↑` the cache-miss input (uncached input
     plus any cache writes: at the catalog's cache-write rate when it prices
     writes separately and the wire reports the write count, else — when the
     catalog has no cache-write price — at the input rate), and `|` the
     cache-hit (cache-read) input (or `cost n/a (<reason>)` / `cost loading` /
-    `cost ?`). The line is a STANDARD public per-token list-price (LiteLLM)
-    estimate. It is a STANDARD public per-token list-price
+    `cost ?`). The line is a public per-token list-price (LiteLLM) estimate at
+    STANDARD rates, or at the catalog's `*_priority` rates when that round
+    REQUESTED the `priority` wire tier (authored `fast`), labelled `priority est.`
+    on the line; the SESSION row prices each round the same way and appends
+    `requested-tier est.` when any counted round requested `priority`
+    (standard-only output is unchanged). The tier is the one the adapter dispatched for that
+    round (`UsageMetadata.requested_service_tier` →
+    `llm_response.usage_billing.service_tier`), a request and not proof the
+    provider applied it. A round with no recorded tier (legacy, or none
+    requested) or `default` stays STANDARD and is never refilled from current
+    config; `auto`/`flex`/invalid tiers and a missing or malformed priority
+    rate (including an absent priority above-threshold or cache-write rate
+    where the standard fields exist) are `?` (no guessed multiplier, no
+    fallback to standard or a cheaper base tier).
+    It is a public per-token list-price
     estimate as of the catalog fetch — not an invoice, not the actual
     subscription/Codex-pool bill, no routed-tier/discount claim, and `total`
     excludes search/grounding/image fixed fees — from that exact round's own
@@ -166,6 +183,26 @@ semantics live here. The public producer contract lives in
     aggregate and separate daemon/Shell lanes; usage/backend/model detail stays
     daemon-scoped. Telegram's HTML adapter presents this block as its own
     icon-free Async Work section rather than folding it into Session.
+    The metadata block has no whole-block character budget: every Session,
+    Cost, Identity, and Async Work row is kept, each field individually bounded
+    and sanitized. Only the overall `TEXT_LIMIT` frame limit applies; reasoning
+    and preview excerpts shrink first, and only if the block still cannot fit
+    is the tail of the unbounded Daemons/Backends lists replaced by a visible
+    `+N omitted` count (never silently, and never the Scope, stats, or Cost
+    rows). Whenever any Async Work status is non-empty, a `Scope · recorded
+    running/queued + finished in last 10m` row (the snapshot's `window_seconds`, 600) states
+    which recorded jobs are counted, for daemon and Shell lanes alike. The
+    kernel selection is bounded by its record-tail limits, not a whole-ledger
+    census; a truly empty,
+    all-zero, or stale snapshot renders no Async rows and no Scope. The Daemon
+    compact stats row (`Daemon stats`) sums
+    those daemon runs' reported lifetime `in`/`out`/`cache`/`api` — not tokens
+    from the last window and not the whole batch. Selected daemon runs with no
+    positive reported usage show `usage n/a (no positive usage reported)` instead
+    of zeros. The card omits the explanatory lifetime parenthetical and the
+    unavailable-cost suffix; this manual retains their meaning. The snapshot
+    carries no daemon cost: none is priced, shown as `$0`, or folded into
+    Session's Cost row. Shell rows make no usage or billing claim.
 12. A pending canonical `shell.run` automatic row reads only the literal safe
     `input.async` boolean. Sync/default mode renders `foreground`; literal
     `async=true` renders `dispatching async job`. The row retains redacted
@@ -341,8 +378,8 @@ this component.
 - `tests/test_telegram_task_card_api_cost.py` covers per-call estimation and
   catalog behavior plus the Cost row fold/format: replay/carrier dedupe, gaps
   and rejected snapshots, missing model/price/usage/billing as partial, n/a
-  without blocking, and the opt-in shared `session_cost` metadata row within the
-  metadata budget with byte-identical default output.
+  without blocking, and the opt-in shared `session_cost` metadata row without a standalone
+  metadata budget, with byte-identical output when that optional row is absent.
 - `tests/test_telegram_task_card_rows.py` proves strict common `async_work`
   consumption, missing/malformed/stale omission, mixed-lane rendering, and
   pending sync-versus-async Shell wording without raw-argument leakage.

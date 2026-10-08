@@ -79,10 +79,18 @@ v2 System settings, or fixed defaults.
 
 Compatibility exists to keep older local files readable while agents/humans
 repair them. Retired prompt fields and ignored runtime knobs are never new-write
-shapes. The six former init prompt fields (`base_prompt`, `base_prompt_file`,
-`covenant`, `covenant_file`, `comment`, `comment_file`) are compatibility-known
+shapes. The four former init prompt fields (`base_prompt`, `base_prompt_file`,
+`covenant`, `covenant_file`) are compatibility-known
 but inert: this reader does not type-check, path-resolve, or consume them.
-Psyche owns the active six-field surface through its independent strict
+The retired `manifest.capabilities.daemon.max_emanations` option fails validation
+with its exact path and migration instructions. Passing it to daemon setup would
+silently leave the daemon capability absent; `manager_pool_size` has different
+semantics and requires an explicit owner choice (see `migration/migration.md`).
+For this exact boot failure, the CLI prints a short, static, secret-free
+`error:` line after its structured JSON error. Older ACP drivers select the
+last error line and truncate it; this line carries the full repair route even
+before their structured-error display is updated.
+Psyche owns the active four-field surface through its independent strict
 `settings/psyche.json` v1 reader at Agent reconstruction. Live refresh resolves
 one immutable Psyche prompt plan exactly once immediately after a successful init
 read and before any destructive teardown, then passes that same candidate through
@@ -137,6 +145,9 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
    `LINGTAI_NUDGE_ENABLED` / `LINGTAI_NUDGE_REPEAT_INTERVAL` policy. The goal
    reminder is explicitly a separate protected-goal system notification, not a
    declared Nudge kind, and is therefore not part of Nudge dispatch/docs.
+   Updating an existing kind preserves its first position; only new kinds
+   append. Identical findings leave the transport payload and publication time
+   unchanged (guarded by `tests/test_nudge_policy.py`).
 7. Every declared Nudge kind is additionally bound by the shared
    `nudge.upsert` hard inline cap: the fully assembled entry (producer body
    plus `kind` and the policy fields from rule 6) may be at most
@@ -241,3 +252,14 @@ both composition roots, focused tests, and the environment/manual route in one
 candidate. Files that are only legacy migration machinery are not a runtime
 registry for this Contract; if later retirement requires deletion, report the
 exact path and obtain path-scoped authorization first.
+
+## Unified instructions and retired inputs
+
+The resident kernel prefix is one short entry. Current loaded full fixed owners
+are disclosed read-only by `psyche.instructions`, including assembled catalog,
+_meta readme and adapter static rules. Base prompt remains resident after the
+entry; dynamic memories and full effective `psyche.covenant` remain separate.
+Comment/comment_file now receive the existing unknown-field diagnostic with
+migrate-to-Pad guidance (strict rejection in the Psyche owner, warning in init).
+Old configs must remove those fields and use authorized Pad edits. No `.rules`
+consumer or `system/rules.md` injection exists; old files are left untouched.

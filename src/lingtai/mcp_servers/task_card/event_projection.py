@@ -8,13 +8,14 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from lingtai.kernel.llm.base import checked_count, safe_billing_model
-from lingtai.kernel.session_stats import ASYNC_WORK_STATUS_KEYS
+from lingtai.kernel.llm.base import checked_count, safe_billing_model, safe_billing_tier
+from lingtai.kernel.session_stats import ASYNC_WORK_STATUS_KEYS, ASYNC_WORK_WINDOW_SECONDS
 from lingtai.kernel.state import AgentState
 from lingtai.kernel.trace_redaction import redact_text
 
 
 _ASYNC_STATUS_KEYS = ASYNC_WORK_STATUS_KEYS
+_ASYNC_WINDOW_MINUTES = ASYNC_WORK_WINDOW_SECONDS // 60
 
 
 class TaskCardEventProjection:
@@ -33,7 +34,6 @@ class TaskCardEventProjection:
         "/taskcard N sets normal rows (1-10"
     )
     DEFAULT_NORMAL_ROWS = 1
-    METADATA_MAX_CHARS = 500
     TIME_PREFIX = "Last Updated: "
     AGENT_STATES = frozenset(state.value for state in AgentState)
 
@@ -60,7 +60,11 @@ class TaskCardEventProjection:
             "daemons": "Daemons",
             "backends": "Backends",
             "shell": "Shell",
+            "scope": "Scope",
+            "scope_text": "recorded running/queued + finished in last {minutes}m",
             "daemon_stats": "Daemon stats",
+            "daemon_usage_na": "usage n/a (no positive usage reported)",
+            "omitted": "+{n} omitted",
         },
         "zh": {
             "header": "📋 活动",
@@ -83,9 +87,23 @@ class TaskCardEventProjection:
             "daemons": "守护进程",
             "backends": "后端",
             "shell": "Shell",
+            "scope": "范围",
+            "scope_text": "已记录的运行中/排队 + 最近 {minutes} 分钟内结束",
             "daemon_stats": "守护进程统计",
+            "daemon_usage_na": "用量 不可用（未上报正值）",
+            "omitted": "另有 {n} 项省略",
         },
     }
+
+    @classmethod
+    def daemon_stats_label(cls, locale: str = "en") -> str:
+        """Compact row label; accounting scope is documented in the manual."""
+        return cls._locale_text("daemon_stats", locale)
+
+    @classmethod
+    def scope_label(cls, locale: str = "en") -> str:
+        """Async Work row label for the running/queued + recent-finished scope."""
+        return cls._locale_text("scope", locale)
 
     @classmethod
     def normalize_locale(cls, locale: object) -> str:
@@ -940,7 +958,8 @@ class TaskCardEventProjection:
     ) -> dict[str, Any]:
         """Validated per-round pricing facts from one ``llm_response``.
 
-        Only the round's own model and adapter-established counts are kept;
+        Only the round's own model, requested service tier and
+        adapter-established counts are kept;
         anything invalid is dropped (unknown), never coerced to zero. Estimated
         rounds keep just the flag so no cost is asserted for them.
         """
@@ -953,6 +972,11 @@ class TaskCardEventProjection:
         model = safe_billing_model(raw.get("model"))
         if model is not None:
             bill["model"] = model
+        if "service_tier" in raw:
+            # REQUESTED wire tier. A present-but-invalid value stays present
+            # (empty) so it is unknown downstream, never standard; an absent
+            # key is a legacy/untiered round and stays absent.
+            bill["service_tier"] = safe_billing_tier(raw["service_tier"]) or ""
         for key in ("cache_write_tokens", "cache_write_1h_tokens", "billable_output_tokens"):
             value = checked_count(raw.get(key))
             if value is not None:
@@ -1208,7 +1232,11 @@ class TaskCardEventProjection:
             locale=locale,
             display_expression=display_expression,
         )
-        return text[: cls.TEXT_LIMIT] if len(text) > cls.TEXT_LIMIT else text
+        if len(text) > cls.TEXT_LIMIT:
+            # Last-resort ceiling: say the frame was cut instead of ending
+            # silently mid-row.
+            return text[: cls.TEXT_LIMIT - 1] + "…"
+        return text
 
     @classmethod
     def format_divider_info(
@@ -1266,8 +1294,9 @@ class TaskCardEventProjection:
             time_parts.append(f"↻{api_delay_s:.1f}s")
             parts.pop(0)
         # The same group's observed API wait + generation intervals are
-        # adjacent. Subtract their unrounded sum from the progress gap, not
-        # from true IDLE. Missing timing or a shorter gap has no honest residual.
+        # adjacent. Subtract their unrounded sum and any measured same-gap
+        # IDLE. Unobserved IDLE retains the prior inclusive residual; missing
+        # timing or a negative result has no honest residual.
         timing = usage.get("stream_timing") if isinstance(usage, dict) else None
         if isinstance(timing, dict):
             first = cls._finite_number(timing.get("first_token_s"))
@@ -1276,6 +1305,8 @@ class TaskCardEventProjection:
             if (gap is not None and gap > 0 and first is not None and first >= 0
                     and generation is not None and generation >= 0):
                 other = gap - (first + generation)
+                if type(idle_s) in (int, float) and math.isfinite(idle_s) and idle_s >= 0:
+                    other -= idle_s
                 if math.isfinite(other) and other >= 0:
                     time_parts.append(f"⏱{other:.1f}s")
         if type(idle_s) in (int, float) and math.isfinite(idle_s) and idle_s >= 0:
@@ -1366,12 +1397,25 @@ class TaskCardEventProjection:
         return str(value)
 
     @classmethod
-    def format_metadata(cls, metadata: object, locale: str = "en") -> list[str]:
+    def format_metadata(
+        cls,
+        metadata: object,
+        locale: str = "en",
+        *,
+        max_chars: int | None = None,
+    ) -> list[str]:
         """Render bounded resident-card metadata as explicit semantic sections.
 
         The manager supplies ``async_work`` as a render-time, read-only snapshot.
         This method deliberately knows nothing about the filesystem or providers;
         it only sanitizes and arranges the already validated payload.
+
+        Every section and row is kept; each field is individually bounded and
+        sanitized, so there is no whole-block character budget. ``max_chars`` is
+        supplied only by the frame renderer when the overall message limit
+        cannot hold the block even after reasoning excerpts are exhausted. It
+        then shortens only the unbounded Daemons/Backends lists, replacing the
+        dropped tail with a visible ``+N omitted`` indicator.
         """
         if not isinstance(metadata, dict):
             return []
@@ -1518,7 +1562,7 @@ class TaskCardEventProjection:
             return out
 
         async_work = metadata.get("async_work")
-        async_sections: list[tuple[str, str, int]] = []
+        async_rows: list[dict[str, Any]] = []
         if isinstance(async_work, dict):
             daemon = async_work.get("daemon")
             shell = async_work.get("shell")
@@ -1598,122 +1642,77 @@ class TaskCardEventProjection:
                     )
                 if api_calls is not None and api_calls > 0:
                     stats_parts.append(f"api {api_calls}")
+                # Selected daemon runs without any reported usage are unknown,
+                # not zero; all-zero lanes get no stats row at all.
+                if not stats_parts and status_parts(daemon):
+                    stats_parts.append(label("daemon_usage_na"))
 
-            # All rows belong to one Async Work section. The priority value is
-            # used only by the whole-line 500-character budget below.
+            # All rows belong to one Async Work section; none is dropped.
             if totals:
-                async_sections.append(("totals", f"{label('async_work')} · {' · '.join(totals)}", 2))
+                async_rows.append({"label": label("async_work"), "parts": totals})
+                scope = label("scope_text").format(minutes=_ASYNC_WINDOW_MINUTES)
+                async_rows.append({"label": label("scope"), "parts": [scope]})
             if daemon_parts:
-                async_sections.append(("daemon", f"{label('daemons')} · {' · '.join(daemon_parts)}", 3))
+                async_rows.append(
+                    {"label": label("daemons"), "parts": daemon_parts, "shrink": True}
+                )
             if backend_parts:
-                async_sections.append(("backend", f"{label('backends')} · {' · '.join(backend_parts)}", 4))
+                async_rows.append(
+                    {"label": label("backends"), "parts": backend_parts, "shrink": True}
+                )
             if shell_parts:
-                async_sections.append(("shell", f"{label('shell')} · {' · '.join(shell_parts)}", 3))
+                async_rows.append({"label": label("shell"), "parts": shell_parts})
             if stats_parts:
-                async_sections.append(("stats", f"{label('daemon_stats')} · {' · '.join(stats_parts)}", 4))
+                async_rows.append(
+                    {"label": cls.daemon_stats_label(locale), "parts": stats_parts}
+                )
 
-        # ``sections`` is intentionally list[list[str]]: a section is either
-        # present or absent, and dividers are inserted only between present
-        # adjacent sections (never after Identity or inside Async Work).
-        sections: list[list[str]] = []
-        priorities: list[list[int]] = []
-        if session_line is not None:
-            session_rows = [session_line] if cost_line is None else [session_line, cost_line]
-            sections.append(session_rows)
-            priorities.append([0] * len(session_rows))
-        if identity_line is not None:
-            sections.append([identity_line])
-            priorities.append([1])
-        if async_sections:
-            sections.append([line for _, line, _ in async_sections])
-            priorities.append([priority for _, _, priority in async_sections])
+        def async_line(row: dict[str, Any]) -> str:
+            parts = list(row["parts"])
+            if row.get("omitted"):
+                parts.append(label("omitted").format(n=row["omitted"]))
+            return f"{row['label']} · {' · '.join(parts)}"
 
-        def render_selected(selected: list[list[tuple[str, int]]]) -> list[str]:
+        # A section is either present or absent, and dividers are inserted only
+        # between present adjacent sections (never after Identity or inside
+        # Async Work).
+        def compose() -> list[str]:
+            sections: list[list[str]] = []
+            if session_line is not None:
+                sections.append(
+                    [session_line] if cost_line is None else [session_line, cost_line]
+                )
+            if identity_line is not None:
+                sections.append([identity_line])
+            if async_rows:
+                sections.append([async_line(row) for row in async_rows])
             result: list[str] = []
-            previous = False
-            for section in selected:
-                present = [line for line, _ in section if line]
-                if not present:
-                    continue
-                if previous:
+            for index, section in enumerate(sections):
+                if index:
                     result.append(cls.METADATA_DIVIDER)
-                result.extend(present)
-                previous = True
+                result.extend(section)
             return result
 
-        def total_length(lines: list[str]) -> int:
-            return len("\n".join(lines))
+        def rendered_length(lines: list[str]) -> int:
+            return sum(len(line) + 1 for line in lines)
 
-        selected: list[list[tuple[str, int]]] = [
-            [(line, priority) for line, priority in zip(lines, section_priorities)]
-            for lines, section_priorities in zip(sections, priorities)
-        ]
-
-        # Remove lower-priority complete rows before touching Identity. Session
-        # and Identity are section rows, while Async totals outrank lane detail.
-        for priority_to_drop in (4, 3, 2):
-            if total_length(render_selected(selected)) <= cls.METADATA_MAX_CHARS:
-                break
-            for section in selected:
-                section[:] = [item for item in section if item[1] != priority_to_drop]
-
-        # If necessary, shorten only the Identity payload. The label and its
-        # separator remain atomic, and the ellipsis is added only to a shortened
-        # payload (never to a divider or a partial label).
-        if total_length(render_selected(selected)) > cls.METADATA_MAX_CHARS:
-            identity_location: tuple[int, int] | None = None
-            for section_index, section in enumerate(selected):
-                for item_index, (_, priority) in enumerate(section):
-                    if priority == 1:
-                        identity_location = (section_index, item_index)
-                        break
-                if identity_location is not None:
+        lines = compose()
+        if max_chars is not None:
+            # Only unbounded detail lists (many backends/models) can need this;
+            # drop their tail one item at a time, longest row first, and always
+            # keep one item plus the explicit omitted count.
+            while rendered_length(lines) > max_chars:
+                candidates = [
+                    row for row in async_rows
+                    if row.get("shrink") and len(row["parts"]) > 1
+                ]
+                if not candidates:
                     break
-            if identity_location is not None:
-                section_index, item_index = identity_location
-                original, priority = selected[section_index][item_index]
-                marker = " · "
-                marker_index = original.find(marker)
-                if marker_index >= 0:
-                    prefix = original[: marker_index + len(marker)]
-                    payload = original[marker_index + len(marker) :]
-                    low, high = 0, len(payload)
-                    best: str | None = None
-                    while low <= high:
-                        mid = (low + high) // 2
-                        candidate_payload = payload if mid == len(payload) else (
-                            payload[: max(0, mid - 1)] + "…"
-                        )
-                        candidate = prefix + candidate_payload
-                        trial = [list(section) for section in selected]
-                        trial[section_index][item_index] = (candidate, priority)
-                        if total_length(render_selected(trial)) <= cls.METADATA_MAX_CHARS:
-                            best = candidate
-                            low = mid + 1
-                        else:
-                            high = mid - 1
-                    if best is not None:
-                        selected[section_index][item_index] = (best, priority)
-                    else:
-                        selected[section_index].pop(item_index)
-
-        # A pathological session payload may itself exceed the budget. There is
-        # no safe partial Session representation; retain the higher-priority
-        # whole line and discard lower-priority whole lines rather than splitting
-        # a label/separator. Normal session fields are bounded well below this.
-        while total_length(render_selected(selected)) > cls.METADATA_MAX_CHARS:
-            removable = [
-                (priority, section_index, item_index)
-                for section_index, section in enumerate(selected)
-                for item_index, (_, priority) in enumerate(section)
-                if priority > 0
-            ]
-            if not removable:
-                break
-            _, section_index, item_index = max(removable)
-            selected[section_index].pop(item_index)
-
-        return render_selected(selected)
+                row = max(candidates, key=lambda item: len(async_line(item)))
+                row["parts"].pop()
+                row["omitted"] = row.get("omitted", 0) + 1
+                lines = compose()
+        return lines
 
     @classmethod
     def _short_working_dir(cls, working_dir: str) -> str:
@@ -1805,7 +1804,21 @@ class TaskCardEventProjection:
         metadata_lines = cls.format_metadata(metadata, locale)
         time_line = f"{cls.time_prefix(locale)}{cls.render_time(now)}"
         ask_agent_line = cls._locale_text("ask_agent", locale)
+        # Metadata rows are never budgeted on their own. Reasoning/preview
+        # excerpts shrink first (below); only if the overall limit still cannot
+        # hold the block with every excerpt exhausted are the unbounded
+        # Daemons/Backends lists shortened with an explicit omitted count.
+        frame_fixed = (
+            len(cls.header(locale)) + 1 + 1 + len(footer)
+            + len(cls.METADATA_DIVIDER) + 1
+            + len(time_line) + 1 + len(ask_agent_line) + 1
+        )
         if not tool_prepared and not text_prepared and not api_prepared:
+            allowance = cls.TEXT_LIMIT - frame_fixed
+            if sum(len(line) + 1 for line in metadata_lines) > allowance:
+                metadata_lines = cls.format_metadata(
+                    metadata, locale, max_chars=max(0, allowance)
+                )
             slots = {
                 "header": [cls.header(locale)],
                 "rows": [],
@@ -1835,22 +1848,16 @@ class TaskCardEventProjection:
             tool_scaffold += len(prefix) + len(suffix) + 2
             if summary_metrics:
                 tool_scaffold += len(summary_metrics) + 2
-        fixed = (
-            len(cls.header(locale))
-            + 1
-            + 1
-            + len(footer)
-            + len(cls.METADATA_DIVIDER)
-            + 1
-            + sum(len(line) + 1 for line in metadata_lines)
-            + len(time_line)
-            + 1
-            + len(ask_agent_line)
-            + 1
-            + api_scaffold
-            + text_scaffold
-            + tool_scaffold
+        non_metadata_fixed = frame_fixed + api_scaffold + text_scaffold + tool_scaffold
+        # Each shrunken excerpt still carries its one-character ellipsis.
+        allowance = (
+            cls.TEXT_LIMIT - non_metadata_fixed - len(tool_prepared) - len(text_prepared)
         )
+        if sum(len(line) + 1 for line in metadata_lines) > allowance:
+            metadata_lines = cls.format_metadata(
+                metadata, locale, max_chars=max(0, allowance)
+            )
+        fixed = non_metadata_fixed + sum(len(line) + 1 for line in metadata_lines)
         budget = cls.TEXT_LIMIT - fixed
         divisor = max(1, len(tool_prepared) + len(text_prepared))
         per_row_cap = max(0, min(cls.REASONING_CAP, budget // divisor))

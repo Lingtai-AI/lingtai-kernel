@@ -167,7 +167,6 @@ _TASK_CARD_MARKDOWN_RULE_RE = re.compile(
 # normal-row setting; see ``_task_card_footer``.
 _TASK_CARD_FOOTER = TaskCardEventProjection.FOOTER
 _TASK_CARD_DEFAULT_NORMAL_ROWS = _TASKCARD_DEFAULT_NORMAL_ROWS
-_TASK_CARD_METADATA_MAX_CHARS = TaskCardEventProjection.METADATA_MAX_CHARS
 
 # Canonical AgentState values that render without a /refresh hint; "stuck" is
 # the exact same enum plus the hint, and "offline" is not an AgentState value
@@ -309,14 +308,18 @@ def _telegram_task_card_html(text: str) -> str:
         ("Async Work · ", "<b>ASYNC WORK</b>", "async"),
         ("异步工作 · ", "<b>异步工作</b>", "async"),
     )
+    stats_en = TaskCardEventProjection.daemon_stats_label("en")
+    stats_zh = TaskCardEventProjection.daemon_stats_label("zh")
     async_row_prefixes = (
+        ("Scope · ", "Scope"),
+        ("范围 · ", "范围"),
         ("Daemons · ", "Daemons"),
         ("守护进程 · ", "守护进程"),
         ("Backends · ", "Backends"),
         ("后端 · ", "后端"),
         ("Shell · ", "Shell"),
-        ("Daemon stats · ", "Daemon stats"),
-        ("守护进程统计 · ", "守护进程统计"),
+        (f"{stats_en} · ", stats_en),
+        (f"{stats_zh} · ", stats_zh),
     )
     def session_rows(payload: str) -> list[str]:
         parts = payload.split(" · ")

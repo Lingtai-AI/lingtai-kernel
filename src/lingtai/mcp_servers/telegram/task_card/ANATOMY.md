@@ -114,9 +114,18 @@ onto its one tracked resident Task Card target per account+chat.
   escaped dynamic content for fixed tag overhead, while Feishu consumes the
   shared frame unchanged. `format_metadata` renders an adapter-supplied,
   preformatted `session_cost` metadata string as one `Cost · …` row inside the
-  Session section (budgeted like Session; absent key means byte-identical
-  output). In Telegram HTML, `_telegram_task_card_html`
-  (`src/lingtai/mcp_servers/telegram/manager.py:292-418`) gives Session the
+  Session section (absent key means byte-identical output). The metadata block
+  has no whole-block character budget; `format_rows_task_card_text` passes
+  `max_chars` only when the overall `TEXT_LIMIT` cannot hold it after excerpts
+  shrink, and `format_metadata` then shortens only the Daemons/Backends lists
+  tails with a `+N omitted` indicator. Any non-empty Async Work block gains a
+  localized `Scope` row (running/queued + finished in last 10m from
+  `ASYNC_WORK_WINDOW_SECONDS`); `daemon_stats_label` supplies the compact
+  Daemon stats label. The row shows `usage n/a (no positive usage reported)`
+  when selected runs report no positive values, but omits the lifetime
+  parenthetical and unavailable-cost suffix; their caveats live in the manual. In
+  Telegram HTML, `_telegram_task_card_html`
+  (`src/lingtai/mcp_servers/telegram/manager.py:291-421`) gives Session the
   cumulative compact `out` value and a bold `Cost` row, puts Async Work in a
   separate icon-free section, and leaves the per-call metrics line as plain
   text. The separate
@@ -133,14 +142,18 @@ onto its one tracked resident Task Card target per account+chat.
   (`src/lingtai/mcp_servers/telegram/manager.py:2972-2989`).
 - `api_cost.py` — Telegram-owned pure `usage_line` formatter (passed to
   `render_event_groups(usage_line=...)` by both automatic render sites) and a
-  small process-local `PriceCatalog` of LiteLLM public standard list prices with
+  small process-local `PriceCatalog` of LiteLLM public list prices (standard and
+  `*_priority`; `_requested_tier_entry` picks the round's REQUESTED tier fields
+  for the one estimator, unknown for other tiers or missing priority rates) with
   one bounded background refresh (`_http_fetch`: fixed URL, `read1` chunks under
   an 8 MiB cap and a monotonic total deadline; a failed fetch or thread start
   releases the single in-flight slot and paces the retry). It consumes only
   `usage["bill"]` facts that `TaskCardEventProjection.project_llm_response_usage`
   validated from `llm_response.usage_billing` (kernel `session.py`, adapter-set
-  `UsageMetadata.cache_write_*`/`billable_output_tokens`, checked with the shared
-  `checked_count`/`safe_billing_model` in `kernel/llm/base.py`; absent, negative
+  `UsageMetadata.cache_write_*`/`billable_output_tokens`/`requested_service_tier`
+  (OpenAI chat/Responses/Codex sessions stamp the wire `service_tier` they sent),
+  checked with the shared `checked_count`/`safe_billing_model`/`safe_billing_tier`
+  in `kernel/llm/base.py`; absent, negative
   or bool counts are unknown, never zero) and never blocks rendering on I/O.
   Catalog entries keep a present-but-invalid tier rate as `None` so a bad tier
   price cannot fall back to the cheaper base rate; every charge/average is

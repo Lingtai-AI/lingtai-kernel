@@ -2623,6 +2623,7 @@ def test_actual_telegram_idle_time_row(tmp_path, monkeypatch, mode, live):
     text = _last_edit(acct)
     expected = {"known": "2.5", "multiple": "5.0", "zero": "0.0"}.get(mode)
     coffee = f" · ☕{expected}s" if expected is not None else ""
-    assert f"↻12.4s · ⏱7.2s{coffee} · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
+    residual = {"known": "4.7", "multiple": "2.2"}.get(mode, "7.2")
+    assert f"↻12.4s · ⏱{residual}s{coffee} · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
     if expected is None:
         assert "☕" not in text

@@ -4,12 +4,13 @@ last_changed_at: 2026-09-29T00:00:00Z
 description: >
   Compact router for Psyche's four durable domains (pad, lingtai, knowledge,
   skills), the shared file→rebuild model, redacted settings, and the separate
-  `.rules` heartbeat reference.
+  fixed-instructions disclosure and retirement guidance.
 related_files:
 - src/lingtai/tools/psyche/CONTRACT.md
 - src/lingtai/tools/psyche/ANATOMY.md
 - src/lingtai/tools/psyche/settings.py
 - src/lingtai/agent.py
+- ENVIRONMENT_VARIABLES.md
 - src/lingtai/intrinsic_skills/pad-manual/SKILL.md
 - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md
 - src/lingtai/tools/knowledge/manual/SKILL.md
@@ -19,12 +20,11 @@ related_files:
 - src/lingtai/kernel/base_agent/__init__.py
 - src/lingtai/tools/avatar/manual/SKILL.md
 - src/lingtai/intrinsic_skills/psyche-manual/reference/settings/SKILL.md
-- src/lingtai/intrinsic_skills/psyche-manual/reference/network-rules/SKILL.md
 - tests/test_psyche_family.py
 - tests/test_avatar_rules.py
 maintenance: |
   Keep this short router aligned with the psyche Contract/Anatomy, installed
-  domain manuals, settings anchors, and the `.rules` lifecycle signpost. Put
+  domain manuals, settings anchors, and retirement guidance. Put
   detailed procedure in the focused references rather than expanding this entry.
 ---
 
@@ -43,12 +43,19 @@ only if the domain is unclear. There is no required router-then-domain double re
 | `psyche(action="lingtai", input={}, reasoning="load identity guidance")` | LingTai manual: `system/lingtai.md` |
 | `psyche(action="knowledge", input={}, reasoning="load knowledge guidance")` | Knowledge manual: `knowledge/<name>/KNOWLEDGE.md` |
 | `psyche(action="skills", input={}, reasoning="load skills guidance")` | Skills manual: `.library/{intrinsic,custom}/` and configured paths |
+| `psyche(action="instructions", input={}, reasoning="orientation")` | current loaded fixed instructions, including runtime and adapter rules; no ambient reread |
+| `psyche(action="covenant", input={}, reasoning="load the effective Covenant")` | current loaded Covenant body, not a tool manual; custom source/mirror preserved |
 | `psyche(action="settings", input={}, reasoning="inspect Psyche settings")` | redacted settings SHOW |
 | `psyche(action="manual", input={}, reasoning="load the routing table")` | this router |
 
-All six actions require strict empty `input` and are read-only: no authoring,
+All eight actions require strict empty `input` and are read-only: no authoring,
 editing, pinning, installing, migration, catalog rescan, or prompt reload. Keep
 root `summarize=false` when exact guidance matters.
+
+Read `covenant` on first orientation and before discussing duties, collaboration,
+learning, or memory, not on every call. It returns the current effective body;
+ambient edits do not change it until successful reconstruction. No installed
+manual/default substitutes for a configured Covenant. Empty means none is loaded.
 
 ## One mutation model
 
@@ -69,7 +76,7 @@ recipes live in `shell-manual`.
 controls and mechanical names. LingTai owns self-authored character guidance.
 `settings` is SHOW-only, fully redacted, and reports the last successful applied
 snapshot. Read [the settings reference](reference/settings/SKILL.md) for grammar,
-precedence, timing, rollback, and all eight anchors.
+precedence, timing, rollback, and all six anchors.
 
 ### Setting pad
 [settings reference](reference/settings/SKILL.md#setting-pad)
@@ -89,15 +96,32 @@ precedence, timing, rollback, and all eight anchors.
 ### Setting covenant file
 [settings reference](reference/settings/SKILL.md#setting-covenant-file)
 
-### Setting comment
-[settings reference](reference/settings/SKILL.md#setting-comment)
+## Retired comments and network rules
 
-### Setting comment file
-[settings reference](reference/settings/SKILL.md#setting-comment-file)
+`comment`/`comment_file` are removed, including Avatar's spawn comment. Remove
+these keys from old owner/config documents and put desired working instructions
+in `system/pad.md` through an ordinary authorized edit. Pad remains writable
+working memory, not a security boundary or broadcast mechanism.
 
-## Network rules protocol (`.rules`)
+Neither `.rules` nor `system/rules.md` is read, consumed, or injected on heartbeat,
+boot, rebuild, refresh, or molt. Existing files are left untouched. There is no
+compatibility reader, automatic rewrite, purge, or data migration.
 
-`.rules` is a separate heartbeat signal, not a Psyche action or rebuild API. Read
-the [network-rules reference](reference/network-rules/SKILL.md) before using it;
-its atomic write, consumption, replacement, and verification hazards differ from
-ordinary file→rebuild.
+## Loaded memory length reminder
+
+After a successful molt or CLI refresh relaunch/start, `memory-length` reports
+character counts for the **loaded** Pad (including pinned references), Character,
+their total and threshold. It is not a token count, disk-size check or knowledge
+catalog scan. The environment threshold defaults to 50000; discover its effective
+value with `system(action="settings", input={})` under
+`prompt.memory_length_warning_chars`, and read the canonical
+[`environment registry`](../../../../ENVIRONMENT_VARIABLES.md).
+
+A lifecycle boundary produces at most one warning; normal turns, heartbeat,
+initial startup and `context.rebuild` do not produce new warnings. At/below the
+threshold a subsequent successful lifecycle check clears only the current
+notification; prior checks remain in `logs/events.jsonl`. Publication is best-effort
+and never blocks molt/refresh. No Pad, pinned reference, Character, Knowledge or
+history content is automatically removed, cropped or rewritten. Review stale and
+duplicate content and move it to its proper durable owner through ordinary
+scoped edits; a warning is not permission for unrelated cleanup.

@@ -17,4 +17,4 @@ maintenance: |
 **术语对照**
 
 - `psyche`：跨凝蜕长存之四域（pad、灵台、knowledge、skills）唯一公开根；pad + lingtai + knowledge + skills = psyche。调用名保持 canonical English。
-- 六个 action 均只读且 input 严空：五个加载手册，`settings` 展示五字段、全遮蔽的 Pad 配置清单；旧 psyche 之 molt、summarize、name 等动作已归 context 与 system，此根不作别名。
+- 七个 action 均只读且 input 严空：五个加载手册，`covenant` 返回当前生效约定正文，`settings` 展示五字段、全遮蔽的 Pad 配置清单；旧 psyche 之 molt、summarize、name 等动作已归 context 与 system，此根不作别名。

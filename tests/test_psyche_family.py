@@ -19,7 +19,7 @@ from tests._service_helpers import make_mock_llm_service as make_mock_service
 
 
 MANUAL_ACTIONS = ["pad", "lingtai", "knowledge", "skills", "manual"]
-EXPECTED_ACTIONS = ["pad", "lingtai", "knowledge", "skills", "settings", "manual"]
+EXPECTED_ACTIONS = ["pad", "lingtai", "knowledge", "skills", "instructions", "covenant", "settings", "manual"]
 
 #: Which installed manual each action must return, by its `.library` directory.
 EXPECTED_MANUAL_DIR = {
@@ -87,6 +87,8 @@ def test_every_child_input_is_the_canonical_strict_empty_object():
         "lingtai input",
         "knowledge input",
         "skills input",
+        "instructions input",
+        "covenant input",
         "settings inventory input",
         "manual input",
     ]
@@ -209,13 +211,13 @@ def test_router_manual_discloses_depth_and_first_call_guard(tmp_path):
         result = _call(agent, "manual")
         body = result["manual"]
         assert "reference/settings/SKILL.md" in body
-        assert "reference/network-rules/SKILL.md" in body
+        assert "Neither `.rules` nor `system/rules.md` is read" in body
         assert "strict empty `input`" in body
         assert "manual first" in body
         assert len(body) < 10000
         manual_path = Path(result["manual_path"])
         assert (manual_path.parent / "reference/settings/SKILL.md").is_file()
-        assert (manual_path.parent / "reference/network-rules/SKILL.md").is_file()
+        assert "Network rules are retired" in (manual_path.parent / "reference/network-rules/SKILL.md").read_text()
     finally:
         agent.stop(timeout=1.0)
 
@@ -230,7 +232,7 @@ def test_router_keeps_settings_anchors_as_reference_pointers(tmp_path):
         body = result["manual"]
         anchors = (
             "pad", "pad-file", "base-prompt", "base-prompt-file",
-            "covenant", "covenant-file", "comment", "comment-file",
+            "covenant", "covenant-file",
         )
         for anchor in anchors:
             heading = f"### Setting {anchor.replace('-', ' ')}"
@@ -278,14 +280,14 @@ def test_settings_provider_has_exact_applied_reconstruction_rows(tmp_path):
         rows = provider()
         assert [row.key for row in rows] == [
             "pad", "pad_file", "base_prompt", "base_prompt_file",
-            "covenant", "covenant_file", "comment", "comment_file",
+            "covenant", "covenant_file",
         ]
         assert [row.current for row in rows] == [
             "PAD FROM FILE",
             str(pad_source),
-            "", None, "", None, "", None,
+            "", None, "", None,
         ]
-        assert [row.default for row in rows] == ["", None, "", None, "", None, "", None]
+        assert [row.default for row in rows] == ["", None, "", None, "", None]
         assert all(row.configurable is True for row in rows)
         assert all(row._sensitive is True for row in rows)
         assert [row.comment for row in rows] == [
@@ -295,8 +297,6 @@ def test_settings_provider_has_exact_applied_reconstruction_rows(tmp_path):
             "psyche-manual#setting-base-prompt-file",
             "psyche-manual#setting-covenant",
             "psyche-manual#setting-covenant-file",
-            "psyche-manual#setting-comment",
-            "psyche-manual#setting-comment-file",
         ]
 
         pad_source.write_text("FRESH PAD FROM FILE", encoding="utf-8")
@@ -384,7 +384,7 @@ def test_settings_success_is_exactly_eight_projected_rows_and_redacted(tmp_path)
         rows = result["settings"]
         assert [row["key"] for row in rows] == [
             "pad", "pad_file", "base_prompt", "base_prompt_file",
-            "covenant", "covenant_file", "comment", "comment_file",
+            "covenant", "covenant_file",
         ]
         assert all(row["current"] == "<redacted>" for row in rows)
         assert all(row["default"] == "<redacted>" for row in rows)
@@ -396,8 +396,6 @@ def test_settings_success_is_exactly_eight_projected_rows_and_redacted(tmp_path)
             "psyche-manual#setting-base-prompt-file",
             "psyche-manual#setting-covenant",
             "psyche-manual#setting-covenant-file",
-            "psyche-manual#setting-comment",
-            "psyche-manual#setting-comment-file",
         ]
         assert list(result["settings"][0]) == [
             "key", "current", "default", "configurable", "comment",
@@ -432,7 +430,7 @@ def test_malformed_ambient_init_preserves_applied_settings_snapshot(tmp_path):
         result = _call(agent, "settings")
         assert [row["key"] for row in result["settings"]] == [
             "pad", "pad_file", "base_prompt", "base_prompt_file",
-            "covenant", "covenant_file", "comment", "comment_file",
+            "covenant", "covenant_file",
         ]
         assert "private content" not in repr(result)
         assert _settings_provider(agent)()[0].current == "APPLIED PRIVATE CONTENT"
@@ -635,7 +633,7 @@ def test_unknown_or_retired_action_is_rejected(tmp_path, action):
     try:
         result = _call(agent, action)
         assert "Unknown psyche action" in result["error"]
-        assert "pad, lingtai, knowledge, skills, settings, manual" in result["error"]
+        assert ", ".join(EXPECTED_ACTIONS) in result["error"]
     finally:
         agent.stop(timeout=1.0)
 
@@ -765,7 +763,7 @@ def test_catalog_composer_failure_fails_the_whole_rebuild(
 
     agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
     try:
-        agent._prompt_manager.write_section("comment", "CURRENT-COMMENT")
+        agent._prompt_manager.write_section("pad", "CURRENT-PAD")
         module = importlib.import_module(module_name)
 
         def _boom(*_a, **_k):
@@ -814,7 +812,7 @@ def test_catalog_composer_failure_fails_the_whole_rebuild(
         assert publishes == []
         assert summarize_calls == []
         # And no partially composed prompt was left behind.
-        assert agent._prompt_manager.read_section("comment") == "CURRENT-COMMENT"
+        assert agent._prompt_manager.read_section("pad") == "CURRENT-PAD"
     finally:
         agent.stop(timeout=1.0)
 
@@ -931,7 +929,8 @@ def test_substrate_prompt_section_is_untouched_by_the_rename(tmp_path):
         assert body and body.strip()
         mirror = agent._working_dir / "system" / "substrate.md"
         assert mirror.is_file() and mirror.read_text(encoding="utf-8").strip()
-        assert body in agent._build_system_prompt()
+        assert body in _call(agent, "instructions")["instructions"]
+        assert body not in agent._build_system_prompt()
 
         # A second rebuild recomposes and publishes it byte-identically.
         agent._reconstruct_context()
@@ -966,8 +965,7 @@ def test_manual_docs_installed_relative_links_resolve(tmp_path):
             path = Path(result["manual_path"])
             paths = [path]
             if action == "manual":
-                paths += [path.parent / "reference/settings/SKILL.md",
-                          path.parent / "reference/network-rules/SKILL.md"]
+                paths += [path.parent / "reference/settings/SKILL.md"]
             for source in paths:
                 for link in re.findall(r"\]\(([^)]+)\)", source.read_text()):
                     if "://" in link:

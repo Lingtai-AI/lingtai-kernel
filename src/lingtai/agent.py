@@ -2463,6 +2463,42 @@ class Agent(BaseAgent):
             tools=list(self._tool_handlers.keys()),
         )
 
+    def _publish_memory_length_warning(self, lifecycle_id: str) -> None:
+        """One advisory per successful molt/refresh; measure loaded memory, not disk."""
+        if getattr(self, "_memory_length_lifecycle_id", None) == lifecycle_id:
+            return
+        try:
+            from lingtai.kernel.config import memory_length_warning_chars
+            from lingtai.kernel.notifications import clear, submit
+
+            pad_chars = len(self._prompt_manager.read_section("pad") or "")
+            character_chars = len(self._prompt_manager.read_section("character") or "")
+            total = pad_chars + character_chars
+            limit = memory_length_warning_chars()
+            if total > limit:
+                submit(
+                    self, "memory-length", header="Loaded memory exceeds character threshold",
+                    icon="🧠", priority="high",
+                    data={"lifecycle_id": lifecycle_id, "pad_chars": pad_chars,
+                          "character_chars": character_chars, "total_chars": total,
+                          "limit_chars": limit},
+                    instructions=(
+                        f"Loaded Pad (including pinned references): {pad_chars} characters; "
+                        f"Character: {character_chars}; total {total} exceeds {limit}. "
+                        "Review and archive stale/duplicate memory in its proper durable owner. "
+                        "This is advisory only: no content was erased or truncated. "
+                        "One notification per successful molt/refresh, not per turn."
+                    ),
+                )
+            else:
+                clear(self, "memory-length")
+            self._memory_length_lifecycle_id = lifecycle_id
+            self._log("memory_length_checked", lifecycle_id=lifecycle_id,
+                      pad_chars=pad_chars, character_chars=character_chars,
+                      total_chars=total, limit_chars=limit, over_limit=total > limit)
+        except Exception as error:
+            self._log("memory_length_warning_failed", error=str(error))
+
     def _reconstruct_context(
         self,
         data: dict | None = None,
@@ -2491,6 +2527,7 @@ class Agent(BaseAgent):
         prior_base_prompt = getattr(self, "_base_prompt", missing_base_prompt)
         prior_snapshot = self._psyche_settings_snapshot
         prior_prompt_plan = self._psyche_prompt_plan
+        prior_covenant = self._effective_covenant
         prior_token_decomp_dirty = self._token_decomp_dirty
         system_dir = self._working_dir / "system"
         generation_mirrors = (
@@ -2526,6 +2563,7 @@ class Agent(BaseAgent):
                 self._base_prompt = prior_base_prompt
             self._psyche_settings_snapshot = prior_snapshot
             self._psyche_prompt_plan = prior_prompt_plan
+            self._effective_covenant = prior_covenant
             self._token_decomp_dirty = prior_token_decomp_dirty
 
             from lingtai.kernel._fsutil import atomic_write_text
@@ -2558,7 +2596,7 @@ class Agent(BaseAgent):
             # Directly constructed/testing agents may legitimately have no
             # init.json, but an existing unreadable/invalid file is a failed
             # configured source and must fail loud. Treating both as `{}` would
-            # silently delete config-only sections (for example comment) even
+            # silently delete config-only sections even
             # though the init reader promised KEEP_PREVIOUS_EFFECTIVE.
             if data is None:
                 if (self._working_dir / "init.json").is_file():
@@ -2583,7 +2621,7 @@ class Agent(BaseAgent):
                 if file_key in data:
                     data[key] = resolve_file(data.get(key), data.pop(file_key))
 
-        # Psyche owns the three configurable prompt pairs. The complete
+        # Psyche owns the two configurable prompt pairs. The complete
         # immutable plan was resolved before this composition transaction, then
         # its inputs are overlaid only into this local composition input. `data`
         # remains the effective init mapping and is never mutated with owner
@@ -2593,7 +2631,6 @@ class Agent(BaseAgent):
         data.update({
             "base_prompt": psyche_prompt_inputs.base_prompt,
             "covenant": psyche_prompt_inputs.covenant,
-            "comment": psyche_prompt_inputs.comment,
         })
 
         system_dir = self._working_dir / "system"
@@ -2625,8 +2662,8 @@ class Agent(BaseAgent):
 
         # --- Base prompt (third-party prompt injection point) ---
         # `base_prompt` is the Psyche-owned third-party (application / recipe /
-        # preset) system-prompt injection point — one of the three configurable
-        # prompt surfaces (with `covenant` and `comment`).
+        # preset) system-prompt injection point — one of the two configurable
+        # prompt surfaces (with `covenant`).
         # It is NOT a prompt-manager section: the kernel builder renders it right
         # after the raw kernel-owned `principle` section and before the rest of
         # Batch 1 (see lingtai.kernel.prompt.build_system_prompt_batches), so it
@@ -2654,9 +2691,14 @@ class Agent(BaseAgent):
         if covenant:
             covenant_file.write_text(covenant, encoding="utf-8")
         elif covenant_file.is_file():
-            covenant = covenant_file.read_text(encoding="utf-8")
+            from lingtai.kernel._frontmatter import strip_frontmatter
+
+            covenant = strip_frontmatter(covenant_file.read_text(encoding="utf-8"))
+        self._effective_covenant = covenant
         if covenant:
-            self._prompt_manager.write_section("covenant", covenant, protected=True)
+            from lingtai.kernel.prompt import COVENANT_ROUTE
+
+            self._prompt_manager.write_section("covenant", COVENANT_ROUTE, protected=True)
         else:
             self._prompt_manager.delete_section("covenant")
 
@@ -2679,20 +2721,6 @@ class Agent(BaseAgent):
         # post-molt hook ordering.
         from lingtai.tools.lingtai import _lingtai_load
         _lingtai_load(self, {}, publish=False)
-
-        # --- Rules (from system/rules.md, not init.json) ---
-        rules_md = system_dir / "rules.md"
-        if rules_md.is_file():
-            try:
-                rules_content = rules_md.read_text(encoding="utf-8").strip()
-                if rules_content:
-                    self._prompt_manager.write_section("rules", rules_content, protected=True)
-                else:
-                    self._prompt_manager.delete_section("rules")
-            except OSError:
-                pass
-        else:
-            self._prompt_manager.delete_section("rules")
 
         # --- Pad (pad.md + pinned pad_append.json references) ---
         # Configured Pad content is an initial seed, not an authoritative
@@ -2765,13 +2793,6 @@ class Agent(BaseAgent):
         except Exception:
             if not guidance_file.is_file():
                 guidance_file.write_text("{}\n", encoding="utf-8")
-        # --- Comment ---
-        comment = data.get("comment", "")
-        if comment:
-            self._prompt_manager.write_section("comment", comment)
-        else:
-            self._prompt_manager.delete_section("comment")
-
         # Return discovery state to the full reconstruction seam. It publishes
         # this immutable snapshot only after the final prompt flush succeeds.
         from lingtai.tools.psyche.settings import PsycheSettingsSnapshot
@@ -2783,8 +2804,6 @@ class Agent(BaseAgent):
             base_prompt_file=psyche_prompt_inputs.base_prompt_file,
             covenant=psyche_prompt_inputs.covenant,
             covenant_file=psyche_prompt_inputs.covenant_file,
-            comment=psyche_prompt_inputs.comment,
-            comment_file=psyche_prompt_inputs.comment_file,
         )
 
     def _build_launch_cmd(self) -> list[str] | None:

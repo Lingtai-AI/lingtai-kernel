@@ -1,5 +1,6 @@
 ---
 related_files:
+  - tests/test_unified_instructions.py
   - ENVIRONMENT_VARIABLES.md
   - ANATOMY.md
   - CONTRACT.md

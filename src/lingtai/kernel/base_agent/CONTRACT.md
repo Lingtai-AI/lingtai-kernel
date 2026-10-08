@@ -199,6 +199,13 @@ Platform profiles are selector-composed at the composition roots
 
 ## Contract rules
 
+Covenant construction retains the complete effective constructor/mirror body
+outside resident prompt state. Its protected slot carries only the discovery
+route and immediate pre-action gates; the existing read-only Psyche host Port
+returns the loaded body. Agent reconstruction preserves source precedence and
+rolls the body back with the applied generation. The detailed disclosure promise
+is owned by [Psyche](../../tools/psyche/CONTRACT.md).
+
 `agent_state.idle_elapsed_s` is optional finite nonnegative monotonic seconds
 from true IDLE entry to exit, emitted only when leaving IDLE with an anchor.
 ACTIVE/tools, prompt build, queue/network wait, ASLEEP and STUCK are not IDLE.
@@ -215,7 +222,7 @@ Automatic notification delivery composes the [Notification contract](../../tools
    runtime artifacts are `.agent.json` (manifest), `.agent.heartbeat`
    (liveness), `.agent.lock` (lease), the signal files
    (`.suspend`/`.sleep`/`.interrupt`/`.refresh`/`.refresh.taken`/`.prompt`/
-   `.clear`/`.rules`), `.alarm` (the one self-sleep absolute
+   `.clear`), `.alarm` (the one self-sleep absolute
    deadline), `.notification/`, `logs/`, and `history/`. Artifact names and
    meanings are frozen; observers may read,
    only the owning agent/watcher mutates.

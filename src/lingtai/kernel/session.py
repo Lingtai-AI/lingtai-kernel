@@ -28,7 +28,7 @@ from .llm import (
     LLMResponse,
     LLMService,
 )
-from .llm.base import checked_count, safe_billing_model
+from .llm.base import checked_count, safe_billing_model, safe_billing_tier
 from .llm_utils import (
     send_with_timeout,
     send_with_timeout_stream,
@@ -119,13 +119,17 @@ def _safe_usage_extra_for_event(extra: object) -> dict[str, str] | None:
 def _usage_billing_for_event(usage: object, model: object) -> dict[str, object] | None:
     """Bounded neutral pricing evidence for one ``llm_response`` round.
 
-    Carries only the model that made this exact call and the adapter's
-    explicitly established non-negative integer counts; unknown stays absent.
+    Carries only the model that made this exact call, the wire service tier the
+    adapter REQUESTED for it (not an applied tier), and the adapter's explicitly
+    established non-negative integer counts; unknown stays absent.
     """
     billing: dict[str, object] = {}
     safe_model = safe_billing_model(model)
     if safe_model is not None:
         billing["model"] = safe_model
+    tier = safe_billing_tier(getattr(usage, "requested_service_tier", None))
+    if tier is not None:
+        billing["service_tier"] = tier
     for key in ("cache_write_tokens", "cache_write_1h_tokens", "billable_output_tokens"):
         value = checked_count(getattr(usage, key, None))
         if value is not None:

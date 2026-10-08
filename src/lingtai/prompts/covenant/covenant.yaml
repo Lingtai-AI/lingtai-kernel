@@ -24,6 +24,9 @@ injection_contract:
   mirror_path: system/covenant.md
   override_policy: psyche_owner_pair_may_supply_content
   notes: >
+    This is a loaded source owner, not a separate resident fulltext section.
+    The kernel renders one short entry; psyche.instructions reads current loaded
+    fixed detail without disk I/O. Covenant fulltext remains psyche.covenant.
     Psyche resolves covenant/covenant_file from settings/psyche.json. A nonempty
     resolved owner value is mirrored to system/covenant.md; when the owner value is
     empty, the existing durable mirror is the fallback. No packaged
@@ -39,7 +42,8 @@ related_files:
     why: >
       Owns the concrete composition rule: _reload_prompt_sections() consumes Psyche's
       resolved covenant input, maintains system/covenant.md as mirror/fallback, and
-      writes the protected `covenant` section.
+      retains the complete effective body and writes only the protected Covenant
+      discovery route; psyche(action='covenant', input={}) discloses the loaded body.
   - path: src/lingtai/tools/psyche/settings.py
     why: >
       Owns the strict settings/psyche.json schema and resolves the

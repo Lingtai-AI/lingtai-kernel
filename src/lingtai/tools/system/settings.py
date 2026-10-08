@@ -207,8 +207,6 @@ SYSTEM_INIT_INERT_OR_COMPATIBILITY_EXCLUSIONS = frozenset(
         "/base_prompt_file",
         "/covenant",
         "/covenant_file",
-        "/comment",
-        "/comment_file",
         "/soul",
         "/soul_file",
         "/principle",
@@ -315,6 +313,12 @@ SYSTEM_ENVIRONMENT_SETTING_SPECS: tuple[_EnvironmentSettingSpec, ...] = (
         ("LINGTAI_TOOL_PROSE_SECTION_ENABLED",),
         False,
         "tool_prose",
+    ),
+    _EnvironmentSettingSpec(
+        "prompt.memory_length_warning_chars",
+        ("LINGTAI_MEMORY_LENGTH_WARNING_CHARS",),
+        50000,
+        "memory_length",
     ),
     _EnvironmentSettingSpec(
         "prompt.system_prompt_pressure_ratio",
@@ -1091,6 +1095,10 @@ def _environment_current(resolver: str, root: Path) -> Any:
         from lingtai.kernel.config import tool_prose_section_enabled
 
         return tool_prose_section_enabled()
+    if resolver == "memory_length":
+        from lingtai.kernel.config import memory_length_warning_chars
+
+        return memory_length_warning_chars()
     if resolver == "prompt_pressure":
         from lingtai.kernel.config import system_prompt_pressure_ratio
 

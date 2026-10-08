@@ -12,6 +12,7 @@ import pytest
 
 from lingtai.adapters.tool_plugin_host import AgentPsycheSettingsAdapter
 from lingtai.agent import Agent
+from lingtai.kernel.prompt import COVENANT_ROUTE
 from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
 from lingtai.tools.psyche import settings as psyche_settings
 from lingtai.tools.psyche import prompt as psyche_prompt
@@ -74,8 +75,6 @@ class _AlternateSnapshot:
     base_prompt_file: str | None
     covenant: str
     covenant_file: str | None
-    comment: str
-    comment_file: str | None
 
 
 class _AlternateSettingsPort:
@@ -87,8 +86,6 @@ class _AlternateSettingsPort:
             base_prompt_file=None,
             covenant="alternate covenant",
             covenant_file="covenant.md",
-            comment="alternate comment",
-            comment_file=None,
         )
 
 
@@ -102,8 +99,6 @@ def test_settings_provider_accepts_an_independent_structural_snapshot() -> None:
         None,
         "alternate covenant",
         "covenant.md",
-        "alternate comment",
-        None,
     ]
 
 
@@ -116,8 +111,6 @@ def test_settings_provider_accepts_an_independent_structural_snapshot() -> None:
         ("base_prompt_file", []),
         ("covenant", {}),
         ("covenant_file", object()),
-        ("comment", 3.5),
-        ("comment_file", True),
     ],
 )
 def test_settings_provider_validates_every_structural_snapshot_field(
@@ -130,8 +123,6 @@ def test_settings_provider_validates_every_structural_snapshot_field(
         "base_prompt_file": None,
         "covenant": "",
         "covenant_file": None,
-        "comment": "",
-        "comment_file": None,
     }
     values[field] = value
 
@@ -143,8 +134,6 @@ def test_settings_provider_validates_every_structural_snapshot_field(
         base_prompt_file: object
         covenant: object
         covenant_file: object
-        comment: object
-        comment_file: object
 
     class InvalidSettingsPort:
         def read_snapshot(self) -> InvalidSnapshot:
@@ -162,9 +151,7 @@ def test_missing_owner_document_defaults_all_six_values(tmp_path: Path) -> None:
         inputs.base_prompt_file,
         inputs.covenant,
         inputs.covenant_file,
-        inputs.comment,
-        inputs.comment_file,
-    ) == ("", None, "", None, "", None)
+    ) == ("", None, "", None)
 
 
 def test_owner_document_serializer_round_trips_through_the_owner_reader(
@@ -175,8 +162,6 @@ def test_owner_document_serializer_round_trips_through_the_owner_reader(
         base_prompt_file="base.md",
         covenant="COVENANT",
         covenant_file="covenant.md",
-        comment="COMMENT",
-        comment_file="comment.md",
     )
     path = tmp_path / "settings" / "psyche.json"
     path.parent.mkdir()
@@ -187,8 +172,6 @@ def test_owner_document_serializer_round_trips_through_the_owner_reader(
         "base_prompt_file": str(tmp_path / "base.md"),
         "covenant": "COVENANT",
         "covenant_file": str(tmp_path / "covenant.md"),
-        "comment": "COMMENT",
-        "comment_file": str(tmp_path / "comment.md"),
     }
     assert json.loads(content)["schema_version"] == 1
 
@@ -215,7 +198,7 @@ def test_owner_document_is_closed_strict_v1(tmp_path: Path, raw: str) -> None:
 
 
 def test_owner_validation_uses_fixed_field_order(tmp_path: Path) -> None:
-    _write_owner(tmp_path, comment=False, covenant=[], base_prompt=3)
+    _write_owner(tmp_path, covenant=[], base_prompt=3)
 
     with pytest.raises(PsycheSettingsError, match="base_prompt must be a string"):
         read_resolved_prompt_inputs(tmp_path)
@@ -303,7 +286,6 @@ def test_owner_file_pairs_win_and_relative_paths_anchor_to_agent_workdir(
     for name, content in {
         "base.md": "BASE FROM FILE",
         "covenant.md": "COVENANT FROM FILE",
-        "comment.md": "COMMENT FROM FILE",
     }.items():
         (tmp_path / name).write_text(content, encoding="utf-8")
     _write_owner(
@@ -312,18 +294,15 @@ def test_owner_file_pairs_win_and_relative_paths_anchor_to_agent_workdir(
         base_prompt_file="base.md",
         covenant="covenant fallback",
         covenant_file="covenant.md",
-        comment="comment fallback",
-        comment_file="comment.md",
     )
 
     inputs = read_resolved_prompt_inputs(tmp_path)
-    assert (inputs.base_prompt, inputs.covenant, inputs.comment) == (
-        "BASE FROM FILE", "COVENANT FROM FILE", "COMMENT FROM FILE",
+    assert (inputs.base_prompt, inputs.covenant) == (
+        "BASE FROM FILE", "COVENANT FROM FILE",
     )
-    assert (inputs.base_prompt_file, inputs.covenant_file, inputs.comment_file) == (
+    assert (inputs.base_prompt_file, inputs.covenant_file) == (
         str(tmp_path / "base.md"),
         str(tmp_path / "covenant.md"),
-        str(tmp_path / "comment.md"),
     )
 
     _write_owner(tmp_path, base_prompt="base fallback", base_prompt_file="missing.md")
@@ -515,9 +494,8 @@ def test_reconstruction_uses_only_psyche_owner_and_preserves_prompt_contract(
         # or render order.
         agent._base_prompt = "OWNER BASE"
         agent._prompt_manager.write_section(
-            "covenant", "OWNER COVENANT", protected=True,
+            "covenant", COVENANT_ROUTE, protected=True,
         )
-        agent._prompt_manager.write_section("comment", "OWNER COMMENT")
         expected_prompt = agent._build_system_prompt()
         expected_batches = "\n".join(agent._build_system_prompt_batches())
 
@@ -525,27 +503,26 @@ def test_reconstruction_uses_only_psyche_owner_and_preserves_prompt_contract(
             tmp_path,
             base_prompt="OWNER BASE",
             covenant="OWNER COVENANT",
-            comment="OWNER COMMENT",
         )
         agent._reconstruct_context()
         prompt = agent._build_system_prompt()
         assert prompt == expected_prompt
         assert "\n".join(agent._build_system_prompt_batches()) == expected_batches
         assert "LEGACY" not in prompt
-        principle = prompt.index("Progressive disclosure principle: each resident prompt layer")
+        principle = prompt.index("Act on the human or peer")
         base = prompt.index("OWNER BASE")
-        covenant = prompt.index("OWNER COVENANT")
-        comment = prompt.index("OWNER COMMENT")
-        assert principle < base < covenant < comment
+        assert "OWNER COVENANT" not in prompt
+        assert agent._effective_covenant == "OWNER COVENANT"
+        assert principle < base
         assert (tmp_path / "system" / "base_prompt.md").read_text(encoding="utf-8") == "OWNER BASE"
         assert (tmp_path / "system" / "covenant.md").read_text(encoding="utf-8") == "OWNER COVENANT"
 
         snapshot = _settings_provider(agent)()
         assert [row.key for row in snapshot] == [
             "pad", "pad_file", "base_prompt", "base_prompt_file",
-            "covenant", "covenant_file", "comment", "comment_file",
+            "covenant", "covenant_file",
         ]
-        assert [row.default for row in snapshot] == ["", None, "", None, "", None, "", None]
+        assert [row.default for row in snapshot] == ["", None, "", None, "", None]
         assert all(row.configurable and row._sensitive for row in snapshot)
         assert [row.comment for row in snapshot] == [
             "psyche-manual#setting-pad",
@@ -554,8 +531,6 @@ def test_reconstruction_uses_only_psyche_owner_and_preserves_prompt_contract(
             "psyche-manual#setting-base-prompt-file",
             "psyche-manual#setting-covenant",
             "psyche-manual#setting-covenant-file",
-            "psyche-manual#setting-comment",
-            "psyche-manual#setting-comment-file",
         ]
 
         _write_owner(tmp_path, unknown="invalid pending edit")
@@ -564,7 +539,6 @@ def test_reconstruction_uses_only_psyche_owner_and_preserves_prompt_contract(
         assert agent._build_system_prompt() == prompt
         assert [row.current for row in _settings_provider(agent)()] == [
             "", None, "OWNER BASE", None, "OWNER COVENANT", None,
-            "OWNER COMMENT", None,
         ]
     finally:
         agent.stop(timeout=1.0)
@@ -606,6 +580,7 @@ def test_show_snapshot_commits_only_after_final_prompt_flush(
         assert agent._prompt_manager._sections == applied_sections
         assert agent._base_prompt == "APPLIED BASE"
         assert agent._psyche_prompt_plan is applied_plan
+        assert agent._effective_covenant == "APPLIED COVENANT"
         assert agent._build_system_prompt() == applied_prompt
         assert (
             tmp_path / "system" / "base_prompt.md"
@@ -618,7 +593,6 @@ def test_show_snapshot_commits_only_after_final_prompt_flush(
         ).read_text(encoding="utf-8") == applied_system_mirror
         assert applied == [
             "", None, "APPLIED BASE", None, "APPLIED COVENANT", None,
-            "", None,
         ]
 
         # Clearing the rejected generation must fall back to the last-good
@@ -628,7 +602,8 @@ def test_show_snapshot_commits_only_after_final_prompt_flush(
         agent._reconstruct_context()
         prompt_after_clear = agent._build_system_prompt()
         assert "APPLIED BASE" in prompt_after_clear
-        assert "APPLIED COVENANT" in prompt_after_clear
+        assert "APPLIED COVENANT" not in prompt_after_clear
+        assert agent._effective_covenant == "APPLIED COVENANT"
         assert "PENDING BASE" not in prompt_after_clear
         assert "PENDING COVENANT" not in prompt_after_clear
     finally:
@@ -639,7 +614,7 @@ def test_each_successful_reconstruction_reads_once_and_advances_show(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     _write_init(tmp_path)
-    _write_owner(tmp_path, base_prompt="BASE A", comment="COMMENT A")
+    _write_owner(tmp_path, base_prompt="BASE A")
     agent = _agent(tmp_path)
     provider = _settings_provider(agent)
     real_read = psyche_settings.read_resolved_prompt_inputs
@@ -664,7 +639,7 @@ def test_each_successful_reconstruction_reads_once_and_advances_show(
         assert len(plans) == 1
         assert agent._psyche_prompt_plan is plans[0]
         assert [row.current for row in provider()] == [
-            "", None, "BASE A", None, "", None, "COMMENT A", None,
+            "", None, "BASE A", None, "", None,
         ]
 
         _write_owner(tmp_path, base_prompt="BASE B", covenant="COVENANT B")
@@ -673,15 +648,15 @@ def test_each_successful_reconstruction_reads_once_and_advances_show(
         assert len(plans) == 2
         assert agent._psyche_prompt_plan is plans[1]
         assert [row.current for row in provider()] == [
-            "", None, "BASE B", None, "COVENANT B", None, "", None,
+            "", None, "BASE B", None, "COVENANT B", None,
         ]
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_base_and_covenant_mirrors_fall_back_but_comment_does_not(tmp_path: Path) -> None:
+def test_base_and_covenant_mirrors_fall_back(tmp_path: Path) -> None:
     _write_init(tmp_path)
-    _write_owner(tmp_path, base_prompt="BASE", covenant="COVENANT", comment="COMMENT")
+    _write_owner(tmp_path, base_prompt="BASE", covenant="COVENANT")
     agent = _agent(tmp_path)
     try:
         agent._reconstruct_context()
@@ -689,7 +664,9 @@ def test_base_and_covenant_mirrors_fall_back_but_comment_does_not(tmp_path: Path
         agent._reconstruct_context()
         prompt = agent._build_system_prompt()
         assert "BASE" in prompt
-        assert "COVENANT" in prompt
+        assert "COVENANT" not in prompt
+        assert agent._effective_covenant == "COVENANT"
+        assert 'psyche(action="covenant", input={})' in prompt
         assert "COMMENT" not in prompt
     finally:
         agent.stop(timeout=1.0)
@@ -711,3 +688,192 @@ def test_psyche_labt_and_contract_commands_run_both_focused_suites() -> None:
     assert "  - tests/test_psyche_prompt_settings.py" in behaviors
     assert command in behaviors
     assert command in contract
+
+
+@pytest.mark.parametrize("source", ["inline", "file", "mirror"])
+def test_covenant_body_is_current_read_only_and_not_resident(tmp_path, monkeypatch, source):
+    from copy import deepcopy
+
+    _write_init(tmp_path)
+    body = "# Custom Covenant\n\n完整约定 — every exception retained.\n"
+    if source == "inline":
+        _write_owner(tmp_path, covenant=body)
+    elif source == "file":
+        (tmp_path / "configured.md").write_text(body, encoding="utf-8")
+        _write_owner(tmp_path, covenant="ignored inline", covenant_file="configured.md")
+    else:
+        (tmp_path / "system").mkdir()
+        (tmp_path / "system/covenant.md").write_text(body, encoding="utf-8")
+    agent = _agent(tmp_path)
+    try:
+        call = lambda: agent._intrinsics["psyche"]({
+            "action": "covenant", "input": {}, "reasoning": "orientation",
+        })
+        # Direct Agent construction deliberately defers owner loading; canonical
+        # reconstruction consumes the configured owner document.
+        agent._reconstruct_context()
+        expected = {"status": "ok", "covenant": body}
+        assert call() == expected
+        prompt = agent._build_system_prompt()
+        assert body not in prompt
+        assert 'psyche(action="covenant", input={})' in prompt
+        assert 'psyche(action="covenant", input={})' in prompt
+        assert "first orientation" in prompt
+        assert "duties, collaboration" in prompt
+        assert "learning or memory" in prompt
+        before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+        sections = deepcopy(agent._prompt_manager._sections)
+        snapshot = agent._psyche_settings_snapshot
+        plan = agent._psyche_prompt_plan
+        # Neither I/O nor lifecycle may be reached by a disclosed-body call.
+        with monkeypatch.context() as m:
+            def forbidden(*_args, **_kwargs):
+                raise AssertionError("covenant action attempted I/O or reconstruction")
+            m.setattr(Path, "read_text", forbidden)
+            m.setattr(Path, "write_text", forbidden)
+            m.setattr(agent, "_reconstruct_context", forbidden)
+            m.setattr(agent, "_flush_system_prompt", forbidden)
+            assert call() == expected
+        assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+        assert agent._prompt_manager._sections == sections
+        assert agent._psyche_settings_snapshot is snapshot
+        assert agent._psyche_prompt_plan is plan
+        # Ambient edits never change the currently loaded body.
+        _write_owner(tmp_path, covenant="Next effective body")
+        assert call() == expected
+        agent._reconstruct_context()
+        assert call() == {"status": "ok", "covenant": "Next effective body"}
+        assert agent._build_system_prompt() == prompt
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_covenant_mirror_frontmatter_has_equal_initial_and_reload_body(tmp_path):
+    _write_init(tmp_path)
+    (tmp_path / "system").mkdir()
+    (tmp_path / "system/covenant.md").write_text(
+        "---\noperator: retained\n---\n# Body only\n", encoding="utf-8",
+    )
+    agent = _agent(tmp_path)
+    try:
+        initial = agent._effective_covenant
+        assert initial == "# Body only\n"
+        agent._reconstruct_context()
+        assert agent._effective_covenant == initial
+        assert 'psyche(action="covenant", input={})' in agent._build_system_prompt()
+        assert "operator: retained" in (tmp_path / "system/covenant.md").read_text()
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_empty_covenant_returns_empty_body_without_installed_default(tmp_path):
+    _write_init(tmp_path)
+    agent = _agent(tmp_path)
+    try:
+        result = agent._intrinsics["psyche"]({
+            "action": "covenant", "input": {}, "reasoning": "orientation",
+        })
+        assert result == {"status": "ok", "covenant": ""}
+        assert agent._prompt_manager.read_section("covenant") is None
+    finally:
+        agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize("from_mirror", [False, True])
+def test_base_agent_initial_covenant_body_and_read_only_route(tmp_path, from_mirror):
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.tools.registry import INTRINSICS
+    from tests._workdir_lease_helpers import make_test_lease
+    from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+    from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
+    from tests._notification_store_helpers import notification_store_for
+    from tests._agent_presence_helpers import make_test_presence_store
+
+    body = "Original full constitution\nwith conditions and exceptions.\n"
+    if from_mirror:
+        (tmp_path / "system").mkdir()
+        (tmp_path / "system/covenant.md").write_text(body)
+    agent = BaseAgent(
+        intrinsics=INTRINSICS, service=make_mock_service(), agent_name="test",
+        working_dir=tmp_path, covenant="" if from_mirror else body,
+        workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(),
+        snapshot_port=make_test_snapshot_port(),
+        lifecycle_clock=make_test_lifecycle_clock(),
+        source_revision_port=make_test_source_revision_port(),
+        notification_store=notification_store_for(tmp_path),
+    )
+    try:
+        assert agent._effective_covenant == body
+        assert body not in agent._build_system_prompt()
+        assert 'psyche(action="covenant", input={})' in agent._build_system_prompt()
+        assert agent._intrinsics["psyche"]({
+            "action": "covenant", "input": {}, "reasoning": "orientation",
+        }) == {"status": "ok", "covenant": body}
+        assert (tmp_path / "system/covenant.md").read_text() == body
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_daemon_variant_does_not_claim_parent_covenant_inheritance():
+    from lingtai.tools.daemon import EMANATION_BLACKLIST
+    from lingtai.tools.daemon.system_prompt import build_daemon_system_prompt
+
+    assert "psyche" in EMANATION_BLACKLIST
+    prompt = build_daemon_system_prompt(task="bounded task", tool_names=["shell"])
+    assert COVENANT_ROUTE not in prompt
+    assert "Covenant" not in prompt
+    assert "parent-provided one-run context" in prompt
+
+
+@pytest.mark.parametrize("raw,expected", [(None, 50000), ("", 50000), ("no", 50000),
+                                         ("0", 50000), ("-1", 50000), ("9.5", 50000),
+                                         (" 123 ", 123)])
+def test_memory_length_threshold_environment(raw, expected, monkeypatch):
+    from lingtai.kernel.config import memory_length_warning_chars
+    if raw is None:
+        monkeypatch.delenv("LINGTAI_MEMORY_LENGTH_WARNING_CHARS", raising=False)
+    else:
+        monkeypatch.setenv("LINGTAI_MEMORY_LENGTH_WARNING_CHARS", raw)
+    assert memory_length_warning_chars() == expected
+
+
+def test_loaded_memory_warning_counts_pins_and_dedups_lifecycle(tmp_path, monkeypatch):
+    _write_init(tmp_path)
+    _write_owner(tmp_path)
+    agent = _agent(tmp_path)
+    try:
+        system = tmp_path / "system"
+        (system / "pad.md").write_text("live pad")
+        (system / "lingtai.md").write_text("live character")
+        pinned = tmp_path / "pinned.md"
+        pinned.write_text("PINNED" * 20)
+        (system / "pad_append.json").write_text(json.dumps([str(pinned)]))
+        agent._reconstruct_context()
+        agent._build_system_prompt()
+        pad = agent._prompt_manager.read_section("pad")
+        character = agent._prompt_manager.read_section("character")
+        assert "PINNED" in pad
+        monkeypatch.setenv("LINGTAI_MEMORY_LENGTH_WARNING_CHARS", "20")
+        from lingtai.tools.system.settings import _environment_current
+        assert _environment_current("memory_length", tmp_path) == 20
+        path = tmp_path / ".notification" / "memory-length.json"
+        assert not path.exists()  # boot and reconstruction alone do not warn
+        agent._publish_memory_length_warning("refresh-test")
+        data = json.loads(path.read_text())["data"]
+        assert data == {"lifecycle_id": "refresh-test", "pad_chars": len(pad),
+                        "character_chars": len(character), "total_chars": len(pad)+len(character),
+                        "limit_chars": 20}
+        prior = path.read_bytes()
+        # Ambient edits are not the loaded prompt; no content mutation/reload.
+        (system / "pad.md").write_text("ambient disk edit")
+        agent._publish_memory_length_warning("refresh-test")
+        assert path.read_bytes() == prior
+        agent._publish_memory_length_warning("molt-2")
+        assert json.loads(path.read_text())["data"]["pad_chars"] == len(pad)
+        assert (system / "pad.md").read_text() == "ambient disk edit"
+        monkeypatch.setenv("LINGTAI_MEMORY_LENGTH_WARNING_CHARS", str(len(pad)+len(character)))
+        agent._publish_memory_length_warning("molt-3")
+        assert not path.exists()  # equality is below-warning, clear current only
+        assert agent._prompt_manager.read_section("pad") == pad
+    finally:
+        agent.stop(timeout=1)

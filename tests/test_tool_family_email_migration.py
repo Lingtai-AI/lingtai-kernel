@@ -22,6 +22,8 @@ service, so nothing here delivers real mail to a real peer or human.
 """
 from __future__ import annotations
 
+from lingtai.tools.tool_family import _without_descriptions
+
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -190,9 +192,9 @@ def test_all_of_correlates_every_action_const_with_its_exact_branch_schema():
         assert condition["if"]["properties"]["action"]["const"] == action
         assert condition["if"]["required"] == ["action"]
         # Both surfaces derive from the same canonical child schema.
-        assert condition["then"]["properties"]["input"] == {
+        assert condition["then"]["properties"]["input"] == _without_descriptions({
             k: v for k, v in branch.items() if k != "title"
-        }
+        })
 
 
 def test_manual_child_reuses_the_canonical_strict_empty_input_literal():
