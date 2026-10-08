@@ -217,10 +217,7 @@ def _ensure_manager(agent_working_dir: Path, *, pool_size: int) -> None:
 def _ensure_manager_locked(agent_working_dir: Path, root: Path, *, pool_size: int) -> None:
     pid_path = root / "manager.pid"
     expected_runtime_identity = _manager_runtime_identity()
-    try:
-        info = read_json(pid_path, default={}, expect=dict)
-    except TypeError:
-        info = {}
+    info = _read_manager_pid_info(root)
     pid = info.get("pid") if isinstance(info, dict) else None
     started_at = info.get("started_at") if isinstance(info, dict) else None
     start_identity = info.get("manager_start_identity") if isinstance(info, dict) else None
@@ -602,7 +599,7 @@ class _DaemonManagerProcess:
             return
         jobs = sorted(
             self.queue_dir.glob("*.json"),
-            key=lambda path: (*self._queue_sort_key(path), path.name),
+            key=self._queue_sort_key,
         )
         for job_path in jobs[:capacity]:
             job = read_json(job_path, default={}, expect=dict)
