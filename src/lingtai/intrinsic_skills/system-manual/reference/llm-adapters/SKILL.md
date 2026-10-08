@@ -14,6 +14,8 @@ related_files:
 - src/lingtai/llm/service.py
 - src/lingtai/llm/openai/adapter.py
 - src/lingtai/llm/openai/codex_ws.py
+- src/lingtai/llm/openai/codex_usage.py
+- tests/test_codex_credits.py
 - src/lingtai/llm/anthropic/adapter.py
 - src/lingtai/llm/claude_code/adapter.py
 - src/lingtai/init_schema.py
@@ -105,6 +107,29 @@ provider: single-account binding, token refresh, and `store=false` semantics
 are all handled inside the adapter (see `_register.py` and `service.py`).
 Omitted/`default` thinking sends an explicit `reasoning.effort = "xhigh"`
 (Codex-only default); `service_tier` shares the `openai` normalizer.
+
+### Purchased credits
+
+In a Codex preset, set `manifest.llm.codex_allow_credits` to the JSON boolean
+`true` (or turn on **Use paid Codex credits** in the preset editor) to allow
+requests after included usage runs out. Missing or `false` means off. This is
+purchased Codex/ChatGPT credit on the signed-in account, not OpenAI API balance;
+it does not spend credits before included usage.
+
+With credits off, LingTai reads the account's ordinary allowance through
+`GET https://chatgpt.com/backend-api/wham/usage` before each native Codex
+request. Exhausted or unverifiable usage stops that turn with an actionable
+message; retry after the usage service recovers or the allowance resets. The
+read uses the same OAuth account even when inference uses a custom Codex
+endpoint. The setting also travels through presets to daemon and vision
+adapters. Other provider families, including external pools via `openai`, do
+not implement this native Codex policy.
+
+With credits on, LingTai sends the same Codex request; OpenAI decides allowance,
+credit eligibility, debit, and spending limits. This local check is not an
+atomic billing cap: another client or an in-flight request can cross the
+allowance boundary after the check. There is no credit-first wire flag and
+LingTai never redeems rate-limit-reset vouchers or changes account billing.
 
 ### Transport: REST vs WebSocket
 

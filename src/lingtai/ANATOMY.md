@@ -43,6 +43,7 @@ related_files:
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/registry.py
   - src/lingtai/CONTRACT.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
   - src/lingtai/init.jsonc
   - src/lingtai/tools/psyche/ANATOMY.md
   - src/lingtai/tools/psyche/prompt.py
@@ -232,6 +233,12 @@ Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai/kernel/` (
 - **Managed-runtime Python selection:** before auto-creating a venv, `venv_resolve.py:_find_python` :509 derives policy from the current process (`sys.platform`, normalized `platform.machine()`, and the macOS product major read directly from `platform.mac_ver()`). On macOS the managed cap is Python 3.11–3.13 across all supported cells (the release workflow builds only cp311/cp312/cp313 wheels, so a managed 3.14 choice would fall onto a source build); Apple Silicon on macOS 14+ and Apple Silicon on macOS 13 plus x86_64/translated Rosetta on macOS 13+ therefore accept 3.11–3.13. Non-macOS targets retain the open-ended Python >=3.11 baseline. Versioned names are tried newest-first on macOS while generic aliases stay first elsewhere; resolved aliases are deduplicated, and each candidate receives one five-second JSON probe of version/platform/architecture/macOS class. Bad probes fall through, while invalid macOS targets and exhausted searches fail actionably before venv or pip subprocesses start.
 - **Runtime venv markers:** `venv_resolve.py` accepts legacy managed venvs without `.lingtai-env.json` if `import lingtai` succeeds, then stamps the marker best-effort. Marker read/parse/probe failures are `error`, not `mismatch`, and never delete the managed runtime. A valid marker that proves a different OS/arch/Python environment is a confirmed mismatch: explicit `init.venv_path` candidates are rejected but left on disk, while only the managed global runtime venv (`~/.lingtai-tui/runtime/venv/`) may be removed before auto-create. The TUI calls this same logic through `python -m lingtai.venv_resolve env-marker {check,stamp} --venv <path>`.
 - **Lazy top-level facade:** `src/lingtai/__init__.py` uses PEP-562 ``__getattr__`` to resolve every public name lazily from its canonical source module (`_LAZY_EXPORTS`, ``__init__.py:21-79``). A bare ``import lingtai`` performs only stdlib/importlib.metadata work and uses the established `0+unknown` sentinel when distribution metadata is unavailable; it must not load `lingtai.agent`, `lingtai.kernel`, `tools`, `lingtai.llm`, services, MCP servers, or concrete providers. ``__dir__`` returns standard module globals unioned with ``__all__`` (``__init__.py:136-137``). Verified by `tests/test_lingtai_facade.py` and `tests/test_kernel_isolation.py`.
+
+`manifest.llm.codex_allow_credits` is a preset-owned boolean passed by
+`llm/service.py` to the native Codex factory. The default-off admission policy
+and its billing limits are taught by the
+[LLM adapter manual](intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md)
+and guarded by `tests/test_codex_credits.py`.
 
 ## Unified fixed projection
 

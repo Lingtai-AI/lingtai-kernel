@@ -127,6 +127,7 @@ def register_all_adapters() -> None:
         )
         d = defaults or {}
         codex_id_kw: dict = {}
+        codex_id_kw["codex_allow_credits"] = d.get("codex_allow_credits", False)
         for cfg_key in ("codex_session_anchor", "codex_thread_salt"):
             val = d.get(cfg_key)
             if val is not None:

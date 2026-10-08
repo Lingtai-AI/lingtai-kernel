@@ -161,6 +161,8 @@ LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # ``priority``; ``auto``/``default``/``flex``/``priority`` verbatim; any
     # other value fails validation. ``anthropic``/``claude-code`` ignore it.
     "service_tier": str,
+    # Native Codex requests may use purchased credits only after explicit opt-in.
+    "codex_allow_credits": bool,
 }
 LLM_SPECIAL_KNOWN: set[str] = {"thinking"}
 # manifest.llm fields retired from the active schema but still tolerated on
