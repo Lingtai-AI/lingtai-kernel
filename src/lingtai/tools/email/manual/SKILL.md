@@ -1,7 +1,7 @@
 ---
 name: email-manual
 description: >
-  Internal LingTai mail: send/read/dismiss/reply, bare-path addressing,
+  Internal LingTai mail: send/read/dismiss/reply, absolute-path addressing,
   delayed self-send time capsules, and full-body persistent notifications.
   Not internet email (see `mcp-manual`) or recurring schedules (see `shell-manual`).
 version: 1.3.0
@@ -40,9 +40,10 @@ optional `null` means omitted. Root `summarize` is not an input field.
 - **Browse:** `email(action="check", input={}, reasoning="inspect inbox")`.
   Use returned own-mailbox IDs; `search` is regex search. Never send raw local IDs
   as references in mail/public prose.
-- **New message:** verify the recipient directory, then `send` with `address`
-  and `message`. Ordinary `peer` addressing is bare/path-based, with no `@`;
-  `abs` requires an explicitly authorized cross-network target, not guessed routing.
+- **New message:** verify the recipient directory, then `send` with an absolute
+  `address` (the recipient's agent-workdir path) and `message`. Bare names and
+  `@` addresses are refused; legacy mail without a route is answered as the
+  routing reference describes.
 - Address a sender by non-empty `sender_nickname`, else `sender_name`. Reply on
   the arrival channel, not private text output. Read the routing reference before
   an exceptional channel pivot.
@@ -58,7 +59,7 @@ configuration changes, lifecycle intervention, or cleanup.
 
 | Need | Read |
 |---|---|
-| Recipient discovery, `peer`/`abs`, return routes, identity, replies | [Addressing and replies](reference/addressing-and-replies/SKILL.md) |
+| Absolute recipient paths, return routes, legacy mail without a route, identity, replies | [Addressing and replies](reference/addressing-and-replies/SKILL.md) |
 | Filters/folders, self-send, attachments, storage and retention | [Actions and storage](reference/actions-and-storage/SKILL.md) |
 | Liveness, delivery ordering, bounces, unread/overflow handling | [Notifications and delivery](reference/notifications-and-delivery/SKILL.md) |
 | SHOW sources, changes, timing and redaction | [Settings reference](reference/settings-reference/SKILL.md) |

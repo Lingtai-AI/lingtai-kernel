@@ -1,7 +1,7 @@
 """Regression tests for issue #145 — internal email reply route preservation.
 
 When two `.lingtai/` networks both contain an agent named ``mimo-1``,
-``email(action="send", mode="abs", address=...)`` from A to B followed by
+``email(action="send", address=<absolute path>)`` from A to B followed by
 ``email(action="reply", ...)`` on the receiving side must route back to the
 original sender's absolute path — not collapse to the ambiguous bare name and
 self-deliver inside the responder's own network.
@@ -62,7 +62,7 @@ def _make_inbox_email(working_dir: Path, *, sender: str, subject: str = "hello",
 
 
 def test_abs_send_embeds_return_route_in_dispatched_payload(tmp_path):
-    """``_send(mode="abs")`` must persist a concrete return route so the
+    """A send to an absolute path must persist a concrete return route so the
     recipient's later ``reply`` can address the original sender exactly,
     even when ``from`` is later trimmed/normalized."""
     sender_dir = tmp_path / "dev-1" / ".lingtai" / "mimo-1"
@@ -77,7 +77,6 @@ def test_abs_send_embeds_return_route_in_dispatched_payload(tmp_path):
     recipient_path = str(tmp_path / "dev-2" / ".lingtai" / "mimo-1")
     result = agent._email_manager.handle({
         "action": "send",
-        "mode": "abs",
         "address": recipient_path,
         "subject": "hi",
         "message": "ping",
@@ -93,16 +92,16 @@ def test_abs_send_embeds_return_route_in_dispatched_payload(tmp_path):
     dispatched = mock_svc.send.call_args[0][1]
     rr = dispatched.get("_return_route")
     assert rr is not None, "abs send must embed _return_route"
-    assert rr.get("mode") == "abs"
+    assert set(rr) == {"address", "sender_agent_id"}
     assert rr.get("address") == str(sender_dir)
-    # sender_agent_id is mandatory for the ambiguity guard on reply.
     assert rr.get("sender_agent_id") == agent._agent_id
 
     agent.stop(timeout=1.0)
 
 
-def test_peer_send_does_not_embed_return_route(tmp_path):
-    """Peer-mode (intra-network) sends keep the lean payload — no route needed."""
+def test_bare_name_send_is_refused_without_dispatch(tmp_path):
+    """Every send address must be an absolute agent-workdir path, so a bare
+    name is refused before anything is queued or dispatched."""
     sender_dir = tmp_path / "dev-1" / ".lingtai" / "mimo-1"
     sender_dir.mkdir(parents=True)
     agent = Agent(service=make_mock_service(), agent_name="mimo-1",
@@ -112,28 +111,22 @@ def test_peer_send_does_not_embed_return_route(tmp_path):
     mock_svc.send.return_value = None
     agent._mail_service = mock_svc
 
-    agent._email_manager.handle({
+    result = agent._email_manager.handle({
         "action": "send",
         "address": "peer-2",
         "subject": "hi",
         "message": "ping",
     })
-
-    deadline = time.time() + 2.0
-    while time.time() < deadline and not mock_svc.send.called:
-        time.sleep(0.05)
-    assert mock_svc.send.called
-
-    dispatched = mock_svc.send.call_args[0][1]
-    assert dispatched.get("_return_route") in (None,)
+    assert "error" in result and "absolute" in result["error"], result
+    assert not mock_svc.send.called
 
     agent.stop(timeout=1.0)
 
 
-def test_reply_uses_return_route_address_in_abs_mode(tmp_path):
-    """When an inbound message carries ``_return_route`` (mode=abs), the
-    reply must be dispatched in abs mode to the route's address — not to
-    the bare ``from`` alias."""
+def test_reply_uses_return_route_address(tmp_path):
+    """When an inbound message carries ``_return_route``, the reply must be
+    dispatched to the route's absolute address — not to the bare ``from``
+    alias."""
     # dev-2 side: where we live and reply *from*.
     responder_dir = tmp_path / "dev-2" / ".lingtai" / "mimo-1"
     responder_dir.mkdir(parents=True)
@@ -152,7 +145,7 @@ def test_reply_uses_return_route_address_in_abs_mode(tmp_path):
         message="original",
         identity={"agent_name": "mimo-1", "agent_id": "AGENT-DEV-1",
                   "admin": {}},
-        return_route={"mode": "abs", "address": original_sender_abs,
+        return_route={"address": original_sender_abs,
                       "sender_agent_id": "AGENT-DEV-1"},
     )
     result = agent._email_manager.handle({
@@ -167,20 +160,17 @@ def test_reply_uses_return_route_address_in_abs_mode(tmp_path):
         time.sleep(0.05)
     assert mock_svc.send.called, "reply was never dispatched"
 
-    call = mock_svc.send.call_args
-    address_arg = call[0][0]
-    kwargs = call[1]
+    address_arg = mock_svc.send.call_args[0][0]
     assert address_arg == original_sender_abs, (
-        f"reply went to {address_arg!r} not the abs return route"
+        f"reply went to {address_arg!r} not the return route"
     )
-    assert kwargs.get("mode") == "abs"
 
     agent.stop(timeout=1.0)
 
 
 def test_reply_falls_back_to_abs_when_from_is_absolute_path(tmp_path):
     """Older messages without ``_return_route`` but with an absolute ``from``
-    should still be replied to via abs mode — graceful upgrade path."""
+    should still be replied to at that absolute address — graceful upgrade path."""
     responder_dir = tmp_path / "dev-2" / ".lingtai" / "mimo-1"
     responder_dir.mkdir(parents=True)
     agent = Agent(service=make_mock_service(), agent_name="mimo-1",
@@ -211,95 +201,108 @@ def test_reply_falls_back_to_abs_when_from_is_absolute_path(tmp_path):
     assert mock_svc.send.called
 
     address_arg = mock_svc.send.call_args[0][0]
-    kwargs = mock_svc.send.call_args[1]
     assert address_arg == original_sender_abs
-    assert kwargs.get("mode") == "abs"
 
     agent.stop(timeout=1.0)
 
 
-def test_reply_to_same_network_bare_address_still_uses_peer_mode(tmp_path):
-    """Same-network replies must not be perturbed: bare ``from`` →
-    peer-mode dispatch to the same bare address."""
-    responder_dir = tmp_path / "dev-2" / ".lingtai" / "mimo-1"
+@pytest.mark.parametrize(
+    "responder_root,responder_name,sender,identity",
+    [
+        pytest.param(
+            "dev-2", "mimo-1", "peer-7",
+            {"agent_name": "peer-7", "agent_id": "AGENT-PEER-7", "admin": {}},
+            id="bare_peer_name",
+        ),
+        pytest.param(
+            "dev-2", "mimo-1", "mimo-1",
+            {"agent_name": "mimo-1", "agent_id": "AGENT-DEV-1", "admin": {}},
+            id="self_name_collision_issue_145",
+        ),
+        pytest.param(
+            "project", "orchestrator", "human",
+            {"agent_name": "human", "admin": None},
+            id="human_mail_without_route",
+        ),
+    ],
+)
+def test_reply_without_route_and_bare_from_is_refused(
+    tmp_path, responder_root, responder_name, sender, identity,
+):
+    """There is no bare-name reply target: a route-less reply whose ``from``
+    is a bare (non-absolute) name is always refused and nothing is
+    dispatched — whether that bare name is an unrelated peer, the TUI's
+    human mail writer, or (the exact bug behind issue #145) a name that
+    collides with the responder's own network."""
+    responder_dir = tmp_path / responder_root / ".lingtai" / responder_name
     responder_dir.mkdir(parents=True)
-    agent = Agent(service=make_mock_service(), agent_name="mimo-1",
+    agent = Agent(service=make_mock_service(), agent_name=responder_name,
                   working_dir=responder_dir)
     mock_svc = MagicMock()
-    mock_svc.address = "mimo-1"
+    mock_svc.address = responder_name
     mock_svc.send.return_value = None
     agent._mail_service = mock_svc
 
     eid = _make_inbox_email(
         responder_dir,
-        sender="peer-7",
+        sender=sender,
         subject="hey",
         message="howdy",
-        identity={"agent_name": "peer-7", "agent_id": "AGENT-PEER-7",
-                  "admin": {}},
-    )
-    agent._email_manager.handle({
-        "action": "reply",
-        "email_id": [eid],
-        "message": "back at you",
-    })
-
-    deadline = time.time() + 2.0
-    while time.time() < deadline and not mock_svc.send.called:
-        time.sleep(0.05)
-    assert mock_svc.send.called
-
-    address_arg = mock_svc.send.call_args[0][0]
-    kwargs = mock_svc.send.call_args[1]
-    assert address_arg == "peer-7"
-    # Peer is the default; allow either explicit "peer" or absent.
-    assert kwargs.get("mode", "peer") == "peer"
-
-    agent.stop(timeout=1.0)
-
-
-def test_reply_self_route_with_different_agent_id_is_refused(tmp_path):
-    """Ambiguity guard: if the reply would target the responder's own
-    workdir while ``sender_agent_id`` says the original came from a
-    different agent, the reply must fail loudly rather than silently
-    self-deliver (the exact bug observed in issue #145)."""
-    responder_dir = tmp_path / "dev-2" / ".lingtai" / "mimo-1"
-    responder_dir.mkdir(parents=True)
-    agent = Agent(service=make_mock_service(), agent_name="mimo-1",
-                  working_dir=responder_dir)
-    mock_svc = MagicMock()
-    mock_svc.address = "mimo-1"
-    mock_svc.send.return_value = None
-    agent._mail_service = mock_svc
-
-    # No ``_return_route`` and bare ``from`` that resolves to self under
-    # the peer-resolution rule; identity says the sender is a different
-    # agent. This is the exact shape of the dev-1→dev-2 reply that bit
-    # us live.
-    eid = _make_inbox_email(
-        responder_dir,
-        sender="mimo-1",
-        subject="cross-project ping",
-        message="please reply",
-        identity={"agent_name": "mimo-1", "agent_id": "AGENT-DEV-1",
-                  "admin": {}},
+        identity=identity,
+        to=[responder_name],
     )
     result = agent._email_manager.handle({
         "action": "reply",
         "email_id": [eid],
-        "message": "should be refused",
+        "message": "back at you",
     })
-    assert "error" in result, f"expected ambiguity error, got {result!r}"
-    assert "email(action='send', input={'mode': 'abs'," in result["error"]
+    assert "error" in result and "not an absolute address" in result["error"], result
+    assert "email(action='send', input={'address': " in result["error"]
     assert "reasoning=" in result["error"]
-    assert "email(action='send', mode='abs'" not in result["error"]
     err = result["error"].lower()
-    assert "ambig" in err or "abs" in err or "self" in err, (
-        f"error should explain the ambiguity, got: {result['error']!r}"
+    assert "absolute" in err, (
+        f"error should name the absolute-route requirement, got: {result['error']!r}"
     )
-    # No outbound dispatch.
     time.sleep(0.3)
     assert not mock_svc.send.called
+
+    agent.stop(timeout=1.0)
+
+
+def test_reply_to_tui_human_mail_uses_stamped_route(tmp_path):
+    """TUI human mail carries a bare ``from`` (``human``) plus an absolute
+    ``_return_route``; the reply must go to the human's directory."""
+    responder_dir = tmp_path / "project" / ".lingtai" / "orchestrator"
+    responder_dir.mkdir(parents=True)
+    human_dir = tmp_path / "project" / ".lingtai" / "human"
+    agent = Agent(service=make_mock_service(), agent_name="orchestrator",
+                  working_dir=responder_dir)
+    mock_svc = MagicMock()
+    mock_svc.address = "orchestrator"
+    mock_svc.send.return_value = None
+    agent._mail_service = mock_svc
+
+    eid = _make_inbox_email(
+        responder_dir,
+        sender="human",
+        subject="need a hand",
+        message="status?",
+        identity={"agent_name": "human", "admin": None},
+        return_route={"address": str(human_dir), "sender_agent_id": ""},
+        to=["orchestrator"],
+    )
+    result = agent._email_manager.handle({
+        "action": "reply",
+        "email_id": [eid],
+        "message": "all good",
+    })
+    assert result.get("status") == "sent", result
+
+    deadline = time.time() + 2.0
+    while time.time() < deadline and not mock_svc.send.called:
+        time.sleep(0.05)
+    assert mock_svc.send.called, "reply was never dispatched"
+    assert mock_svc.send.call_args[0][0] == str(human_dir)
 
     agent.stop(timeout=1.0)
 
@@ -312,10 +315,10 @@ def test_reply_self_route_with_different_agent_id_is_refused(tmp_path):
 def test_abs_reply_lands_in_original_sender_inbox_not_self(tmp_path):
     """Full integration: dev-1 and dev-2 both run an agent named ``mimo-1``.
     The live regression from #145 surfaces on the *second* reply: dev-2
-    sends abs to dev-1, dev-1 replies (this hop works because peer-mode
-    resolution still honours the abs ``from`` address), then dev-2 replies
-    to dev-1's reply. That third hop is where the bare-alias ``from`` made
-    the message self-deliver inside dev-2's own network.
+    sends to dev-1's absolute path, dev-1 replies (this hop works because the
+    route on dev-2's send names dev-2's absolute workdir), then dev-2 replies
+    to dev-1's reply. That third hop is where the bare-alias ``from`` made the
+    message self-deliver inside dev-2's own network.
     """
     from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
@@ -364,7 +367,6 @@ def test_abs_reply_lands_in_original_sender_inbox_not_self(tmp_path):
         # Hop 1: dev-2 sends abs to dev-1.
         send_result = dev2._email_manager.handle({
             "action": "send",
-            "mode": "abs",
             "address": str(dev1_dir),
             "subject": "ping from dev-2",
             "message": "are you there?",
