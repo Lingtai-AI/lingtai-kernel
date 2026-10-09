@@ -1,14 +1,17 @@
 ---
 name: knowledge-contract
-tool: knowledge
-contract_version: 2
+contract_version: 3
 related_files:
   - src/lingtai/tools/knowledge/__init__.py
   - src/lingtai/tools/knowledge/ANATOMY.md
+  - src/lingtai/tools/knowledge/manual/SKILL.md
+  - src/lingtai/tools/_catalog.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - tests/test_knowledge.py
   - tests/test_tool_family_knowledge_migration_parity.py
+  - tests/test_psyche_family.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -19,8 +22,12 @@ maintenance: |
 
 `knowledge` is the agent-private durable knowledge capability. It scans the
 agent's local `knowledge/` directory for `KNOWLEDGE.md`-bearing entries and
-injects a compact catalog into the system prompt. The implementation lives in
-`src/lingtai/tools/knowledge/`; the code is the source of truth.
+injects a compact catalog into the system prompt. It registers **no**
+model-facing tool: since the Psyche consolidation the standalone `knowledge`
+root and its `info` / `manual` actions are retired, and guidance for this
+domain is served read-only through `psyche(action="knowledge")`. The
+implementation lives in `src/lingtai/tools/knowledge/`; the code is the source
+of truth.
 
 ## Routing Card
 Guarded by: [KN001](BEHAVIORS.md#behavior-kn001)
@@ -29,7 +36,7 @@ Guarded by: [KN001](BEHAVIORS.md#behavior-kn001)
 **Use this when:**
 - You are editing the private durable knowledge capability.
 - You are reviewing the catalog scanner, prompt injection, frontmatter schema,
-  or the knowledge/skill boundary.
+  legacy migration, or the knowledge/skill boundary.
 - You need to verify that knowledge entries can carry private references
   (local paths, mail ids, logs) without violating the skills contract.
 
@@ -37,21 +44,23 @@ Guarded by: [KN001](BEHAVIORS.md#behavior-kn001)
 - Skill catalog behavior: read `src/lingtai/tools/skills/CONTRACT.md` (the
   structurally isomorphic, physically separate sibling).
 - Code navigation only: read `src/lingtai/tools/knowledge/ANATOMY.md`.
+- The public manual-routing envelope: read
+  `src/lingtai/tools/psyche/CONTRACT.md`, which owns the one public root.
 - Authoring procedures for sharing across agents: write a skill instead.
 
-**Fast paths:** tool schema -> §Tool surface; on-disk layout -> §Storage;
-how it differs from skills -> §Knowledge vs skills.
+**Fast paths:** public guidance route -> §Tool surface; private
+setup/reconciliation lifecycle -> §Private lifecycle; on-disk layout ->
+§Storage; how it differs from skills -> §Knowledge vs skills.
 
 ## Scope
 
 - Canonical capability name: `knowledge`.
-- Canonical tool name: `knowledge`.
-- Former names `library` and `codex` are intentionally not compatibility aliases.
-
-This is a breaking rename while the user base is still small. New manifests must
-spell the private durable store as `knowledge`. Old `library`/`codex` capability
-entries are skipped as unknown capabilities; old `library(...)`/`codex(...)`
-tool calls are unavailable.
+- Public tool name: none. The former `knowledge` root and its `info` and
+  `manual` actions were retired in the Psyche consolidation with no alias,
+  wrapper, or compatibility path; those spellings are unknown and fail loudly.
+- Former names `library` and `codex` are intentionally not compatibility
+  aliases. Old `library`/`codex` capability entries are skipped as unknown
+  capabilities; old `library(...)`/`codex(...)` tool calls are unavailable.
 
 `knowledge` means private durable memory: what one agent has learned, decided,
 and discovered. `skills` means portable procedure catalog. Knowledge entries
@@ -66,81 +75,65 @@ The two capabilities are structurally isomorphic but physically separate:
 |---|---|---|
 | Root directory | `<agent>/.library/{intrinsic,custom}/` | `<agent>/knowledge/` |
 | Manifest file | `SKILL.md` | `KNOWLEDGE.md` |
-| Tool name | `skills` | `knowledge` |
-| Tool surface | `info`, `manual` (unmigrated flat schema) | `info`, `manual` (LTP v2 family envelope) |
+| Model-facing tool | none — guidance via `psyche(action="skills")` | none — guidance via `psyche(action="knowledge")` |
 | Prompt section | protected `skills` (YAML catalog) | protected `knowledge` (YAML catalog) |
 | Extra path sources | `manifest.capabilities.skills.paths` | none — strictly per-agent |
 | Visibility | portable / shareable | private / agent-owned |
 | May reference local paths, mail ids, logs | no | yes |
 
-Two separate handlers register two separate tools. Shared Markdown catalog
-mechanics live in `src/lingtai/tools/_catalog.py`; each capability keeps its own
-tool, storage root, prompt section, and semantic contract so private knowledge
-does not leak into the public skill catalog.
+Shared Markdown catalog mechanics live in `src/lingtai/tools/_catalog.py`; each
+capability keeps its own storage root, prompt section, and semantic contract so
+private knowledge does not leak into the public skill catalog. Neither
+capability registers a tool of its own; both serve guidance through the one
+read-only `psyche` root.
 
 ## Tool surface
 
-`knowledge` is a migrated **LTP v2 family** (`src/lingtai/tools/CONTRACT.md`).
-Its public name and its two public action values are unchanged by that
-migration; the root envelope is what changed. The model-facing root is the
-closed object `{action, input, reasoning, summarize}` with
-`additionalProperties: false` and `required: [action, input, reasoning]`.
-`summarize` is the optional root-only Host presentation control and is never
-action input.
+None. This capability registers no model-facing tool, schema, handler, or
+action. `src/lingtai/tools/knowledge/__init__.py` exposes no `get_schema`,
+`get_description`, `handle`, or `ACTION_ORDER`, and `setup()` mounts nothing
+onto the agent's tool surface. `knowledge` is absent from
+`_LTP_V2_MIGRATED_FAMILIES` (`src/lingtai/kernel/tool_result_summary.py`), and
+it appears in the daemon `EMANATION_BLACKLIST` only as a capability name that
+must stay off the borrowable host-tool floor.
 
-`action` selects one child; `input` is that child's own strict object. Both
-children take the canonical **strict-empty** input
-(`{"type": "object", "properties": {}, "required": [], "additionalProperties": false}`)
-because neither operation ever took an argument:
+The public entry for this domain is the read-only
+`psyche(action="knowledge")` call owned by
+`src/lingtai/tools/psyche/CONTRACT.md`. It returns the installed knowledge
+manual as `{status, manual, manual_path}`; a missing manual returns
+`status: "degraded"` with an empty `manual`, the resolved `manual_path`, and an
+`error`. The call takes the canonical strict-empty `input`; it creates, edits,
+searches, rescans, and loads nothing, and a manual load never reaches the
+catalog scanner, the reconciler, or the legacy migration.
 
-| Action | `input` | Return on success |
-|---|---|---|
-| `info` | `{}` (strict empty) | `{status: "ok", knowledge_dir, catalog_size, problems}` |
-| `manual` | `{}` (strict empty) | `{status: "ok", knowledge_manual, manual_path}` |
+The retired surface fails loudly, before any file is read: the old `knowledge`
+root, its `info` and `manual` actions, the historical JSON-database actions
+(`submit`, `view`, `consolidate`, `delete`), and the former `library`/`codex`
+names are all unknown on the one public `psyche` root, with no alias or
+compatibility path. There is no in-tool capacity limit; the historical
+`knowledge_limit` kwarg is accepted by `setup()` but ignored. The capability
+supports no settings file at any level; nothing is configurable and no settings
+document is ever read or written.
 
-The composed schema correlates each action `const` with its exact `input`
-schema at the root (`allOf`/`if`/`then`) and additionally discloses every
-action's shape under `input.oneOf`. Both surfaces reach the Chat Completions
-and Responses wires; the Responses builder rewrites nested `oneOf` to `anyOf`
-but preserves the root correlation.
+## Private lifecycle
 
-Behavior is preserved exactly across the migration:
+What survived the retirement is private lifecycle ownership, unchanged:
 
-- `info` re-scans and reconciles the private knowledge catalog, rewrites the
-  protected prompt section, and returns health only. It never loads entry
-  bodies into its result and never mutates entries.
-- `manual` returns the current knowledge-manual body at `knowledge_manual` and
-  its host-local path at `manual_path`. It performs no scan, no reconciliation,
-  and no mutation. A missing manual returns `status: "degraded"` with an empty
-  `knowledge_manual`, the resolved `manual_path`, and an `error`. This result
-  is the child's own canonical shape, returned verbatim by the dispatcher with
-  no double wrap.
-
-Neither action creates, edits, searches, or loads knowledge entries; the tool
-remains a signpost. Because both child inputs are strict-empty, *any* `input`
-key — including an authoring or search field — is rejected at dispatch before
-the handler runs, with `{status: "failed", error_code: "INVALID_ARGUMENT"}`.
-Unknown root fields and a non-boolean `summarize` fail the same way.
-
-Unknown actions return knowledge's exact pre-migration envelope,
-`{status: "error", message: "unknown action: <repr>, only 'info' or 'manual' is
-supported"}`, and do not mutate state; a missing `action` renders the
-empty-string default and an unhashable `action` (invalid JSON, issue #513)
-renders its repr rather than raising. That shape is preserved by knowledge's
-own Host layer after dispatch, not by altering the generic dispatcher's
-canonical `ACTION_REQUIRED` failure.
-
-The family supports no settings files at either LTP settings level; there is
-nothing to configure and no file is ever read.
-
-The previous JSON-database actions (`submit`, `view`, `consolidate`, `delete`)
-are intentionally removed: knowledge is now authored by writing `KNOWLEDGE.md`
-files through `shell`, just like skills. There is no
-in-tool capacity limit; the historical `knowledge_limit` kwarg is accepted but
-ignored.
-
-Only `knowledge(...)` is registered. There is no `library(...)` or `codex(...)`
-alias.
+- `setup()` (the setup/refresh lifecycle entry) runs `_reconcile(agent)`: the
+  one-time legacy JSON migration, then catalog composition. It returns the
+  health result `{status, knowledge_dir, catalog_size, problems}`; it never
+  loads entry bodies into its result and never mutates authored entries.
+- `_compose_catalog(agent, *, publish=True)` is the pure read composer: it
+  scans `<agent>/knowledge/`, rewrites the protected `knowledge` prompt
+  section, and reports the same health shape. With `publish=False` it writes
+  the section without flushing, so full-context reconstruction composes every
+  canonical section before the one final prompt publication.
+- `_reconcile` is the ONLY path that performs the legacy migration, because
+  migration writes inside `knowledge/` and renames the legacy source; catalog
+  recomposition — including the full-context reconstruction path in
+  `Agent._reload_prompt_sections` — deliberately never migrates.
+- Neither `_reconcile` nor `_compose_catalog` is reachable from any
+  model-facing action.
 
 ## Storage
 
@@ -182,21 +175,28 @@ attachments). Those files are not parsed by the capability; the agent opens
 them via `shell` when it loads an entry.
 
 The agent is the sole long-term author of `knowledge/`. The only capability
-write is a one-time legacy migration: if `knowledge/knowledge.json` or old `codex/codex.json` exists, entries are converted to `knowledge/<slug>/KNOWLEDGE.md`, each legacy `supplementary` field is written to `references/supplementary.md`, and the source JSON is renamed to `<name>.json.migrated` to prevent repeat work.
+write is a one-time legacy migration: if `knowledge/knowledge.json` or old
+`codex/codex.json` exists, entries are converted to `knowledge/<slug>/KNOWLEDGE.md`,
+each legacy `supplementary` field is written to `references/supplementary.md`,
+and the source JSON is renamed to `<name>.json.migrated` to prevent repeat
+work.
 
 ## Prompt injection
 
-On setup and on every `info` call, the capability rewrites protected prompt
-section `knowledge`:
+On setup/refresh reconciliation (`_reconcile`) and on every full-context
+reconstruction (`_compose_catalog`, invoked from `Agent._reload_prompt_sections`
+with `publish=False`), the capability rewrites protected prompt section
+`knowledge`:
 
-- If there are entries, the section contains a preamble plus a YAML
-  catalog. Each entry is rendered as a `- name:` block with `location:`
-  (absolute `KNOWLEDGE.md` path) and a `description:` block scalar.
+- If there are entries, the section contains a preamble plus a YAML catalog.
+  Each entry is rendered as a `- name:` block with `location:` (absolute
+  `KNOWLEDGE.md` path) and a `description:` block scalar.
 - If there are no entries, the section is cleared.
 
-Only `name`, `description`, and `path` are ever injected. Bodies and supporting
-files stay out of the prompt until the agent loads them through `read`. This
-mirrors the skills catalog and keeps the always-on prompt cheap.
+Only `name`, `description`, and `location` are ever injected. Bodies and
+supporting files stay out of the prompt until the agent loads them through the
+regular `shell` tool. This mirrors the skills catalog and keeps the always-on
+prompt cheap.
 
 ## Knowledge / skill directionality
 
@@ -214,63 +214,53 @@ skill -> private knowledge.
 
 | Claim | Source | Test |
 |---|---|---|
-| `knowledge` is the only private durable memory capability in the builtin registry | `src/lingtai/tools/registry.py` | `tests/test_check_caps.py::test_get_all_providers_includes_expected_capabilities` |
-| `knowledge` setup registers only the `knowledge` tool | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_setup_registers_only_knowledge_tool`, `tests/test_tool_family_knowledge_migration_parity.py::test_setup_registers_one_knowledge_tool_with_the_family_schema` |
-| The root envelope is the closed `action`/`input`/`reasoning`/`summarize` object with required `reasoning` | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_schema_root_is_closed_action_input_reasoning_summarize` |
-| Public action values are unchanged (`info`, `manual`) and no authoring/search/edit action exists | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_public_action_values_are_unchanged_by_the_migration`, `::test_family_has_no_authoring_search_or_edit_capability` |
-| Both child inputs are canonical strict-empty objects, correlated to their action const on both wires | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_child_inputs_are_canonical_strict_empty_objects`, `::test_root_allof_correlates_each_action_const_with_its_input_schema`, `::test_knowledge_family_schema_survives_chat_and_responses_wires` |
-| Missing or extra `input` fails before any handler I/O | `src/lingtai/tools/tool_family/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_missing_input_is_rejected_before_any_io`, `::test_extra_input_field_is_rejected_before_any_io` |
-| `info` re-scans and returns exact count/problems without loading bodies or mutating entries | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_info_rescans_and_reports_exact_count_and_problems`, `::test_info_does_not_load_bodies_or_mutate_entries` |
-| `manual` returns the current body/path and never rescans or mutates | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_manual_returns_body_and_path_without_rescanning`, `::test_manual_missing_is_degraded_and_still_no_rescan` |
-| The exact pre-migration unknown-action envelope survives the migration | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_unknown_action_returns_error` |
-| Legacy `knowledge/knowledge.json` and `codex/codex.json` entries migrate once into `KNOWLEDGE.md` folders; `supplementary` becomes `references/supplementary.md` | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_legacy_knowledge_json_migrates_to_knowledge_md`, `tests/test_knowledge.py::test_legacy_codex_json_migrates_to_knowledge_md` |
-| Manager-style lookup is exact: `knowledge` resolves and former names do not | `src/lingtai/agent.py` | `tests/test_knowledge.py::test_former_alias_capabilities_do_not_register_knowledge` |
-| Catalog reads `<agent>/knowledge/<name>/KNOWLEDGE.md` and excludes `SKILL.md` entries | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_md_convention_distinct_from_skill_md` |
-| Prompt catalog includes only `name`/`description`/`path` from frontmatter | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_prompt_catalog_only_metadata_not_body` |
-| Entries may carry references, scripts, and assets | filesystem convention | `tests/test_knowledge.py::test_entries_may_have_scripts_and_assets` |
+| `knowledge` remains a builtin capability in the registry with empty providers | `src/lingtai/tools/registry.py` | `tests/test_check_caps.py::test_get_all_providers_returns_all_capabilities`, `::test_builtin_capabilities_have_empty_providers` |
+| Setup registers no tool and the package exposes no schema/dispatch surface | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_setup_registers_no_tool`, `::test_knowledge_package_exposes_no_schema_or_dispatch`, `tests/test_tool_family_knowledge_migration_parity.py::test_knowledge_registers_no_tool_and_is_not_a_summarize_family` |
+| The public action inventory for this domain lives on the `psyche` root: `knowledge` present, `info` absent | `src/lingtai/tools/psyche/__init__.py` | `tests/test_knowledge.py::test_knowledge_manual_is_one_psyche_action`, `tests/test_psyche_family.py::test_exact_public_action_inventory` |
+| Every retired knowledge action (`submit`, `view`, `consolidate`, `delete`, `info`, …) fails loudly on the psyche root without mutating state | `src/lingtai/tools/psyche/__init__.py` | `tests/test_knowledge.py::test_retired_knowledge_actions_are_rejected_on_the_psyche_root`, `tests/test_psyche_family.py::test_unknown_or_retired_action_is_rejected` |
+| `_reconcile` re-scans and returns exact count/problems without loading bodies or mutating entries | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_reconcile_rescans_and_reports_exact_count_and_problems`, `::test_reconcile_does_not_load_bodies_or_mutate_entries` |
+| Legacy `knowledge/knowledge.json` and `codex/codex.json` migrate once into `KNOWLEDGE.md` folders; `supplementary` becomes `references/supplementary.md`; migration runs only from the setup/refresh lifecycle | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_legacy_knowledge_json_migrates_to_knowledge_md`, `::test_legacy_codex_json_migrates_to_knowledge_md`, `tests/test_tool_family_knowledge_migration_parity.py::test_setup_lifecycle_is_what_runs_the_legacy_migration`, `::test_catalog_recompose_never_runs_the_legacy_migration` |
+| Full-context reconstruction recomposes the catalog through the pure `_compose_catalog(publish=False)` composer | `src/lingtai/agent.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_full_context_rebuild_recomposes_the_catalog` |
+| The manual is returned through `psyche(action="knowledge")` with no catalog scan, no health fields, and no double wrap | `src/lingtai/tools/psyche/__init__.py`, `src/lingtai/tools/tool_family/manual.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_manual_returns_body_and_path_without_rescanning`, `::test_manual_missing_is_degraded_and_still_no_rescan` |
+| Manager-style lookup is exact: `knowledge` resolves and former names produce no tools | `src/lingtai/agent.py`, `src/lingtai/tools/registry.py` | `tests/test_knowledge.py::test_former_alias_capabilities_are_not_tools` |
+| Catalog reads `<agent>/knowledge/<name>/KNOWLEDGE.md` and excludes `SKILL.md` entries | `src/lingtai/tools/_catalog.py` | `tests/test_knowledge.py::test_knowledge_md_convention_distinct_from_skill_md` |
+| Prompt catalog includes only `name`/`description`/`location` from frontmatter, never bodies or supporting files | `src/lingtai/tools/_catalog.py` | `tests/test_knowledge.py::test_prompt_catalog_only_metadata_not_body` |
+| Entries may carry references, scripts, assets, and private local references in the body | filesystem convention | `tests/test_knowledge.py::test_entries_may_have_scripts_and_assets`, `::test_entry_may_reference_local_paths_in_body` |
 
 ## Verification matrix
 
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
-| `knowledge(...)` is the only private-memory tool | `tests/test_knowledge.py` | Boot with `capabilities={"knowledge": {}}` and inspect tools | Old names linger and confuse the model |
-| Former `library`/`codex` names do not register | alias-removal tests in `tests/test_knowledge.py` / `tests/test_skills.py` | Boot old manifests and inspect capability skip logs | Breaking rename is only half-applied |
+| No model-facing `knowledge` tool, schema, or handler exists | `tests/test_knowledge.py::test_knowledge_setup_registers_no_tool`, `::test_knowledge_package_exposes_no_schema_or_dispatch` | Boot with `capabilities={"knowledge": {}}` and inspect the built tool surface | Retired root silently returns; the model sends dead calls |
+| Calling any retired knowledge action fails loudly before any I/O | `tests/test_knowledge.py::test_retired_knowledge_actions_are_rejected_on_the_psyche_root` | Call `psyche(action="info", input={}, reasoning="x")` and read the typed unknown-action error | Removed actions silently no-op; the signpost boundary weakens |
 | Skills do not depend on private knowledge | documented invariant; enforce by review | Check shared skill docs for private paths/ids | Shared skills become non-portable |
 | Knowledge and skills use distinct manifest filenames | `tests/test_knowledge.py::test_knowledge_md_convention_distinct_from_skill_md` | Drop a `SKILL.md` into `<agent>/knowledge/foo/` and confirm it is not picked up | Physical separation collapses; private/public boundary blurs |
 | Body content stays out of prompt catalog | `tests/test_knowledge.py::test_prompt_catalog_only_metadata_not_body` | Author an entry with a long body and inspect the prompt section | Prompt bloat / private detail leakage |
-| LTP v2 envelope: closed root, strict-empty child inputs, pre-I/O rejection | `tests/test_tool_family_knowledge_migration_parity.py` | Call with an extra `input` field and confirm no rescan happens | Invalid calls reach handlers; the signpost boundary weakens |
-| `manual` performs no catalog scan or mutation | `tests/test_tool_family_knowledge_migration_parity.py::test_manual_returns_body_and_path_without_rescanning` | Author an entry, call `manual`, confirm the prompt section is unchanged | Reading guidance silently rewrites prompt state |
+| Legacy migration runs once, from setup/refresh only, never during catalog recomposition | `tests/test_tool_family_knowledge_migration_parity.py::test_setup_lifecycle_is_what_runs_the_legacy_migration`, `::test_catalog_recompose_never_runs_the_legacy_migration` | Place `knowledge/knowledge.json`, run a rebuild, confirm it is untouched; then reconcile and confirm exactly one migration | Repeat migration, or migration mid-reconstruction, loses data |
+| Loading the manual never rescans, reconciles, or mutates the catalog | `tests/test_tool_family_knowledge_migration_parity.py::test_manual_returns_body_and_path_without_rescanning` | Author an entry, call `psyche(action="knowledge")`, confirm the prompt section is unchanged | Reading guidance silently rewrites prompt state |
 
 Run before merging knowledge changes:
 
 ```bash
-python -m pytest tests/test_knowledge.py tests/test_tool_family_knowledge_migration_parity.py \
-  tests/test_skills.py tests/test_check_caps.py tests/test_daemon_preset_capabilities.py -q
+python -m pytest tests/test_knowledge.py tests/test_tool_family_knowledge_migration_parity.py tests/test_psyche_family.py -q
 ```
 
 ## Schema and glossary ownership
 
-- **Canonical identifiers:** function names, JSON property names, action/enum
-  values, required fields, defaults, and bounds are canonical English literals.
-  The schema (`get_schema()`) and description (`get_description()`) are
-  language-independent; the optional `lang` argument is accepted for source
-  compatibility but ignored.
-- **Provider wire:** provider adapters resolve the top-level tool description
-  through `wire_tool_description`: the global `WIRE_TOOL_DESCRIPTION` pointer
-  while the resident `## tools` section is opted in via
-  `LINGTAI_TOOL_PROSE_SECTION_ENABLED`, otherwise the full
-  `FunctionSchema.description` prose (that section is off by default, so the
-  wire is where the canonical prose lands). Nested parameter descriptions are
-  unchanged either way.
-- **Glossary resources:** this package owns `glossary-en.md`, `glossary-zh.md`,
-  and `glossary-wen.md`. Each has strict YAML frontmatter
+- **Canonical identifiers:** function names, JSON property names, frontmatter
+  fields, defaults, and bounds are canonical English literals. Since the
+  retirement there is no model-facing schema (`get_schema()`) or description
+  (`get_description()`) for this capability and nothing from it reaches the
+  provider wire.
+- **Glossary resources:** this package still owns `glossary-en.md`,
+  `glossary-zh.md`, and `glossary-wen.md`. Each has strict YAML frontmatter
   (`kind: tool-glossary`, `schema_version: 1`, `tool_package: tools.<pkg>`,
   `language: <lang>`). English body is empty; zh/wen bodies contain concise
   terminology mappings that quote immutable English identifiers and never offer
   localized aliases.
 - **Fallback:** exact normalized language lookup, then English, then no
   appendix. Fail-closed for localized text; fail-open for tool availability.
-- **Update triggers:** changing a function name, action/enum value, property
-  name, or user-visible concept requires reviewing all three glossary files in
-  the same PR.
+- **Update triggers:** changing a function name, property name, frontmatter
+  field, or user-visible concept requires reviewing all three glossary files
+  in the same PR.
 - **Validation:** `python -m lingtai.tools.glossary_validator --check`.

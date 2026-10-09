@@ -66,7 +66,7 @@ repo root with the project's Python.
 - **title**: a migrated family's model-facing root is exactly action/input/reasoning/summarize and closed
 - **guards**: `lingtai-tool-protocol` § Behavior
 - **runner**: any LingTai agent with `shell` access to this repository
-- **prerequisites**: a clean checkout of `<repo>`; one migrated family to probe (e.g. `shell`, `knowledge`, or `mcp`)
+- **prerequisites**: a clean checkout of `<repo>`; one migrated family to probe (e.g. `shell`, `mcp`, or `psyche`)
 - **estimate**: ≈ 20 minutes
 
 ### Steps
