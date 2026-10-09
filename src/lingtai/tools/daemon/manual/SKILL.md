@@ -72,7 +72,9 @@ daemon(action="emanate", input={
 ## Actions and completion
 
 `emanate` dispatches ids plus `group_id`; `list` inspects the index; `ask` sends
-a backend-specific follow-up; `check` reads state/events/artifact metadata and
+a backend-specific follow-up. Live native LingTai returns `queued` only after
+ID-bound durable admission, not model delivery, and `check` correlates pending
+IDs with bounded cumulative delivery evidence. `check` reads state/events/artifact metadata and
 durable result/error paths; `reclaim` cancels all running work owned by this manager, not one id,
 and leaves evidence. Confirm the whole affected scope before calling it. `list`, `check`, `settings`, and `manual` are read-only; `emanate`, `ask`, and `reclaim` are side-effectful.
 Example: `daemon(action="reclaim", input={}, reasoning="cancel all confirmed manager-owned work")`.

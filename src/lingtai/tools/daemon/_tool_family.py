@@ -295,7 +295,10 @@ ASK_INPUT_SCHEMA: dict[str, Any] = {
         },
         "message": {
             "type": "string",
-            "description": "Follow-up message; delivery is backend-specific and may be asynchronous or checkpoint-queued.",
+            "minLength": 1,
+            "maxLength": 50_000,
+            "pattern": r"\S",
+            "description": "Non-blank follow-up message; delivery is backend-specific and may be asynchronous or checkpoint-queued.",
         },
     },
     "required": ["id", "message"],

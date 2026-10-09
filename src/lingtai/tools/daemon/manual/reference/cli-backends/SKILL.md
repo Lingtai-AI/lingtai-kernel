@@ -39,7 +39,7 @@ text.
 
 | Backend (aliases) | Initial runner / native MCP | `ask` / completion |
 |---|---|---|
-| `lingtai` | in-process; task-scoped stdio + HTTP | live-only ask, no terminal resume; `finish(done)` enforced |
+| `lingtai` | in-process; task-scoped stdio + HTTP | marked/current live ask is ID-bound `queued`, then delivered by checkpoint or a legal text-only boundary; an unmarked/pre-upgrade live owner returns only `{status:"sent",id}` after durable legacy control-spool submission, not shared-inbox admission; no terminal resume; `finish(done)` enforced |
 | `claude-p` (`claude-code`) | `claude --print ... --mcp-config ... --strict-mcp-config` (stdio) | async resume; checkpoint + `finish(done)` |
 | `codex` | `codex exec --json` with `mcp_servers.*` overrides (stdio) | async resume; checkpoint + `finish(done)` |
 | `opencode` | `opencode run --format json`, `OPENCODE_CONFIG_CONTENT` (stdio) | async resume; checkpoint + `finish(done)` |
@@ -57,9 +57,11 @@ authenticated; an unavailable CLI fails rather than silently falling back.
 
 MCP-capable workers must call `finish` exactly once before their final report.
 `checkpoint` is live-only, bounded, cooperative, and nonterminal: it records
-progress and drains queued parent messages at the next checkpoint. It is not chat,
-stdin injection, preemption, cancellation, or a completion receipt. A missing
-or invalid finish makes the run failed; inspect its durable result and trace.
+progress and can atomically claim queued parent messages. Native LingTai uses the
+same inbox, so its legal text-only boundary may win first; `check` records which
+route delivered each bounded recent ID. This is not chat, stdin injection,
+preemption, cancellation, or a completion receipt. A missing or invalid finish
+makes the run failed; inspect its durable result and trace.
 
 ## Nested reference catalog
 
