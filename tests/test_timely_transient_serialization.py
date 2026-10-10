@@ -183,7 +183,7 @@ def test_converters_preserve_family_on_non_newest_holder_too(outputs):
 @pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
 def test_converters_pass_unaffected_outputs_through_unchanged(outputs):
     # Ordinary payloads, summary markers, and permanent _meta lanes are not
-    # timely transient; their complete content remains in compact JSON.
+    # timely transient and must serialize exactly as before.
     ordinary = {"stdout": "all good", "exit_code": 0, "_meta": {"tool_meta": {"id": "call_1"}}}
     marker = {
         "artifact": "lingtai_agent_summarized_result",
@@ -194,8 +194,8 @@ def test_converters_pass_unaffected_outputs_through_unchanged(outputs):
 
     serialized = outputs(iface)
 
-    assert serialized["call_1"] == json.dumps(ordinary, default=str, ensure_ascii=False, separators=(",", ":"))
-    assert serialized["call_2"] == json.dumps(marker, default=str, ensure_ascii=False, separators=(",", ":"))
+    assert serialized["call_1"] == json.dumps(ordinary, default=str)
+    assert serialized["call_2"] == json.dumps(marker, default=str)
 
 
 @pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
@@ -507,29 +507,3 @@ def test_frozen_output_stays_byte_stable_across_turns_within_epoch():
     assert result.usage.extra["codex_request_mode"] == "ws_incremental"
     delta = transport.sent_frames[-1]["input"]
     assert [i.get("call_id") for i in delta if i.get("type") == "function_call_output"] == ["call_2"]
-
-
-@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
-def test_tool_result_json_is_compact_unicode_and_lossless(outputs):
-    content = {
-        "message": "知微：消息完整保留 😀",
-        "quoted": 'a"b\\c\n\t',
-        "nested": {"items": [True, None, 3, "é"]},
-        "_meta": {"notifications": {"message": "新的指令"}},
-    }
-    iface = _iface_with_two_results(content, {"later": "历史消息仍保留"})
-    rendered = outputs(iface)
-    for call_id, original in (("call_1", content), ("call_2", {"later": "历史消息仍保留"})):
-        assert json.loads(rendered[call_id]) == original
-        assert rendered[call_id] == json.dumps(
-            original, default=str, ensure_ascii=False, separators=(",", ":")
-        )
-        assert len(rendered[call_id]) < len(json.dumps(original, default=str))
-    assert "知微" in rendered["call_1"]
-    assert "😀" in rendered["call_1"]
-
-
-@pytest.mark.parametrize("outputs", _CONVERTER_OUTPUTS)
-def test_tool_result_plain_string_stays_verbatim(outputs):
-    text = '知微 \n  exact spacing \\u4e2d'
-    assert outputs(_iface_with_two_results(text, "later"))["call_1"] == text

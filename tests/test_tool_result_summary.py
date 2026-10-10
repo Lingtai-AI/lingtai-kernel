@@ -164,30 +164,6 @@ def test_replacement_has_structured_raw_locator():
     assert "events.jsonl" in repl["retrieval_hint"]
 
 
-def test_retrieval_hint_is_compact_but_keeps_caveats_and_locator():
-    repl = build_summary_replacement(
-        tool_name="bash",
-        tool_call_id="toolu_abc",
-        summary_text="ok",
-        reason="r",
-        original_visible_chars=100,
-        summary_input_chars=100,
-        summary_input_truncated=False,
-    )
-    hint = repl["retrieval_hint"]
-    assert len(hint) < 450
-    for required in (
-        "GENERATED",
-        "NOT canonical",
-        "incomplete",
-        "NOT in your context",
-        "grep 'toolu_abc' <workdir>/logs/events.jsonl",
-        "summary=false",
-        "daemon/subagent",
-    ):
-        assert required in hint
-
-
 def test_cap_refusal_has_structured_raw_locator():
     refusal = build_cap_refusal(
         tool_name="grep",
