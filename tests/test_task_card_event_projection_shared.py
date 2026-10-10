@@ -729,6 +729,88 @@ def test_residual_subtracts_measured_idle_without_changing_gap_or_speed():
     assert "☕105.0s" in render(121, usage, stream_metrics=True, idle_s=105)
 
 
+def _delta_fold(events):
+    state, deltas = None, []
+    for event in events:
+        state, delta = TaskCardEventProjection.reduce_input_delta_event(state, event)
+        if event.get("type") == "llm_response":
+            deltas.append(delta)
+    return deltas
+
+
+def _resp(api, total, **extra):
+    return {"type": "llm_response", "api_call_id": api, "input_tokens": total,
+            "cached_tokens": 0, "output_tokens": 1, **extra}
+
+
+def test_input_delta_symbol_differs_from_uncached_and_is_telegram_only():
+    previous = _resp("api_1", 156_185)
+    current = _resp("api_2", 157_504, cached_tokens=153_600, output_tokens=625,
+                    thinking_tokens=0)
+    deltas = _delta_fold([previous, current])
+    assert deltas == [None, 1_319]
+    _, usage = TaskCardEventProjection.project_llm_response_usage(current)
+    usage["input_delta"] = deltas[1]
+    text = TaskCardEventProjection.format_divider_info(None, usage, stream_metrics=True)
+    assert text == "↓625 (0) Δ +1.3k ↑3.9k ◌ 157.5k | 97.5%"
+    assert "input" not in text
+    legacy = TaskCardEventProjection.format_divider_info(None, usage)
+    assert "Δ" not in legacy and "↑3.9k" in legacy
+
+
+def test_input_delta_zero_negative_and_render_signs():
+    assert _delta_fold([_resp("a", 100), _resp("b", 100), _resp("c", 40)]) == [None, 0, -60]
+    fmt = TaskCardEventProjection.format_divider_info
+    assert "Δ 0 " in fmt(None, {"output": 1, "input_delta": 0}, stream_metrics=True) + " "
+    assert "Δ -1.5k" in fmt(None, {"output": 1, "input_delta": -1_500}, stream_metrics=True)
+    assert "Δ" not in fmt(None, {"output": 1, "input_delta": True}, stream_metrics=True)
+
+
+def test_input_delta_first_missing_malformed_estimated_do_not_bridge():
+    for bad in ({"input_tokens": None}, {"input_tokens": "9"}, {"input_tokens": True},
+                {"input_tokens": 0}, {"input_tokens": -5}, {"estimated": True},
+                {"api_call_id": ""}):
+        events = [_resp("a", 100), _resp("b", 200, **bad), _resp("c", 300)]
+        assert _delta_fold(events) == [None, None, None], bad
+    assert _delta_fold([_resp("a", 100)]) == [None]
+
+
+def test_input_delta_duplicate_and_carrier_do_not_move_baseline():
+    carrier = {"type": "notification_block_injected", "call_id": "t"}
+    events = [_resp("a", 100), carrier, _resp("a", 999), carrier, _resp("b", 130)]
+    assert _delta_fold(events) == [None, None, 30]
+
+
+def test_input_delta_pure_text_predecessor_counts_and_lifecycle_resets():
+    # A pure-text call has no tool row but still is the immediate predecessor.
+    assert _delta_fold([_resp("text", 500), _resp("tool", 560)]) == [None, 60]
+    for boundary in ("psyche_molt", "heartbeat_start", "heartbeat_stop", "agent_stop"):
+        events = [_resp("a", 200_000), {"type": boundary}, _resp("b", 8_000),
+                  _resp("c", 9_000)]
+        assert _delta_fold(events) == [None, None, 1_000], boundary
+
+
+def test_input_delta_uses_session_generation_and_index_evidence():
+    def resp(api, total, molt, index):
+        return _resp(api, total, session_usage={
+            "schema": TaskCardEventProjection.SESSION_USAGE_SCHEMA,
+            "molt_count": molt, "api_call_index": index})
+    assert _delta_fold([resp("a", 100, 0, 1), resp("b", 150, 0, 2)]) == [None, 50]
+    # New generation (molt not journaled) and an unseen intervening call.
+    assert _delta_fold([resp("a", 200_000, 0, 9), resp("b", 5_000, 1, 1)]) == [None, None]
+    assert _delta_fold([resp("a", 100, 0, 1), resp("b", 150, 0, 3)]) == [None, None]
+
+
+def test_input_delta_survives_later_carrier_attachment():
+    usage = {"output": 1, "cache_miss": 2, "input_delta": 7}
+    groups = [{"events": [{"kind": "tool", "_tool_call_id": "t", "_api_call_id": "a"}]}]
+    TaskCardEventProjection.apply_tool_usages(groups, {"a": usage})
+    TaskCardEventProjection.apply_tool_usages(
+        groups, {"t": {"output": 1, "cache_miss": 2}, "a": {"output": 1}},
+    )
+    assert groups[0]["events"][0]["_usage"]["input_delta"] == 7
+
+
 @pytest.mark.parametrize("gap,idle", [(20.0, None), (400.0, 380.0)])
 def test_speed_uses_full_api_interval_and_preserves_original_symbols(gap, idle):
     timing = {"first_token_s": 13.742831084, "generation_s": 0.044933125,
@@ -739,3 +821,10 @@ def test_speed_uses_full_api_interval_and_preserves_original_symbols(gap, idle):
     assert "⚡13.7s · 29 tok/s" in text
     assert f"↻{gap:.1f}s" in text
     assert "API" not in text and "avg" not in text
+
+
+def test_input_delta_malformed_versioned_generation_does_not_bridge():
+    for bad in ({"molt_count": True}, {"molt_count": None}, {"api_call_index": "2"}, {"api_call_index": None}):
+        raw = {"schema": TaskCardEventProjection.SESSION_USAGE_SCHEMA, "molt_count": 0, "api_call_index": 2, **bad}
+        events = [_resp("a", 100), _resp("b", 200, session_usage=raw), _resp("c", 300)]
+        assert _delta_fold(events) == [None, None, None]

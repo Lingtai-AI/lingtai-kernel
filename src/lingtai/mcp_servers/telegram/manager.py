@@ -1021,6 +1021,7 @@ class TelegramManager:
         # fallback only; generation/order fences remain hidden in this state.
         self._task_card_session_usage_state: dict | None = None
         self._task_card_idle_state: dict | None = None
+        self._task_card_input_delta_state: dict | None = None
         # Since-molt per-response bill facts folded beside that reducer; priced
         # only at render into the SESSION ``Cost`` row (see ``api_cost``).
         self._task_card_session_cost_state: dict | None = None
@@ -3218,6 +3219,12 @@ class TelegramManager:
                 and previous.get("bill")
             ):
                 usage = {**usage, "bill": previous["bill"]}
+            if (
+                "input_delta" not in usage
+                and isinstance(previous, dict)
+                and type(previous.get("input_delta")) is int
+            ):
+                usage = {**usage, "input_delta": previous["input_delta"]}
             cache[call_id] = usage
         limit = self._TASK_CARD_EVENT_WINDOW * 4
         while len(cache) > limit:
@@ -3249,6 +3256,7 @@ class TelegramManager:
                 self._task_card_call_usages = {}
                 self._task_card_session_usage_state = None
                 self._task_card_idle_state = None
+                self._task_card_input_delta_state = None
                 self._task_card_session_cost_state = None
                 self._task_card_event_metadata = None
             return
@@ -3269,6 +3277,7 @@ class TelegramManager:
                 self._task_card_call_usages = {}
                 self._task_card_session_usage_state = None
                 self._task_card_idle_state = None
+                self._task_card_input_delta_state = None
                 self._task_card_session_cost_state = None
                 self._task_card_event_metadata = None
             return
@@ -3319,6 +3328,7 @@ class TelegramManager:
         window = self._TASK_CARD_EVENT_WINDOW
         projected_events: list[tuple[dict, dict]] = []
         idle_events: list[dict] = []
+        delta_events: list[dict] = []
         session_events: list[dict] = []
         per_call_usages: dict[str, dict] = {}
         tool_results: dict[str, dict] = {}
@@ -3366,6 +3376,7 @@ class TelegramManager:
                     carry = lines[0] if start > 0 else b""
                     complete = lines[1:] if start > 0 else lines
                     round_idle_events: list[dict] = []
+                    round_delta_events: list[dict] = []
                     round_projected: list[tuple[dict, dict]] = []
                     round_session_events: list[dict] = []
                     for raw in complete:
@@ -3377,6 +3388,11 @@ class TelegramManager:
                             "agent_stop", "tool_call", "diary",
                         }:
                             round_idle_events.append(event)
+                        if event.get("type") in {
+                            "llm_response", "psyche_molt", "heartbeat_start",
+                            "heartbeat_stop", "agent_stop",
+                        }:
+                            round_delta_events.append(event)
                         if event.get("type") in {
                             "llm_response",
                             "notification_block_injected",
@@ -3410,6 +3426,7 @@ class TelegramManager:
                     )[-window:]
                     projected_events = round_projected + projected_events
                     idle_events = round_idle_events + idle_events
+                    delta_events = round_delta_events + delta_events
                     chunk_size *= 2
         except OSError:
             return None
@@ -3422,6 +3439,17 @@ class TelegramManager:
                 idle_state, event, idle_rows.get(id(event)),
             )
         self._task_card_idle_state = idle_state
+        # Same journal order as the incremental path; the oldest scanned call
+        # has no observed predecessor, so it gets no delta.
+        delta_state: dict | None = None
+        for event in delta_events:
+            delta_state, delta = TaskCardEventProjection.reduce_input_delta_event(
+                delta_state, event,
+            )
+            call_id = event.get("api_call_id")
+            if delta is not None and call_id in per_call_usages:
+                per_call_usages[call_id]["input_delta"] = delta
+        self._task_card_input_delta_state = delta_state
         groups = self._group_task_card_events(projected_events)
         TaskCardEventProjection.apply_tool_results(groups, tool_results)
         TaskCardEventProjection.apply_tool_usages(groups, per_call_usages)
@@ -3540,10 +3568,17 @@ class TelegramManager:
         per_call_usages: dict[str, dict] = {}
         summary_times: dict[str, float] = {}
         idle_state = getattr(self, "_task_card_idle_state", None)
+        delta_state = getattr(self, "_task_card_input_delta_state", None)
+        input_deltas: dict[str, int] = {}
         for raw in complete.split(b"\n"):
             event = self._decode_event_line(raw)
             if event is None:
                 continue
+            delta_state, input_delta = TaskCardEventProjection.reduce_input_delta_event(
+                delta_state, event,
+            )
+            if input_delta is not None:
+                input_deltas[event["api_call_id"]] = input_delta
             if event.get("type") in {
                 "llm_response",
                 "notification_block_injected",
@@ -3570,9 +3605,13 @@ class TelegramManager:
             if row is not None:
                 projected_events.append((event, row))
 
+        for call_id, input_delta in input_deltas.items():
+            if call_id in per_call_usages:
+                per_call_usages[call_id]["input_delta"] = input_delta
         summary_usages = self._read_apriori_summary_usages(set(summary_times))
         with self._task_card_event_lock:
             self._task_card_idle_state = idle_state
+            self._task_card_input_delta_state = delta_state
             session_state = self._task_card_session_usage_state
             cost_state = self._task_card_session_cost_state
             for event in session_events:

@@ -112,6 +112,14 @@ semantics live here. The public producer contract lives in
     and mixed rounds use the same formula. Estimated, missing-usage and
     untimed/nonstream rounds omit speed; unknown first output is omitted, never
     shown as inferred zero. Total API delay and its `↻` symbol remain unchanged.
+    On the token line, `Δ +1.3k` (symbol only, before `↑`) is the signed change
+    of the parent `llm_response.input_tokens` from the immediately preceding
+    parent API call in journal order, overlapping `↑` rather than splitting it.
+    Zero and negative values are valid. It is omitted for the first observed
+    call, missing/invalid/estimated input, duplicate ids, and across
+    molt/lifecycle or session-index discontinuities; carriers, daemon usage
+    and cumulative SESSION counts never supply it. Initial replay and
+    incremental appends use the same reducer and agree.
     `☕X.Ys` on that first time line sums fully witnessed true IDLE intervals
     contained between the same progress rows that establish the gap. The
     `agent_state.idle_elapsed_s` producer uses monotonic seconds, never
