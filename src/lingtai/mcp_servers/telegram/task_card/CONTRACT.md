@@ -101,12 +101,14 @@ semantics live here. The public producer contract lives in
    malformed, or output-less count is omitted without a dangling parenthesis,
    preserving old-event rendering and never exposing reasoning text.
     Telegram opts into two metrics lines: time and speed first
-    (`↻12.4s · ⚡1.2s · 45 tok/s`), tokens next (existing
+    (`↻12.4s · ⚡1.2s · 35 tok/s`), tokens next (existing
     output/thinking/cache/context symbols). `⚡` is seconds from actual dispatch to first nonempty text or
     tool name/argument payload, excluding ids, reasoning, lifecycle, heartbeat,
     usage and empty events. Speed is final provider non-reasoning output tokens
-    (including tools) / measured first-output-to-final-usage seconds, only with
-    explicit compatible counts and a finite positive interval. Text, tool-only
+    (including tools) / measured dispatch-to-final-usage seconds
+    (`first_token_s + generation_s`), only with explicit compatible counts and
+    finite positive generation and combined intervals. This is API-average
+    output throughput, not server-only generation speed. Text, tool-only
     and mixed rounds use the same formula. Estimated, missing-usage and
     untimed/nonstream rounds omit speed; unknown first output is omitted, never
     shown as inferred zero. Total API delay and its `↻` symbol remain unchanged.

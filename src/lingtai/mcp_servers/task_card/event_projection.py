@@ -1319,12 +1319,16 @@ class TaskCardEventProjection:
                 tokens = checked_count(timing.get("generation_tokens"))
                 if (tokens is not None and type(interval) in (int, float)
                         and math.isfinite(interval) and interval > 0):
-                    try:
-                        speed = tokens / interval
-                    except OverflowError:
-                        speed = math.inf
-                    if math.isfinite(speed):
-                        time_parts.append(f"{speed:.0f} tok/s")
+                    # Average over dispatch-to-final-usage, not a buffered
+                    # first-output-to-final-usage delivery burst.
+                    api_interval = first + interval
+                    if math.isfinite(api_interval) and api_interval > 0:
+                        try:
+                            speed = tokens / api_interval
+                        except OverflowError:
+                            speed = math.inf
+                        if math.isfinite(speed):
+                            time_parts.append(f"{speed:.0f} tok/s")
         return "\n".join(line for line in (" · ".join(time_parts), " ".join(parts)) if line)
 
     @classmethod

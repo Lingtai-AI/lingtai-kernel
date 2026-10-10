@@ -68,7 +68,7 @@ Pass when the suite passes and the active/diff-only observations hold. Fail on p
 - [ ] Step 1: the automatic event-tail suite passes.
 - [ ] Step 2: the divider contains `↓<output> (<thinking>) ↑<cache-miss>` with compact counts, while `_usage` remains private projection state.
 - [ ] Step 3: the `llm_response` fallback renders the same parenthesized form; an old event without thinking tokens preserves the prior output/cache/context line with no dangling parentheses.
-- [ ] Step 4: time and speed occupy their own line (`↻12.4s · ⚡1.2s · 45 tok/s`), token symbols remain on the next line; unavailable evidence omits the new metric, never inferred zero.
+- [ ] Step 4: time and speed occupy their own line (`↻12.4s · ⚡1.2s · 35 tok/s`), token symbols remain on the next line; unavailable evidence omits the new metric, never inferred zero.
 
 - [ ] Step 5: only complete IDLE evidence adds `☕X.Ys` on the first line; gap, first-output and speed values stay unchanged; unknown coverage omits coffee.
 
