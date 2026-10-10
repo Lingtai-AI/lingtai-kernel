@@ -3,6 +3,8 @@
 Naming convention:
 - to_<provider>(iface) -> provider message list
 - from_<provider>(messages, ...) -> ChatInterface
+
+Structured tool results use compact Unicode JSON; plain strings stay verbatim.
 """
 
 from __future__ import annotations
@@ -326,7 +328,7 @@ def _to_anthropic_block(block: ContentBlock) -> dict:
         return {
             "type": "tool_result",
             "tool_use_id": block.id,
-            "content": content if isinstance(content, str) else json.dumps(content, default=str),
+            "content": content if isinstance(content, str) else json.dumps(content, default=str, ensure_ascii=False, separators=(",", ":")),
         }
     elif isinstance(block, ThinkingBlock):
         d: dict = {"type": "thinking", "thinking": block.text}
@@ -412,7 +414,7 @@ def to_openai(iface: ChatInterface) -> list[dict]:
                         messages.append({
                             "role": "tool",
                             "tool_call_id": block.id,
-                            "content": content if isinstance(content, str) else json.dumps(content, default=str),
+                            "content": content if isinstance(content, str) else json.dumps(content, default=str, ensure_ascii=False, separators=(",", ":")),
                         })
             elif len(entry.content) == 1 and isinstance(entry.content[0], TextBlock):
                 messages.append({"role": "user", "content": entry.content[0].text})
@@ -593,7 +595,7 @@ def to_responses_input(
                         output = (
                             content
                             if isinstance(content, str)
-                            else json.dumps(content, default=str)
+                            else json.dumps(content, default=str, ensure_ascii=False, separators=(",", ":"))
                         )
                         items.append({
                             "type": "function_call_output",

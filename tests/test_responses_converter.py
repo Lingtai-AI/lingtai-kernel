@@ -53,7 +53,7 @@ def test_responses_input_replays_thinking_block_as_reasoning_summary():
         {
             "type": "function_call_output",
             "call_id": "call_123",
-            "output": '{"count": 0}',
+            "output": '{"count":0}',
         },
     ]
 
@@ -120,7 +120,7 @@ def test_responses_input_replays_valid_raw_items_in_original_order_and_without_m
     assert second[4] == {
         "type": "function_call_output",
         "call_id": "call_raw",
-        "output": '{"ok": true}',
+        "output": '{"ok":true}',
     }
 
 

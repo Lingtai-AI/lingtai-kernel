@@ -94,10 +94,10 @@ NOTIFICATIONS_KEY = "notifications"
 NOTIFICATION_GUIDANCE_KEY = "notification_guidance"
 NOTIFICATION_PERSISTENT_KEY = "notification_persistent"
 AGENT_META_INSTRUCTION = (
-    "Only the latest agent_meta.agent_state is current runtime state; older "
-    "runtime snapshots are historical traces. Delivered notification messages "
-    "remain usable task records, subject to newer human instructions and "
-    "producer safeguards; an empty later tail does not resolve them."
+    "Only the latest agent_meta.agent_state is current; older snapshots are "
+    "historical. Delivered notifications remain usable task records, subject "
+    "to newer human instructions and producer safeguards; an empty later tail "
+    "does not resolve them."
 )
 # Telegram lives under an `mcp` namespace level to mirror the ephemeral
 # `notifications.mcp.telegram` shape and match Jason #6148: the required path is
