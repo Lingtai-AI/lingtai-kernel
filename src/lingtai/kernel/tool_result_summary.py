@@ -242,16 +242,12 @@ def _retrieval_hint(
     cid = tool_call_id or "<unknown>"
     log_path = _resolve_raw_log_path(raw_log_path)
     return (
-        f"This is a runtime-GENERATED summary of the original tool result — it is "
-        f"NOT canonical and may be incomplete or inaccurate. The full original "
-        f"result was preserved before summarization and is NOT in your context.\n"
-        f"To retrieve the full original, grep events.jsonl by tool_call_id:\n"
-        f"  grep '{cid}' <workdir>/{log_path}\n"
-        f"  # or use: lingtai-agent log query (see sqlite-log-query manual)\n"
-        f"If you need a different slice of the original, narrow the tool call "
-        f"(e.g. tighter grep/read range) and rerun with summary=false, or "
-        f"delegate extraction to a daemon/subagent with the tool_call_id and "
-        f"the exact question."
+        f"Runtime-GENERATED summary, NOT canonical; may be incomplete or "
+        f"inaccurate. The full original is preserved and NOT in your context: "
+        f"grep '{cid}' <workdir>/{log_path} (or lingtai-agent log query; see "
+        f"sqlite-log-query manual). For another slice, narrow the call and "
+        f"rerun with summary=false, or delegate to a daemon/subagent with the "
+        f"tool_call_id and exact question."
     )
 
 
