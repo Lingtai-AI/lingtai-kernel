@@ -58,6 +58,12 @@ lines, then adds the plain price line, for example:
 ↓200 (20) ↑900 ◌ 1.0k | 10.0%
 ```
 
+`Δ +1.3k`, when present before `↑` (e.g. `↓625 (0) Δ +1.3k ↑3.9k ◌ 157.5k | 97.5%`),
+is how much the context input grew (`+`) or shrank (`-`) versus the previous
+API call of this agent; `↑` is a different, overlapping measure (uncached
+input). It is omitted when there is no reliable previous call (first call,
+restart, molt, missing data).
+
 `☕X.Ys`, when present on the first line, is the sum of real IDLE
 intervals between the progress rows defining `↻`. It comes from the existing
 `agent_state` events: the kernel measures each IDLE exit monotonically. It is

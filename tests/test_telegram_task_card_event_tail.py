@@ -1006,6 +1006,47 @@ def test_split_poll_preserves_billing_facts(tmp_path):
     assert _row_usages(manager)["c1"] == expected
 
 
+def test_input_delta_initial_replay_matches_incremental_appends(tmp_path):
+    acct = FakeAccount()
+    manager, _service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+    path.touch()
+    manager._init_event_tail()
+
+    batches = [
+        [_call_line("c1", "api_1", 1.0), _usage_line("api_1", 100, 0, 5, 1.5)],
+        # Carriers/duplicates never become a baseline; split across polls.
+        [_usage_line("api_2", 130, 0, 5, 2.5), _call_line("c2", "api_2", 2.0)],
+        [_usage_line("api_2", 999, 0, 5, 2.6)],
+        # Pure-text call: no tool row, but the immediate predecessor of api_4.
+        [json.dumps({"type": "diary", "text": "hi", "api_call_id": "api_3", "ts": 3.0}),
+         _usage_line("api_3", 120, 0, 5, 3.5)],
+        [_call_line("c4", "api_4", 4.0), _usage_line("api_4", 125, 0, 5, 4.5)],
+        [json.dumps({"type": "psyche_molt", "molt_count": 1}),
+         _call_line("c5", "api_5", 5.0), _usage_line("api_5", 50, 0, 5, 5.5)],
+        [_call_line("c6", "api_6", 6.0), _usage_line("api_6", 60, 0, 5, 6.5)],
+    ]
+    for lines in batches:
+        _write_lines(path, lines)
+        manager._poll_event_tail()
+
+    def deltas():
+        return {
+            tool: (usage or {}).get("input_delta")
+            for tool, usage in _row_usages(manager).items() if tool
+        }
+
+    expected = {"c1": None, "c2": 30, "c4": 5, "c5": None, "c6": 10}
+    assert deltas() == expected
+    manager._init_event_tail()
+    assert deltas() == expected
+    # The restored baseline also continues correctly for the next append.
+    _write_lines(path, [_call_line("c7", "api_7", 7.0), _usage_line("api_7", 55, 0, 5, 7.5)])
+    manager._poll_event_tail()
+    assert deltas()["c7"] == -5
+
+
 def test_call_usage_cache_is_bounded_and_resets_on_truncation(tmp_path, monkeypatch):
     acct = FakeAccount()
     manager, _service = _manager(tmp_path, acct)

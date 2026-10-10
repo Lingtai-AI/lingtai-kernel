@@ -837,6 +837,53 @@ class TaskCardEventProjection:
             }
         return previous
 
+    @classmethod
+    def reduce_input_delta_event(
+        cls, state: dict[str, Any] | None, event: dict[str, Any],
+    ) -> tuple[dict[str, Any], int | None]:
+        """Journal-ordered signed change of parent ``input_tokens`` between calls.
+
+        Returns ``(state, delta)``; ``delta`` is only for a ``llm_response``
+        whose immediately preceding parent API call has a trusted input. The
+        first observation, a missing/invalid/estimated input, a duplicate
+        ``api_call_id``, and any molt/lifecycle or session-index discontinuity
+        yield no delta and never bridge across the interruption. Carriers and
+        other events never move the baseline. Negative and zero are valid.
+        """
+        kind = event.get("type")
+        if kind in {"psyche_molt", "heartbeat_start", "heartbeat_stop", "agent_stop"}:
+            return {}, None
+        current = state or {}
+        if kind != "llm_response":
+            return current, None
+        call_id = event.get("api_call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return {}, None
+        if call_id == current.get("call_id"):
+            return current, None
+        total = event.get("input_tokens")
+        if type(total) is not int or total <= 0 or event.get("estimated") is True:
+            return {"call_id": call_id}, None
+        generation = index = None
+        raw = event.get("session_usage")
+        if isinstance(raw, dict) and raw.get("schema") == cls.SESSION_USAGE_SCHEMA:
+            generation = cls._exact_non_negative_int(raw.get("molt_count"))
+            index = cls._exact_non_negative_int(raw.get("api_call_index"))
+            if generation is None or index is None:
+                return {"call_id": call_id}, None
+        delta = None
+        previous = current.get("input")
+        if type(previous) is int:
+            known = current.get("generation")
+            if generation is None or known is None or (
+                generation == known and index == current.get("index", -2) + 1
+            ):
+                delta = total - previous
+        return (
+            {"call_id": call_id, "input": total, "generation": generation, "index": index},
+            delta,
+        )
+
     @staticmethod
     def session_usage_metadata(state: dict[str, Any] | None) -> dict[str, Any]:
         """Return a detached safe metadata projection from reducer state."""
@@ -1022,6 +1069,15 @@ class TaskCardEventProjection:
                     )
                     if timing:
                         usage = {**usage, "stream_timing": timing}
+                if "input_delta" not in usage:
+                    # Like pricing, the call-to-call input change is an
+                    # llm_response fact a later carrier must not erase.
+                    previous = row.get("_usage")
+                    delta = (by_api or {}).get("input_delta")
+                    if type(delta) is not int and isinstance(previous, dict):
+                        delta = previous.get("input_delta")
+                    if type(delta) is int:
+                        usage = {**usage, "input_delta": delta}
                 if row.get("_usage") == usage:
                     continue
                 row["_usage"] = usage
@@ -1269,6 +1325,12 @@ class TaskCardEventProjection:
                 thinking_text = cls.format_count(thinking)
                 if thinking_text is not None:
                     parts.append(f"({thinking_text})")
+            delta = usage.get("input_delta")
+            if stream_metrics and type(delta) is int:
+                delta_text = cls.format_count(abs(delta))
+                if delta_text is not None:
+                    sign = "+" if delta > 0 else "-" if delta < 0 else ""
+                    parts.append(f"\u0394 {sign}{delta_text}")
             if type(miss) is int and miss >= 0:
                 parts.append(f"\u2191{cls.format_count(miss)}")
             context = cls.format_count(usage.get("context"))

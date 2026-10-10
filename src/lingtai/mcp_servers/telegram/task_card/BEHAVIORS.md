@@ -63,6 +63,7 @@ Pass when the suite passes and the active/diff-only observations hold. Fail on p
 4. Project text, tool-only and mixed `llm_response.stream_timing` with first actual output 1.2s, generation interval 4s and 180 non-reasoning output tokens; then omit timing or final usage.
 
 5. Replay and live-append measured IDLE intervals between progress rows, then tool-only, missing-field, ASLEEP and restart-crossing gaps.
+6. Replay and live-append consecutive parent inputs 156185 then 157504 with cached input 153600; include pure-text predecessors, later carriers, duplicate ids, malformed input/generation and lifecycle reset events.
 
 ### Expected evidence
 - [ ] Step 1: the automatic event-tail suite passes.
@@ -71,6 +72,7 @@ Pass when the suite passes and the active/diff-only observations hold. Fail on p
 - [ ] Step 4: time and speed occupy their own line (`↻12.4s · ⚡1.2s · 35 tok/s`), token symbols remain on the next line; unavailable evidence omits the new metric, never inferred zero.
 
 - [ ] Step 5: only complete IDLE evidence adds `☕X.Ys` on the first line; gap, first-output and speed values stay unchanged; unknown coverage omits coffee.
+- [ ] Step 6: the token row shows `Δ +1.3k` separately from `↑3.9k`, with no word `input`; zero and negative changes are valid, unreliable predecessors omit delta, and initial replay matches incremental append without changing other channels.
 
 ### Pass / Fail
 Pass when both normalized usage paths render the same parenthesized reasoning count immediately after output and legacy missing-field input remains unchanged. Fail if the count is misplaced, reasoning text is exposed, or missing/malformed data leaves a dangling marker.

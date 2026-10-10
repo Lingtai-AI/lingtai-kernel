@@ -96,6 +96,10 @@ onto its one tracked resident Task Card target per account+chat.
   resident, or transport state. `llm_response.stream_timing` carries optional
   adapter-measured first-visible-text seconds and compatible generation speed
   evidence; `apply_tool_usages` preserves it across current-call carriers.
+  `reduce_input_delta_event` folds journal-ordered parent response inputs and
+  lifecycle/session fences into signed per-call change; initial replay and
+  incremental append share it, and later carriers preserve that value.
+  Telegram adds only the `Δ` symbol before uncached input; other channels opt out.
   `reduce_idle_event` folds ordered `agent_state` entry/exit evidence and
   monotonic `idle_elapsed_s` into row `idle_s`; manager reverse-tail replays
   only the existing bounded window and live append retains ephemeral
