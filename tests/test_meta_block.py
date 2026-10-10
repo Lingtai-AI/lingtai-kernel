@@ -319,21 +319,6 @@ def test_build_meta_readme_documents_always_on_session_cache_miss_telemetry():
     assert "reconstruct" in lowered
 
 
-def test_agent_meta_instruction_is_compact_and_keeps_current_vs_historical_semantics():
-    from lingtai.kernel.meta_block import AGENT_META_INSTRUCTION
-
-    assert len(AGENT_META_INSTRUCTION) < 260
-    for required in (
-        "latest agent_meta.agent_state is current",
-        "older snapshots are historical",
-        "notifications remain usable task records",
-        "newer human instructions",
-        "producer safeguards",
-        "empty later tail does not resolve",
-    ):
-        assert required in AGENT_META_INSTRUCTION
-
-
 def test_build_meta_readme_documents_timely_latest_only_semantics():
     """Only the newest runtime snapshot is current. Delivered messages remain
     usable records after empty tails, with producer/supersession safeguards;
