@@ -123,11 +123,11 @@ def test_system_prompt_update_marks_dirty(tmp_path):
 # Mail via MailService (FIFO)
 # ---------------------------------------------------------------------------
 
-def test_mail_without_service(tmp_path):
+def test_mail_rejects_non_absolute_address_without_service(tmp_path):
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     result = agent.mail("localhost:8301", "hello")
-    # Send is async — no error at send time, mailman handles missing service
-    assert result["status"] == "sent"
+    # Absolute Agent workdir routing is required even without a mail service.
+    assert "all addresses must be absolute agent-workdir paths" in result["error"]
 
 
 def test_mail_with_service(tmp_path):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from ._agent_dir_helpers import make_agent_dir as _make_agent_dir
@@ -14,6 +16,11 @@ def _isolate_codex_usage_service(monkeypatch):
     Credit-policy tests override this response; the HTTP reader itself is tested
     separately with a mock transport.
     """
+    # Pure-kernel and shell suites deliberately run without provider SDKs.
+    # Only isolate provider tests whose adapter is already loaded by collection;
+    # this shared fixture must not import an unrelated optional provider.
+    if "lingtai.llm.openai.adapter" not in sys.modules:
+        return
     from lingtai.llm.openai import codex_usage
 
     monkeypatch.setattr(codex_usage, "read_included_usage_allowed", lambda **kw: True)
