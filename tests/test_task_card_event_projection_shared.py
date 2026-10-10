@@ -651,7 +651,7 @@ def test_stream_metrics_formula_two_lines_and_carrier_preservation():
                                "generation_tokens": 180}}
     _, usage = TaskCardEventProjection.project_llm_response_usage(event)
     info = TaskCardEventProjection.format_divider_info(12.4, usage, stream_metrics=True)
-    assert info == "↻12.4s · ⏱7.2s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%"
+    assert info == "↻12.4s · ⏱7.2s · ⚡1.2s · 35 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%"
     # Other consumers opt out, preserving the established single line.
     assert "⚡" not in TaskCardEventProjection.format_divider_info(12.4, usage)
     groups = [{"events": [{"kind": "text", "text": "hello", "api_delay_s": 12.4,
@@ -661,7 +661,7 @@ def test_stream_metrics_formula_two_lines_and_carrier_preservation():
     })
     assert groups[0]["events"][0]["_usage"]["stream_timing"] == usage["stream_timing"]
     frame = TaskCardEventProjection.render_event_groups(groups, normal_rows=10, stream_metrics=True)
-    assert "↻12.4s · ⏱7.2s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900" in frame
+    assert "↻12.4s · ⏱7.2s · ⚡1.2s · 35 tok/s\n↓200 (20) ↑900" in frame
 
 
 def test_missing_invalid_estimated_stream_metrics_omit_speed():
@@ -719,11 +719,23 @@ def test_residual_subtracts_measured_idle_without_changing_gap_or_speed():
     usage = {"stream_timing": {"first_token_s": 9.4, "generation_s": 7.3,
                                "generation_tokens": 190}}
     assert render(121.0, usage, stream_metrics=True, idle_s=102.8) == (
-        "↻121.0s · ⏱1.5s · ☕102.8s · ⚡9.4s · 26 tok/s")
+        "↻121.0s · ⏱1.5s · ☕102.8s · ⚡9.4s · 11 tok/s")
     # Missing/invalid idle is not a measured zero: retain the prior inclusive
     # residual, without claiming coffee, rather than inventing an idle value.
     for idle in (None, True, -1, float("nan"), float("inf")):
         assert render(121, usage, stream_metrics=True, idle_s=idle) == (
-            "↻121.0s · ⏱104.3s · ⚡9.4s · 26 tok/s")
+            "↻121.0s · ⏱104.3s · ⚡9.4s · 11 tok/s")
     assert "⏱" not in render(121, usage, stream_metrics=True, idle_s=105)
     assert "☕105.0s" in render(121, usage, stream_metrics=True, idle_s=105)
+
+
+@pytest.mark.parametrize("gap,idle", [(20.0, None), (400.0, 380.0)])
+def test_speed_uses_full_api_interval_and_preserves_original_symbols(gap, idle):
+    timing = {"first_token_s": 13.742831084, "generation_s": 0.044933125,
+              "generation_tokens": 406}
+    text = TaskCardEventProjection.format_divider_info(
+        gap, {"stream_timing": timing}, stream_metrics=True, idle_s=idle,
+    )
+    assert "⚡13.7s · 29 tok/s" in text
+    assert f"↻{gap:.1f}s" in text
+    assert "API" not in text and "avg" not in text

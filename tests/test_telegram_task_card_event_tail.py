@@ -2575,7 +2575,7 @@ def test_actual_telegram_tail_stream_time_and_tokens_use_two_lines(tmp_path, mon
     ])
     manager._poll_event_tail()
     text = _last_edit(acct)
-    assert "↻12.4s · ⏱7.2s · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
+    assert "↻12.4s · ⏱7.2s · ⚡1.2s · 35 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
     assert "TTFT" not in text and "↻" in text
 
 
@@ -2624,6 +2624,6 @@ def test_actual_telegram_idle_time_row(tmp_path, monkeypatch, mode, live):
     expected = {"known": "2.5", "multiple": "5.0", "zero": "0.0"}.get(mode)
     coffee = f" · ☕{expected}s" if expected is not None else ""
     residual = {"known": "4.7", "multiple": "2.2"}.get(mode, "7.2")
-    assert f"↻12.4s · ⏱{residual}s{coffee} · ⚡1.2s · 45 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
+    assert f"↻12.4s · ⏱{residual}s{coffee} · ⚡1.2s · 35 tok/s\n↓200 (20) ↑900 ◌ 1.0k | 10.0%" in text
     if expected is None:
         assert "☕" not in text

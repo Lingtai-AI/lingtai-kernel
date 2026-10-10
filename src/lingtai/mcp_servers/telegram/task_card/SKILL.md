@@ -54,7 +54,7 @@ The automatic Telegram card shows time and token information on separate
 lines, then adds the plain price line, for example:
 
 ```text
-↻12.4s · ⚡1.2s · 45 tok/s
+↻12.4s · ⚡1.2s · 35 tok/s
 ↓200 (20) ↑900 ◌ 1.0k | 10.0%
 ```
 
@@ -75,10 +75,10 @@ are omitted, not clamped.
 `⚡` measures actual stream dispatch to first nonempty **text or tool
 name/argument payload**. Reasoning, ids, lifecycle, heartbeat, usage and empty
 events do not count. `tok/s` uses final provider output (including tools) minus
-explicitly reported reasoning tokens, divided by the measured
-first-output-to-final-usage interval (180 / 4 = 45 here), not the total API gap.
-It is observed output throughput including wire/trailer delay, not server-only
-throughput. Generic OpenAI Chat Completions and Responses streaming currently
+explicitly reported reasoning tokens, divided by the measured dispatch-to-final-usage
+interval (`first_token_s + generation_s`; 180 / 5.2 ≈ 35 here), not the total API gap
+or a buffered delivery burst. It is observed API-average output throughput including
+first-output wait and wire/trailer delay, not server-only generation speed. Generic OpenAI Chat Completions and Responses streaming currently
 supply this evidence for text, tool-only and mixed rounds. Missing/estimated
 usage, missing explicit reasoning counts, untimed adapters, and
 nonstream/forced-SSE fallback omit speed; unknown timing is omitted, not inferred
