@@ -24,6 +24,7 @@ from lingtai.kernel.llm.base import (
     ToolCall,
     UsageMetadata,
     checked_count,
+    safe_billing_model,
 )
 from lingtai.kernel.llm.reasoning_effort import (
     ReasoningEffortCapability,
@@ -179,6 +180,25 @@ def _map_usage(usage: dict | None) -> UsageMetadata:
         cache_write_tokens=checked_count(usage.get("cache_creation_input_tokens")),
         billable_output_tokens=checked_count(usage.get("output_tokens")),
     )
+
+
+def _response_model(model_usage: Any) -> str | None:
+    """The exact model a CLI result reports, only when it is unambiguous.
+
+    Exactly one ``modelUsage`` entry whose key is a safe model id, and whose
+    ``canonicalModel`` (when present) equals that key. Empty, malformed,
+    multi-model or disagreeing evidence is unknown (``None``) — never guessed.
+    """
+    if not isinstance(model_usage, dict) or len(model_usage) != 1:
+        return None
+    (key, entry), = model_usage.items()
+    model = safe_billing_model(key)
+    if model is None or not isinstance(entry, dict):
+        return None
+    canonical = entry.get("canonicalModel")
+    if canonical is not None and safe_billing_model(canonical) != model:
+        return None
+    return model
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -982,6 +1002,7 @@ class ClaudeCodeAdapter(LLMAdapter):
 
         result_str = str(envelope.get("result") or "")
         usage = _map_usage(envelope.get("usage"))
+        usage.response_model = _response_model(envelope.get("modelUsage"))
         return result_str, usage, envelope
 
     @staticmethod

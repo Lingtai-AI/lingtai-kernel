@@ -115,6 +115,13 @@ Reading it:
   background; `stale prices` is appended once the snapshot is older than six
   hours and a refresh has not landed. Above 200k/272k total input the
   catalog's above-threshold rates are used when the model lists them.
+- **Claude Code model aliases.** When a CLI result reports one unambiguous
+  exact model, the price line names it as `model <id>` if it differs from the
+  configured selection (e.g. `opus`). That id prices this call; the SESSION
+  header keeps the configured alias. Missing, conflicting or multi-model
+  evidence leaves the configured name unchanged, not a guessed version.
+  An exact id absent from the catalog still shows `model not listed`; this
+  remains a list-price estimate, not subscription spend.
 - **Mirrors the metrics row.** `↓` is the provider-billable output; `↑` is the
   cache-miss input (total input minus cache read — uncached input plus any
   cache writes, the writes at the catalog's cache-write rate when it lists one,

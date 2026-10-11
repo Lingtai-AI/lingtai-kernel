@@ -154,11 +154,15 @@ onto its one tracked resident Task Card target per account+chat.
   releases the single in-flight slot and paces the retry). It consumes only
   `usage["bill"]` facts that `TaskCardEventProjection.project_llm_response_usage`
   validated from `llm_response.usage_billing` (kernel `session.py`, adapter-set
-  `UsageMetadata.cache_write_*`/`billable_output_tokens`/`requested_service_tier`
+  `UsageMetadata.response_model`/`cache_write_*`/`billable_output_tokens`/`requested_service_tier`
   (OpenAI chat/Responses/Codex sessions stamp the wire `service_tier` they sent),
   checked with the shared `checked_count`/`safe_billing_model`/`safe_billing_tier`
   in `kernel/llm/base.py`; absent, negative
   or bool counts are unknown, never zero) and never blocks rendering on I/O.
+  A validated single-model Claude CLI result supplies the exact returned model;
+  differing configured aliases remain `requested_model` and the price line names
+  the actual id (guarded by TT005). Missing or ambiguous evidence never maps an
+  alias to an invented model.
   Catalog entries keep a present-but-invalid tier rate as `None` so a bad tier
   price cannot fall back to the cheaper base rate; every charge/average is
   finite-checked and unknown on overflow. Providers that state the counts on
