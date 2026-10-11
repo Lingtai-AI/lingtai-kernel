@@ -438,6 +438,10 @@ def usage_line(
             if status == "stale":
                 text += " stale prices"
             parts.append(text)
+    if isinstance(bill.get("model"), str) and isinstance(bill.get("requested_model"), str):
+        # The provider-reported model that actually served a call made under a
+        # configured alias; the estimate above is list price, not an invoice.
+        parts.append(f"model {bill['model']}")
     return " · ".join(parts)
 
 

@@ -120,3 +120,25 @@ Pass when only fully correlated existing data produces the second line in the re
 
 ### Pass / Fail
 Pass when supported Markdown renders without visible source markers, unsafe input cannot become provider markup, malformed input cannot unbalance generated HTML, and raw slot/diff-only state is unchanged. Fail on literal markers for supported syntax, HTML injection, malformed generated tags, any change to ordinary Telegram rendering, or mutation of the authored resident slot.
+
+## Behavior TT005 — Claude Code aliases retain exact returned-model evidence
+
+- **id**: TT005
+- **title**: Claude Code aliases retain exact returned-model evidence
+- **guards**: [telegram-task-card-projection § Behavior 9](CONTRACT.md#behavior)
+- **runner**: any LingTai agent with shell access to this repository
+- **prerequisites**: the repository Python and local mocked CLI fixtures; no login or provider call
+- **estimate**: approximately 2 minutes
+
+### Steps
+1. Run `python -m pytest -q tests/test_telegram_task_card_api_cost.py -k 'claude_cli or response_model_absent'`.
+2. Inspect the exact-model fixture: requested `opus`, returned `claude-sonnet-5-5`. Confirm the billing event/projected row uses the returned id, keeps the requested alias distinct, and prices by exact catalog key.
+3. Check missing, malformed, conflicting and multi-model fixtures plus a non-Claude control; no guessed model mapping or configuration mutation occurs.
+
+### Expected evidence
+- The mocked CLI→usage→billing→projection→price path passes and names the actual model when distinct.
+- An unlisted exact model remains unpriced and still named; absent or ambiguous evidence retains existing configured-name behavior.
+- Unknown prices are not an invoice or subscription-charge claim.
+
+### Pass / Fail
+Pass only when all pinned regressions pass. Fail on alias-based guessed pricing, raw metadata leakage, or changed model selection.

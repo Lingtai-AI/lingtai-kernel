@@ -630,6 +630,82 @@ def test_claude_code_usage_preserves_explicit_write_and_output_else_unknown():
     assert claude_code_map_usage(None).cache_write_tokens is None
 
 
+# Shape of a retained real Claude CLI result's ``modelUsage`` (single model).
+_CLI_MODEL_USAGE = {"claude-sonnet-5-5": {
+    "canonicalModel": "claude-sonnet-5-5", "inputTokens": 20, "outputTokens": 10652,
+    "cacheReadInputTokens": 364657, "cacheCreationInputTokens": 64264}}
+
+
+def _claude_cli_usage(model_usage, *, configured="opus"):
+    """Run one mocked CLI turn and return the adapter's UsageMetadata."""
+    from unittest.mock import patch
+
+    from lingtai.llm.claude_code.adapter import ClaudeCodeAdapter
+
+    envelope = {
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": '{"action":"final","text":"ok"}', "session_id": "s",
+        "usage": {"input_tokens": 20, "output_tokens": 50,
+                  "cache_read_input_tokens": 400, "cache_creation_input_tokens": 100},
+    }
+    if model_usage is not ...:
+        envelope["modelUsage"] = model_usage
+    proc = SimpleNamespace(stdout=json.dumps(envelope), stderr="", returncode=0)
+    chat = ClaudeCodeAdapter(model=configured).create_chat(configured, "sys", None)
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", return_value=proc):
+        return chat.send("hi").usage
+
+
+def test_claude_cli_single_model_usage_flows_to_event_projection_and_price():
+    usage = _claude_cli_usage(_CLI_MODEL_USAGE)
+    assert usage.response_model == "claude-sonnet-5-5"
+    billing = _usage_billing_for_event(usage, "opus")
+    assert billing["model"] == "claude-sonnet-5-5" and billing["requested_model"] == "opus"
+    assert "canonicalModel" not in billing and "modelUsage" not in billing
+    _, projected = TaskCardEventProjection.project_llm_response_usage(_llm_event(usage_billing=billing))
+    assert projected["bill"]["model"] == "claude-sonnet-5-5"
+    assert projected["bill"]["requested_model"] == "opus"
+    # Exact catalog key prices the call; the configured alias never would.
+    catalog = _ready_catalog({"claude-sonnet-5-5": SOL})
+    line = api_cost.usage_line(1.0, projected, catalog)
+    assert line.startswith("$") and line.endswith("model claude-sonnet-5-5")
+    alias = {**projected, "bill": {**projected["bill"], "model": "opus"}}
+    assert "model not listed" in api_cost.usage_line(1.0, alias, catalog)
+    # Exact model not in the catalog stays honestly unpriced, still named.
+    unlisted = api_cost.usage_line(1.0, projected, _ready_catalog({"other": SOL}))
+    assert unlisted == "cost n/a (model not listed) · model claude-sonnet-5-5"
+
+
+@pytest.mark.parametrize("model_usage", [
+    ..., {}, None, [], "claude-sonnet-5-5",
+    {"claude-sonnet-5-5": "x"},
+    {"https://evil.example/m?k=1": {}},
+    {"claude-sonnet-5-5": {"canonicalModel": "claude-opus-5-5"}},
+    {"claude-sonnet-5-5": {}, "claude-haiku-5-5": {}},
+])
+def test_claude_cli_missing_malformed_or_multi_model_stays_unknown(model_usage):
+    usage = _claude_cli_usage(model_usage)
+    assert usage.response_model is None
+    # Falls back to the configured selection exactly as before; no new fields.
+    assert _usage_billing_for_event(usage, "opus") == {
+        "model": "opus", "cache_write_tokens": 100, "billable_output_tokens": 50}
+
+
+def test_response_model_absent_or_equal_keeps_existing_billing_and_non_claude_unchanged():
+    assert UsageMetadata().response_model is None
+    assert claude_code_map_usage({"input_tokens": 1}).response_model is None
+    assert _usage_billing_for_event(UsageMetadata(), "sol") == {"model": "sol"}
+    same = UsageMetadata(response_model="sol")
+    assert _usage_billing_for_event(same, "sol") == {"model": "sol"}
+    # Hostile response evidence is dropped, never persisted.
+    hostile = UsageMetadata(response_model="https://h/m")
+    assert _usage_billing_for_event(hostile, "sol") == {"model": "sol"}
+    _, plain = TaskCardEventProjection.project_llm_response_usage(
+        _llm_event(usage_billing={"model": "sol", "requested_model": "sol"}))
+    assert "requested_model" not in plain["bill"]
+    assert "model sol" not in api_cost.usage_line(1.0, plain, _ready_catalog({"sol": SOL}))
+
+
 # ---------------------------------------------------------------- session total
 
 SOL2 = {name: rate * 2 for name, rate in SOL.items()}

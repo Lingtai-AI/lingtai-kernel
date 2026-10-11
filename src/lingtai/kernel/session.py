@@ -125,7 +125,14 @@ def _usage_billing_for_event(usage: object, model: object) -> dict[str, object] 
     """
     billing: dict[str, object] = {}
     safe_model = safe_billing_model(model)
-    if safe_model is not None:
+    actual = safe_billing_model(getattr(usage, "response_model", None))
+    if actual is not None:
+        # Provider-reported model prices the call; the configured selection
+        # stays visible only when it differs (an alias such as ``opus``).
+        billing["model"] = actual
+        if safe_model is not None and safe_model != actual:
+            billing["requested_model"] = safe_model
+    elif safe_model is not None:
         billing["model"] = safe_model
     tier = safe_billing_tier(getattr(usage, "requested_service_tier", None))
     if tier is not None:

@@ -160,7 +160,15 @@ semantics live here. The public producer contract lives in
     excludes search/grounding/image fixed fees — from that exact round's own
     model (a plain name, exact catalog key, no fuzzy alias) and
     adapter-established counts (`llm_response.usage_billing`; a wire field the
-    provider did not state stays unknown, never `0`). Unknown counts, rates,
+    provider did not state stays unknown, never `0`). When the adapter
+    positively established the provider-reported model
+    (guarded by [TT005](BEHAVIORS.md#behavior-tt005)),
+    (`UsageMetadata.response_model`, e.g. exactly one Claude CLI `modelUsage`
+    key agreeing with its `canonicalModel`) that exact id is the round's
+    `model` and the configured selection rides as `requested_model`, shown as
+    `model <id>` on the line; empty, malformed, multi-model or disagreeing
+    evidence is unknown and keeps the configured name, never a guessed alias
+    mapping. Unknown counts, rates,
     incoherent splits (1h cache-write larger than total write, malformed TTL
     count), invalid above-threshold tier rates (never a silent fallback to the
     base rate) and non-finite/overflowing products are `?`; `n/a` notes cover

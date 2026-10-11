@@ -165,6 +165,10 @@ class UsageMetadata:
     # means none was requested or the adapter does not say; it is never the
     # tier the provider applied.
     requested_service_tier: str | None = None
+    # The exact model id the provider's own response positively reported for
+    # THIS call (e.g. a Claude CLI result with a single ``modelUsage`` key).
+    # ``None`` means unknown; it is never inferred from the configured alias.
+    response_model: str | None = None
 
 
 def checked_count(value: object) -> int | None:

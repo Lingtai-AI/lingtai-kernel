@@ -1019,6 +1019,9 @@ class TaskCardEventProjection:
         model = safe_billing_model(raw.get("model"))
         if model is not None:
             bill["model"] = model
+            requested = safe_billing_model(raw.get("requested_model"))
+            if requested is not None and requested != model:
+                bill["requested_model"] = requested
         if "service_tier" in raw:
             # REQUESTED wire tier. A present-but-invalid value stays present
             # (empty) so it is unknown downstream, never standard; an absent
