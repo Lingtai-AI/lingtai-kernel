@@ -26,6 +26,7 @@ related_files:
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/notifications.py
+  - tests/test_whatsapp_notification_repair.py
 review_triggers:
   - src/lingtai/services/mcp_inbox.py
   - src/lingtai/services/mcp_licc.py

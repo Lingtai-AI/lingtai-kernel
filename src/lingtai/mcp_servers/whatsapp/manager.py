@@ -7,6 +7,7 @@ bridge (whatsapp-web.js) over the newline-JSON protocol.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -118,6 +119,22 @@ def _safe_component(value: Any, fallback: str = "unknown") -> str:
     if not safe.strip("."):
         return fallback
     return safe
+
+
+def _notification_event_id(sender: Any, stored_message_id: Any) -> str:
+    """Return a bounded LICC-safe ID for one stored inbound message.
+
+    The sender and the ID returned by ``_store_message`` are serialized as a
+    two-item JSON array before hashing, so punctuation and tuple boundaries
+    cannot change the filename policy or make two ordinary identities merge.
+    The original values remain in notification metadata.
+    """
+    identity = json.dumps(
+        [str(sender), str(stored_message_id)],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"wa_{hashlib.sha256(identity).hexdigest()}"
 
 
 def normalize_wa_id(value: Any) -> str:
@@ -501,13 +518,13 @@ class WhatsAppManager:
             f"wa_id=\"{from_id}\" to recover the complete message)_"
             if newest_truncated else ""
         )
-        push_inbox_event(
+        published = push_inbox_event(
             sender="whatsapp",
             subject=f"whatsapp message from {from_id}",
             body=f"{header}\n\n**Newest WhatsApp message**\n{newest}{newest_note}",
-            # Downstream LICC code may use the event id as a file name, so the
-            # remote-controlled components are sanitized here too.
-            event_id=f"wa:{_safe_component(from_id)}:{_safe_component(msg_id)}",
+            # LICC uses the event ID as a filename. Keep it fixed-size and
+            # canonical while preserving the original identity in metadata.
+            event_id=_notification_event_id(from_id, msg_id),
             metadata={
                 "conversation_ref": ctx["conversation_ref"],
                 "message_id": msg_id,
@@ -518,6 +535,13 @@ class WhatsAppManager:
                 "latest_incoming": ctx["latest_incoming"],
             },
         )
+        if not published:
+            # Archive and replay state intentionally remain unchanged here:
+            # retry/outbox/recovery is a separate reliability design.
+            log.warning(
+                "whatsapp: inbound notification writer returned false after archive; "
+                "no automatic replay was attempted"
+            )
 
     # ------------------------------------------------------------------ identity
 

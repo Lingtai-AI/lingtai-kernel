@@ -128,6 +128,7 @@ related_files:
   - tests/test_tool_executor.py
   - tests/test_tool_result_recovery.py
   - tests/test_tool_result_restore_after_continuation_failure.py
+  - tests/test_whatsapp_notification_repair.py
   - tests/test_windows_import_graph.py
   - tests/test_windows_regression.py
   - tests/test_windows_taskkill_fallback.py

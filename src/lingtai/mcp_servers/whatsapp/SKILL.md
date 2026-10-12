@@ -242,14 +242,21 @@ present. Older `recent_messages` beyond the 10 most recent is history
 overflow, not a sign that the current message is truncated, and is not itself
 a reason to reread the current message.
 
-The effective allowlist is checked before storage or notification. When a
+The effective allowlist is checked before storage or notification. Each
+notification uses a fixed-length `wa_` plus full SHA-256 event ID derived from
+the serialized `(sender, stored_message_id)` tuple, so it satisfies the
+canonical filename rule while `from` and `message_id` remain in metadata.
+When a
 stable bridge message ID exists, it is namespaced by sender and recorded in the
 persistent `inbox_seen.json` replay guard; a redelivery is suppressed. The
 bounded guard retains up to 5000 keys. Messages without a stable upstream ID
 are not deduplicated; they receive a local archive UUID for storage and
 notification, and that UUID is not a valid reply/react target. File/event
 components are sanitized. When a stable bridge ID exists, reply/react uses that
-opaque bridge-supplied value.
+opaque bridge-supplied value. A false notification-writer result is logged
+without message content or identifiers, but the existing archive/seen ordering
+is retained: this narrow repair does not add an outbox, retry, or historical
+replay, so a previously missed wake is not reconstructed by `read`.
 
 ## SIDE EFFECTS / RISK / ERRORS
 
