@@ -20,7 +20,7 @@ import subprocess
 import threading
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
 
 from ._shell_dialect import (
@@ -505,6 +505,71 @@ def _augment_command_result(result: dict, command: str | None = None) -> dict:
 
 
 
+def _is_executable_file(candidate: str) -> bool:
+    """True when *candidate* is an executable regular file (follows symlinks)."""
+    try:
+        return os.path.isfile(candidate) and os.access(candidate, os.X_OK)
+    except OSError:
+        return False
+
+
+
+def _resolve_executable_token(token: str, *, cwd: str, path: str | None) -> str | None:
+    """Resolve a command token to an executable file path, or None.
+
+    Anchored to the real execution *cwd* and *path* search list: a
+    path-bearing token resolves against *cwd* when relative (``execvp``
+    semantics); a bare name is searched along *path*, where an empty entry
+    means *cwd*. Only an actual executable file yields an identity; a
+    missing, non-file, or non-executable candidate returns None so the caller
+    keeps the historical token-only decision.
+    """
+    if not token:
+        return None
+    if "/" in token:
+        candidate = (
+            os.path.normpath(token)
+            if os.path.isabs(token)
+            else os.path.normpath(os.path.join(cwd, token))
+        )
+        return candidate if _is_executable_file(candidate) else None
+    search = path if path is not None else os.environ.get("PATH", os.defpath)
+    for entry in search.split(os.pathsep):
+        # execvp semantics: an empty entry means the execution cwd, and a
+        # relative entry is likewise anchored to the execution cwd — never
+        # to the Python process cwd that happens to run this check.
+        base = entry if os.path.isabs(entry) else os.path.join(cwd, entry)
+        candidate = os.path.normpath(os.path.join(base, token))
+        if _is_executable_file(candidate):
+            return candidate
+    return None
+
+
+
+def _canonical_stored_name(resolved: str) -> str:
+    """Return the filesystem's stored spelling of the resolved file's name.
+
+    Never case-folds policy data: the exact stored directory entry wins, and
+    a single case-variant entry — only possible on a case-insensitive
+    filesystem — is recovered so a token spelled ``RM`` that actually opens
+    the stored file ``rm`` is compared under its real on-disk identity. When
+    the directory cannot be read or several case-variants exist, the literal
+    resolved name is returned unchanged (no silently widened matching).
+    """
+    parent, name = os.path.split(resolved)
+    try:
+        entries = os.listdir(parent or ".")
+    except OSError:
+        return name
+    if name in entries:
+        return name
+    matches = [entry for entry in entries if entry.casefold() == name.casefold()]
+    if len(matches) == 1:
+        return matches[0]
+    return name
+
+
+
 class ShellPolicy:
     """Command execution policy — allow/deny lists with pipe awareness.
 
@@ -549,22 +614,45 @@ class ShellPolicy:
             f"{', '.join(sorted(self._deny))}"
         )
 
-    def is_allowed(self, command: str) -> bool:
+    def is_allowed(
+        self, command: str, *, cwd: str | None = None, path: str | None = None
+    ) -> bool:
         """Check if a command string is allowed by this policy.
 
-        Parses pipes, chains, and subshells to check every command.
+        Parses pipes, chains, and subshells to check every command. When
+        *cwd* is supplied, denylist mode additionally denies a token whose
+        actual executable identity — resolved on the real filesystem against
+        that cwd and *path* (default: the process PATH) — is a pathless deny
+        entry, so on a case-insensitive filesystem ``RM`` is denied by
+        ``deny=["rm"]`` while case-sensitive distinct executables keep their
+        distinction. Without execution context the historical token-only
+        behavior is retained.
         """
         if self._allow is None and self._deny is None:
             return True
         commands = self._extract_commands(command)
-        return all(self._check_single(cmd) for cmd in commands)
+        return all(self._check_single(cmd, cwd=cwd, path=path) for cmd in commands)
 
-    def _check_single(self, cmd: str, *, case_insensitive: bool = False) -> bool:
+    def _check_single(
+        self,
+        cmd: str,
+        *,
+        case_insensitive: bool = False,
+        cwd: str | None = None,
+        path: str | None = None,
+    ) -> bool:
         """Check one command name against policy.
 
-        PowerShell command names are case-insensitive; POSIX retains its
-        historical case-sensitive matching.  The manager supplies the dialect
-        fact rather than making this policy object inspect the host.
+        Raw-token equality is always checked first. In denylist mode, a deny
+        entry without a path separator additionally matches the token's
+        basename, so ``deny=["rm"]`` covers ``/bin/rm`` and ``./rm`` without
+        changing the exact-path meaning of entries such as ``/bin/rm``.
+        PowerShell/cmd case behavior remains supplied by the selected dialect;
+        POSIX case identity is never guessed from an OS label or universal
+        case folding — when the caller threads the real execution context
+        (``cwd``/``path``), a surviving token is denied only if the filesystem
+        proves it executes a stored file whose real name is a pathless deny
+        entry.
         """
         if case_insensitive:
             cmd = cmd.casefold()
@@ -575,8 +663,42 @@ class ShellPolicy:
         if allow is not None:
             return cmd in allow
         if deny is not None:
-            return cmd not in deny
+            if cmd in deny:
+                return False
+            command_name = PurePosixPath(cmd).name
+            if "\\" in cmd:
+                command_name = PureWindowsPath(cmd).name
+            if any(
+                "/" not in item and "\\" not in item and command_name == item
+                for item in deny
+            ):
+                return False
+            if case_insensitive or cwd is None:
+                return True
+            return not self._denied_by_resolved_identity(cmd, deny, cwd=cwd, path=path)
         return True
+
+    def _denied_by_resolved_identity(
+        self, cmd: str, deny: set[str], *, cwd: str, path: str | None
+    ) -> bool:
+        """Deny when the token provably executes a stored file whose real
+        name equals a pathless deny entry.
+
+        Conservative by construction: only a resolved executable file with an
+        unambiguous stored identity can deny; an unresolvable or ambiguous
+        token keeps the historical allow, so identity-resolution failure
+        never widens or narrows policy silently. Symlink targets, aliases,
+        shell functions, and dynamic dispatch are not resolved (documented
+        non-goals of the shell policy).
+        """
+        resolved = _resolve_executable_token(cmd, cwd=cwd, path=path)
+        if resolved is None:
+            return False
+        canonical = _canonical_stored_name(resolved)
+        return any(
+            "/" not in item and "\\" not in item and canonical == item
+            for item in deny
+        )
 
     @staticmethod
     def _extract_commands(command: str) -> list[str]:
@@ -698,8 +820,19 @@ class ShellManager:
             return {"status": "error", "message": "Invalid working_dir path"}
         return None
 
-    def _validate_command(self, command: str) -> dict | None:
-        """Validate command is non-empty and allowed by policy. Returns error dict or None."""
+    def _validate_command(
+        self,
+        command: str,
+        *,
+        cwd: str | None = None,
+        path: str | None = None,
+    ) -> dict | None:
+        """Validate command is non-empty and allowed by policy. Returns error dict or None.
+
+        *cwd*/*path* carry the real execution context (command working dir and
+        PATH search list); when *cwd* is omitted the policy keeps its
+        historical token-only decision for compatibility with direct callers.
+        """
         if not command.strip():
             return {"status": "error", "message": "command is required"}
         try:
@@ -742,7 +875,9 @@ class ShellManager:
             }
         denied = list(dict.fromkeys(
             cmd for cmd in commands
-            if not self._policy._check_single(cmd, case_insensitive=case_insensitive)
+            if not self._policy._check_single(
+                cmd, case_insensitive=case_insensitive, cwd=cwd, path=path
+            )
         ))
         if denied:
             return {
@@ -798,9 +933,11 @@ class ShellManager:
 
     def _handle_run(self, args: dict) -> dict:
         command = args.get("command", "")
-        err = self._validate_command(command)
-        if err:
-            return err
+        # Resolve the actual final execution cwd FIRST — explicit working_dir,
+        # else the bound execution workspace root, else the manager workdir —
+        # and share that one cwd with both policy validation and dispatch, so
+        # the policy gate always judges the filesystem context the child would
+        # actually run in (never a different pre-resolution cwd).
         from lingtai.kernel.execution_workspace import current_execution_workspace
         workspace = current_execution_workspace()
         cwd = args.get("working_dir") or (
@@ -814,6 +951,13 @@ class ShellManager:
                 cwd = str(resolve_execution_path(cwd, fallback_root=workspace.root))
             except (ValueError, OSError):
                 return {"status": "error", "message": "Invalid working_dir path"}
+        err = self._validate_command(
+            command,
+            cwd=cwd,
+            path=os.environ.get("PATH"),
+        )
+        if err:
+            return err
         err = self._validate_working_dir(cwd)
         if err:
             return err
