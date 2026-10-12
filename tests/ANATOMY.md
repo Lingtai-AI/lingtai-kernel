@@ -90,6 +90,7 @@ related_files:
   - tests/test_daemon_windows_process_port.py
   - tests/test_daemon_windows_supervisor.py
   - tests/test_docs_governance.py
+  - tests/test_feishu_channel_event_date.py
   - tests/test_feishu_rich_outbound.py
   - tests/test_git_init.py
   - tests/test_how_to_change_name_e2e.py

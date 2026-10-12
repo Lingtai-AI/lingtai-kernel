@@ -153,10 +153,12 @@ transcription does not discard the audio.
 
 Reaction/read/Bot membership events live in read-only `chat_id="events"`; they
 carry an `event` projection and complete raw `feishu`, do not wake the Agent,
-and must not be a `send` recipient. Ordinary admitted messages and authorized
-business callbacks wake. DMs need no mention; group/topic messages need an
-explicit Bot mention (`@all` alone is ignored), and `allowed_users` gates all
-actors.
+and must not be a `send` recipient. Their event date accepts the first usable
+candidate in action time, header creation time, raw timestamp, then local now;
+non-finite values are skipped before seconds/milliseconds normalization.
+Ordinary admitted messages and authorized business callbacks wake. DMs need no
+mention; group/topic messages need an explicit Bot mention (`@all` alone is
+ignored), and `allowed_users` gates all actors.
 
 ## Notifications and progress
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import logging
 import os
 import re
@@ -1442,6 +1443,8 @@ class FeishuManager:
         for candidate in candidates:
             try:
                 timestamp = float(candidate)
+                if not math.isfinite(timestamp):
+                    continue
                 while timestamp > 10_000_000_000:
                     timestamp /= 1000
                 return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime(
