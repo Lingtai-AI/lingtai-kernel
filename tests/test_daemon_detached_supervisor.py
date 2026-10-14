@@ -541,21 +541,25 @@ def test_cli_session_policy_preserves_legacy_and_inherits_for_detached():
     assert host._cli_start_new_session() is False
 
 
-@pytest.mark.parametrize("backend", ["claude-p", "claude-code", "qwen-code"])
+@pytest.mark.parametrize("backend", ["qwen-code"])
 def test_detached_native_mcp_rehydration_preserves_common_and_owner_values(
     tmp_path, backend,
 ):
-    """The last native-config writer keeps finish plus real owner-only values."""
+    """The last native-config writer keeps finish plus real owner-only values.
+
+    claude-p/claude-code are deliberately absent from this parametrization:
+    the Claude Agent SDK runner builds ``ClaudeAgentOptions.mcp_servers``
+    directly from the capsule in-process (see
+    ``test_claude_sdk_mcp_servers_built_from_capsule_without_native_file``
+    below) and never writes a native config file for
+    ``_rehydrate_native_mcp_files`` to rehydrate.
+    """
     from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
     from threading import Event
 
     run_dir = _make_run_dir(tmp_path, task=f"{backend} native MCP rehydration")
     config_path = run_dir.path / f"{backend}-mcp.json"
-    marker = (
-        "--mcp-config"
-        if backend in {"claude-p", "claude-code"}
-        else "__lingtai_qwen_system_settings_path"
-    )
+    marker = "__lingtai_qwen_system_settings_path"
     backend_argv = [marker, str(config_path)]
     real_mcp = [
         {
@@ -612,6 +616,777 @@ def test_detached_native_mcp_rehydration_preserves_common_and_owner_values(
     assert servers["parent-docs"]["env"] == {
         "DOC_TOKEN": "owner-only-token"
     }
+
+
+@pytest.mark.parametrize("backend", ["claude-p", "claude-code"])
+def test_claude_sdk_mcp_servers_built_from_capsule_without_native_file(
+    tmp_path, backend,
+):
+    """claude-p/claude-code mount parent MCP from the capsule, not a file.
+
+    No ``daemon_common`` entry is added — this backend imposes no mandatory
+    finish/checkpoint tool (see daemon/CONTRACT.md Capability Invariant 3 and
+    ``claude_agent_sdk_runtime.py``).
+    """
+    from lingtai.tools.daemon.claude_agent_sdk_runtime import (
+        _mcp_servers_from_registrations,
+    )
+
+    real_mcp = [
+        {
+            "name": "parent-docs",
+            "transport": "stdio",
+            "command": "/bin/echo",
+            "args": ["docs"],
+            "env": {"DOC_TOKEN": "owner-only-token"},
+        },
+        {
+            # HTTP stays prompt-catalog-only for this backend (unverified
+            # native loader) — must not appear in mcp_servers.
+            "name": "http-only",
+            "transport": "http",
+            "url": "https://example.invalid/mcp",
+        },
+    ]
+    servers = _mcp_servers_from_registrations(real_mcp)
+    assert list(servers) == ["parent-docs"]
+    assert servers["parent-docs"] == {
+        "type": "stdio", "command": "/bin/echo", "args": ["docs"],
+        "env": {"DOC_TOKEN": "owner-only-token"},
+    }
+    # Never run through a secret-bearing file on disk for this backend.
+    assert not (tmp_path / f"{backend}-mcp.json").exists()
+
+
+def test_claude_sdk_explicit_native_tools_whitelist_distinguishes_absent_from_empty():
+    """``backend_options.tools`` reaches ``ClaudeAgentOptions.tools`` verbatim.
+
+    Distinct from both LingTai's `tasks[].tools` (capability names, a
+    different field entirely) and `allowed_tools` (auto-approval, not a
+    restriction) — the real native whitelist. An explicit empty list must
+    disable every native tool, not be silently treated the same as the key
+    being absent (the generic argv-token converter cannot represent that
+    distinction for list values, which is exactly why this is a dedicated
+    sentinel path — see `_handle_emanate_cli`'s `backend_options.tools`
+    handling and `claude_sdk_options_from_argv`).
+    """
+    from lingtai.tools.daemon.claude_agent_sdk_runtime import (
+        _NATIVE_TOOLS_SENTINEL,
+        _build_options,
+        claude_sdk_options_from_argv,
+    )
+
+    # Absent: no restriction (today's default, unchanged).
+    absent = claude_sdk_options_from_argv(["--model", "opus"])
+    assert "tools" not in absent
+    options_absent = _build_options(
+        cwd="/tmp", cli_path="/bin/true", mcp_servers={},
+        sdk_options=absent, backend_env={},
+    )
+    assert options_absent.tools is None
+
+    # Explicit non-empty whitelist.
+    argv_some = [_NATIVE_TOOLS_SENTINEL, json.dumps(["Read", "Bash"])]
+    some = claude_sdk_options_from_argv(argv_some)
+    assert some["tools"] == ["Read", "Bash"]
+
+    # Explicit empty list disables every native tool — must NOT collapse to
+    # "absent"/unrestricted.
+    argv_empty = [_NATIVE_TOOLS_SENTINEL, json.dumps([])]
+    empty = claude_sdk_options_from_argv(argv_empty)
+    assert empty["tools"] == []
+    options_empty = _build_options(
+        cwd="/tmp", cli_path="/bin/true", mcp_servers={},
+        sdk_options=empty, backend_env={},
+    )
+    assert options_empty.tools == []
+    assert options_empty.tools is not None
+
+
+def test_claude_sdk_native_tools_preflight_rejects_non_string_list(tmp_path):
+    """A malformed ``backend_options.tools`` fails the whole batch at preflight."""
+    from tests._daemon_helpers import make_daemon_agent
+
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    result = manager.handle({
+        "action": "emanate",
+        "tasks": [{
+            "task": "irrelevant", "tools": [],
+            "backend_options": {"tools": "Bash"},
+        }],
+        "backend": "claude-p",
+    })
+    assert result["status"] == "error"
+    assert "backend_options.tools" in result["message"]
+    # No run directory was created for the rejected batch.
+    assert not (agent._working_dir / "daemons").exists() or not any(
+        (agent._working_dir / "daemons").iterdir()
+    )
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='fake SDK CLI uses POSIX stdin select')
+def test_claude_sdk_interrupt_actually_interrupts_a_blocked_turn(tmp_path, monkeypatch):
+    """A real, concurrent ``client.interrupt()`` fires while a turn is blocked.
+
+    Deterministic, event-controlled (not timing-based beyond one bounded
+    wait for the background thread to reach the fake CLI's deliberate
+    delay): the fake CLI holds its reply to the first message for up to 2s,
+    giving this test a wide, reliable window to call
+    `request_live_interrupt()` while the SDK connection is genuinely
+    blocked inside `receive_messages()`. Proves the old-Result-drain
+    contract too: the aborted first turn's Result is consumed before the
+    second query's answer is read, and the run's final text is the SECOND
+    message's reply, not stale/empty text from the interrupted turn.
+    """
+    import threading
+    from tests._daemon_helpers import make_daemon_agent
+
+    monkeypatch.setenv("PATH", str(Path(__file__).parent) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("FAKE_CLAUDE_SDK_DELAY_MS", "2000")
+    calls_path = tmp_path / "fake-claude-sdk-interrupt-calls.jsonl"
+    monkeypatch.setenv("FAKE_CLAUDE_SDK_CALLS", str(calls_path))
+
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    run_dir = _make_run_dir(tmp_path, task="count slowly")
+
+    cancel_event = threading.Event()
+    result_box: dict = {}
+
+    def _run():
+        result_box["text"] = manager._run_claude_agent_sdk_emanation(
+            "em-test", run_dir, "count slowly", cancel_event, threading.Event(),
+            backend_argv=[], backend_env={},
+        )
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    try:
+        # Event-controlled wait: poll for evidence the fake CLI actually
+        # received and logged the first `user` line (so the connection is
+        # live and the fake CLI has entered its deliberate 2s hold) rather
+        # than assuming a fixed startup delay.
+        deadline = time.monotonic() + 5
+        first_call_seen = False
+        while time.monotonic() < deadline:
+            if calls_path.exists() and '"type": "user"' in calls_path.read_text():
+                first_call_seen = True
+                break
+            time.sleep(0.05)
+        assert first_call_seen, "fake CLI never logged the first user message"
+        assert run_dir.enqueue_live_followup('second message', interrupt=True) == 'interrupt'
+
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "runner did not finish after interrupt + followup"
+    finally:
+        cancel_event.set()
+        thread.join(timeout=5)
+
+    calls = [json.loads(line) for line in calls_path.read_text().splitlines() if line.strip()]
+    user_calls = [c for c in calls if c.get("type") == "user"]
+    assert len(user_calls) == 2
+    assert user_calls[0]["message"]["content"] == "count slowly"
+    assert user_calls[1]["message"]["content"] == "second message"
+
+    state = run_dir.state_snapshot()
+    assert state["state"] == "done"
+    assert result_box["text"] == "fake reply 2 to: second message"
+    assert state["result_preview"] == "fake reply 2 to: second message"
+    # The interrupted first turn was still durably saved (not swallowed).
+    assert (run_dir.path / "turns" / "turn-1.txt").is_file()
+    turn_events = [
+        json.loads(l) for l in run_dir.events_path.read_text().splitlines()
+        if l.strip() and json.loads(l).get("event") == "daemon_turn"
+    ]
+    assert len(turn_events) == 2
+    assert turn_events[0]["turn"] == 1
+    assert turn_events[0]["is_error"] is True
+    assert turn_events[1]["turn"] == 2
+    assert turn_events[1]["is_error"] is False
+    # The interrupted turn's own interrupt flag was consumed exactly once.
+    assert run_dir.consume_live_interrupt_request() is False
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='fake SDK CLI is a POSIX launcher')
+def test_claude_sdk_stream_eof_without_result_marks_failed_not_done(tmp_path, monkeypatch):
+    """A connection that ends before any Result is a failure, never a success.
+
+    The fake CLI exits immediately after receiving the user message, with
+    no assistant/result at all — simulating a crash. `_run_async` must mark
+    the run failed, not call `mark_done` with empty/stale text.
+    """
+    import threading
+    from tests._daemon_helpers import make_daemon_agent
+
+    monkeypatch.setenv("PATH", str(Path(__file__).parent) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("FAKE_CLAUDE_SDK_CRASH_AFTER_USER", "1")
+
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    run_dir = _make_run_dir(tmp_path, task="say hello")
+
+    # The fake CLI's nonzero exit (simulating a crash with no Result) makes
+    # the real SDK itself raise `ProcessError` out of `receive_messages()`;
+    # the runner's outer catch-all calls `mark_failed` and re-raises, the
+    # same established pattern every other backend runner already uses
+    # (mark terminal state, then propagate for the execution child's own
+    # logging) — so this call is expected to raise here, not return quietly.
+    with pytest.raises(Exception):
+        manager._run_claude_agent_sdk_emanation(
+            "em-test", run_dir, "say hello", threading.Event(), threading.Event(),
+            backend_argv=[], backend_env={},
+        )
+
+    state = run_dir.state_snapshot()
+    assert state["state"] == "failed"
+    assert state.get("error", {}).get("message")
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='fake SDK CLI is a POSIX launcher')
+def test_claude_sdk_resume_eof_without_result_is_not_reported_sent(tmp_path, monkeypatch):
+    """A resume connection that ends before any Result must not report success."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from tests._daemon_helpers import make_daemon_agent
+
+    monkeypatch.setenv("PATH", str(Path(__file__).parent) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("FAKE_CLAUDE_SDK_CRASH_AFTER_USER", "1")
+
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    manager._ask_pool = ThreadPoolExecutor(max_workers=1)
+    run_dir = _make_run_dir(tmp_path, task="say hello")
+    run_dir.set_session_id("claude_session_id", "prior-session", overwrite=True)
+    run_dir.mark_done("initial reply")
+    entry = {
+        "run_dir": run_dir, "backend": "claude-p",
+        "followup_lock": threading.Lock(), "ask_in_flight": False,
+        "ask_future": None,
+    }
+
+    try:
+        dispatch = manager._handle_ask_claude_agent_sdk_resume(
+            "em-test", entry, "follow up please"
+        )
+        assert dispatch.get("status") == "sent"
+        result = entry["ask_future"].result(timeout=10)
+    finally:
+        manager._ask_pool.shutdown(wait=True)
+
+    assert result["status"] == "error"
+    assert result["message"]
+    # Never a fabricated success for a crash with no Result produced.
+    assert result.get("output") is None
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='fake SDK CLI is a POSIX launcher')
+def test_claude_sdk_multi_turn_run_publishes_nonterminal_notice_per_continuing_turn(
+    tmp_path, monkeypatch,
+):
+    """Each turn that the run continues past gets a durable, non-terminal notice.
+
+    Reuses the exact typed/idempotent notification machinery every other
+    non-terminal daemon event already shares; verified by reading the real
+    notification store, not by inspecting internal call counts.
+    """
+    import threading
+    from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
+    from tests._daemon_helpers import make_daemon_agent
+
+    monkeypatch.setenv("PATH", str(Path(__file__).parent) + os.pathsep + os.environ["PATH"])
+    calls_path = tmp_path / "fake-claude-sdk-multiturn-calls.jsonl"
+    monkeypatch.setenv("FAKE_CLAUDE_SDK_CALLS", str(calls_path))
+
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    run_dir = _make_run_dir(tmp_path, task="first task")
+    # Pre-queue a follow-up so the run continues past its first turn without
+    # needing a second, concurrent thread to deliver it mid-run.
+    assert run_dir.enqueue_followup("second message") is True
+
+    manager._run_claude_agent_sdk_emanation(
+        "em-test", run_dir, "first task", threading.Event(), threading.Event(),
+        backend_argv=[], backend_env={},
+    )
+
+    state = run_dir.state_snapshot()
+    assert state["state"] == "done"
+    assert state["result_preview"] == "fake reply 2 to: second message"
+    # Turn 1 was durably saved and non-terminally notified; turn 2 is this
+    # run's terminal outcome and relies on the existing terminal receipt
+    # instead (no redundant non-terminal notice for it).
+    assert (run_dir.path / "turns" / "turn-1.txt").read_text() == "fake reply 1 to: first task"
+    assert (run_dir.path / "turns" / "turn-2.txt").read_text() == "fake reply 2 to: second message"
+
+    snapshot = PosixNotificationStoreAdapter(agent._working_dir).snapshot(
+        lambda channel: channel == "daemon"
+    )
+    events = snapshot.get("daemon", {}).get("data", {}).get("events", [])
+    turn_events = [e for e in events if e.get("kind") == "daemon_turn_result"]
+    assert len(turn_events) == 1
+    assert turn_events[0]["idempotency_key"] == f"daemon-turn:{run_dir.run_id}:1"
+    # Never mistaken for this run's terminal outcome.
+    from lingtai.kernel.base_agent import _is_terminal_daemon_event
+    assert _is_terminal_daemon_event(turn_events[0]) is False
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='fake SDK CLI is a POSIX launcher')
+def test_claude_sdk_final_turn_persistence_failure_fails_run_not_silent_done(
+    tmp_path, monkeypatch,
+):
+    """A write failure on the *final* turn must not be silently reported done.
+
+    Regression for a parent-injected reproduction: the prior revision only
+    recorded `daemon_turn_persistence_failed` when the run went on to a
+    follow-up (the notification-publish path happened to check the write
+    result); a save failure on the turn that actually finalizes the run
+    left zero trace and the run was still marked `done`. The fix checks
+    immediately after every `record_turn_result` call, before deciding to
+    continue or finalize at all.
+    """
+    import threading
+    from tests._daemon_helpers import make_daemon_agent
+
+    monkeypatch.setenv("PATH", str(Path(__file__).parent) + os.pathsep + os.environ["PATH"])
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    run_dir = _make_run_dir(tmp_path, task="say hello")
+    monkeypatch.setattr(run_dir, "record_turn_result", lambda **kw: "")
+
+    manager._run_claude_agent_sdk_emanation(
+        "em-test", run_dir, "say hello", threading.Event(), threading.Event(),
+        backend_argv=[], backend_env={},
+    )
+
+    state = run_dir.state_snapshot()
+    assert state["state"] == "failed"
+    assert "saved" in state.get("error", {}).get("message", "").lower()
+    events = [
+        json.loads(line) for line in run_dir.events_path.read_text().splitlines()
+        if line.strip()
+    ]
+    failure_events = [e for e in events if e.get("event") == "daemon_turn_persistence_failed"]
+    assert len(failure_events) == 1
+    assert failure_events[0]["turn"] == 1
+    # No fabricated success for a turn whose result could not be saved.
+    assert not any(e.get("event") == "daemon_done" for e in events)
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='uses POSIX supervisor identity')
+def test_claude_sdk_accepted_ask_never_stranded_between_drain_and_finalize(
+    tmp_path, monkeypatch,
+):
+    """Regression for the exact race a parent-verified probe reproduced.
+
+    The two-call `drain_followups()` then `mark_done()`/`mark_failed()`
+    pattern left a real window: an `ask`'s `enqueue_followup` landing in the
+    gap returned `{"status": "queued", ...}` for a message that then sat
+    forever in a `done` run's `pending_followups`, with no receipt telling
+    the caller it was actually lost. This test reproduces the identical
+    scheduling boundary — a concurrent production `_handle_ask_detached`
+    call racing the exact instant between the empty-queue check and the
+    terminal commit — against the *real* fixed method
+    (`DaemonRunDir.drain_followups_or_finalize`), which does both under one
+    lock. The production ask call is expected to genuinely *block* on that
+    lock (not return early into the gap), proving the two operations are
+    now strictly ordered rather than merely "probably fine in practice".
+    """
+    import threading
+    from types import SimpleNamespace
+
+    from lingtai.adapters.posix.process_identity import process_identity
+    from lingtai.tools.daemon import DaemonManager
+
+    run_dir = _make_run_dir(tmp_path, task="first")
+    pid = os.getpid()
+    run_dir.update_state(
+        backend="claude-code", owner="supervisor", state="running",
+        supervisor_pid=pid, supervisor_start_identity=process_identity(pid),
+    )
+    manager = DaemonManager.__new__(DaemonManager)
+    manager._workdir = SimpleNamespace(path=run_dir.path.parent.parent)
+    manager._log = lambda *a, **k: None
+
+    entered_commit = threading.Event()
+    ask_attempted = threading.Event()
+    ask_result: dict = {}
+    original_persist = run_dir._persist_daemon_state
+    release_commit = threading.Event()
+
+    def _slow_persist():
+        # Fires from inside `drain_followups_or_finalize`'s own
+        # `_state_transaction()` — the lock is already held at this point,
+        # exactly like the parent probe's hold inside the real method.
+        entered_commit.set()
+        assert ask_attempted.wait(5), "ask thread never attempted its call"
+        # Give the (correctly blocked) ask thread a moment to prove it is
+        # still blocked on the lock, not racing past with a stale decision.
+        assert not release_commit.wait(0.3), "ask call returned before commit released the lock"
+        return original_persist()
+
+    monkeypatch.setattr(run_dir, "_persist_daemon_state", _slow_persist)
+
+    def _ask_thread():
+        assert entered_commit.wait(5)
+        ask_attempted.set()
+        ask_result.update(
+            DaemonManager._handle_ask_detached(
+                manager, run_dir.handle,
+                {"run_dir": run_dir, "backend": "claude-code"},
+                "ACCEPTED_FOLLOWUP",
+            )
+        )
+
+    t = threading.Thread(target=_ask_thread, daemon=True)
+    t.start()
+    try:
+        followup = run_dir.drain_followups_or_finalize(status="done", text="FIRST")
+    finally:
+        release_commit.set()
+    t.join(timeout=5)
+    assert not t.is_alive(), "ask thread did not unblock after the transaction released its lock"
+
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    # The invariant that actually matters: never terminal with a stranded,
+    # ACKed-but-undelivered message. Because the ask call was genuinely
+    # blocked until after this transaction committed, it must have observed
+    # the post-commit "done" state and been told so honestly — not told
+    # "queued" for a message nothing will ever drain.
+    if followup is None:
+        assert state.get("state") == "done"
+        assert state.get("pending_followups") in (None, [])
+        assert ask_result.get("status") != "queued", (
+            "ask was told 'queued' for a message that could never be "
+            f"drained: {ask_result}"
+        )
+    else:
+        # The (unrealistic here, since the probe always finds the queue
+        # empty first) alternative outcome: the message was legitimately
+        # drained by this same transaction.
+        assert followup == "ACCEPTED_FOLLOWUP"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="uses the POSIX fake detached owner")
+@pytest.mark.parametrize(
+    "backend,tools,email_mounted,common_mounted",
+    [
+        ("claude-p", ["email"], True, False),
+        ("claude-code", ["email"], True, False),
+        ("codex", ["email"], True, True),
+        ("opencode", ["email"], True, True),
+        ("qwen-code", ["email"], True, True),
+        ("kimicode", ["email"], True, True),
+        ("claude", ["email"], False, False),
+        ("claude-interactive", ["email"], False, False),
+        ("claude-p", [], False, False),
+    ],
+)
+def test_cli_email_mount_keeps_common_mcp_backend_specific(
+    tmp_path, monkeypatch, backend, tools, email_mounted, common_mounted,
+):
+    """Inspect dispatched registrations without starting a CLI or sending email."""
+    from lingtai.tools.daemon import _DAEMON_COMMON_MCP_NAME, _DAEMON_EMAIL_MCP_NAME
+    from tests._daemon_helpers import install_fake_detached_owner, make_daemon_agent
+
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    monkeypatch.setattr(manager, "_should_use_central_daemon_manager", lambda _count: False)
+    records = install_fake_detached_owner(monkeypatch)
+    result = manager._handle_emanate_cli(
+        [{"task": "inspect email mount", "tools": tools}], backend, 1, 30.0,
+    )
+    assert result["status"] == "dispatched"
+    registrations = {reg["name"]: reg for reg in records[0]["capsule"]["mcp"]}
+    assert (_DAEMON_EMAIL_MCP_NAME in registrations) is email_mounted
+    assert (_DAEMON_COMMON_MCP_NAME in registrations) is common_mounted
+    if email_mounted:
+        email = registrations[_DAEMON_EMAIL_MCP_NAME]
+        assert email["transport"] == "stdio"
+        assert email["command"] == sys.executable
+        assert email["args"] == ["-m", "lingtai.mcp_servers.daemon_email"]
+        assert email["env"]["LINGTAI_AGENT_DIR"] == str(agent._working_dir)
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='fake SDK CLI is a POSIX launcher')
+def test_claude_sdk_emanation_real_connect_query_result_end_to_end(tmp_path, monkeypatch):
+    """Real `claude_agent_sdk.ClaudeSDKClient` round trip, not a mocked SDK.
+
+    Drives the actual installed SDK package against `tests/claude` — a fake
+    CLI speaking the real NDJSON + control-protocol wire the SDK uses
+    (control_request/control_response handshake on connect(), then
+    system/assistant/result stream-json messages) — through
+    `DaemonManager._run_claude_agent_sdk_emanation` exactly as the detached
+    execution child calls it. Proves the runner is not merely a unit-tested
+    wrapper: a real SDK connection is made, a real turn completes, and the
+    real `DaemonRunDir` terminal/session-id/token bookkeeping updates.
+    """
+    import threading
+    from tests._daemon_helpers import make_daemon_agent
+
+    monkeypatch.setenv("PATH", str(Path(__file__).parent) + os.pathsep + os.environ["PATH"])
+    calls_path = tmp_path / "fake-claude-sdk-calls.jsonl"
+    monkeypatch.setenv("FAKE_CLAUDE_SDK_CALLS", str(calls_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-reach-claude")
+
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    run_dir = _make_run_dir(tmp_path, task="say hello")
+
+    # The runner pops auth env vars from this interpreter's os.environ
+    # directly (safe in production: it only ever runs inside a disposable
+    # one-shot execution-child process). Called in-process here for the
+    # test, so save/restore around the call to avoid leaking into later
+    # tests in this same pytest worker.
+    saved_key = os.environ.get("ANTHROPIC_API_KEY")
+    try:
+        result = manager._run_claude_agent_sdk_emanation(
+            "em-test", run_dir, "say hello",
+            threading.Event(), threading.Event(),
+            backend_argv=["--model", "opus"], backend_env={},
+        )
+        # Stripped for the fake CLI's spawn (GH #107 auth hygiene): gone from
+        # this process's environment immediately after the call returns.
+        assert "ANTHROPIC_API_KEY" not in os.environ
+    finally:
+        if saved_key is not None:
+            os.environ["ANTHROPIC_API_KEY"] = saved_key
+
+    assert result == "fake reply 1 to: say hello"
+    state = run_dir.state_snapshot()
+    assert state["state"] == "done"
+    assert state["claude_session_id"] == "fake-claude-sdk-session"
+    assert state["tokens"]["calls"] == 0  # UI-only usage, never the token ledger
+    assert state.get("cli_tokens", {}).get("input") == 10
+    assert state.get("cli_tokens", {}).get("output") == 5
+
+    calls = [json.loads(line) for line in calls_path.read_text().splitlines() if line.strip()]
+    user_calls = [c for c in calls if c.get("type") == "user"]
+    assert len(user_calls) == 1
+    assert user_calls[0]["message"]["content"] == "say hello"
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='fake SDK CLI is a POSIX launcher')
+def test_claude_sdk_resume_real_connect_query_result_end_to_end(tmp_path, monkeypatch):
+    """Real SDK ``resume=`` round trip through the terminal ask delegator.
+
+    Matches ``execution_host.run_resume``'s actual async dispatch contract:
+    the delegator must return immediately with ``entry["ask_future"]`` set
+    (never block on the SDK round trip itself), exactly like the retired
+    ``_handle_ask_cli``/``_ask_pool`` pattern every other resumable CLI
+    backend still uses — this is what ``run_resume`` blocks on and uses to
+    decide the generation's ``record_followup`` receipt.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from tests._daemon_helpers import make_daemon_agent
+
+    monkeypatch.setenv("PATH", str(Path(__file__).parent) + os.pathsep + os.environ["PATH"])
+    calls_path = tmp_path / "fake-claude-sdk-resume-calls.jsonl"
+    monkeypatch.setenv("FAKE_CLAUDE_SDK_CALLS", str(calls_path))
+
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    manager._ask_pool = ThreadPoolExecutor(max_workers=1)
+    run_dir = _make_run_dir(tmp_path, task="say hello")
+    run_dir.set_session_id("claude_session_id", "prior-session", overwrite=True)
+    run_dir.record_cli_tokens(input=7, output=3, cached=2, thinking=1)
+    run_dir.mark_done("initial reply")
+    entry = {
+        "run_dir": run_dir, "backend": "claude-p",
+        "followup_lock": threading.Lock(), "ask_in_flight": False,
+        "ask_future": None,
+    }
+
+    try:
+        dispatch = manager._handle_ask_claude_agent_sdk_resume(
+            "em-test", entry, "follow up please"
+        )
+        assert dispatch.get("status") == "sent"
+        assert dispatch.get("async") is True
+        future = entry.get("ask_future")
+        assert future is not None, "delegator must set entry['ask_future'], not block"
+        result = future.result(timeout=10)
+    finally:
+        manager._ask_pool.shutdown(wait=True)
+
+    assert result == {
+        "status": "sent", "id": "em-test",
+        "output": "fake reply 1 to: follow up please",
+    }
+    assert entry["ask_in_flight"] is False
+    calls = [json.loads(line) for line in calls_path.read_text().splitlines() if line.strip()]
+    user_calls = [c for c in calls if c.get("type") == "user"]
+    assert len(user_calls) == 1
+    assert user_calls[0]["message"]["content"] == "follow up please"
+    # The initial run's terminal state is untouched by a resume follow-up.
+    assert run_dir.state_snapshot()["state"] == "done"
+    assert run_dir.state_snapshot()["result_preview"] == "initial reply"
+    # The resumed session id is re-captured even though it is the same id.
+    assert run_dir.state_snapshot()["claude_session_id"] == "fake-claude-sdk-session"
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    assert state["cli_tokens"] == {
+        "input": 17, "output": 8, "cached": 7, "thinking": 1, "calls": 2,
+    }
+    assert state["tokens"]["calls"] == 0  # CLI usage remains UI-only
+    assert run_dir.result_path.read_text(encoding="utf-8") == "initial reply"
+
+
+def test_claude_sdk_resume_busy_when_ask_already_in_flight(tmp_path):
+    """A second resume ask while one is in flight is rejected, not queued twice."""
+    import threading
+
+    run_dir = _make_run_dir(tmp_path, task="say hello")
+    run_dir.set_session_id("claude_session_id", "prior-session", overwrite=True)
+    run_dir.mark_done("initial reply")
+    entry = {
+        "run_dir": run_dir, "backend": "claude-p",
+        "followup_lock": threading.Lock(), "ask_in_flight": True,
+        "ask_future": None,
+    }
+    from lingtai.tools.daemon import DaemonManager
+
+    result = DaemonManager._handle_ask_claude_agent_sdk_resume(
+        object(), "em-test", entry, "another message"
+    )
+    assert result["status"] == "busy"
+    assert entry.get("ask_future") is None
+
+
+@pytest.mark.parametrize('scenario', ['continue', 'error', 'cancel', 'persistence', 'publish_false', 'publish_raise'])
+def test_claude_sdk_result_save_precedes_notice_or_terminal(tmp_path, monkeypatch, scenario):
+    import asyncio
+    from types import SimpleNamespace
+    import claude_agent_sdk
+    from lingtai.tools.daemon import claude_agent_sdk_runtime as runtime, supervisor_runtime
+
+    run_dir = _make_run_dir(tmp_path, task='first')
+    secret = 'synthetic-sdk-redaction-literal'
+    run_dir.set_ephemeral_redactions([secret])
+    body = 'FIRST ' + secret + ' ' + 'x' * 700
+    saved = body.replace(secret, '<redacted>')
+    cancel = threading.Event()
+    calls, notices = [], []
+    assert run_dir.enqueue_followup('second')
+
+    class Client:
+        def __init__(self, **kw):
+            pass
+        async def connect(self):
+            pass
+        async def disconnect(self):
+            pass
+        async def query(self, text):
+            calls.append(text)
+        async def interrupt(self):
+            pass
+
+    async def drain(client, rd, pending):
+        return SimpleNamespace(result=body if len(calls) == 1 else 'SECOND',
+                               session_id='saved-session', usage=None,
+                               is_error=scenario == 'error' and len(calls) == 1,
+                               terminal_reason=None)
+
+    def publish(rd, manifest, **kw):
+        assert Path(kw['state']['result_path']).read_text() == saved
+        assert rd.state_snapshot()['state'] in {'running', 'active'}
+        assert kw['idempotency_key'] == f'daemon-turn:{rd.run_id}:1'
+        assert kw['kind'] == 'daemon_turn_result'
+        assert secret not in json.dumps(kw)
+        assert ('error' in kw['state']) is (scenario == 'error')
+        notices.append(kw)
+        if scenario == 'publish_raise':
+            raise OSError('synthetic publication failure')
+        return scenario != 'publish_false'
+
+    original_save = run_dir.record_turn_result
+    def save(**kw):
+        path = original_save(**kw)
+        if scenario == 'cancel':
+            cancel.set()
+        return path
+
+    monkeypatch.setattr(claude_agent_sdk, 'ClaudeSDKClient', Client)
+    monkeypatch.setattr(runtime, '_resolve_cli_path', lambda: '/unused/claude')
+    monkeypatch.setattr(runtime, '_drain_turn', drain)
+    monkeypatch.setattr(supervisor_runtime, '_publish_daemon_notification', publish)
+    monkeypatch.setattr(run_dir, 'record_turn_result', (lambda **kw: '') if scenario == 'persistence' else save)
+    manager = SimpleNamespace(_workdir=SimpleNamespace(path=tmp_path))
+    asyncio.run(runtime._run_async(manager, run_dir, 'first', cancel, threading.Event(), {}, {}, {}))
+    state = run_dir.state_snapshot()
+    events = [json.loads(line) for line in run_dir.events_path.read_text().splitlines()]
+    if scenario in {'cancel', 'persistence'}:
+        assert calls == ['first'] and notices == []
+        assert state['pending_followups'] == ['second']
+        assert state['state'] == ('cancelled' if scenario == 'cancel' else 'failed')
+        if scenario == 'cancel':
+            assert (run_dir.path / 'turns/turn-1.txt').read_text() == saved
+        else:
+            assert any(e['event'] == 'daemon_turn_persistence_failed' for e in events)
+    else:
+        assert calls == ['first', 'second'] and len(notices) == 1
+        assert state['state'] == 'done'
+        assert (run_dir.path / 'turns/turn-1.txt').read_text() == saved
+        assert (run_dir.path / 'turns/turn-2.txt').read_text() == 'SECOND'
+        failures = [e for e in events if e['event'] == 'daemon_notification_error']
+        assert len(failures) == int(scenario in {'publish_false', 'publish_raise'})
+        if failures:
+            assert failures[0]['turn'] == 1 and failures[0]['retryable'] is True
+    assert secret not in run_dir.events_path.read_text()
+    assert secret not in run_dir.daemon_json_path.read_text()
+
+
+def test_claude_sdk_boundary_interrupt_cannot_hit_successor(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import claude_agent_sdk
+    from lingtai.tools.daemon import claude_agent_sdk_runtime as runtime
+
+    run_dir = _make_run_dir(tmp_path, task='first')
+    assert run_dir.enqueue_followup('successor')
+    calls, interrupts = [], []
+    class Client:
+        def __init__(self, **kw):
+            pass
+        async def connect(self):
+            pass
+        async def disconnect(self):
+            pass
+        async def query(self, text):
+            calls.append(text)
+        async def interrupt(self):
+            interrupts.append(len(calls))
+    async def drain(client, rd, pending):
+        if len(calls) == 2:
+            await asyncio.sleep(0.6)
+        return SimpleNamespace(result=calls[-1], session_id='same-session',
+                               usage=None, is_error=False, terminal_reason=None)
+    def publish(manager, rd, **kw):
+        if kw['turn'] == 1:
+            assert (rd.path / 'turns/turn-1.txt').read_text() == 'first'
+            assert rd.enqueue_live_followup('late correction', interrupt=True) == 'turn_boundary'
+    monkeypatch.setattr(claude_agent_sdk, 'ClaudeSDKClient', Client)
+    monkeypatch.setattr(runtime, '_resolve_cli_path', lambda: '/unused/claude')
+    monkeypatch.setattr(runtime, '_drain_turn', drain)
+    monkeypatch.setattr(runtime, '_publish_turn_notification', publish)
+    asyncio.run(runtime._run_async(
+        SimpleNamespace(_workdir=SimpleNamespace(path=tmp_path)), run_dir, 'first',
+        threading.Event(), threading.Event(), {}, {}, {},
+    ))
+    assert calls == ['first', 'successor', 'late correction']
+    assert interrupts == []
+    assert run_dir.state_snapshot()['state'] == 'done'
+
+
+def test_claude_sdk_terminal_drain_preserves_cancelled_input(tmp_path):
+    run_dir = _make_run_dir(tmp_path, task='first')
+    assert run_dir.enqueue_followup('accepted before cancellation')
+    run_dir.mark_cancelled()
+    assert run_dir.drain_followups_or_finalize(status='done', text='late result') is None
+    assert run_dir.state_snapshot()['state'] == 'cancelled'
+    assert run_dir.state_snapshot()['pending_followups'] == ['accepted before cancellation']
 
 
 def test_detached_lingtai_surface_keeps_one_local_finish_without_external_common(

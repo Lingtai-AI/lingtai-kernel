@@ -22,6 +22,19 @@ dependencies = [
     "httpx>=0.27",
     "openai>=1.0",
     "anthropic>=0.40",
+    # Official Python Agent SDK for the claude-p/claude-code daemon backend
+    # (src/lingtai/tools/daemon/claude_agent_sdk_runtime.py). Verified
+    # against the real PyPI release: requires Python>=3.10 (this project's
+    # own floor is >=3.11, so no added constraint) and mcp>=1.23,<3 (strictly
+    # wider than this project's own mcp>=2,<3 pin below, so no conflict).
+    # Per-platform wheels confirmed for macOS arm64/x86_64, manylinux
+    # aarch64/x86_64, and win_amd64, plus an sdist fallback — covers every
+    # cell in this project's own `required-environments`/`tool.uv.environments`
+    # below. Floor is the exact version this backend was built and tested
+    # against; widen only after re-verifying the installed SDK's internal
+    # wire/env/cli_path behavior this backend depends on (see the module
+    # docstring and daemon/CONTRACT.md).
+    "claude-agent-sdk>=0.2.165,<0.3",
     # Official MCP Python SDK v2 (protocol 2026-07-28). The supported range is
     # the SDK's own published compatibility window; the wheel exact-pins
     # `mcp-types`, so never pin that separately here.

@@ -397,7 +397,9 @@ a maintained flag catalog.
   `retired-test:test_daemon_run_dir::test_checkpoint_inbox_backfills_pre_checkpoint_live_state`
 - **runner**: any LingTai agent with the `daemon` tool and a common-MCP CLI backend
 - **prerequisites**: a live detached CLI run whose launch path mounts
-  `daemon_common` (`claude-p`/`claude-code`, Codex, OpenCode, Qwen, or Kimi)
+  `daemon_common` (Codex, OpenCode, Qwen, or Kimi — not `claude-p`/`claude-code`,
+  which mounts no `daemon_common` and instead delivers a live `ask` through
+  `delivery="turn_boundary"`/`"interrupt"`; see `CONTRACT.md` §3 scope note)
 - **estimate**: 5 min
 
 ### Steps

@@ -7,8 +7,8 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 17
-last_changed_at: "2026-09-08"
+contract_version: 18
+last_changed_at: "2026-10-13"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
@@ -45,6 +45,7 @@ related_files:
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/execution_host.py
   - src/lingtai/tools/daemon/supervisor_runtime.py
+  - src/lingtai/tools/daemon/claude_agent_sdk_runtime.py
   - src/lingtai/adapters/posix/daemon_capsule.py
   - src/lingtai/adapters/posix/daemon_supervisor.py
   - src/lingtai/kernel/provider_admission.py
@@ -76,6 +77,7 @@ review_triggers:
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/execution_host.py
   - src/lingtai/tools/daemon/supervisor_runtime.py
+  - src/lingtai/tools/daemon/claude_agent_sdk_runtime.py
   - src/lingtai/adapters/posix/daemon_capsule.py
   - src/lingtai/adapters/posix/daemon_manager.py
   - src/lingtai/adapters/posix/daemon_supervisor.py
@@ -144,12 +146,22 @@ ownership -> §Process and Terminal Boundaries.
   `_normalize_backend`: `mimo→mimocode`, `qwen→qwen-code`, `omp→oh-my-pi`,
   `kimi→kimicode`; `claude-code` is a compatibility alias for `claude-p`.
   `claude` / `claude-interactive` are hidden (not schema-advertised). Active
-  external CLI runs whose launch path really mounts `daemon_common`
-  (`claude-p`/`claude-code`, Codex, OpenCode, Qwen, and Kimi) accept `ask` as a
-  queued next-checkpoint message. This does not add a terminal resume contract:
-  Qwen and Kimi still return explicit unsupported messages after terminal state,
-  while hidden interactive Claude and every backend without common MCP retain the
-  existing active `busy` behavior.
+  external CLI runs whose launch path really mounts `daemon_common` (Codex,
+  OpenCode, Qwen, and Kimi) accept `ask` as a queued next-checkpoint message.
+  `claude-p`/`claude-code` instead accepts a live `ask` through a direct
+  `enqueue_live_followup` transaction — no control-spool hop or checkpoint
+  tool (see §3) — returning
+  `{"status":"queued","delivery":"turn_boundary"}`. Message acceptance
+  and an optional current-turn interrupt request are atomic.
+  `"delivery":"interrupt"` acknowledges a request only while a query's
+  interrupt boundary is open; the delivered event, not that response, proves
+  the SDK call ran. An ask accepted between turns remains queued without
+  interrupting a successor. A terminal commit and queue drain share the same
+  lock; cancelled/timeout/failed terminal truth never consumes pending input.
+  This does not add a terminal resume contract for every backend: Qwen and
+  Kimi still return explicit unsupported messages after terminal state,
+  while hidden interactive Claude and every other backend without common MCP
+  or live-followup support retain the existing active `busy` behavior.
 - The architecture capability invariant applies to every daemon backend and
   backend family LingTai exposes. It is not primarily a per-task input contract:
   the durable requirement is that any daemon architecture preserves the same
@@ -184,7 +196,7 @@ exactly the branch that consumes it:
 |---|---|
 | `emanate` | `tasks[]` (each requires `task` + `tools`; optional per-task fields are unchanged and specified below), `backend`, `max_turns`, `timeout` |
 | `list` | `contains`, `status`, `include_done`, `last` |
-| `ask` | `id`, `message` |
+| `ask` | `id`, `message`, `interrupt` |
 | `check` | `id`, `last`, `truncate` |
 | `reclaim` | — (canonical strict-empty `input`) |
 | `settings` | — (canonical strict-empty `input`) |
@@ -369,7 +381,7 @@ replaces the parent's.
 |---|---|---|---|---|
 | `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `prompt` (LingTai only), `skills`/`mcp`/`preset`/`backend_options`/`context_token_limit`/`plugin`/`task_files` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; for large concurrent batches it strongly recommends `notification(action='delay')` on `daemon` to reduce wake frequency while preserving daemon truth; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — obsolete `system_prompt` migration, CLI `prompt`, bad limits, or tool-surface/preset failure |
 | `list` | — | `contains`, `status`, `include_done` (default true), `last` (default newest 1000; explicit positive values, including values above 1000, are accepted) | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
-| `ask` | `id`, `message` | — | `{status: "sent", id, output}` (resume-capable CLI ask returns immediately as `{status: "sent", id, async: true, ...}`); an active common-MCP CLI returns `{status: "queued", id, delivery: "checkpoint", message_id}` | `{status: "error", id, message}` — unknown/absent id or terminal backend resume unsupported; an active backend without common MCP remains `{status: "busy", ...}` |
+| `ask` | `id`, `message` | `interrupt` (claude-p/claude-code only; ignored elsewhere) | `{status: "sent", id, output}` (resume-capable CLI ask returns immediately as `{status: "sent", id, async: true, ...}`); an active common-MCP CLI returns `{status: "queued", id, delivery: "checkpoint", message_id}`; an active claude-p/claude-code run returns `{status: "queued", id, delivery: "turn_boundary"}` or `{status: "queued", id, delivery: "interrupt"}` | `{status: "error", id, message}` — unknown/absent id or terminal backend resume unsupported; an active backend without common MCP or live-followup support remains `{status: "busy", ...}` |
 | `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, latest_checkpoint, pending_checkpoint_messages, events: [...]}`; pending is a count, never message content | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
 | `reclaim` | — | — | `{status: "reclaimed", cancelled: <n>}` (or `{status: "shutdown", ...}` on lifecycle shutdown) | — |
 
@@ -445,6 +457,33 @@ LTP-v2 family schema. Other unknown business fields pass through so the server
 remains authoritative for closed-schema validation.
 
 ### 3. daemon_common provides cooperative checkpoints and terminal completion
+
+**Scope:** this invariant applies to every `_cli_backend_loads_common_mcp`
+backend (`codex`, `opencode`, `qwen-code`, `kimicode`) and the native `lingtai`
+backend. It deliberately does **not** apply to `claude-p`/`claude-code`: the
+Claude Agent SDK backend imposes no mandatory finish/checkpoint tool on
+Claude. There, the model's ordinary reply plus the per-turn SDK
+`ResultMessage` (`is_error`, `terminal_reason`, `result`) are the completion
+signal. A live `daemon(ask)` uses atomic `run_dir.enqueue_live_followup`
+directly (no control-spool hop); the continuing `client.query()` loop sends
+queued messages at turn boundaries without a checkpoint tool call.
+`ask.interrupt=true` additionally requests a targeted, single-session
+interrupt only while `begin_live_turn`/`end_live_turn` keep the current
+query's boundary open, never a manager-wide reclaim. Acceptance is not
+delivery: `daemon_interrupt_delivered` proves the SDK call ran. Between-turn
+asks stay queued and cannot interrupt a successor. Per-turn
+`receive_messages()` readers never overlap, and interrupt-poller teardown
+completes before a successor query. Every human-origin turn's complete
+result is durably saved (`<run>/turns/turn-<N>.txt` plus a bounded
+`daemon_turn` event) and, when the run continues past that turn, published
+as one compact non-terminal `kind="daemon_turn_result"` notice on the
+existing `daemon` channel (same store/idempotency machinery as
+`daemon_checkpoint`/`daemon_followup`; never classified terminal by
+`_is_terminal_daemon_event`) *before* the next query is sent — so a turn's
+conclusion is recoverable even if the run's eventual terminal receipt is
+delayed, lost to a later failure, or never reached. This authorized decision
+retires the prior checkpoint-based design for this one backend; it does not
+change any other backend's checkpoint/completion contract below.
 
 MCP-capable daemon backends receive the built-in `daemon_common` MCP before any
 parent registrations. Its strict LTP-v2 `checkpoint` tool accepts
@@ -819,7 +858,7 @@ Current source-backed status:
 | Backend / architecture | Selected skills catalog/path | Parent MCP native mounting | `daemon_common` native checkpoint + completion |
 |---|---|---|---|
 | `lingtai` | Yes, in the daemon prompt/context. | Yes, task-scoped stdio and HTTP MCP clients. | Yes; live checkpoint is available and `finish(done)` is enforced. |
-| `claude-p` / `claude-code` | Yes. | Yes for stdio via per-run `--mcp-config`; HTTP omitted. | Yes; live checkpoint and finish use the same per-run config. |
+| `claude-p` / `claude-code` | Yes. | Yes for stdio via `ClaudeAgentOptions.mcp_servers` (built in-process from the capsule, no native config file); HTTP omitted. | No — this backend mounts no `daemon_common`; see §3. |
 | `codex` | Yes. | Yes for stdio via `-c mcp_servers.*`; HTTP omitted. | Yes; live checkpoint and finish use the same config override path. |
 | `opencode` | Yes. | Yes for stdio via `OPENCODE_CONFIG_CONTENT`; HTTP omitted. | Yes; live checkpoint and finish use the same per-process config content. |
 | `qwen-code` / `qwen` | Yes. | Yes for stdio via per-run Qwen settings; HTTP omitted. | Yes; live checkpoint and finish use the same settings file. |
@@ -831,8 +870,10 @@ Current source-backed status:
 
 The native stdio/helper set is source-owned by `_codex_mcp_argv`,
 `_opencode_mcp_env`, `_write_qwen_mcp_settings`, `_write_kimicode_mcp_config`,
-`_write_claude_mcp_config`, and `_cli_backend_loads_common_mcp`. If a backend is
-not in that loaded set, this contract treats it as prompt-catalog-only until
+`claude_agent_sdk_runtime._mcp_servers_from_registrations` (claude-p/claude-code,
+in-process — no native config file), and `_cli_backend_loads_common_mcp`
+(daemon_common mounting; claude-p/claude-code deliberately excluded — see §3).
+If a backend is not in that loaded set, this contract treats it as prompt-catalog-only until
 code and tests prove otherwise.
 
 ## State & Storage
@@ -1013,8 +1054,8 @@ terminal state, result/artifact files, and one idempotent terminal notification.
 Agent stop and `system.refresh` shut down only parent-local resources; they do
 not inspect or terminate a detached supervisor or its backend child. Explicit
 `daemon(action="reclaim")` is the only parent control that requests run
-cancellation. `daemon(action="ask")` uses the run-local control spool and is
-accepted only while durable state is running. The ownership transition is
+cancellation. `daemon(action="ask")` follows the backend-specific live-delivery
+and terminal-resume routes in §Scope. The ownership transition is
 unconditional; detached supervision is not gated behind a production flag.
 
 The detached execution child is not currently given derived-launch authority.
@@ -1107,8 +1148,8 @@ Re-check this contract when touching:
 - `src/lingtai/mcp_servers/daemon_common/` checkpoint/finish schemas,
   RunDir identity/wake behavior, payload file, or server behavior.
 - `tests/test_daemon*.py` coverage that proves backend options, CLI native MCP,
-  daemon_common completion, OpenCode-family routing, Qwen settings, Claude print
-  MCP config, run-dir artifacts, prompt redaction, selected-skill catalog
+  daemon_common completion, OpenCode-family routing, Qwen settings, Claude SDK
+  MCP mounting, run-dir artifacts, prompt redaction, selected-skill catalog
   preservation, prompt mapping, or compact context reset behavior.
 - `retired-test:test_codex_standalone_compaction` for per-task
   `context_token_limit` wiring/pre-flight validation.

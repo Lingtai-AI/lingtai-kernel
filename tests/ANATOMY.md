@@ -51,6 +51,7 @@ related_files:
   - tests/_agent_presence_helpers.py
   - tests/_daemon_helpers.py
   - tests/_detached_cli_parent.py
+  - tests/_fake_claude_sdk_cli.py
   - tests/_fake_codex_cli.py
   - tests/_fake_llm_adapter.py
   - tests/_fake_resume_cli.py
@@ -62,6 +63,7 @@ related_files:
   - tests/_service_helpers.py
   - tests/_snapshot_helpers.py
   - tests/_workdir_lease_helpers.py
+  - tests/claude
   - tests/codex
   - tests/conftest.py
   - tests/contracts/llm_conversation_input/__init__.py

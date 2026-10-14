@@ -3,8 +3,8 @@ name: daemon-cli-backends
 description: >
   Nested daemon-manual reference for backend choice, native versus prompt-only
   MCP, CLI options, list/ask behavior, and per-backend live-help routes.
-version: 1.18.0
-last_changed_at: 2026-09-09T00:00:00Z
+version: 1.19.0
+last_changed_at: 2026-10-13T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/CONTRACT.md
@@ -40,7 +40,7 @@ text.
 | Backend (aliases) | Initial runner / native MCP | `ask` / completion |
 |---|---|---|
 | `lingtai` | in-process; task-scoped stdio + HTTP | live-only ask, no terminal resume; `finish(done)` enforced |
-| `claude-p` (`claude-code`) | `claude --print ... --mcp-config ... --strict-mcp-config` (stdio) | async resume; checkpoint + `finish(done)` |
+| `claude-p` (`claude-code`) | official `claude_agent_sdk.ClaudeSDKClient` (stdio) | live ask at next turn boundary or via interrupt; terminal resume; no checkpoint/finish — ordinary reply + per-turn result is completion |
 | `codex` | `codex exec --json` with `mcp_servers.*` overrides (stdio) | async resume; checkpoint + `finish(done)` |
 | `opencode` | `opencode run --format json`, `OPENCODE_CONFIG_CONTENT` (stdio) | async resume; checkpoint + `finish(done)` |
 | `qwen-code` (`qwen`) | `qwen --yolo -p`, per-run settings (stdio) | active checkpoint queue; terminal ask unsupported; `finish(done)` |
@@ -55,11 +55,14 @@ Aliases normalize to the canonical names shown above. Hidden legacy
 status is source-backed, not a promise that the vendor CLI is installed or
 authenticated; an unavailable CLI fails rather than silently falling back.
 
-MCP-capable workers must call `finish` exactly once before their final report.
-`checkpoint` is live-only, bounded, cooperative, and nonterminal: it records
-progress and drains queued parent messages at the next checkpoint. It is not chat,
-stdin injection, preemption, cancellation, or a completion receipt. A missing
-or invalid finish makes the run failed; inspect its durable result and trace.
+MCP-capable workers (every backend above except `claude-p`/`claude-code`, which
+mounts no `daemon_common`) must call `finish` exactly once before their final
+report. `checkpoint` is live-only, bounded, cooperative, and nonterminal: it
+records progress and drains queued parent messages at the next checkpoint. It
+is not chat, stdin injection, preemption, cancellation, or a completion
+receipt. A missing or invalid finish makes the run failed; inspect its durable
+result and trace. `claude-p`/`claude-code` instead completes on its ordinary
+final reply plus the SDK's own per-turn result — see its child page.
 
 ## Nested reference catalog
 
@@ -137,16 +140,20 @@ is the only nested object: it maps valid environment names to string values and
 emits no argv. It is merged last; never put secrets in prompts or logs.
 
 Options are persisted as `backend_options`/`backend_argv`, separately from
-`backend_harness_argv`. They are not re-passed by `ask`; do not assume every
-vendor flag or environment overlay persists across a resumed process.
+`backend_harness_argv`. Generally they are not re-passed by `ask`; do not
+assume vendor flags or environment overlays persist. Claude SDK terminal
+resume is the exception: it re-applies the validated model/effort/native-tool
+policy from the original task.
 `lingtai` ignores them. CLI cwd is the granted parent workdir, not the run
 artifact directory; an artifact folder is not workspace isolation.
 Never override a backend's output, MCP, prompt, approval, or session flags: the
 harness owns those boundaries so result parsing and completion cannot be faked.
 
-CLI `ask` returns immediately with `async: true` for resumable sessions; progress
-and the final follow-up notice are in `check` and the daemon notification. Only one
-follow-up per session may be in flight; a concurrent second ask is `busy`. Qwen,
+Terminal CLI `ask` returns immediately with `async: true` for resumable
+sessions; progress and the final follow-up notice are in `check` and the daemon
+notification. Only one terminal resume per session may be in flight; another
+is `busy`. Live Claude SDK asks instead return `queued`, use the same owned
+connection, and do not require a checkpoint. Qwen,
 Kimi, and DeepSeek have no terminal resume contract, though Qwen/Kimi may queue
 one active checkpoint correction where the table says so.
 
