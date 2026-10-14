@@ -531,7 +531,6 @@ _DAEMON_EMAIL_MCP_NAME = "email"
 # that never requested ``email`` still never gets it.
 _DAEMON_AUTO_MCP_TOOL_NAMES = frozenset({_DAEMON_EMAIL_MCP_NAME})
 _DAEMON_COMPLETION_FILE = "daemon_completion.json"
-_DAEMON_CLAUDE_MCP_CONFIG_FILE = "claude-mcp-config.json"
 _DAEMON_COMPLETION_STATUSES = {"done", "failed", "incomplete"}
 _SOURCE_ROOT = Path(__file__).resolve().parents[3]
 
@@ -617,50 +616,6 @@ def _claude_code_env() -> dict[str, str]:
     for key in _CLAUDE_CODE_STRIP_ENV:
         env.pop(key, None)
     return env
-
-
-def _normalize_claude_usage(usage: dict | None) -> dict | None:
-    """Normalize a Claude Code stream-json ``usage`` block to UI totals.
-
-    Claude Code's final ``result`` event carries a ``usage`` block like::
-
-        {"input_tokens": 6950, "cache_creation_input_tokens": 3068,
-         "cache_read_input_tokens": 15621, "output_tokens": 4, ...}
-
-    Returns ``{"input", "output", "cached", "thinking"}`` with::
-
-        cached = cache_read_input_tokens + cache_creation_input_tokens
-
-    ``thinking`` is 0 — Claude Code does not surface a separate thinking-token
-    count in this block. The primary ``input_tokens`` and ``output_tokens``
-    fields are required; cache-read and cache-creation counts are optional and
-    default to zero. Every consumed field must be a non-negative integer
-    (booleans are not token counts, matching the Codex/Cursor normalizers);
-    a missing primary or malformed field invalidates the whole event. Returns
-    ``None`` if ``usage`` is missing/not a dict, carries an invalid field, or
-    carries no countable tokens, so callers can skip persistence cleanly.
-    """
-    if not isinstance(usage, dict):
-        return None
-
-    def _nonnegative_int(value) -> int | None:
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            return None
-        return value
-
-    input_tokens = _nonnegative_int(usage.get("input_tokens"))
-    output_tokens = _nonnegative_int(usage.get("output_tokens"))
-    cache_read = _nonnegative_int(usage.get("cache_read_input_tokens", 0))
-    cache_creation = _nonnegative_int(usage.get("cache_creation_input_tokens", 0))
-    if None in (input_tokens, output_tokens, cache_read, cache_creation):
-        return None
-
-    cached = cache_read + cache_creation
-    thinking = 0
-    if not (input_tokens or output_tokens or cached or thinking):
-        return None
-    return {"input": input_tokens, "output": output_tokens,
-            "cached": cached, "thinking": thinking}
 
 
 def _normalize_codex_usage(usage: dict | None) -> dict | None:
@@ -854,9 +809,12 @@ def _write_kimicode_mcp_config(
 
 
 def _cli_backend_loads_common_mcp(backend: str) -> bool:
+    # claude-p/claude-code deliberately excluded: the Claude Agent SDK
+    # backend imposes no mandatory finish/checkpoint MCP tool on Claude — the
+    # model's ordinary reply plus the per-turn SDK ResultMessage are the
+    # completion signal. See claude_agent_sdk_runtime.py and daemon/CONTRACT.md
+    # Capability Invariant 3.
     return backend in {
-        "claude-p",
-        "claude-code",
         "codex",
         "opencode",
         "qwen-code",
@@ -1143,6 +1101,12 @@ class _BackendSpec:
     ask_handler_attr: str | None
     ask_unsupported_msg: str | None
     reserved_flags: frozenset[str]
+    # True only for the Claude Agent SDK backend (claude-p/claude-code): a
+    # live run accepts an ``ask`` the same way the lingtai backend does
+    # (queued through the control spool into ``enqueue_followup``, drained at
+    # the next turn boundary) instead of the checkpoint-queue or busy
+    # fallback every other CLI backend uses. See `_handle_ask_detached`.
+    live_followup_capable: bool = False
 
 
 @dataclass(frozen=True)
@@ -1207,18 +1171,24 @@ _BACKEND_SPECS: dict[str, _BackendSpec] = {
     "claude-p": _BackendSpec(
         id="claude-p",
         is_cli=True,
-        runner_attr="_run_claude_code_emanation",
-        ask_handler_attr="_handle_ask_cli",
+        runner_attr="_run_claude_agent_sdk_emanation",
+        ask_handler_attr="_handle_ask_claude_agent_sdk_resume",
         ask_unsupported_msg=None,
-        reserved_flags=frozenset(_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS),
+        # No denylist here: claude_agent_sdk_runtime.claude_sdk_options_from_argv
+        # is a closed *allowlist* translator to typed ClaudeAgentOptions
+        # fields, called at this same preflight point below, which is a
+        # strictly tighter gate than any reserved-flags denylist.
+        reserved_flags=frozenset(),
+        live_followup_capable=True,
     ),
     "claude-code": _BackendSpec(
         id="claude-code",
         is_cli=True,
-        runner_attr="_run_claude_code_emanation",
-        ask_handler_attr="_handle_ask_cli",
+        runner_attr="_run_claude_agent_sdk_emanation",
+        ask_handler_attr="_handle_ask_claude_agent_sdk_resume",
         ask_unsupported_msg=None,
-        reserved_flags=frozenset(_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS),
+        reserved_flags=frozenset(),
+        live_followup_capable=True,
     ),
     "codex": _BackendSpec(
         id="codex",
@@ -2512,30 +2482,6 @@ class DaemonManager:
         if context:
             return f"{context}\n\n## LingTai daemon completion MCP\n{common}"
         return common
-
-    @staticmethod
-    def _write_claude_mcp_config(
-        run_dir: DaemonRunDir,
-        registrations: list[dict],
-    ) -> Path:
-        servers: dict[str, dict] = {}
-        for reg in registrations:
-            if reg.get("transport", reg.get("type", "stdio")) != "stdio":
-                continue
-            server = {
-                "command": reg["command"],
-                "args": list(reg.get("args") or []),
-            }
-            if reg.get("env"):
-                server["env"] = dict(reg["env"])
-            servers[reg["name"]] = server
-        path = run_dir.path / _DAEMON_CLAUDE_MCP_CONFIG_FILE
-        atomic_write_json(path, {"mcpServers": servers}, ensure_ascii=False, indent=2)
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
-        return path
 
     @staticmethod
     def _read_daemon_completion(run_dir: DaemonRunDir) -> _DaemonCompletion:
@@ -4422,32 +4368,7 @@ class DaemonManager:
         finally:
             self._close_task_mcp_clients(mcp_clients)
 
-    def _find_claude_session_id(self, em_id: str) -> str | None:
-        """Search ~/.claude/projects/ for the session JSONL whose customTitle matches em_id.
-
-        Claude Code stores sessions as JSONL files under
-        ``~/.claude/projects/<project-hash>/``. The first line of each session
-        file is a JSON object with ``type: "custom-title"`` containing the
-        ``customTitle`` and ``sessionId``.
-        """
-        projects_dir = Path.home() / ".claude" / "projects"
-        if not projects_dir.is_dir():
-            return None
-        for jsonl_path in projects_dir.rglob("*.jsonl"):
-            try:
-                with open(jsonl_path, "r", encoding="utf-8") as f:
-                    first_line = f.readline().strip()
-                if not first_line:
-                    continue
-                obj = json.loads(first_line)
-                if (obj.get("type") == "custom-title"
-                        and obj.get("customTitle") == em_id):
-                    return obj.get("sessionId")
-            except (OSError, json.JSONDecodeError):
-                continue
-        return None
-
-    def _run_claude_code_emanation(
+    def _run_claude_agent_sdk_emanation(
         self,
         em_id: str,
         run_dir: DaemonRunDir,
@@ -4457,320 +4378,20 @@ class DaemonManager:
         backend_argv: list[str] | None = None,
         backend_env: dict[str, str] | None = None,
     ) -> str:
-        """Run a Claude Code CLI session as the emanation backend.
+        """Run Claude via the official Claude Agent SDK (claude-p/claude-code).
 
-        Spawns Claude Code with ``--output-format stream-json --verbose`` so
-        events arrive in real time (vs ``--output-format text``, which
-        buffers everything until completion — see GH issues #99/#100).
-        Parses each event line and writes:
-
-        - ``claude_session_id`` to daemon.json on the first event that
-          carries one (typically the system ``init`` event, but any event
-          with ``session_id`` works as a fallback). This makes
-          ``daemon(ask)`` usable from the moment ``emanate`` returns,
-          rather than after the initial run completes.
-        - Per-turn ``text``/``tool_use`` blocks via
-          ``record_cli_output`` so ``daemon(check)`` shows live progress.
-        - Tool calls via ``set_current_tool`` / ``clear_current_tool``.
-        - stderr to its own pipe so diagnostic messages aren't lost in
-          the stdout stream.
-
-        Note: Claude Code's token ``usage`` fields are deliberately NOT
-        forwarded to ``append_tokens``. Claude Code bills through its
-        own provider account, and its cache_creation/cache_read
-        semantics don't map cleanly onto the kernel's LLM-adapter
-        accounting. Mixing them into ``sum_token_ledger`` would
-        produce a misleading "lifetime totals" number for the parent.
-        The final ``result`` event's ``usage`` is instead persisted to
-        ``daemon.json.cli_tokens`` via ``record_cli_tokens`` — UI-only,
-        never touching either token ledger — so the TUI ``/daemons``
-        view can still surface what the CLI run cost.
-
-        Falls back to the legacy JSONL scan if no ``session_id`` ever
-        appears in the stream.
+        Retires the ``claude --print --output-format stream-json`` subprocess
+        parse loop (GH issues #99/#100/#101 motivated that original design;
+        ``ClaudeSDKClient`` now owns the equivalent structured event stream
+        natively, plus session-level resume). See ``claude_agent_sdk_runtime.py``
+        for the connection/turn/ask/terminal logic; this method only forwards
+        the exact call shape every ``runner_attr`` uses.
         """
-        if cancel_event.is_set():
-            return _mark_cancelled_or_timeout(run_dir, timeout_event)
-
-        # Required infrastructure flags come first; free-form
-        # backend_options sit between them and the task prompt so the
-        # task itself stays the trailing positional argument that the
-        # Claude Code CLI expects.
-        cmd = [
-            "claude",
-            "--print",
-            "--dangerously-skip-permissions",
-            "--output-format", "stream-json",
-            "--verbose",
-            "--name", em_id,
-        ]
-        if backend_argv:
-            cmd.extend(backend_argv)
-        cmd.append(task)
-        self._log("daemon_claude_code_start", em_id=em_id, cmd=" ".join(cmd))
-
-        spawn_env = _claude_code_env()
-        if len(spawn_env) != len(os.environ):
-            self._log("daemon_claude_code_env_stripped", em_id=em_id,
-                      stripped=[k for k in _CLAUDE_CODE_STRIP_ENV if k in os.environ])
-        # The caller-supplied ``backend_options.env`` overlay is applied last so
-        # a profile selector such as CLAUDE_CONFIG_DIR wins over the inherited
-        # environment. It is an explicit operator choice, so it can also
-        # re-introduce a name the strip list removed; the strip list defends
-        # against accidental inheritance, not against a deliberate override.
-        if backend_env:
-            spawn_env.update(backend_env)
-
-        command = DaemonProcessCommand(
-            tuple(cmd), self._workdir.path, tuple(spawn_env.items()),
+        from .claude_agent_sdk_runtime import run_claude_agent_sdk_emanation
+        return run_claude_agent_sdk_emanation(
+            self, em_id, run_dir, task, cancel_event, timeout_event,
+            backend_argv, backend_env,
         )
-        try:
-            handle = self._process_port.spawn(command, group_id=run_dir.group_id)
-        except FileNotFoundError:
-            exc = RuntimeError("'claude' CLI not found on PATH")
-            run_dir.mark_failed(exc)
-            raise exc
-        except OSError as e:
-            exc = RuntimeError(f"Failed to start claude CLI: {e}")
-            run_dir.mark_failed(exc)
-            raise exc
-        # Drain stderr in a background thread so diagnostic messages reach
-        # the run dir even while the main thread is parsing stdout events.
-        # iLink-style daemons with a chatty stderr would otherwise block
-        # the pipe and stall the process.
-        stderr_thread = self._process_port.drain_stderr(
-            handle,
-            on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
-            thread_name=f"daemon-claude-stderr-{em_id}",
-        )
-        stderr_lines = stderr_thread.lines
-
-        final_result_text: str | None = None
-        final_is_error: bool = False
-        session_id_captured: str | None = None
-        # Buffered, not yet persisted — see the result-event handler and
-        # the post-classification persistence below for why.
-        usage_candidate: tuple[dict[str, int], dict] | None = None
-        # Active tool_use blocks awaiting their tool_result. Keyed by
-        # the tool_use id from the assistant message; value is the tool
-        # name so we can call clear_current_tool with a status string.
-        pending_tools: dict[str, str] = {}
-
-        def _store_session_id(sid: str) -> None:
-            nonlocal session_id_captured
-            if run_dir.set_session_id("claude_session_id", sid, overwrite=True):
-                session_id_captured = sid
-                self._log("daemon_claude_code_session",
-                          em_id=em_id, session_id=sid)
-
-        def _handle_assistant_event(event: dict) -> None:
-            message = event.get("message") or {}
-            content = message.get("content") or []
-            for block in content:
-                btype = block.get("type")
-                if btype == "text":
-                    text = block.get("text") or ""
-                    if text.strip():
-                        run_dir.record_cli_output(text, stream="stdout")
-                elif btype == "tool_use":
-                    tool_id = block.get("id") or ""
-                    tool_name = block.get("name") or "unknown"
-                    tool_input = block.get("input") or {}
-                    if tool_id:
-                        pending_tools[tool_id] = tool_name
-                    try:
-                        run_dir.set_current_tool(tool_name, tool_input)
-                    except Exception:
-                        pass
-            # NOTE: Claude Code spend is intentionally NOT recorded in the
-            # daemon's or parent's token ledger. Claude Code runs as an
-            # external process with its own billing path; counting its
-            # `usage` fields here would mix unrelated currencies (cache
-            # read/write semantics differ from the kernel's LLM adapters)
-            # and create a misleading "lifetime totals" number. Spend
-            # remains visible to the agent via daemon(check) — the
-            # `last_output` field, cli_output events, and stderr — and,
-            # for UI display, the final result event's usage is persisted
-            # separately to daemon.json.cli_tokens (see the result-event
-            # handler below). Neither path touches sum_token_ledger.
-
-        def _handle_user_event(event: dict) -> None:
-            # User events in stream-json mode carry tool_result blocks back
-            # from tool executions performed by Claude Code itself.
-            message = event.get("message") or {}
-            content = message.get("content") or []
-            for block in content:
-                if block.get("type") != "tool_result":
-                    continue
-                tool_id = block.get("tool_use_id") or ""
-                status = "error" if block.get("is_error") else "ok"
-                if tool_id in pending_tools:
-                    pending_tools.pop(tool_id, None)
-                try:
-                    run_dir.clear_current_tool(status)
-                except Exception:
-                    pass
-
-        try:
-            for raw_line in self._process_port.iter_stdout(handle):
-                if cancel_event.is_set():
-                    exit_receipt = self._process_port.terminate(
-                        handle, reason=("timeout" if timeout_event and timeout_event.is_set()
-                                        else "reclaim"),
-                    )
-                    if exit_receipt is not None:
-                        self._attributed_process_exit(
-                            exit_receipt, "claude", "", run_dir,
-                        )
-                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
-
-                line = raw_line.rstrip("\n")
-                if not line:
-                    continue
-
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    # Defensive: if Claude Code ever emits a non-JSON line
-                    # in stream-json mode (e.g. a startup banner), don't
-                    # crash the parse — surface it as raw stdout.
-                    run_dir.record_cli_output(line, stream="stdout")
-                    continue
-
-                # Capture session_id from the first event that has it. The
-                # very first system events (hook_started, init) already
-                # carry it, so this typically fires within the first few
-                # lines — well before the LLM produces any reply.
-                sid = event.get("session_id")
-                if sid and session_id_captured != sid:
-                    _store_session_id(sid)
-
-                etype = event.get("type")
-                if etype == "assistant":
-                    _handle_assistant_event(event)
-                elif etype == "user":
-                    _handle_user_event(event)
-                elif etype == "result":
-                    final_result_text = event.get("result") or ""
-                    final_is_error = bool(event.get("is_error"))
-                    # Buffer Claude Code's reported token usage — do not
-                    # persist it yet. A watchdog/manual cancel can still
-                    # fire after this final line arrives but before
-                    # the process Port wait returns; persisting here would let a
-                    # cancelled/timed-out run leave usage and, via
-                    # mark_done below, a false "done" state. Retain only
-                    # the first valid terminal usage candidate (a
-                    # duplicated terminal line is not a new provider
-                    # call), and persist it once terminal classification
-                    # (cancel/timeout, exit code, is_error) has passed —
-                    # see the persistence call after the classification
-                    # gates below.
-                    if usage_candidate is None:
-                        usage = _normalize_claude_usage(event.get("usage"))
-                        if usage is not None:
-                            usage_candidate = (usage, event.get("usage"))
-                    # If there are still tool_use blocks pending without
-                    # a matching tool_result (shouldn't happen on success,
-                    # but be defensive), clear them so daemon.json's
-                    # current_tool doesn't stay stuck.
-                    while pending_tools:
-                        pending_tools.popitem()
-                        try:
-                            run_dir.clear_current_tool("ok")
-                        except Exception:
-                            pass
-
-            exit_receipt = self._process_port.wait(handle)
-        except Exception as e:
-            exit_receipt = self._process_port.terminate(
-                handle, reason=("timeout" if timeout_event and timeout_event.is_set()
-                                else "reclaim"),
-            )
-            run_dir.mark_failed(e)
-            raise
-        finally:
-            # Give the stderr drainer a moment to finish reading any
-            # remaining bytes before the pipe closes on us.
-            stderr_thread.join(timeout=2.0)
-            if ('exit_receipt' in locals() and exit_receipt is not None
-                    and exit_receipt.returncode is not None):
-                self._process_port.release(handle)
-
-        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
-
-        # Re-check cancellation after the process Port wait returns. A watchdog or
-        # manual reclaim can set cancel_event while we were blocked in
-        # wait() for the process to exit after stdout EOF — a zero exit
-        # observed after that point must not overwrite the cancelled/
-        # timeout state or persist the buffered usage candidate (mirrors
-        # the Cursor backend's post-EOF cancellation fix).
-        if cancel_event.is_set():
-            if exit_receipt is not None:
-                self._attributed_process_exit(
-                    exit_receipt, "claude", stderr_tail[-500:], run_dir,
-                )
-            return _mark_cancelled_or_timeout(run_dir, timeout_event)
-
-        if exit_receipt.returncode != 0:
-            detail = stderr_tail or (final_result_text or "")
-            attributed = self._attributed_process_exit(
-                exit_receipt, "claude", detail[-500:], run_dir,
-            )
-            exc = RuntimeError(
-                attributed
-                or f"claude CLI exited with code {exit_receipt.returncode}: "
-                f"{detail[-500:]}"
-            )
-            run_dir.mark_failed(exc)
-            raise exc
-
-        # If the result event signalled an error even though the process
-        # exited 0, surface that so the caller doesn't think the task
-        # succeeded.
-        if final_is_error:
-            exc = RuntimeError(
-                f"claude CLI reported is_error=true: "
-                f"{(final_result_text or stderr_tail)[-500:]}"
-            )
-            run_dir.mark_failed(exc)
-            raise exc
-
-        # Fallback: if no event carried session_id (extremely unusual but
-        # possible if Claude Code changes its stream format), fall back to
-        # the legacy JSONL scan so daemon(ask) still works.
-        if not session_id_captured:
-            session_id = self._find_claude_session_id(em_id)
-            if session_id:
-                _store_session_id(session_id)
-
-        text = (final_result_text or "").strip() or "[no output]"
-        # _require_done_completion is itself a terminal acceptance gate:
-        # when the run loaded daemon_common MCP, a missing/bad finish()
-        # call marks the run failed and raises here, before any usage is
-        # persisted or the run is marked done.
-        self._require_done_completion(run_dir, text)
-
-        # Final re-check: the classification above (including
-        # _require_done_completion, which reads a completion file and can
-        # take non-trivial time) could still race a watchdog/manual
-        # cancel. Persist the buffered usage candidate — and mark done —
-        # only for a run accepted as successful by every prior gate.
-        if cancel_event.is_set():
-            return _mark_cancelled_or_timeout(run_dir, timeout_event)
-
-        if usage_candidate is not None:
-            usage, raw = usage_candidate
-            try:
-                run_dir.record_cli_tokens(
-                    input=usage["input"], output=usage["output"],
-                    cached=usage["cached"], thinking=usage["thinking"],
-                    raw=raw,
-                )
-            except Exception:
-                pass
-
-        run_dir.mark_done(text)
-        return text
 
     def _run_claude_interactive_emanation(
         self,
@@ -5771,10 +5392,52 @@ class DaemonManager:
                 backend_argv = []
             else:
                 try:
+                    opts_for_argv = raw_opts
+                    native_tools_sentinel: list[str] = []
+                    if backend in ("claude-p", "claude-code") and isinstance(raw_opts, dict) and "tools" in raw_opts:
+                        # `tools` is a real native tool-preset whitelist
+                        # (ClaudeAgentOptions.tools), not the generic
+                        # argv-token converter's vocabulary: an explicit
+                        # empty list must mean "no native tools", distinct
+                        # from the key being absent — the generic converter
+                        # cannot represent that distinction for list values
+                        # (an empty list emits zero argv tokens either way).
+                        # Pulled out before the generic conversion and carried
+                        # through backend_argv as one `__lingtai_claude_tools`
+                        # sentinel pair (same pattern as the existing Qwen/
+                        # OpenCode `__lingtai_*` config-path sentinels).
+                        native_tools = raw_opts["tools"]
+                        if not isinstance(native_tools, list) or not all(
+                            isinstance(t, str) and t for t in native_tools
+                        ):
+                            raise ValueError(
+                                "backend_options.tools must be an array of "
+                                "non-empty strings (the native tool "
+                                "whitelist); use the task's own top-level "
+                                "`tools` for LingTai capabilities"
+                            )
+                        opts_for_argv = {k: v for k, v in raw_opts.items() if k != "tools"}
+                        native_tools_sentinel = [
+                            "__lingtai_claude_tools", json.dumps(native_tools),
+                        ]
                     backend_argv, backend_env = _backend_options_to_argv_and_env(
-                        raw_opts
+                        opts_for_argv
                     )
+                    backend_argv = backend_argv + native_tools_sentinel
                     _validate_claude_backend_argv(backend, backend_argv)
+                    if backend in ("claude-p", "claude-code"):
+                        # Closed allowlist translation to typed
+                        # ClaudeAgentOptions kwargs; raises on anything not
+                        # in claude_agent_sdk_runtime.SUPPORTED_SDK_FLAGS
+                        # (including --allowed-tools, --system-prompt, and
+                        # any other harness/SDK-owned flag). Discarded here
+                        # — this is a preflight validation pass; the runner
+                        # re-derives the same dict from the same validated
+                        # backend_argv it receives via the manifest.
+                        from .claude_agent_sdk_runtime import (
+                            claude_sdk_options_from_argv,
+                        )
+                        claude_sdk_options_from_argv(backend_argv)
                 except ValueError as e:
                     return {"status": "error",
                             "message": f"tasks[{i}].backend_options: {e}"}
@@ -5886,7 +5549,7 @@ class DaemonManager:
                     if _cli_backend_loads_common_mcp(backend)
                     else list(context.mcp_regs)
                 )
-                if _cli_backend_loads_common_mcp(backend) and "email" in (spec.get("tools") or []):
+                if (_cli_backend_loads_common_mcp(backend) or backend_spec.live_followup_capable) and "email" in (spec.get("tools") or []):
                     mcp_regs = self._with_daemon_email_mcp(
                         mcp_regs, run_dir, self._workdir.path,
                     )
@@ -5913,13 +5576,12 @@ class DaemonManager:
                 cli_task = self._compose_cli_task(
                     spec["task"], task_context, backend=backend,
                 )
-                if backend_spec.runner_attr == "_run_claude_code_emanation":
-                    mcp_config_path = self._write_claude_mcp_config(run_dir, mcp_regs)
-                    backend_harness_argv = [
-                        "--mcp-config", str(mcp_config_path),
-                        "--strict-mcp-config",
-                    ]
-                elif backend == "codex" and _cli_backend_loads_common_mcp(backend):
+                # claude-p/claude-code: no harness argv, no MCP config file —
+                # the Claude Agent SDK runner receives `mcp_regs` straight
+                # from the capsule and builds `ClaudeAgentOptions.mcp_servers`
+                # itself (see claude_agent_sdk_runtime.py); nothing is ever
+                # written to a secret-bearing JSON file on disk for it.
+                if backend == "codex" and _cli_backend_loads_common_mcp(backend):
                     backend_harness_argv = _codex_mcp_argv(mcp_regs)
                 elif backend == "opencode" and _cli_backend_loads_common_mcp(backend):
                     opencode_env = _opencode_mcp_env(mcp_regs)
@@ -6310,7 +5972,7 @@ class DaemonManager:
 
         # CLI backends with resumable sessions:
         #   - claude / claude-interactive: interactive `claude --resume ...`
-        #   - claude-p / claude-code:      `claude --resume ... --print`
+        #   - claude-p / claude-code:      SDK `ClaudeAgentOptions(resume=...)`
         #   - codex:                       `codex exec resume <codex_session_id>`
         #   - opencode:                    `opencode run --session <opencode_session_id> ...`
         #   - mimocode:                    `mimo run --session <mimocode_session_id> ...`
@@ -6324,7 +5986,7 @@ class DaemonManager:
         # this always takes the detached branch in production. The legacy
         # backend-specific dispatch below stays reachable only when a test
         # constructs a non-detached entry directly, exercising
-        # `_handle_ask_cli`/`_handle_ask_codex`/etc. in isolation.
+        # `_handle_ask_codex`/etc. in isolation.
         if entry.get("detached"):
             return self._handle_ask_detached(em_id, entry, message)
 
@@ -6378,6 +6040,40 @@ class DaemonManager:
             control.submit_request(run_dir.path, "ask", {"message": message})
             self._log("daemon_ask_detached", em_id=em_id, message_length=len(message))
             return {"status": "sent", "id": em_id}
+        if spec is not None and spec.live_followup_capable and state.get("state") in ("running", "active"):
+            # claude-p/claude-code: no mandatory checkpoint tool exists to
+            # drain a queued message, and the control-spool's supervisor
+            # watcher polls on a ~0.5s cadence — long enough for the run to
+            # finalize in between a `control.submit_request` write and the
+            # watcher's `enqueue_followup` call, silently dropping an
+            # accepted ask with no receipt. `enqueue_followup` is itself a
+            # disk-locked, cross-process-safe transaction (the same one
+            # `enqueue_checkpoint_message` already uses for other CLI
+            # backends), so this calls it directly from this process instead
+            # of going through the control spool at all — eliminating that
+            # window rather than accepting it. If the run went terminal in
+            # the instant between the state check above and this call,
+            # `enqueue_followup` returns None and this falls through to the
+            # terminal resume-generation path below, so the ask is never
+            # silently lost — the caller gets an honest resume/terminal
+            # outcome either way.
+            if state.get("owner") not in {"supervisor", "manager"}:
+                return {"status": "error", "message": "detached run owner is not confirmed"}
+            pid = state.get("supervisor_pid")
+            if not isinstance(pid, int) or not self._pid_identity_matches(
+                pid, state.get("supervisor_start_identity")
+            ):
+                return {"status": "error", "message": "detached supervisor identity is not live"}
+            delivery = run_dir.enqueue_live_followup(message)
+            if delivery is not None:
+                self._log("daemon_ask_detached", em_id=em_id, message_length=len(message))
+                return {"status": "queued", "id": em_id, "delivery": delivery,
+                        "message": "queued; delivered to Claude at the next turn boundary"
+                                   f" — see daemon(action='check', id='{em_id}') for progress"}
+            # enqueue_followup saw a non-running/active state (the run
+            # finalized between the read above and this call) — refresh and
+            # fall through to the ordinary terminal-resume path below.
+            state = self._read_run_dir_state_from_disk(run_dir)
         if spec is None:
             return {"status": "error", "id": em_id,
                     "message": f"unknown backend {backend!r}"}
@@ -6587,233 +6283,20 @@ class DaemonManager:
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
-    def _handle_ask_cli(self, em_id: str, entry: dict, message: str) -> dict:
-        """Dispatch a Claude Code `--resume` follow-up off the caller's turn.
-
-        Returns immediately after spawning the subprocess; the stream-json
-        parse runs in ``self._ask_pool``. Progress + final reply still land
-        in ``run_dir`` (``cli_output`` events, ``last_output``, and a
-        ``follow-up completed`` notification on success), so ``daemon(check)``
-        observes the ask just as it did when this method was synchronous.
-
-        Refuses a second concurrent ask against the same emanation with
-        ``status="busy"`` — ``claude --resume`` serializes per-session and
-        a second spawn would either error or interleave reply text.
-        """
-        run_dir = entry.get("run_dir")
-        if run_dir is None:
-            return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
-
-        session_id = run_dir._state.get("claude_session_id")
-        if not session_id:
-            return {"status": "error",
-                    "message": f"No claude session ID found for {em_id}. "
-                               "The emanation may still be initializing — "
-                               "wait a moment and retry."}
-
-        # Concurrent-ask guard. Checked + set under followup_lock so two
-        # parent tool calls racing on the same em_id can't both spawn.
-        with entry["followup_lock"]:
-            if entry.get("ask_in_flight"):
-                return {"status": "busy", "id": em_id,
-                        "message": f"a previous ask on {em_id} is still "
-                                   "running; wait for it or use "
-                                   f"daemon(action='check', id='{em_id}')"}
-            entry["ask_in_flight"] = True
-
-        cmd = [
-            "claude",
-            "--resume", session_id,
-            "--print",
-            "--dangerously-skip-permissions",
-            "--output-format", "stream-json",
-            "--verbose",
-            message,
-        ]
-        self._log("daemon_claude_code_ask", em_id=em_id,
-                  session_id=session_id, message_length=len(message))
-
-        command = DaemonProcessCommand(
-            tuple(cmd), self._workdir.path,
-            tuple(_claude_code_env().items()),
-        )
-        try:
-            handle = self._process_port.spawn(command, group_id=None)
-        except FileNotFoundError:
-            with entry["followup_lock"]:
-                entry["ask_in_flight"] = False
-            return {"status": "error",
-                    "message": "'claude' CLI not found on PATH"}
-        except OSError as e:
-            with entry["followup_lock"]:
-                entry["ask_in_flight"] = False
-            return {"status": "error",
-                    "message": f"Failed to start claude CLI: {e}"}
-        # Surface that an ask just started so `daemon(check)` shows it
-        # immediately, even before any stream-json event arrives.
-        # record_cli_output already routes its filesystem writes through
-        # _safe (which catches OSError); the outer guard here is only for
-        # the unlikely case the call site itself raises (e.g. attribute
-        # access on a torn-down run_dir). Narrowed to OSError so real bugs
-        # propagate.
-        try:
-            run_dir.record_cli_output(
-                f"[ask dispatched] {message[:200]}", stream="stdout",
-            )
-        except OSError:
-            pass
-
-        ask_future = self._ask_pool.submit(
-            self._run_ask_claude_code_stream, em_id, entry, handle, run_dir,
-        )
-        ask_future.add_done_callback(
-            lambda f, eid=em_id: self._on_ask_done(eid, f)
-        )
-        entry["ask_future"] = ask_future
-
-        return {"status": "sent", "id": em_id, "async": True,
-                "message": "ask dispatched; check daemon(action='check', "
-                           f"id='{em_id}') for progress and final reply"}
-
-    def _run_ask_claude_code_stream(
-        self,
-        em_id: str,
-        entry: dict,
-        handle: DaemonProcessHandle,
-        run_dir: DaemonRunDir,
+    def _handle_ask_claude_agent_sdk_resume(
+        self, em_id: str, entry: dict, message: str,
     ) -> dict:
-        """Background worker: stream a Claude Code `--resume` subprocess.
+        """Terminal follow-up for claude-p/claude-code via SDK ``resume=``.
 
-        Same stream-json parse as ``_run_claude_code_emanation``. Always
-        clears ``ask_in_flight`` and releases the opaque Port handle.
-        Return value is captured by the future for tests/debugging; the
-        agent observes the result through the run_dir + notification.
+        Only reached from the resume-owner's one-shot execution
+        (``execution_host.DetachedDaemonExecutionHost.run_resume``) once the
+        run is already terminal — a *live* run's ``ask`` is queued through
+        the control spool instead (``_handle_ask_detached``'s
+        ``live_followup_capable`` branch), matching the lingtai backend's own
+        follow-up contract. See ``claude_agent_sdk_runtime.py``.
         """
-        stderr_thread = self._process_port.drain_stderr(
-            handle,
-            on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
-            thread_name=f"daemon-claude-ask-stderr-{em_id}",
-        )
-        stderr_lines = stderr_thread.lines
-
-        final_result_text: str | None = None
-        final_is_error = False
-        timed_out = False
-        # Buffered, not yet persisted — see the result-event handler and
-        # the post-classification persistence below for why.
-        usage_candidate: tuple[dict[str, int], dict] | None = None
-
-        try:
-            deadline = time.monotonic() + self._timeout
-            for raw_line in self._process_port.iter_stdout(handle, deadline=deadline):
-                line = raw_line.rstrip("\n")
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    run_dir.record_cli_output(line, stream="stdout")
-                    continue
-
-                etype = event.get("type")
-                if etype == "assistant":
-                    message_obj = event.get("message") or {}
-                    for block in (message_obj.get("content") or []):
-                        if block.get("type") == "text":
-                            text = block.get("text") or ""
-                            if text.strip():
-                                run_dir.record_cli_output(text, stream="stdout")
-                elif etype == "result":
-                    final_result_text = event.get("result") or ""
-                    final_is_error = bool(event.get("is_error"))
-                    # Buffer the follow-up's token usage — do not persist
-                    # yet. A result read right at the deadline can still
-                    # be followed by a timeout classification below;
-                    # persisting here would leave usage for a follow-up
-                    # that is reported as failed. Retain only the first
-                    # valid terminal usage candidate and persist once
-                    # terminal classification (timeout, exit code,
-                    # is_error) has passed — same UI-only, never-ledger
-                    # policy as the initial emanation run.
-                    if usage_candidate is None:
-                        usage = _normalize_claude_usage(event.get("usage"))
-                        if usage is not None:
-                            usage_candidate = (usage, event.get("usage"))
-
-            if time.monotonic() >= deadline:
-                timed_out = True
-                exit_receipt = self._process_port.terminate(handle, reason="timeout")
-            else:
-                # Reader hit EOF before the deadline. The CLI usually exits
-                # within milliseconds of closing stdout, but bound the wait
-                # so a misbehaving child can't strand us here.
-                try:
-                    exit_receipt = self._process_port.wait(
-                        handle, timeout=max(1.0, deadline - time.monotonic())
-                    )
-                except TimeoutError:
-                    timed_out = True
-                    exit_receipt = self._process_port.terminate(handle, reason="timeout")
-        except Exception:
-            exit_receipt = self._process_port.terminate(handle, reason="error")
-            raise
-        finally:
-            stderr_thread.join(timeout=2.0)
-            if ('exit_receipt' in locals() and exit_receipt is not None
-                    and exit_receipt.returncode is not None):
-                self._process_port.release(handle)
-            with entry["followup_lock"]:
-                entry["ask_in_flight"] = False
-
-        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
-
-        if timed_out:
-            if exit_receipt is not None:
-                self._attributed_process_exit(
-                    exit_receipt, "claude", stderr_tail[-500:], run_dir,
-                )
-            err = f"claude --resume timed out after {self._timeout}s"
-            self._publish_followup_if_live(
-                em_id, status="follow-up failed", text=err, run_dir=run_dir,
-            )
-            return {"status": "error", "id": em_id, "message": err}
-
-        if exit_receipt.returncode != 0:
-            detail = stderr_tail or (final_result_text or "")
-            attributed = self._attributed_process_exit(
-                exit_receipt, "claude", detail[-500:], run_dir,
-            )
-            err = attributed or f"claude CLI exited {exit_receipt.returncode}: {detail[-500:]}"
-            self._publish_followup_if_live(
-                em_id, status="follow-up failed", text=err, run_dir=run_dir,
-            )
-            return {"status": "error", "id": em_id, "message": err}
-
-        if final_is_error:
-            err = (f"claude CLI reported is_error=true: "
-                   f"{(final_result_text or stderr_tail)[-500:]}")
-            self._publish_followup_if_live(
-                em_id, status="follow-up failed", text=err, run_dir=run_dir,
-            )
-            return {"status": "error", "id": em_id, "message": err}
-
-        if usage_candidate is not None:
-            usage, raw = usage_candidate
-            try:
-                run_dir.record_cli_tokens(
-                    input=usage["input"], output=usage["output"],
-                    cached=usage["cached"], thinking=usage["thinking"],
-                    raw=raw,
-                )
-            except Exception:
-                pass
-
-        output = (final_result_text or "").strip()
-        if output:
-            self._publish_followup_if_live(
-                em_id, status="follow-up completed", text=output, run_dir=run_dir,
-            )
-        return {"status": "sent", "id": em_id, "output": output}
+        from .claude_agent_sdk_runtime import run_claude_agent_sdk_resume
+        return run_claude_agent_sdk_resume(self, em_id, entry, message)
 
     def _handle_ask_codex(self, em_id: str, entry: dict, message: str) -> dict:
         """Dispatch a Codex ``exec resume`` follow-up off the caller's turn.

@@ -8,9 +8,9 @@ description: >
   shows how to translate that help into the generic `backend_options`
   mechanism. Also owns Claude Code's operational core: the `env -u` auth
   hygiene wrapper, weekly-limit smoke test, stale-token diagnosis, and the
-  budget/timeout/print-mode background caveats. It is not a flag catalog.
-version: 0.5.0
-last_changed_at: 2026-08-13T00:00:00Z
+  budget/timeout/SDK background caveats. It is not a flag catalog.
+version: 0.6.0
+last_changed_at: 2026-10-14T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 maintenance: |
@@ -22,37 +22,39 @@ maintenance: |
 The installed CLI's own help is the authority for Claude Code flags; this page is
 only the entrypoint. Conversion rules and persistence live in the parent
 [`reference/cli-backends/SKILL.md`](../../../SKILL.md). `claude-p` is the
-canonical print-mode backend id; `claude-code` is a compatibility alias.
+canonical official-SDK backend id; `claude-code` is a compatibility alias.
 
 ## Discover flags from the installed CLI
 
 1. Confirm the CLI is installed: `which claude` → `${HOME}/.local/bin/claude`.
-2. Run `claude --version` and `claude --help` in bash. The daemon wraps
-   `claude --print`; the print-mode flags are the relevant surface.
-3. Translate what you found into `backend_options` with the parent's generic
-   conversion rules. Nothing Claude-specific is added to that contract here.
+2. Run `claude --version` and `claude --help` in bash for context — the CLI's
+   own help still documents the full flag surface, but this harness exposes
+   only the closed subset in the table below via `backend_options`. Every
+   other flag (`-p`/`--print`, `--dangerously-skip-permissions`,
+   `--allowedTools`, `--system-prompt`, `-d`, and anything else) is
+   harness-owned: the SDK sets its typed equivalent directly, and
+   `backend_options` cannot reach or override it. See Harness boundary.
+3. Translate what you need into `backend_options` using the table below; the
+   underscore→dash key rule still applies for display, but the daemon
+   translates these to typed SDK fields internally, not raw argv.
 
 ## Key flags at a glance
 
-The installed CLI's `--help` is still the authority — this table only shortcuts
-the flags you will most often translate; it is not a catalog. Long flags
-translate through `backend_options` underscore keys per the parent's conversion
-rules (`{"fallback_model": "claude-sonnet-5"}` → `--fallback-model
-claude-sonnet-5`); the example below shows one full translation.
+Only these `backend_options` keys reach the SDK
+(`claude_agent_sdk_runtime.SUPPORTED_SDK_FLAGS`); anything else fails before
+any run directory is created.
 
-| Flag | Purpose |
-|------|---------|
-| `-p` / `--print` | Non-interactive mode — run, print result, exit. Harness-owned: the daemon already passes it (reserved). |
-| `--dangerously-skip-permissions` | Skip permission prompts (required for automation). The harness already passes it for every run. |
-| `--effort max` | Maximum reasoning effort for complex tasks |
-| `--model opus` / `--model sonnet` | Model choice (Sonnet is the default) |
-| `--max-budget-usd N` | Spending limit per call — the only spend bound; see Harness boundary |
-| `--allowedTools "Bash Edit Read Write"` | Restrict which tools Claude can use |
-| `--system-prompt "..."` | Custom system prompt |
-| `--add-dir /path/to/dir` | Grant access to additional directories |
-| `-d /path/to/repo` | Set working directory |
+| `backend_options` key | SDK field | Purpose |
+|------|---------|---------|
+| `effort` | `effort` | Reasoning effort: `low`/`medium`/`high`/`xhigh`/`max` |
+| `model` | `model` | Model choice (the installed CLI's default when omitted) |
+| `fallback_model` | `fallback_model` | Fallback model if the primary fails |
+| `max_budget_usd` | `max_budget_usd` | Spending limit for the run — the only spend bound; see Harness boundary |
+| `tools` | `tools` | Native whitelist: omitted is unrestricted; `[]` disables native tools; an array selects them. Not task-level LingTai `tools` or permission auto-approval `allowed_tools`. |
+| `disallowed_tools` | `disallowed_tools` | Native denylist, also applied when a whitelist is present |
+| `add_dir` | `add_dirs` (repeatable) | Grant access to additional directories |
 
-## Example: automatic fallback model for a long print run
+## Example: automatic fallback model for a long run
 
 Through `backend_options`, an underscore key becomes a dashed long flag:
 
@@ -175,48 +177,44 @@ Official docs: https://platform.claude.com/docs/en/docs/claude-code
 
 ## Harness boundary
 
-The harness spawns `claude --print --dangerously-skip-permissions
---output-format stream-json --verbose --name <em_id>`, then your
-`backend_options` argv, then harness-owned MCP flags, with the task prompt as
-the trailing positional argument. Validation refuses the harness-owned flags
-`--settings`, `--print`, `--output-format`, `--mcp-config`, and
-`--strict-mcp-config` in `backend_options` before spawn: breaking stream-json
-output or the per-run MCP config silently breaks progress/result extraction
-and completion enforcement.
-Related run-scoped behavior you should not fight through flags:
+The harness uses only the official `claude_agent_sdk.ClaudeSDKClient`: one
+persistent connection per live run with sequential, non-overlapping per-turn
+readers. The SDK spawns the verified `shutil.which("claude")` CLI, never its
+bundled fallback. Hidden PTY Claude compatibility is unchanged, not this route or a new feature.
+Harness-owned `--settings`, `--print`, `--output-format`, `--mcp-config`,
+and `--strict-mcp-config` cannot be overridden via `backend_options`. Typed
+`ClaudeAgentOptions` sets `permission_mode="bypassPermissions"`, the
+`claude_code` system-prompt preset, and `strict_mcp_config=True`.
+Only the table's closed allowlist is accepted. `tools` preserves omitted versus
+`[]`; `allowed_tools` is auto-approval, not a whitelist, and it and
+`system_prompt` are rejected before run creation.
 
-- MCP: the harness writes stdio registrations (including `daemon_common`) to
-  the run's `claude-mcp-config.json` and appends `--mcp-config <path>
-  --strict-mcp-config` itself as `backend_harness_argv`.
-- Safe mode: `--safe-mode` disables customizations including MCP servers; do
-  not use it because claude-p terminal success requires the injected
-  `daemon_common.finish(status="done")`. For read-only runs, keep MCP enabled
-  and combine a read-only brief with the live-help `--allowedTools` surface.
-- Resume: `daemon(action="ask", input={"id": ..., "message": ...})` runs `claude --resume <claude_session_id>
-  --print ...` against the session id persisted to `daemon.json.claude_session_id`;
-  `backend_options` are not re-passed on ask — emanate-time flags persist for
-  the session's life.
-- No built-in timeout: Claude Code has **no built-in timeout** — nothing in the
-  CLI bounds a run. `--max-budget-usd N` is the only spend bound and there is
-  **no daemon-side equivalent**: pass it via `backend_options` whenever the
-  scope is unknown, so a runaway task hits a budget cap instead of running
-  indefinitely.
-- Print-mode background jobs never notify back: inside `claude -p`, the inner
-  Claude's own background jobs (`run_in_background`, `&`, and wait-loops) are
-  interactive-session affordances; in `--print` there is no second prompt and
-  no `<task-notification>` re-entry, so the model is never woken when the job
-  finishes. If you are the Claude running inside a `claude -p` daemon, **do not
-  background a job and then end your turn waiting for its completion** — run
-  validation synchronously with an adequate explicit timeout and read the
-  result in the same turn, or report a blocker. The `claude-p` backend enforces
-  this: a run that ends while awaiting a background-job notification is marked
-  failed, not done.
-- Auth-env hygiene: the daemon spawn strips `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_OAUTH_TOKEN` so refreshed OAuth wins
-  over stale inherited tokens (a stale token surfaces as a false "weekly
-  limit" — the smoke test above distinguishes it from a truly exhausted
-  subscription). Manual shell calls need the full `env -u` wrapper in
-  Subscription & auth above. Never print token values.
+- MCP: parent-provided MCP registrations are translated in-process into
+  `ClaudeAgentOptions.mcp_servers` (stdio only; HTTP stays prompt-catalog-only)
+  — no native config file is ever written to the run directory for this
+  backend.
+- No mandatory finish/checkpoint tool: this backend mounts no `daemon_common`.
+  The ordinary reply and per-turn SDK result (success/error and why) signal
+  completion; neither `finish(status="done")` nor `checkpoint` is required.
+- Ask: a **live** message is atomically queued for the owned connection's next
+  turn boundary (`delivery: "turn_boundary"`); this slice carries no interrupt
+  semantics — a queued message always waits for the current turn to finish
+  naturally, and no checkpoint tool is involved.
+  A **terminal** ask opens a fresh SDK connection with
+  `ClaudeAgentOptions(resume=<claude_session_id>, ...)`, re-applying the same
+  validated `backend_options`, including model, effort, whitelist, and denylist.
+  `daemon.json.claude_session_id` captures the earliest SDK ID (usually init);
+  dispatch returning does not guarantee the ID is already persisted.
+- Bounds: the supervisor owns the daemon wall-clock deadline; terminal resume
+  has its own bounded owner generation. Neither is a spending cap. Use
+  `backend_options.max_budget_usd` for the SDK/CLI spend bound.
+- Background jobs are not tracked or awaited. With no pending follow-up, the
+  runner disconnects after its query result; later job notifications are not
+  guaranteed. Injected results never satisfy a pending query. Never background
+  work and end expecting later re-entry.
+- Auth-env hygiene: the SDK `env` option overlays but cannot unset inherited
+  keys, so the daemon strips the three auth variables listed above before
+  connecting. Manual shell calls need the full `env -u` wrapper; never print secrets.
 
 ## Troubleshooting
 

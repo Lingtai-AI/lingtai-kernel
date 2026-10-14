@@ -251,8 +251,13 @@ async def test_active_cli_ask_is_delivered_once_at_checkpoint_without_terminal_m
     [
         ("claude", False),
         ("claude-interactive", False),
-        ("claude-p", True),
-        ("claude-code", True),
+        # claude-p/claude-code deliberately excluded: the Claude Agent SDK
+        # backend mounts no daemon_common MCP and does not use the
+        # checkpoint-queue mechanism this test covers. Its own live-ask
+        # delivery (control spool -> enqueue_followup -> SDK query() at the
+        # next turn boundary) is covered by
+        # test_claude_sdk_live_ask_queues_via_turn_boundary_not_checkpoint
+        # below.
         ("codex", True),
         ("opencode", True),
         ("mimocode", False),
@@ -308,114 +313,54 @@ async def test_active_cli_ask_checkpoint_support_matches_mounted_common_mcp(
         assert queue == []
 
 
-# ----------------------------------------------------------------------
-# DaemonRunDir primitives for a future live-connection ask boundary: a
-# durable live-followup queue, atomic queue-or-finalize, and per-turn
-# result persistence. The detached supervisor's control watcher already
-# queues onto enqueue_live_followup via the enqueue_followup wrapper (see
-# run_dir.py); nothing yet drains/delivers that queue to a running SDK
-# session, and drain_followups_or_finalize/record_turn_result still have no
-# production caller. These tests exercise DaemonRunDir directly rather than
-# through daemon(ask).
-# ----------------------------------------------------------------------
-
-
-def test_enqueue_live_followup_queues_durably_and_enqueue_followup_keeps_bool_contract(
-    tmp_path,
+@pytest.mark.skipif(os.name != 'posix', reason='uses POSIX supervisor identity')
+@pytest.mark.parametrize("backend", ["claude-p", "claude-code"])
+async def test_claude_sdk_live_ask_queues_via_turn_boundary_not_checkpoint(
+    tmp_path, backend,
 ):
-    """``enqueue_live_followup`` queues for the next turn boundary; the
-    legacy bool-returning ``enqueue_followup`` wraps it unchanged."""
+    """claude-p/claude-code route a live ask through enqueue_followup, not checkpoint.
+
+    No daemon_common MCP is mounted for this backend, so there is no
+    checkpoint-queue tool for the model to call. Delivery calls
+    ``run_dir.enqueue_followup`` directly (not the control spool a
+    supervisor-process watcher polls on a ~0.5s cadence) so there is no
+    window in which the run can finalize before the message is durably
+    queued; the runner's reader loop calls ``client.query()`` at the next
+    turn boundary (see claude_agent_sdk_runtime.py).
+    """
+    from lingtai.adapters.posix.process_identity import process_identity
+
     agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
     run_dir = make_daemon_run_dir(
-        agent, handle="em-live-followup", backend="claude-p", tools=[]
+        agent, handle=f"em-{backend}", backend=backend,
+        task=f"active {backend} task", tools=[],
     )
-
-    assert run_dir.enqueue_live_followup("stop and do this instead") == "turn_boundary"
-    assert _disk_state(run_dir)["pending_followups"] == ["stop and do this instead"]
-
-    assert run_dir.enqueue_followup("a second correction") is True
-    assert _disk_state(run_dir)["pending_followups"] == [
-        "stop and do this instead",
-        "a second correction",
-    ]
-
-    # Empty/non-string messages are rejected without mutating the queue.
-    assert run_dir.enqueue_live_followup("") is None
-    assert run_dir.enqueue_followup("") is False
-
-    run_dir.mark_done("terminal")
-    assert run_dir.enqueue_live_followup("too late") is None
-    assert run_dir.enqueue_followup("also too late") is False
-
-
-@pytest.mark.parametrize(
-    "status,finalize_kwargs",
-    [
-        ("done", {"text": "final answer"}),
-        ("failed", {"error": RuntimeError("boom")}),
-    ],
-)
-def test_drain_followups_or_finalize_racing_followup_then_terminal_write(
-    tmp_path, status, finalize_kwargs,
-):
-    """A followup queued before finalize wins the race; the terminal write
-    lands once drained, and a further call on the now-terminal run is a
-    no-op. This exercises sequential queue-then-finalize ordering only, not
-    proof of behavior under real concurrent/threaded contention."""
-    agent = make_daemon_agent(tmp_path, ["daemon"])
-    run_dir = make_daemon_run_dir(
-        agent, handle=f"em-drain-finalize-{status}", backend="claude-p", tools=[]
+    pid = os.getpid()
+    run_dir.update_state(
+        backend=backend, owner="supervisor", state="active",
+        supervisor_pid=pid, supervisor_start_identity=process_identity(pid),
     )
+    manager._emanations[run_dir.run_id] = {
+        "detached": True, "task": f"active {backend} task",
+        "start_time": time.time(), "timeout_s": 1200.0,
+        "run_dir": run_dir, "backend": backend,
+    }
 
-    assert run_dir.enqueue_live_followup("finish this differently") == "turn_boundary"
+    from lingtai.kernel.daemon_supervisor import control
 
-    racing = run_dir.drain_followups_or_finalize(status=status, **finalize_kwargs)
-    assert racing == "finish this differently"
-    assert _disk_state(run_dir)["state"] == "running"
-
-    finalized = run_dir.drain_followups_or_finalize(status=status, **finalize_kwargs)
-    assert finalized is None
-    state = _disk_state(run_dir)
-    assert state["state"] == status
-    if status == "done":
-        assert state["result_preview"] == finalize_kwargs["text"]
-        assert run_dir.result_path.read_text(encoding="utf-8") == finalize_kwargs["text"]
-        assert run_dir.manifest_path.exists()
-    else:
-        assert state["error"] == {"type": "RuntimeError", "message": "boom"}
-
-    # Already terminal: a later call is a no-op, not a re-finalize.
-    assert run_dir.drain_followups_or_finalize(status=status, **finalize_kwargs) is None
-
-
-def test_record_turn_result_persists_full_text_and_bounded_event_preview(tmp_path):
-    """The complete turn body lands on disk; the event preview stays bounded."""
-    agent = make_daemon_agent(tmp_path, ["daemon"])
-    run_dir = make_daemon_run_dir(
-        agent, handle="em-turn-result", backend="claude-p", tools=[]
+    result = manager.handle(
+        {"action": "ask", "id": run_dir.run_id, "message": "bounded correction"}
     )
-
-    long_text = "x" * (DaemonRunDir._TURN_PREVIEW_MAX + 50)
-    turn_path = run_dir.record_turn_result(
-        turn=1, text=long_text, is_error=False, session_id="sess-1"
-    )
-
-    assert turn_path == str(run_dir.path / "turns" / "turn-1.txt")
-    assert Path(turn_path).read_text(encoding="utf-8") == long_text
-
-    turn_events = [
-        json.loads(line)
-        for line in run_dir.events_path.read_text(encoding="utf-8").splitlines()
-        if line.strip() and json.loads(line).get("event") == "daemon_turn"
-    ]
-    assert len(turn_events) == 1
-    event = turn_events[0]
-    assert event["turn"] == 1
-    assert event["is_error"] is False
-    assert event["session_id"] == "sess-1"
-    assert event["path"] == turn_path
-    assert event["preview"] == long_text[: DaemonRunDir._TURN_PREVIEW_MAX]
-    assert len(event["preview"]) == DaemonRunDir._TURN_PREVIEW_MAX
+    assert result["status"] == "queued"
+    assert result["delivery"] == "turn_boundary"
+    # No checkpoint-queue mutation — this backend never calls
+    # daemon_common.checkpoint because it is never mounted for it.
+    assert _disk_state(run_dir).get("pending_checkpoint_messages", []) == []
+    # No control-spool hop either — enqueue_followup was called directly, so
+    # the message is already durably queued and immediately drainable.
+    assert control.pending_requests(run_dir.path) == []
+    assert run_dir.drain_followups() == "bounded correction"
 
 
 async def test_checkpoint_rejects_wrong_identity_invalid_payload_and_terminal_run(

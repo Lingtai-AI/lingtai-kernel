@@ -3,8 +3,8 @@ name: daemon-cli-backends
 description: >
   Nested daemon-manual reference for backend choice, native versus prompt-only
   MCP, CLI options, list/ask behavior, and per-backend live-help routes.
-version: 1.18.0
-last_changed_at: 2026-09-09T00:00:00Z
+version: 1.19.0
+last_changed_at: 2026-10-14T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/CONTRACT.md
@@ -40,7 +40,7 @@ text.
 | Backend (aliases) | Initial runner / native MCP | `ask` / completion |
 |---|---|---|
 | `lingtai` | in-process; task-scoped stdio + HTTP | live-only ask, no terminal resume; `finish(done)` enforced |
-| `claude-p` (`claude-code`) | `claude --print ... --mcp-config ... --strict-mcp-config` (stdio) | async resume; checkpoint + `finish(done)` |
+| `claude-p` (`claude-code`) | official `claude_agent_sdk.ClaudeSDKClient` (stdio) | live ask at the next turn boundary; terminal resume; no checkpoint/finish — ordinary reply + per-turn result is completion |
 | `codex` | `codex exec --json` with `mcp_servers.*` overrides (stdio) | async resume; checkpoint + `finish(done)` |
 | `opencode` | `opencode run --format json`, `OPENCODE_CONFIG_CONTENT` (stdio) | async resume; checkpoint + `finish(done)` |
 | `qwen-code` (`qwen`) | `qwen --yolo -p`, per-run settings (stdio) | active checkpoint queue; terminal ask unsupported; `finish(done)` |
@@ -55,11 +55,14 @@ Aliases normalize to the canonical names shown above. Hidden legacy
 status is source-backed, not a promise that the vendor CLI is installed or
 authenticated; an unavailable CLI fails rather than silently falling back.
 
-MCP-capable workers must call `finish` exactly once before their final report.
-`checkpoint` is live-only, bounded, cooperative, and nonterminal: it records
-progress and drains queued parent messages at the next checkpoint. It is not chat,
-stdin injection, preemption, cancellation, or a completion receipt. A missing
-or invalid finish makes the run failed; inspect its durable result and trace.
+MCP-capable workers (every backend above except `claude-p`/`claude-code`, which
+mounts no `daemon_common`) must call `finish` exactly once before their final
+report. `checkpoint` is live-only, bounded, cooperative, and nonterminal: it
+records progress and drains queued parent messages at the next checkpoint. It
+is not chat, stdin injection, preemption, cancellation, or a completion
+receipt. A missing or invalid finish makes the run failed; inspect its durable
+result and trace. `claude-p`/`claude-code` instead completes on its ordinary
+final reply plus the SDK's own per-turn result — see its child page.
 
 ## Nested reference catalog
 
