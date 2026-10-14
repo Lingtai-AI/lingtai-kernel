@@ -45,6 +45,7 @@ related_files:
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/execution_host.py
   - src/lingtai/tools/daemon/supervisor_runtime.py
+  - src/lingtai/tools/daemon/claude_agent_sdk_runtime.py
   - src/lingtai/adapters/posix/daemon_capsule.py
   - src/lingtai/adapters/posix/daemon_supervisor.py
   - src/lingtai/kernel/provider_admission.py
@@ -76,6 +77,7 @@ review_triggers:
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/execution_host.py
   - src/lingtai/tools/daemon/supervisor_runtime.py
+  - src/lingtai/tools/daemon/claude_agent_sdk_runtime.py
   - src/lingtai/adapters/posix/daemon_capsule.py
   - src/lingtai/adapters/posix/daemon_manager.py
   - src/lingtai/adapters/posix/daemon_supervisor.py
@@ -529,6 +531,15 @@ unchanged-contract `enqueue_followup` wrapper, to durably queue an incoming
 queued message to a running SDK session, so this is a staged intermediate —
 not a finished ask-delivery path — and the SDK production cutover that
 consumes it lands in a later change.
+`src/lingtai/tools/daemon/claude_agent_sdk_runtime.py` carries that future
+connection's option-building, MCP-translation, usage-normalization, CLI
+resolution, and single-turn message-draining helpers as a directly-tested
+foundation module; it has no caller from any backend dispatcher or
+backend-selection table yet, so it changes no observable daemon behavior. The
+live `claude-p`/`claude-code` backend remains the existing
+`claude --print --output-format stream-json` subprocess parser
+(`_run_claude_code_emanation`) until the connected run loop, backend-argv
+preflight, and old-parser retirement land together in a later change.
 `daemon.json.call_parameters` and `.prompt` may contain task surface,
 selected-skill catalog/path context, and redacted MCP registrations. Secret MCP
 values belong only in native run-scoped launch plumbing where a backend needs

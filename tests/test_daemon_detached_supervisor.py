@@ -2834,3 +2834,111 @@ def test_control_receipt_stays_coherent_when_terminal_state_races_ask(tmp_path):
 
     state = DaemonRunDir.read_state_from_disk(run_dir.path)
     assert not state.get("pending_followups")
+
+
+def test_claude_sdk_explicit_native_tools_whitelist_distinguishes_absent_from_empty():
+    """``backend_options.tools`` is meant to reach ``ClaudeAgentOptions.tools`` verbatim.
+
+    Distinct from both LingTai's `tasks[].tools` (capability names, a
+    different field entirely) and `allowed_tools` (auto-approval, not a
+    restriction) — the real native whitelist. An explicit empty list must
+    disable every native tool, not be silently treated the same as the key
+    being absent (the generic argv-token converter cannot represent that
+    distinction for list values, which is exactly why this staged module
+    uses a dedicated sentinel path instead — see `claude_sdk_options_from_argv`).
+
+    This exercises only the staged translator/options-builder pair directly;
+    no `_handle_emanate_cli` call site feeds it `backend_options.tools` yet,
+    and that future preflight wiring is not tested here.
+    """
+    from lingtai.tools.daemon.claude_agent_sdk_runtime import (
+        _NATIVE_TOOLS_SENTINEL,
+        _build_options,
+        claude_sdk_options_from_argv,
+    )
+
+    # Absent: no restriction (today's default, unchanged).
+    absent = claude_sdk_options_from_argv(["--model", "opus"])
+    assert "tools" not in absent
+    options_absent = _build_options(
+        cwd="/tmp", cli_path="/bin/true", mcp_servers={},
+        sdk_options=absent, backend_env={},
+    )
+    assert options_absent.tools is None
+
+    # Explicit non-empty whitelist.
+    argv_some = [_NATIVE_TOOLS_SENTINEL, json.dumps(["Read", "Bash"])]
+    some = claude_sdk_options_from_argv(argv_some)
+    assert some["tools"] == ["Read", "Bash"]
+
+    # Explicit empty list disables every native tool — must NOT collapse to
+    # "absent"/unrestricted.
+    argv_empty = [_NATIVE_TOOLS_SENTINEL, json.dumps([])]
+    empty = claude_sdk_options_from_argv(argv_empty)
+    assert empty["tools"] == []
+    options_empty = _build_options(
+        cwd="/tmp", cli_path="/bin/true", mcp_servers={},
+        sdk_options=empty, backend_env={},
+    )
+    assert options_empty.tools == []
+    assert options_empty.tools is not None
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='fake SDK CLI is a POSIX launcher')
+def test_claude_sdk_drain_turn_real_connect_echoes_body_and_session(tmp_path, monkeypatch):
+    """Staged-foundation wire check: a real SDK connect/query/drain round trip.
+
+    Drives the actual installed ``claude_agent_sdk.ClaudeSDKClient`` against
+    `tests/claude` — a fake CLI speaking the real NDJSON + control-protocol
+    wire the SDK uses — by calling only this staged module's own
+    `_build_options`/`_drain_turn` helpers directly. No model/network request
+    is made, no `DaemonManager` backend dispatch is involved, and this proves
+    nothing about any daemon backend being wired to this module yet (see the
+    module docstring in `claude_agent_sdk_runtime.py`).
+
+    This is temporary intermediate coverage: a later stage supersedes it with
+    the full end-to-end acceptance test that goes through `DaemonManager`'s
+    real backend dispatch once that wiring exists.
+    """
+    import asyncio
+
+    from lingtai.tools.daemon.claude_agent_sdk_runtime import (
+        _build_options, _drain_turn, _normalize_usage, _resolve_cli_path,
+    )
+
+    monkeypatch.setenv("PATH", str(Path(__file__).parent) + os.pathsep + os.environ["PATH"])
+    calls_path = tmp_path / "fake-claude-sdk-calls.jsonl"
+    monkeypatch.setenv("FAKE_CLAUDE_SDK_CALLS", str(calls_path))
+
+    run_dir = _make_run_dir(tmp_path, task="say hello")
+
+    async def _run():
+        import claude_agent_sdk
+
+        cli_path = _resolve_cli_path()
+        assert Path(cli_path).resolve() == (Path(__file__).parent / "claude").resolve()
+        options = _build_options(
+            cwd=str(tmp_path), cli_path=cli_path, mcp_servers={},
+            sdk_options={}, backend_env={},
+        )
+        client = claude_agent_sdk.ClaudeSDKClient(options=options)
+        await client.connect()
+        try:
+            await client.query("say hello")
+            return await _drain_turn(client, run_dir, {})
+        finally:
+            await client.disconnect()
+
+    result = asyncio.run(_run())
+
+    assert result is not None
+    assert result.result == "fake reply 1 to: say hello"
+    assert _normalize_usage(result.usage) == {
+        "input": 10, "output": 5, "cached": 5, "thinking": 0,
+    }
+    assert run_dir.state_snapshot()["claude_session_id"] == "fake-claude-sdk-session"
+
+    calls = [json.loads(line) for line in calls_path.read_text().splitlines() if line.strip()]
+    user_calls = [c for c in calls if c.get("type") == "user"]
+    assert len(user_calls) == 1
+    assert user_calls[0]["message"]["content"] == "say hello"
