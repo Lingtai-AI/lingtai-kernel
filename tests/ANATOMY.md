@@ -51,6 +51,7 @@ related_files:
   - tests/_agent_presence_helpers.py
   - tests/_daemon_helpers.py
   - tests/_detached_cli_parent.py
+  - tests/_fake_claude_sdk_cli.py
   - tests/_fake_codex_cli.py
   - tests/_fake_llm_adapter.py
   - tests/_fake_resume_cli.py
@@ -62,6 +63,7 @@ related_files:
   - tests/_service_helpers.py
   - tests/_snapshot_helpers.py
   - tests/_workdir_lease_helpers.py
+  - tests/claude
   - tests/codex
   - tests/conftest.py
   - tests/contracts/llm_conversation_input/__init__.py
@@ -179,8 +181,11 @@ graph.
 - `test_architecture_documents.py`, `test_docs_governance.py`,
   `test_anatomy_drift_checker.py`, and `test_labt_validation.py` retain graph and
   document validation; retaining them is not runtime conformance evidence.
-- `codex`/`opencode` and fake CLI/provider modules remain local subprocess
-  fixtures, not real installed-provider tests.
+- `codex`/`opencode`/`claude` and fake CLI/provider modules remain local
+  subprocess fixtures, not real installed-provider tests. The `claude`
+  fixture pairs a fake CLI subprocess with the real installed
+  `claude_agent_sdk` package to prove the SDK wire protocol end to end, not
+  network/model access.
 
 - `test_tc_wake.py` and `test_pre_request_hook.py` retain the accepted modern
   canonical-wire wake and generic adapter-hook regressions.
