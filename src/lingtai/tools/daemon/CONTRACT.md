@@ -1054,8 +1054,8 @@ terminal state, result/artifact files, and one idempotent terminal notification.
 Agent stop and `system.refresh` shut down only parent-local resources; they do
 not inspect or terminate a detached supervisor or its backend child. Explicit
 `daemon(action="reclaim")` is the only parent control that requests run
-cancellation. `daemon(action="ask")` uses the run-local control spool and is
-accepted only while durable state is running. The ownership transition is
+cancellation. `daemon(action="ask")` follows the backend-specific live-delivery
+and terminal-resume routes in §Scope. The ownership transition is
 unconditional; detached supervision is not gated behind a production flag.
 
 The detached execution child is not currently given derived-launch authority.
