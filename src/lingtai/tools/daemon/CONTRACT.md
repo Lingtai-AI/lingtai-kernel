@@ -7,7 +7,7 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 17
+contract_version: 18
 last_changed_at: "2026-10-14"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
@@ -146,12 +146,18 @@ ownership -> §Process and Terminal Boundaries.
   `_normalize_backend`: `mimo→mimocode`, `qwen→qwen-code`, `omp→oh-my-pi`,
   `kimi→kimicode`; `claude-code` is a compatibility alias for `claude-p`.
   `claude` / `claude-interactive` are hidden (not schema-advertised). Active
-  external CLI runs whose launch path really mounts `daemon_common`
-  (`claude-p`/`claude-code`, Codex, OpenCode, Qwen, and Kimi) accept `ask` as a
-  queued next-checkpoint message. This does not add a terminal resume contract:
-  Qwen and Kimi still return explicit unsupported messages after terminal state,
-  while hidden interactive Claude and every backend without common MCP retain the
-  existing active `busy` behavior.
+  external CLI runs whose launch path really mounts `daemon_common` (Codex,
+  OpenCode, Qwen, and Kimi) accept `ask` as a queued next-checkpoint message.
+  `claude-p`/`claude-code` instead accepts a live `ask` through a direct
+  `enqueue_live_followup` transaction — no control-spool hop or checkpoint
+  tool (see §3) — returning `{"status":"queued","delivery":"turn_boundary"}`;
+  the queued message is delivered at the next turn boundary. A terminal
+  commit and queue drain share the same lock; cancelled/timeout/failed
+  terminal truth never consumes pending input. This does not add a terminal
+  resume contract for every backend: Qwen and Kimi still return explicit
+  unsupported messages after terminal state, while hidden interactive Claude
+  and every other backend without common MCP or live-followup support
+  retain the existing active `busy` behavior.
 - The architecture capability invariant applies to every daemon backend and
   backend family LingTai exposes. It is not primarily a per-task input contract:
   the durable requirement is that any daemon architecture preserves the same
@@ -448,6 +454,27 @@ remains authoritative for closed-schema validation.
 
 ### 3. daemon_common provides cooperative checkpoints and terminal completion
 
+**Scope:** this invariant applies to every `_cli_backend_loads_common_mcp`
+backend (`codex`, `opencode`, `qwen-code`, `kimicode`) and the native `lingtai`
+backend. It deliberately does **not** apply to `claude-p`/`claude-code`: the
+Claude Agent SDK backend imposes no mandatory finish/checkpoint tool on
+Claude. There, the model's ordinary reply plus the per-turn SDK
+`ResultMessage` (`is_error`, `terminal_reason`, `result`) are the completion
+signal. A live `daemon(ask)` uses atomic `run_dir.enqueue_live_followup`
+directly (no control-spool hop); the continuing `client.query()` loop sends
+queued messages at the next turn boundary without a checkpoint tool call —
+this slice carries no interrupt semantics. Every human-origin turn's complete
+result is durably saved (`<run>/turns/turn-<N>.txt` plus a bounded
+`daemon_turn` event) and, when the run continues past that turn, published
+as one compact non-terminal `kind="daemon_turn_result"` notice on the
+existing `daemon` channel (same store/idempotency machinery as
+`daemon_checkpoint`/`daemon_followup`; never classified terminal by
+`_is_terminal_daemon_event`) *before* the next query is sent — so a turn's
+conclusion is recoverable even if the run's eventual terminal receipt is
+delayed, lost to a later failure, or never reached. This authorized decision
+retires the prior checkpoint-based design for this one backend; it does not
+change any other backend's checkpoint/completion contract below.
+
 MCP-capable daemon backends receive the built-in `daemon_common` MCP before any
 parent registrations. Its strict LTP-v2 `checkpoint` tool accepts
 `action="checkpoint"`, an `input` object with required bounded `state` and
@@ -519,27 +546,6 @@ Run artifacts must make the daemon contract reviewable without leaking secrets.
 `DaemonRunDir` owns the run folder and persistent artifact set: `daemon.json`,
 `.prompt`, `.heartbeat`, `history/chat_history.jsonl`, `logs/events.jsonl`,
 `logs/token_ledger.jsonl`, `result.txt`, and `artifacts.json`.
-`DaemonRunDir.record_turn_result` additionally persists one connection-owned
-turn's complete text under `turns/turn-<N>.txt`, with a bounded preview on the
-matching `daemon_turn` event; this primitive and the atomic
-`drain_followups_or_finalize` queue-or-finalize finisher exist in the current
-codebase with no production caller yet — their connection-owned consumer
-lands in a later change. `enqueue_live_followup` is further along: the
-detached supervisor's control watcher already calls it, through the
-unchanged-contract `enqueue_followup` wrapper, to durably queue an incoming
-`ask` message against a live run. No backend yet drains or delivers that
-queued message to a running SDK session, so this is a staged intermediate —
-not a finished ask-delivery path — and the SDK production cutover that
-consumes it lands in a later change.
-`src/lingtai/tools/daemon/claude_agent_sdk_runtime.py` carries that future
-connection's option-building, MCP-translation, usage-normalization, CLI
-resolution, and single-turn message-draining helpers as a directly-tested
-foundation module; it has no caller from any backend dispatcher or
-backend-selection table yet, so it changes no observable daemon behavior. The
-live `claude-p`/`claude-code` backend remains the existing
-`claude --print --output-format stream-json` subprocess parser
-(`_run_claude_code_emanation`) until the connected run loop, backend-argv
-preflight, and old-parser retirement land together in a later change.
 `daemon.json.call_parameters` and `.prompt` may contain task surface,
 selected-skill catalog/path context, and redacted MCP registrations. Secret MCP
 values belong only in native run-scoped launch plumbing where a backend needs
@@ -842,7 +848,7 @@ Current source-backed status:
 | Backend / architecture | Selected skills catalog/path | Parent MCP native mounting | `daemon_common` native checkpoint + completion |
 |---|---|---|---|
 | `lingtai` | Yes, in the daemon prompt/context. | Yes, task-scoped stdio and HTTP MCP clients. | Yes; live checkpoint is available and `finish(done)` is enforced. |
-| `claude-p` / `claude-code` | Yes. | Yes for stdio via per-run `--mcp-config`; HTTP omitted. | Yes; live checkpoint and finish use the same per-run config. |
+| `claude-p` / `claude-code` | Yes. | Yes for stdio via `ClaudeAgentOptions.mcp_servers` (built in-process from the capsule, no native config file); HTTP omitted. | No — this backend mounts no `daemon_common`; see §3. |
 | `codex` | Yes. | Yes for stdio via `-c mcp_servers.*`; HTTP omitted. | Yes; live checkpoint and finish use the same config override path. |
 | `opencode` | Yes. | Yes for stdio via `OPENCODE_CONFIG_CONTENT`; HTTP omitted. | Yes; live checkpoint and finish use the same per-process config content. |
 | `qwen-code` / `qwen` | Yes. | Yes for stdio via per-run Qwen settings; HTTP omitted. | Yes; live checkpoint and finish use the same settings file. |
@@ -854,9 +860,11 @@ Current source-backed status:
 
 The native stdio/helper set is source-owned by `_codex_mcp_argv`,
 `_opencode_mcp_env`, `_write_qwen_mcp_settings`, `_write_kimicode_mcp_config`,
-`_write_claude_mcp_config`, and `_cli_backend_loads_common_mcp`. If a backend is
-not in that loaded set, this contract treats it as prompt-catalog-only until
-code and tests prove otherwise.
+`claude_agent_sdk_runtime._mcp_servers_from_registrations` (claude-p/claude-code,
+in-process — no native config file), and `_cli_backend_loads_common_mcp`
+(daemon_common mounting; claude-p/claude-code deliberately excluded — see §3).
+If a backend is not in that loaded set, this contract treats it as
+prompt-catalog-only until code and tests prove otherwise.
 
 ## State & Storage
 
@@ -1130,8 +1138,8 @@ Re-check this contract when touching:
 - `src/lingtai/mcp_servers/daemon_common/` checkpoint/finish schemas,
   RunDir identity/wake behavior, payload file, or server behavior.
 - `tests/test_daemon*.py` coverage that proves backend options, CLI native MCP,
-  daemon_common completion, OpenCode-family routing, Qwen settings, Claude print
-  MCP config, run-dir artifacts, prompt redaction, selected-skill catalog
+  daemon_common completion, OpenCode-family routing, Qwen settings, Claude SDK
+  MCP mounting, run-dir artifacts, prompt redaction, selected-skill catalog
   preservation, prompt mapping, or compact context reset behavior.
 - `retired-test:test_codex_standalone_compaction` for per-task
   `context_token_limit` wiring/pre-flight validation.

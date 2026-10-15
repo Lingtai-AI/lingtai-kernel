@@ -543,17 +543,12 @@ class DetachedDaemonExecutionHost:
                 pass
 
         backend = self._manifest.get("backend")
-        if backend in {"claude-p", "claude-code"} and "--mcp-config" in argv:
-            idx = argv.index("--mcp-config")
-            if idx + 1 < len(argv):
-                servers = {
-                    r["name"]: {"command": r["command"], "args": list(r.get("args") or []), **(
-                        {"env": dict(r["env"])} if r.get("env") else {}
-                    )}
-                    for r in regs if r.get("transport", "stdio") == "stdio" and r.get("command")
-                }
-                write(Path(argv[idx + 1]), {"mcpServers": servers})
-        elif backend == "qwen-code" and "__lingtai_qwen_system_settings_path" in argv:
+        # claude-p/claude-code deliberately absent: the Claude Agent SDK
+        # runner reads `self._capsule["mcp"]` directly and builds
+        # `ClaudeAgentOptions.mcp_servers` in-process (see
+        # claude_agent_sdk_runtime.py) — no native config file is written for
+        # it, so there is nothing to rehydrate here.
+        if backend == "qwen-code" and "__lingtai_qwen_system_settings_path" in argv:
             idx = argv.index("__lingtai_qwen_system_settings_path")
             if idx + 1 < len(argv):
                 servers = {
