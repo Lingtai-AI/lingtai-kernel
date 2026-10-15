@@ -3,8 +3,8 @@ name: daemon-cli-backends
 description: >
   Nested daemon-manual reference for backend choice, native versus prompt-only
   MCP, CLI options, list/ask behavior, and per-backend live-help routes.
-version: 1.19.0
-last_changed_at: 2026-10-14T00:00:00Z
+version: 1.20.1
+last_changed_at: 2026-10-15T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/CONTRACT.md
@@ -40,7 +40,7 @@ text.
 | Backend (aliases) | Initial runner / native MCP | `ask` / completion |
 |---|---|---|
 | `lingtai` | in-process; task-scoped stdio + HTTP | live-only ask, no terminal resume; `finish(done)` enforced |
-| `claude-p` (`claude-code`) | official `claude_agent_sdk.ClaudeSDKClient` (stdio) | live ask at the next turn boundary; terminal resume; no checkpoint/finish — ordinary reply + per-turn result is completion |
+| `claude-p` (`claude-code`) | official `claude_agent_sdk.ClaudeSDKClient` (stdio) | live ask at next turn boundary or via interrupt; terminal resume; no checkpoint/finish — ordinary reply + per-turn result is completion |
 | `codex` | `codex exec --json` with `mcp_servers.*` overrides (stdio) | async resume; checkpoint + `finish(done)` |
 | `opencode` | `opencode run --format json`, `OPENCODE_CONFIG_CONTENT` (stdio) | async resume; checkpoint + `finish(done)` |
 | `qwen-code` (`qwen`) | `qwen --yolo -p`, per-run settings (stdio) | active checkpoint queue; terminal ask unsupported; `finish(done)` |
@@ -81,7 +81,7 @@ It is not a maintained vendor flag catalog.
   description: OpenCode live-help route for model, variant, agent, and harness flags.
 - name: daemon-backend-claude-p
   location: reference/backends/claude-p/SKILL.md
-  description: Claude print-mode route for model, fallback, harness, resume, and auth hygiene.
+  description: Claude Agent SDK route for model, fallback, harness, resume, and auth hygiene.
 - name: daemon-backend-mimocode
   location: reference/backends/mimocode/SKILL.md
   description: MiMo Code route for CLI options, reserved session flags, and JSONL status.
@@ -140,8 +140,10 @@ is the only nested object: it maps valid environment names to string values and
 emits no argv. It is merged last; never put secrets in prompts or logs.
 
 Options are persisted as `backend_options`/`backend_argv`, separately from
-`backend_harness_argv`. They are not re-passed by `ask`; do not assume every
-vendor flag or environment overlay persists across a resumed process.
+`backend_harness_argv`. Generally they are not re-passed by `ask`; do not
+assume vendor flags or environment overlays persist. Claude SDK terminal
+resume is the exception: it re-applies the validated model/effort/native-tool
+policy from the original task.
 `lingtai` ignores them. CLI cwd is the granted parent workdir, not the run
 artifact directory; an artifact folder is not workspace isolation.
 Never override a backend's output, MCP, prompt, approval, or session flags: the

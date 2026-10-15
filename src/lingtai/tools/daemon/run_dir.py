@@ -672,16 +672,22 @@ class DaemonRunDir:
         """Persist a follow-up before acknowledging its control request."""
         return self.enqueue_live_followup(message) is not None
 
-    def enqueue_live_followup(self, message: str) -> str | None:
+    def enqueue_live_followup(self, message: str, *, interrupt: bool = False) -> str | None:
         """Queue the message for delivery at the next safe turn boundary.
 
-        Returns a delivery marker string once the message is durably queued,
-        or ``None`` when *message* is empty/non-string or the run is not
-        currently running/active. This is the same durable
-        ``pending_followups`` queue ``drain_followups`` and
-        ``drain_followups_or_finalize`` consume. It carries no interrupt
-        semantics in this slice — every accepted message waits for the next
-        turn boundary.
+        Returns a delivery marker string once the message is durably queued
+        (``'turn_boundary'``, or ``'interrupt'`` when *interrupt* is true and
+        the connection's current query window is open — see
+        ``begin_live_turn``/``end_live_turn``), or ``None`` when *message* is
+        empty/non-string or the run is not currently running/active. Message
+        acceptance and the optional current-turn interrupt request are one
+        atomic transaction. This is the same durable ``pending_followups``
+        queue ``drain_followups`` and ``drain_followups_or_finalize`` consume.
+        ``'interrupt'`` only means the request was durably recorded —
+        ``consume_live_interrupt_request`` (read by the per-turn poller) and
+        the resulting ``daemon_interrupt_delivered``/
+        ``daemon_interrupt_delivery_failed`` event are what prove
+        ``client.interrupt()`` actually ran.
         """
         if not isinstance(message, str) or not message:
             return None
@@ -695,8 +701,29 @@ class DaemonRunDir:
                 self._state["pending_followups"] = queue
             queue.append(message)
             delivery = "turn_boundary"
+            if interrupt and self._state.get("live_turn_active"):
+                self._state["interrupt_requested"] = True
+                delivery = "interrupt"
             self._persist_daemon_state()
             return delivery
+
+    def begin_live_turn(self) -> None:
+        """Open the current query's interrupt boundary before sending it."""
+        with self._state_transaction():
+            if self._state.get("state") not in {"running", "active"}:
+                return
+            self._state["live_turn_active"] = True
+            self._state["interrupt_requested"] = False
+            self._persist_daemon_state()
+
+    def end_live_turn(self) -> None:
+        """Close that boundary before a successor query can be sent."""
+        with self._state_transaction():
+            if not self._state.get("live_turn_active") and not self._state.get("interrupt_requested"):
+                return
+            self._state["live_turn_active"] = False
+            self._state["interrupt_requested"] = False
+            self._persist_daemon_state()
 
     def drain_followups(self) -> str | None:
         """Atomically consume queued follow-ups at a safe text-only boundary."""
@@ -766,6 +793,21 @@ class DaemonRunDir:
         if finalized:
             self.write_manifest()
         return None
+
+    def consume_live_interrupt_request(self) -> bool:
+        """Atomically read-and-clear a pending live-interrupt request.
+
+        Called only by the per-turn interrupt poller. Returns ``True`` at
+        most once per accepted request — a later call (including one made
+        after ``end_live_turn``/``begin_live_turn`` closed and reopened the
+        window for a successor query) observes a clean ``False``.
+        """
+        with self._state_transaction():
+            requested = bool(self._state.get("interrupt_requested"))
+            if requested:
+                self._state["interrupt_requested"] = False
+                self._persist_daemon_state()
+            return requested
 
     _TURN_PREVIEW_MAX = 500
 

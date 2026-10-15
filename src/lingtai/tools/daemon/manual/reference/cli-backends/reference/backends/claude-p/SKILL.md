@@ -9,7 +9,7 @@ description: >
   mechanism. Also owns Claude Code's operational core: the `env -u` auth
   hygiene wrapper, weekly-limit smoke test, stale-token diagnosis, and the
   budget/timeout/SDK background caveats. It is not a flag catalog.
-version: 0.6.0
+version: 0.7.0
 last_changed_at: 2026-10-14T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
@@ -197,9 +197,10 @@ Only the table's closed allowlist is accepted. `tools` preserves omitted versus
   The ordinary reply and per-turn SDK result (success/error and why) signal
   completion; neither `finish(status="done")` nor `checkpoint` is required.
 - Ask: a **live** message is atomically queued for the owned connection's next
-  turn boundary (`delivery: "turn_boundary"`); this slice carries no interrupt
-  semantics — a queued message always waits for the current turn to finish
-  naturally, and no checkpoint tool is involved.
+  turn boundary (`delivery: "turn_boundary"`). `interrupt: true` additionally
+  requests only an open current query's interrupt (`delivery: "interrupt"`);
+  `daemon_interrupt_delivered`, not acceptance, proves the SDK call ran.
+  Between turns input stays queued, cannot interrupt a successor, and needs no checkpoint.
   A **terminal** ask opens a fresh SDK connection with
   `ClaudeAgentOptions(resume=<claude_session_id>, ...)`, re-applying the same
   validated `backend_options`, including model, effort, whitelist, and denylist.

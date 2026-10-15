@@ -745,6 +745,91 @@ def _resolve_cli_path_guard(monkeypatch):
     monkeypatch.setattr(runtime, "_resolve_cli_path", _guarded)
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='fake SDK CLI uses POSIX stdin select')
+def test_claude_sdk_interrupt_actually_interrupts_a_blocked_turn(
+    tmp_path, monkeypatch, _resolve_cli_path_guard,
+):
+    """A real, concurrent ``client.interrupt()`` fires while a turn is blocked.
+
+    Deterministic, event-controlled (not timing-based beyond one bounded
+    wait for the background thread to reach the fake CLI's deliberate
+    delay): the fake CLI holds its reply to the first message for up to 2s,
+    giving this test a wide, reliable window to accept a second message with
+    ``interrupt=True`` while the SDK connection is genuinely blocked inside
+    `receive_messages()`. Proves the old-Result-drain contract too: the
+    aborted first turn's Result is consumed before the second query's answer
+    is read, and the run's final text is the SECOND message's reply, not
+    stale/empty text from the interrupted turn.
+    """
+    import threading
+    from tests._daemon_helpers import make_daemon_agent
+
+    monkeypatch.setenv("PATH", str(Path(__file__).parent) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("FAKE_CLAUDE_SDK_DELAY_MS", "2000")
+    calls_path = tmp_path / "fake-claude-sdk-interrupt-calls.jsonl"
+    monkeypatch.setenv("FAKE_CLAUDE_SDK_CALLS", str(calls_path))
+
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    run_dir = _make_run_dir(tmp_path, task="count slowly")
+
+    cancel_event = threading.Event()
+    result_box: dict = {}
+
+    def _run():
+        result_box["text"] = manager._run_claude_agent_sdk_emanation(
+            "em-test", run_dir, "count slowly", cancel_event, threading.Event(),
+            backend_argv=[], backend_env={},
+        )
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    try:
+        # Event-controlled wait: poll for evidence the fake CLI actually
+        # received and logged the first `user` line (so the connection is
+        # live and the fake CLI has entered its deliberate 2s hold) rather
+        # than assuming a fixed startup delay.
+        deadline = time.monotonic() + 5
+        first_call_seen = False
+        while time.monotonic() < deadline:
+            if calls_path.exists() and '"type": "user"' in calls_path.read_text():
+                first_call_seen = True
+                break
+            time.sleep(0.05)
+        assert first_call_seen, "fake CLI never logged the first user message"
+        assert run_dir.enqueue_live_followup('second message', interrupt=True) == 'interrupt'
+
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "runner did not finish after interrupt + followup"
+    finally:
+        cancel_event.set()
+        thread.join(timeout=5)
+
+    calls = [json.loads(line) for line in calls_path.read_text().splitlines() if line.strip()]
+    user_calls = [c for c in calls if c.get("type") == "user"]
+    assert len(user_calls) == 2
+    assert user_calls[0]["message"]["content"] == "count slowly"
+    assert user_calls[1]["message"]["content"] == "second message"
+
+    state = run_dir.state_snapshot()
+    assert state["state"] == "done"
+    assert result_box["text"] == "fake reply 2 to: second message"
+    assert state["result_preview"] == "fake reply 2 to: second message"
+    # The interrupted first turn was still durably saved (not swallowed).
+    assert (run_dir.path / "turns" / "turn-1.txt").is_file()
+    turn_events = [
+        json.loads(l) for l in run_dir.events_path.read_text().splitlines()
+        if l.strip() and json.loads(l).get("event") == "daemon_turn"
+    ]
+    assert len(turn_events) == 2
+    assert turn_events[0]["turn"] == 1
+    assert turn_events[0]["is_error"] is True
+    assert turn_events[1]["turn"] == 2
+    assert turn_events[1]["is_error"] is False
+    # The interrupted turn's own interrupt flag was consumed exactly once.
+    assert run_dir.consume_live_interrupt_request() is False
+
+
 @pytest.mark.skipif(os.name != 'posix', reason='fake SDK CLI is a POSIX launcher')
 def test_claude_sdk_stream_eof_without_result_marks_failed_not_done(
     tmp_path, monkeypatch, _resolve_cli_path_guard,
@@ -1281,6 +1366,57 @@ def test_claude_sdk_result_save_precedes_notice_or_terminal(tmp_path, monkeypatc
             assert failures[0]['turn'] == 1 and failures[0]['retryable'] is True
     assert secret not in run_dir.events_path.read_text()
     assert secret not in run_dir.daemon_json_path.read_text()
+
+
+def test_claude_sdk_boundary_interrupt_cannot_hit_successor(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import claude_agent_sdk
+    from lingtai.tools.daemon import claude_agent_sdk_runtime as runtime
+
+    run_dir = _make_run_dir(tmp_path, task='first')
+    assert run_dir.enqueue_followup('successor')
+    calls, interrupts = [], []
+    class Client:
+        def __init__(self, **kw):
+            pass
+        async def connect(self):
+            pass
+        async def disconnect(self):
+            pass
+        async def query(self, text):
+            calls.append(text)
+        async def interrupt(self):
+            interrupts.append(len(calls))
+    async def drain(client, rd, pending):
+        if len(calls) == 2:
+            await asyncio.sleep(0.6)
+        return SimpleNamespace(result=calls[-1], session_id='same-session',
+                               usage=None, is_error=False, terminal_reason=None)
+    def publish(manager, rd, **kw):
+        if kw['turn'] == 1:
+            assert (rd.path / 'turns/turn-1.txt').read_text() == 'first'
+            assert rd.enqueue_live_followup('late correction', interrupt=True) == 'turn_boundary'
+    monkeypatch.setattr(claude_agent_sdk, 'ClaudeSDKClient', Client)
+    monkeypatch.setattr(runtime, '_resolve_cli_path', lambda: '/unused/claude')
+    monkeypatch.setattr(runtime, '_drain_turn', drain)
+    monkeypatch.setattr(runtime, '_publish_turn_notification', publish)
+    asyncio.run(runtime._run_async(
+        SimpleNamespace(_workdir=SimpleNamespace(path=tmp_path)), run_dir, 'first',
+        threading.Event(), threading.Event(), {}, {}, {},
+    ))
+    assert calls == ['first', 'successor', 'late correction']
+    assert interrupts == []
+    assert run_dir.state_snapshot()['state'] == 'done'
+
+
+def test_claude_sdk_terminal_drain_preserves_cancelled_input(tmp_path):
+    run_dir = _make_run_dir(tmp_path, task='first')
+    assert run_dir.enqueue_followup('accepted before cancellation')
+    run_dir.mark_cancelled()
+    assert run_dir.drain_followups_or_finalize(status='done', text='late result') is None
+    assert run_dir.state_snapshot()['state'] == 'cancelled'
+    assert run_dir.state_snapshot()['pending_followups'] == ['accepted before cancellation']
 
 
 def test_detached_lingtai_surface_keeps_one_local_finish_without_external_common(

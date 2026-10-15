@@ -17,13 +17,14 @@ Sequential, non-overlapping ``receive_messages()`` readers each drain one
 query turn on the same connection. A human-origin ``ResultMessage``
 (``origin is None or origin["kind"] == "human"``) closes the pending query;
 an injected background-notification result is recorded, never matched as
-that answer. Live ``ask`` acceptance uses atomic ``enqueue_live_followup``,
-which durably queues the message for delivery at the next safe turn
-boundary; ``drain_followups_or_finalize`` orders that queue drain with
-terminal commit so a racing ``ask`` can never be stranded after a terminal
-write. Queued messages reach ``client.query()`` only at the next turn
-boundary — this slice carries no interrupt semantics, so an accepted ask
-always waits for the current turn to finish naturally.
+that answer. Live ``ask`` acceptance uses atomic ``enqueue_live_followup``;
+``drain_followups_or_finalize`` orders queue drain with terminal commit.
+Queued messages reach ``client.query()`` at turn boundaries. An optional
+interrupt request targets only the query window bounded by ``begin_live_turn``
+and ``end_live_turn``. The per-turn poller calls ``client.interrupt()``;
+acceptance is not immediate delivery, and ``daemon_interrupt_delivered``
+proves the call ran. Between-turn asks stay queued, and poller teardown
+completes before any successor query.
 
 No ``daemon_common`` MCP is mounted for this backend: there is no mandatory
 ``finish``/``checkpoint`` tool. The model's ordinary reply ends the turn; the
@@ -366,6 +367,63 @@ async def _drain_turn(client, run_dir: "DaemonRunDir", pending_tools: dict[str, 
     return None
 
 
+async def _poll_live_interrupt(client, run_dir: "DaemonRunDir", stop: "asyncio.Event") -> None:
+    """Poll accepted current-query interrupt requests without competing with
+    the turn's `_drain_turn` reader. Runs only during one turn; teardown is
+    awaited before any successor query. An ask accepted between turns stays
+    queued and cannot target a successor; acceptance never guarantees that
+    ``client.interrupt()`` will run immediately.
+
+    ``daemon(ask, interrupt=true)``'s own response can only ever report that
+    an interrupt was *requested* — the poller runs concurrently, up to 0.5s
+    later, in a different call entirely. This records the one observable
+    event that distinguishes an actual delivered ``client.interrupt()`` call
+    (``daemon_interrupt_delivered``) from a request that was consumed but
+    failed to send (``daemon_interrupt_delivery_failed``), using the
+    existing bounded event log rather than a new control protocol.
+    """
+    while not stop.is_set():
+        if run_dir.consume_live_interrupt_request():
+            try:
+                await client.interrupt()
+            except Exception as exc:
+                try:
+                    run_dir.append_event(
+                        "daemon_interrupt_delivery_failed",
+                        error_type=type(exc).__name__,
+                    )
+                except Exception:
+                    pass
+                return
+            try:
+                run_dir.append_event("daemon_interrupt_delivered")
+            except Exception:
+                pass
+            return
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
+
+
+async def _drain_turn_with_interrupt(client, run_dir: "DaemonRunDir", pending_tools: dict) -> Any:
+    """Run `_drain_turn` with a concurrent interrupt poller for its duration."""
+    stop = asyncio.Event()
+    poller = asyncio.create_task(_poll_live_interrupt(client, run_dir, stop))
+    try:
+        return await _drain_turn(client, run_dir, pending_tools)
+    finally:
+        stop.set()
+        poller.cancel()
+        try:
+            run_dir.end_live_turn()
+        finally:
+            try:
+                await poller
+            except (asyncio.CancelledError, Exception):
+                pass
+
+
 def _publish_turn_notification(
     manager, run_dir: "DaemonRunDir", *, turn: int, text: str,
     is_error: bool, turn_path: str,
@@ -474,6 +532,7 @@ async def _run_async(
     final_text = ""
     turn_seq = 0
     try:
+        run_dir.begin_live_turn()
         await client.query(task)
         pending_tools: dict[str, str] = {}
         while True:
@@ -485,7 +544,7 @@ async def _run_async(
                 return mark_cancelled_or_timeout(run_dir, timeout_event)
 
             try:
-                result = await _drain_turn(client, run_dir, pending_tools)
+                result = await _drain_turn_with_interrupt(client, run_dir, pending_tools)
             except ResultError as exc:
                 turn_exc = ClaudeTurnError(str(exc), getattr(exc, "terminal_reason", None))
                 run_dir.mark_failed(turn_exc)
@@ -590,13 +649,17 @@ async def _run_async(
                 manager, run_dir, turn=turn_seq, text=final_text,
                 is_error=bool(result.is_error), turn_path=turn_path,
             )
+            run_dir.begin_live_turn()
             await client.query(followup)
             continue
     finally:
         try:
-            await client.disconnect()
-        except Exception:
-            pass
+            run_dir.end_live_turn()
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
 
 
 def run_claude_agent_sdk_emanation(
@@ -749,7 +812,7 @@ async def _resume_async(
     try:
         await client.query(message)
         pending_tools: dict[str, str] = {}
-        result = await _drain_turn(client, run_dir, pending_tools)
+        result = await _drain_turn_with_interrupt(client, run_dir, pending_tools)
         if result is None:
             raise ClaudeTurnError(
                 "claude SDK resume stream ended without a result", None

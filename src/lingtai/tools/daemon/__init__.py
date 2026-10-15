@@ -600,8 +600,8 @@ def _parent_host_tool_floor() -> frozenset[str]:
 # ``CLAUDE_CODE_OAUTH_TOKEN`` can also beat a refreshed
 # ``~/.claude/.credentials.json`` and surface as a false weekly-limit error
 # (GH Lingtai-AI/lingtai#189). Strip these for Claude Code subprocesses
-# only: print-mode Claude (claude-p/claude-code) and interactive Claude
-# (claude/claude-interactive). Other backends (codex, lingtai, opencode,
+# only: the Claude Agent SDK backend (claude-p/claude-code) and interactive
+# Claude (claude/claude-interactive). Other backends (codex, lingtai, opencode,
 # mimocode, qwen-code, oh-my-pi, cursor, kimicode) are unaffected.
 _CLAUDE_CODE_STRIP_ENV = (
     "ANTHROPIC_API_KEY",
@@ -1102,10 +1102,12 @@ class _BackendSpec:
     ask_unsupported_msg: str | None
     reserved_flags: frozenset[str]
     # True only for the Claude Agent SDK backend (claude-p/claude-code): a
-    # live run accepts an ``ask`` the same way the lingtai backend does
-    # (queued through the control spool into ``enqueue_followup``, drained at
-    # the next turn boundary) instead of the checkpoint-queue or busy
-    # fallback every other CLI backend uses. See `_handle_ask_detached`.
+    # live run accepts an ``ask`` through a direct ``enqueue_live_followup``
+    # transaction — no control-spool hop — delivered at the next turn
+    # boundary (or, with ``interrupt=True`` and an open current-query
+    # window, via the per-turn interrupt poller) instead of the
+    # checkpoint-queue or busy fallback every other CLI backend uses. See
+    # `_handle_ask_detached`.
     live_followup_capable: bool = False
 
 
@@ -1311,8 +1313,12 @@ def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
     daemon backends own their execution mode and must not let callers override
     it (doing so would silently break daemon progress/result extraction):
 
-      * Claude print-mode owns ``--print`` / ``--output-format stream-json``;
-        interactive mode also owns ``--settings`` hooks + managed system prompt.
+      * Interactive Claude (``claude``/``claude-interactive``) owns ``--print``
+        / ``--output-format stream-json`` / ``--settings`` hooks + managed
+        system prompt. claude-p/claude-code has no reserved-flags denylist
+        here — its own closed *allowlist* translator
+        (``claude_sdk_options_from_argv``) is the tighter gate; see
+        `_BackendSpec.reserved_flags` for claude-p/claude-code.
       * OpenCode-family (``opencode``, ``mimocode``) own ``--format`` (JSON);
         ``mimocode`` additionally reserves its session selectors
         (``--session``/``-s``, ``--continue``/``-c``, ``--fork``) so a caller
@@ -1948,7 +1954,10 @@ class DaemonManager:
                 limit=args.get("last"),
             )
         elif action == "ask":
-            return self._handle_ask(args.get("id", ""), args.get("message", ""))
+            return self._handle_ask(
+                args.get("id", ""), args.get("message", ""),
+                interrupt=bool(args.get("interrupt")),
+            )
         elif action == "check":
             return self._handle_check(
                 args.get("id", ""),
@@ -4931,8 +4940,8 @@ class DaemonManager:
 
         # Clear completed emanations and stale pools.
         # Keep completed CLI emanations (backend != lingtai) so that `ask`
-        # can still route to `_handle_ask_cli` / `_handle_ask_codex` /
-        # `_handle_ask_opencode` / `_handle_ask_cursor`
+        # can still route to `_handle_ask_claude_agent_sdk_resume` /
+        # `_handle_ask_codex` / `_handle_ask_opencode` / `_handle_ask_cursor`
         # and `list` can show them. Detached entries (no in-process "future")
         # are always kept in the registry here — their own supervisor process
         # owns the run's actual lifetime, and `check`/`list` fall back to
@@ -5961,7 +5970,7 @@ class DaemonManager:
             "durable_facade": True,
         }
 
-    def _handle_ask(self, em_id: str, message: str) -> dict:
+    def _handle_ask(self, em_id: str, message: str, *, interrupt: bool = False) -> dict:
         entry = self._emanations.get(em_id)
         if not entry:
             entry = self._durable_detached_entry(em_id)
@@ -5988,7 +5997,7 @@ class DaemonManager:
         # constructs a non-detached entry directly, exercising
         # `_handle_ask_codex`/etc. in isolation.
         if entry.get("detached"):
-            return self._handle_ask_detached(em_id, entry, message)
+            return self._handle_ask_detached(em_id, entry, message, interrupt=interrupt)
 
         backend = entry.get("backend")
         backend_spec = _backend_spec(backend)
@@ -6009,7 +6018,9 @@ class DaemonManager:
         self._log("daemon_ask", em_id=em_id, message_length=len(message))
         return {"status": "sent", "id": em_id}
 
-    def _handle_ask_detached(self, em_id: str, entry: dict, message: str) -> dict:
+    def _handle_ask_detached(
+        self, em_id: str, entry: dict, message: str, *, interrupt: bool = False,
+    ) -> dict:
         """Follow-up for a detached lingtai run: submit via the control spool.
 
         The facade has no in-process ``followup_buffer``/session to write
@@ -6045,16 +6056,16 @@ class DaemonManager:
             # drain a queued message, and the control-spool's supervisor
             # watcher polls on a ~0.5s cadence — long enough for the run to
             # finalize in between a `control.submit_request` write and the
-            # watcher's `enqueue_followup` call, silently dropping an
-            # accepted ask with no receipt. `enqueue_followup` is itself a
-            # disk-locked, cross-process-safe transaction (the same one
+            # watcher's drain call, silently dropping an accepted ask with no
+            # receipt. `enqueue_live_followup` is itself a disk-locked,
+            # cross-process-safe transaction (the same one
             # `enqueue_checkpoint_message` already uses for other CLI
             # backends), so this calls it directly from this process instead
             # of going through the control spool at all — eliminating that
             # window rather than accepting it. If the run went terminal in
             # the instant between the state check above and this call,
-            # `enqueue_followup` returns None and this falls through to the
-            # terminal resume-generation path below, so the ask is never
+            # `enqueue_live_followup` returns None and this falls through to
+            # the terminal resume-generation path below, so the ask is never
             # silently lost — the caller gets an honest resume/terminal
             # outcome either way.
             if state.get("owner") not in {"supervisor", "manager"}:
@@ -6064,13 +6075,24 @@ class DaemonManager:
                 pid, state.get("supervisor_start_identity")
             ):
                 return {"status": "error", "message": "detached supervisor identity is not live"}
-            delivery = run_dir.enqueue_live_followup(message)
+            delivery = run_dir.enqueue_live_followup(message, interrupt=interrupt)
             if delivery is not None:
-                self._log("daemon_ask_detached", em_id=em_id, message_length=len(message))
+                self._log("daemon_ask_detached", em_id=em_id, message_length=len(message),
+                          interrupt=interrupt)
                 return {"status": "queued", "id": em_id, "delivery": delivery,
-                        "message": "queued; delivered to Claude at the next turn boundary"
-                                   f" — see daemon(action='check', id='{em_id}') for progress"}
-            # enqueue_followup saw a non-running/active state (the run
+                        "message": (
+                            # Honest acceptance-vs-delivery distinction: this
+                            # is a request the runner's poller observes on a
+                            # ~0.5s cadence, not proof `client.interrupt()`
+                            # has already run. A `daemon_interrupt_delivered`
+                            # event (see claude_agent_sdk_runtime.py) is the
+                            # actual observable evidence once it has.
+                            "queued; interrupt requested for the current turn; "
+                            "delivery is confirmed only by daemon_interrupt_delivered"
+                            if delivery == "interrupt" else
+                            "queued; delivered to Claude at the next turn boundary"
+                        ) + f" — see daemon(action='check', id='{em_id}') for progress"}
+            # enqueue_live_followup saw a non-running/active state (the run
             # finalized between the read above and this call) — refresh and
             # fall through to the ordinary terminal-resume path below.
             state = self._read_run_dir_state_from_disk(run_dir)
@@ -6290,10 +6312,10 @@ class DaemonManager:
 
         Only reached from the resume-owner's one-shot execution
         (``execution_host.DetachedDaemonExecutionHost.run_resume``) once the
-        run is already terminal — a *live* run's ``ask`` is queued through
-        the control spool instead (``_handle_ask_detached``'s
-        ``live_followup_capable`` branch), matching the lingtai backend's own
-        follow-up contract. See ``claude_agent_sdk_runtime.py``.
+        run is already terminal — a *live* run's ``ask`` instead uses a
+        direct ``enqueue_live_followup`` transaction with no control-spool
+        hop (``_handle_ask_detached``'s ``live_followup_capable`` branch).
+        See ``claude_agent_sdk_runtime.py``.
         """
         from .claude_agent_sdk_runtime import run_claude_agent_sdk_resume
         return run_claude_agent_sdk_resume(self, em_id, entry, message)
@@ -6301,10 +6323,10 @@ class DaemonManager:
     def _handle_ask_codex(self, em_id: str, entry: dict, message: str) -> dict:
         """Dispatch a Codex ``exec resume`` follow-up off the caller's turn.
 
-        Mirrors ``_handle_ask_cli``: spawn, register the proc, hand the
-        JSONL stream parse to ``self._ask_pool``, return immediately.
-        Concurrent-ask guard is the same — ``codex exec resume`` is
-        single-writer per session.
+        Same async-dispatch pattern as every resumable CLI ask handler:
+        spawn, register the proc, hand the JSONL stream parse to
+        ``self._ask_pool``, return immediately. Concurrent-ask guard is the
+        same — ``codex exec resume`` is single-writer per session.
         """
         run_dir = entry.get("run_dir")
         if run_dir is None:
@@ -6353,7 +6375,9 @@ class DaemonManager:
             return {"status": "error",
                     "message": f"Failed to start codex CLI: {e}"}
         # Ask follow-ups are not part of any batch (see claude-code ask).
-        # See _handle_ask_cli for the rationale on the narrowed except.
+        # Narrowed except: a spawn failure (FileNotFoundError/OSError) is
+        # reported synchronously above; only the later stream-parse failure
+        # is handled by the async worker below.
         try:
             run_dir.record_cli_output(
                 f"[ask dispatched] {message[:200]}", stream="stdout",
@@ -7546,7 +7570,7 @@ class DaemonManager:
     ) -> dict:
         """Dispatch an OpenCode-family session-resume follow-up off the caller's turn.
 
-        Mirrors ``_handle_ask_cli`` / ``_handle_ask_codex``: spawn the resume
+        Mirrors ``_handle_ask_codex``: spawn the resume
         subprocess (``opencode run --session <id> ...`` by default), hand the
         JSON-stream parse to ``self._ask_pool``, return immediately. The
         concurrent-ask guard refuses overlapping asks per-emanation because
