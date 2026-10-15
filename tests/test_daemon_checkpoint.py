@@ -254,9 +254,10 @@ async def test_active_cli_ask_is_delivered_once_at_checkpoint_without_terminal_m
         # claude-p/claude-code deliberately excluded: the Claude Agent SDK
         # backend mounts no daemon_common MCP and does not use the
         # checkpoint-queue mechanism this test covers. Its own live-ask
-        # delivery (control spool -> enqueue_followup -> SDK query() at the
-        # next turn boundary) is covered by
+        # delivery (direct enqueue_live_followup -> SDK query() at the next
+        # turn boundary, or a current-turn interrupt) is covered by
         # test_claude_sdk_live_ask_queues_via_turn_boundary_not_checkpoint
+        # and test_claude_sdk_live_ask_interrupt_flag_requests_immediate_interrupt
         # below.
         ("codex", True),
         ("opencode", True),
@@ -318,11 +319,11 @@ async def test_active_cli_ask_checkpoint_support_matches_mounted_common_mcp(
 async def test_claude_sdk_live_ask_queues_via_turn_boundary_not_checkpoint(
     tmp_path, backend,
 ):
-    """claude-p/claude-code route a live ask through enqueue_followup, not checkpoint.
+    """claude-p/claude-code route a live ask through enqueue_live_followup, not checkpoint.
 
     No daemon_common MCP is mounted for this backend, so there is no
     checkpoint-queue tool for the model to call. Delivery calls
-    ``run_dir.enqueue_followup`` directly (not the control spool a
+    ``run_dir.enqueue_live_followup`` directly (not the control spool a
     supervisor-process watcher polls on a ~0.5s cadence) so there is no
     window in which the run can finalize before the message is durably
     queued; the runner's reader loop calls ``client.query()`` at the next
@@ -357,10 +358,53 @@ async def test_claude_sdk_live_ask_queues_via_turn_boundary_not_checkpoint(
     # No checkpoint-queue mutation — this backend never calls
     # daemon_common.checkpoint because it is never mounted for it.
     assert _disk_state(run_dir).get("pending_checkpoint_messages", []) == []
-    # No control-spool hop either — enqueue_followup was called directly, so
-    # the message is already durably queued and immediately drainable.
+    # No control-spool hop either — enqueue_live_followup was called
+    # directly, so the message is already durably queued and immediately
+    # drainable.
     assert control.pending_requests(run_dir.path) == []
     assert run_dir.drain_followups() == "bounded correction"
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='uses POSIX supervisor identity')
+@pytest.mark.parametrize('at_boundary', [False, True])
+@pytest.mark.parametrize("backend", ["claude-p", "claude-code"])
+async def test_claude_sdk_live_ask_interrupt_flag_requests_immediate_interrupt(
+    tmp_path, backend, at_boundary,
+):
+    """``interrupt=true`` additionally sets the durable interrupt-request flag."""
+    from lingtai.adapters.posix.process_identity import process_identity
+
+    agent = make_daemon_agent(tmp_path, ["daemon"])
+    manager = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(
+        agent, handle=f"em-{backend}-int", backend=backend,
+        task=f"active {backend} task", tools=[],
+    )
+    pid = os.getpid()
+    run_dir.update_state(
+        backend=backend, owner="supervisor", state="active",
+        supervisor_pid=pid, supervisor_start_identity=process_identity(pid),
+    )
+    manager._emanations[run_dir.run_id] = {
+        "detached": True, "task": f"active {backend} task",
+        "start_time": time.time(), "timeout_s": 1200.0,
+        "run_dir": run_dir, "backend": backend,
+    }
+
+    if not at_boundary:
+        run_dir.begin_live_turn()
+    result = manager.handle({
+        "action": "ask", "id": run_dir.run_id,
+        "message": "stop and do this instead", "interrupt": True,
+    })
+    assert result["status"] == "queued"
+    assert result['delivery'] == ('turn_boundary' if at_boundary else 'interrupt')
+    assert run_dir.consume_live_interrupt_request() is (not at_boundary)
+    assert run_dir.drain_followups() == 'stop and do this instead'
+    run_dir.end_live_turn()
+    run_dir.begin_live_turn()
+    # Consuming is one-shot.
+    assert run_dir.consume_live_interrupt_request() is False
 
 
 async def test_checkpoint_rejects_wrong_identity_invalid_payload_and_terminal_run(

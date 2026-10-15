@@ -150,14 +150,18 @@ ownership -> §Process and Terminal Boundaries.
   OpenCode, Qwen, and Kimi) accept `ask` as a queued next-checkpoint message.
   `claude-p`/`claude-code` instead accepts a live `ask` through a direct
   `enqueue_live_followup` transaction — no control-spool hop or checkpoint
-  tool (see §3) — returning `{"status":"queued","delivery":"turn_boundary"}`;
-  the queued message is delivered at the next turn boundary. A terminal
-  commit and queue drain share the same lock; cancelled/timeout/failed
-  terminal truth never consumes pending input. This does not add a terminal
-  resume contract for every backend: Qwen and Kimi still return explicit
-  unsupported messages after terminal state, while hidden interactive Claude
-  and every other backend without common MCP or live-followup support
-  retain the existing active `busy` behavior.
+  tool (see §3) — returning
+  `{"status":"queued","delivery":"turn_boundary"}`. Message acceptance
+  and an optional current-turn interrupt request are atomic.
+  `"delivery":"interrupt"` acknowledges a request only while a query's
+  interrupt boundary is open; the delivered event, not that response, proves
+  the SDK call ran. An ask accepted between turns remains queued without
+  interrupting a successor. A terminal commit and queue drain share the same
+  lock; cancelled/timeout/failed terminal truth never consumes pending input.
+  This does not add a terminal resume contract for every backend: Qwen and
+  Kimi still return explicit unsupported messages after terminal state,
+  while hidden interactive Claude and every other backend without common MCP
+  or live-followup support retain the existing active `busy` behavior.
 - The architecture capability invariant applies to every daemon backend and
   backend family LingTai exposes. It is not primarily a per-task input contract:
   the durable requirement is that any daemon architecture preserves the same
@@ -192,7 +196,7 @@ exactly the branch that consumes it:
 |---|---|
 | `emanate` | `tasks[]` (each requires `task` + `tools`; optional per-task fields are unchanged and specified below), `backend`, `max_turns`, `timeout` |
 | `list` | `contains`, `status`, `include_done`, `last` |
-| `ask` | `id`, `message` |
+| `ask` | `id`, `message`, `interrupt` |
 | `check` | `id`, `last`, `truncate` |
 | `reclaim` | — (canonical strict-empty `input`) |
 | `settings` | — (canonical strict-empty `input`) |
@@ -377,7 +381,7 @@ replaces the parent's.
 |---|---|---|---|---|
 | `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `prompt` (LingTai only), `skills`/`mcp`/`preset`/`backend_options`/`context_token_limit`/`plugin`/`task_files` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; for large concurrent batches it strongly recommends `notification(action='delay')` on `daemon` to reduce wake frequency while preserving daemon truth; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — obsolete `system_prompt` migration, CLI `prompt`, bad limits, or tool-surface/preset failure |
 | `list` | — | `contains`, `status`, `include_done` (default true), `last` (default newest 1000; explicit positive values, including values above 1000, are accepted) | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
-| `ask` | `id`, `message` | — | `{status: "sent", id, output}` (resume-capable CLI ask returns immediately as `{status: "sent", id, async: true, ...}`); an active common-MCP CLI returns `{status: "queued", id, delivery: "checkpoint", message_id}` | `{status: "error", id, message}` — unknown/absent id or terminal backend resume unsupported; an active backend without common MCP remains `{status: "busy", ...}` |
+| `ask` | `id`, `message` | `interrupt` (claude-p/claude-code only; ignored elsewhere) | `{status: "sent", id, output}` (resume-capable CLI ask returns immediately as `{status: "sent", id, async: true, ...}`); an active common-MCP CLI returns `{status: "queued", id, delivery: "checkpoint", message_id}`; an active claude-p/claude-code run returns `{status: "queued", id, delivery: "turn_boundary"}` or `{status: "queued", id, delivery: "interrupt"}` | `{status: "error", id, message}` — unknown/absent id or terminal backend resume unsupported; an active backend without common MCP or live-followup support remains `{status: "busy", ...}` |
 | `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, latest_checkpoint, pending_checkpoint_messages, events: [...]}`; pending is a count, never message content | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
 | `reclaim` | — | — | `{status: "reclaimed", cancelled: <n>}` (or `{status: "shutdown", ...}` on lifecycle shutdown) | — |
 
@@ -462,8 +466,14 @@ Claude. There, the model's ordinary reply plus the per-turn SDK
 `ResultMessage` (`is_error`, `terminal_reason`, `result`) are the completion
 signal. A live `daemon(ask)` uses atomic `run_dir.enqueue_live_followup`
 directly (no control-spool hop); the continuing `client.query()` loop sends
-queued messages at the next turn boundary without a checkpoint tool call —
-this slice carries no interrupt semantics. Every human-origin turn's complete
+queued messages at turn boundaries without a checkpoint tool call.
+`ask.interrupt=true` additionally requests a targeted, single-session
+interrupt only while `begin_live_turn`/`end_live_turn` keep the current
+query's boundary open, never a manager-wide reclaim. Acceptance is not
+delivery: `daemon_interrupt_delivered` proves the SDK call ran. Between-turn
+asks stay queued and cannot interrupt a successor. Per-turn
+`receive_messages()` readers never overlap, and interrupt-poller teardown
+completes before a successor query. Every human-origin turn's complete
 result is durably saved (`<run>/turns/turn-<N>.txt` plus a bounded
 `daemon_turn` event) and, when the run continues past that turn, published
 as one compact non-terminal `kind="daemon_turn_result"` notice on the

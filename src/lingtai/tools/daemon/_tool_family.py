@@ -297,8 +297,19 @@ ASK_INPUT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "Follow-up message; delivery is backend-specific and may be asynchronous or checkpoint-queued.",
         },
+        "interrupt": {
+            "type": ["boolean", "null"],
+            "description": (
+                "Targeted semantic interrupt for a live run, honored only by "
+                "backends that support it (currently claude-p/claude-code): "
+                "stop the current turn via the backend's own session-level "
+                "interrupt instead of waiting for the next turn boundary, "
+                "then deliver this message. Null/false waits for the next "
+                "turn boundary; ignored by backends without this support."
+            ),
+        },
     },
-    "required": ["id", "message"],
+    "required": ["id", "message", "interrupt"],
     "additionalProperties": False,
 }
 
@@ -481,6 +492,7 @@ class DaemonFamilyDispatcher:
                 "action": "ask",
                 "id": action_input.get("id", ""),
                 "message": action_input.get("message", ""),
+                "interrupt": bool(action_input.get("interrupt")),
             }
         )
 
