@@ -44,6 +44,10 @@ def safe_exception_description(exc: BaseException) -> str:
     return f"<unrenderable {name}>"
 
 
+class ContextCapacityError(ValueError):
+    """Local request capacity refusal; provider I/O has not started."""
+
+
 class LLMReplayTerminalError(Exception):
     """Trusted wrapper when a provider exception cannot carry replay metadata.
 
@@ -583,6 +587,89 @@ class ChatSession(ABC):
         """Total context window in tokens for this session's model. 0 = unknown."""
         return 0
 
+    def configure_context_capacity(self, context_limit: int = 0) -> None:
+        """Set a caller's tighter capacity, in tokens (zero uses the model)."""
+        self._context_capacity_limit = max(0, int(context_limit or 0))
+
+    def _effective_output_tokens(self, window: int) -> int:
+        extra = getattr(self, "_extra_kwargs", {})
+        output = extra.get("max_output_tokens", extra.get("max_tokens"))
+        return int(output) if output is not None else (window * 15 + 99) // 100
+
+    def _request_input_budget(self) -> int | None:
+        limits = [n for n in (
+            self.context_window(), getattr(self, "_context_capacity_limit", 0),
+        ) if n > 0]
+        if not limits:
+            return None  # No invented model capacity for unknown routes.
+        window = min(limits)
+        # Reserve the explicit output allowance, or 15% when unspecified;
+        # another 5% (at least 1024 tokens) covers protocol framing. Estimates
+        # below receive a separate 10% tokenizer-error allowance.
+        output = self._effective_output_tokens(window)
+        if output > window:
+            detail = f"Local context capacity blocked: output allowance {output} exceeds window {window}"
+            raise mark_llm_replay_terminal(ContextCapacityError(detail), no_aed_retry=True, message=detail)
+        return max(0, window - max(0, output) - max(1024, (window + 19) // 20))
+
+    def _estimate_request_tokens(self, extra_input=None) -> int:
+        from ..token_counter import count_tokens
+        import json
+
+        tokens = self.interface.estimate_context_tokens()
+        if extra_input:
+            tokens += count_tokens(json.dumps(extra_input, default=str))
+        return (tokens * 110 + 99) // 100
+
+    def _on_capacity_history_rewritten(self) -> None:
+        """Adapters with remote replay state must invalidate it here."""
+
+    def _capacity_protected_entry_id(self):
+        from .interface import TextBlock, ToolResultBlock
+
+        entries = self.interface.entries
+        protected = entries[-1].id if entries else None
+        for entry in reversed(entries):
+            if entry.role == "user" and any(isinstance(b, TextBlock) for b in entry.content) and not any(
+                isinstance(b, ToolResultBlock) for b in entry.content
+            ):
+                protected = entry.id
+                break
+        return protected
+
+    def _ensure_request_capacity(self, extra_input=None, *, protected_entry_id=None) -> int:
+        """Fit post-hook canonical input before I/O; preserve the newest turn.
+
+        No compaction/model call is needed. A local refusal uses the existing
+        trusted terminal wrapper so neither transient recovery nor AED can
+        replay the blocked dispatch. Real staged tool results remain committed.
+        """
+        budget = self._request_input_budget()
+        if budget is None:
+            return 0
+        protected = protected_entry_id if protected_entry_id is not None else self._capacity_protected_entry_id()
+        previous = self._estimate_request_tokens(extra_input)
+        dropped_total = 0
+        # 64 rounds bounds work even on huge histories. Every round must both
+        # delete entries and strictly reduce the recomputed estimate.
+        for _ in range(64):
+            if previous <= budget:
+                return dropped_total
+            dropped = self._trim_context_one_round(protected_entry_id=protected)
+            if not dropped:
+                break
+            dropped_total += dropped
+            self._on_capacity_history_rewritten()
+            current = self._estimate_request_tokens(extra_input)
+            if current >= previous:
+                break
+            previous = current
+        else:
+            if previous <= budget:
+                return dropped_total
+        detail = f"Local context capacity blocked: estimated {previous} input tokens; budget {budget}"
+        raise mark_llm_replay_terminal(ContextCapacityError(detail), no_aed_retry=True, message=detail)
+
     # -----------------------------------------------------------------------
     # Context-overflow auto-recovery (shared across all providers)
     # -----------------------------------------------------------------------
@@ -609,7 +696,7 @@ class ChatSession(ABC):
         """
         return False
 
-    def _trim_context_one_round(self) -> int:
+    def _trim_context_one_round(self, *, protected_entry_id: int | None = None) -> int:
         """Drop ~``_OVERFLOW_DROP_FRACTION`` of non-system entries from the
         **front** of the canonical interface.
 
@@ -653,13 +740,32 @@ class ChatSession(ABC):
             # If the entry at the cut is a user[tool_results-only], advance
             # past it so we don't leave dangling results without their call.
             cur = entries[cut]
-            if cur.role == "user" and cur.content and all(
+            if cur.role == "user" and cur.content and any(
                 isinstance(b, ToolResultBlock) for b in cur.content
             ):
                 cut += 1
                 continue
             break
 
+        # Results may share rows with text or arrive in several rows. Expand
+        # across every matching id, not just the adjacent results-only case.
+        while cut < max_cut:
+            removed_calls = {
+                b.id for e in entries[first_conv:cut] for b in e.content
+                if isinstance(b, ToolCallBlock)
+            }
+            crossing = [
+                i for i, e in enumerate(entries[cut:], start=cut)
+                if any(isinstance(b, ToolResultBlock) and b.id in removed_calls for b in e.content)
+            ]
+            if not crossing:
+                break
+            cut = max(crossing) + 1
+
+        if protected_entry_id is not None:
+            protected_index = next((i for i, e in enumerate(entries) if e.id == protected_entry_id), 0)
+            if cut > protected_index:
+                return 0
         if cut >= max_cut:
             # Snap consumed everything — refuse to drop the entire conversation.
             return 0
@@ -741,6 +847,7 @@ class ChatSession(ABC):
         rounds = 0
         while True:
             try:
+                self._ensure_request_capacity()
                 result = do_call()
                 return result, total_dropped, rounds
             except Exception as exc:
@@ -757,7 +864,7 @@ class ChatSession(ABC):
                     # it after their error-revert step (issue #653).
                     self._attach_overflow_trim_stats(exc, total_dropped, rounds)
                     raise
-                dropped = self._trim_context_one_round()
+                dropped = self._trim_context_one_round(protected_entry_id=self._capacity_protected_entry_id())
                 if dropped == 0:
                     logger.warning(
                         "[overflow-recovery] cannot trim further "
@@ -766,6 +873,7 @@ class ChatSession(ABC):
                     )
                     self._attach_overflow_trim_stats(exc, total_dropped, rounds)
                     raise
+                self._on_capacity_history_rewritten()
                 total_dropped += dropped
                 rounds += 1
                 logger.warning(

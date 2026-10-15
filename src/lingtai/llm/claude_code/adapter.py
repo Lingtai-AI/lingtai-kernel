@@ -388,8 +388,16 @@ class ClaudeCodeChatSession(ChatSession):
                 self._interface.add_tool_results(message)
             # message is None -> caller pre-staged the interface; just generate.
 
+            capacity_protected_id = self._capacity_protected_entry_id()
             if self.pre_request_hook is not None:
                 self.pre_request_hook(self._interface)
+
+            restore_before_capacity = restore
+            before_capacity = len(self._interface.entries)
+            restore = None
+            self._ensure_request_capacity(protected_entry_id=capacity_protected_id)
+            if len(self._interface.entries) == before_capacity:
+                restore = restore_before_capacity
 
             # Capture after the kernel's pre-request hook but before the first
             # physical invocation. The closure reuses this exact snapshot for
@@ -439,6 +447,9 @@ class ClaudeCodeChatSession(ChatSession):
             if restore is not None:
                 restore()
             raise
+
+    def _on_capacity_history_rewritten(self) -> None:
+        self._reset_remote_session()
 
     def _snapshot_interface(self):
         """Capture the canonical history so a failed turn can be rolled back.

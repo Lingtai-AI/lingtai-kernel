@@ -44,6 +44,7 @@ from lingtai.kernel.llm.base import (
     UsageMetadata,
     checked_count,
     mark_llm_replay_terminal,
+    ContextCapacityError,
     safe_exception_description,
     wire_tool_description,
 )
@@ -2603,8 +2604,11 @@ class OpenAIChatSession(ChatSession):
         # 1b. Caller-owned pre-request hook. Wire tail is tool results or text,
         # so any (call, result) pair the hook splices is appended at a
         # safe boundary and rides along on this same API request.
+        capacity_protected_id = self._capacity_protected_entry_id()
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
+
+        self._ensure_request_capacity(protected_entry_id=capacity_protected_id)
 
         # 2. Build ephemeral provider messages from interface — re-runs
         #    inside the overflow-recovery loop so each retry sees the
@@ -2765,8 +2769,11 @@ class OpenAIChatSession(ChatSession):
             raise TypeError(f"Unsupported message type: {type(message)}")
 
         # 1b. Pre-request hook — see send() above for contract.
+        capacity_protected_id = self._capacity_protected_entry_id()
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
+
+        self._ensure_request_capacity(protected_entry_id=capacity_protected_id)
 
         # 2. Build ephemeral provider messages from interface — re-runs
         #    inside the overflow-recovery loop so each retry sees the
@@ -3156,6 +3163,34 @@ class OpenAIResponsesSession(ChatSession):
         self._interface.enforce_tool_pairing()
         return self._replay_input_items()
 
+    def _estimate_request_tokens(self, extra_input=None) -> int:
+        from lingtai.kernel.token_counter import count_tokens
+
+        # Count the converted request, not its lossy human-readable projection.
+        # Rebuild on every trim round so removed opaque snapshots cannot survive.
+        request = {
+            "model": self._model,
+            "input": self._replay_input_items() if self._stateless_replay else (extra_input or []),
+            **self._extra_kwargs,
+        }
+        if self._instructions:
+            request["instructions"] = self._instructions
+        if self._tools:
+            request["tools"] = self._tools
+            if self._tool_choice:
+                request["tool_choice"] = self._tool_choice
+        if self._prompt_cache_key:
+            request["prompt_cache_key"] = self._prompt_cache_key
+        # Include stream framing conservatively for both dispatch paths.
+        request["stream"] = True
+        return (count_tokens(json.dumps(request, default=str)) * 110 + 99) // 100
+
+    def _on_capacity_history_rewritten(self) -> None:
+        self._response_id = None
+        for entry in self._interface.entries:
+            entry.provider_data.pop(_RESPONSES_OUTPUT_ITEMS_KEY, None)
+            entry.provider_data.pop(_RESPONSES_REPLAY_FINGERPRINT_KEY, None)
+
     def send(self, message) -> LLMResponse:
         """Send a user message (str) or tool results (list of dicts)."""
         rollback_snapshot: list[dict] | None = None
@@ -3168,11 +3203,22 @@ class OpenAIResponsesSession(ChatSession):
             # canonical interface that is serialized below, so spliced entries
             # ride on this request. Stateful mode preserves the historical
             # delta-only behavior.
+            capacity_protected_id = self._capacity_protected_entry_id()
             if self.pre_request_hook is not None:
                 self.pre_request_hook(self._interface)
                 if self._stateless_replay:
                     self._interface.enforce_tool_pairing()
                     input_items = self._replay_input_items()
+
+            # A rewrite must never be undone by an old rollback snapshot.
+            before_capacity = len(self._interface.entries)
+            rollback_before_capacity = rollback_snapshot
+            rollback_snapshot = None
+            self._ensure_request_capacity(input_items, protected_entry_id=capacity_protected_id)
+            if len(self._interface.entries) == before_capacity:
+                rollback_snapshot = rollback_before_capacity
+            if self._stateless_replay:
+                input_items = self._replay_input_items()
 
             kwargs: dict[str, Any] = {
                 "model": self._model,
@@ -3232,11 +3278,22 @@ class OpenAIResponsesSession(ChatSession):
             input_items = self._request_input(message)
 
             # Pre-request hook — see send() above for stateless/stateful split.
+            capacity_protected_id = self._capacity_protected_entry_id()
             if self.pre_request_hook is not None:
                 self.pre_request_hook(self._interface)
                 if self._stateless_replay:
                     self._interface.enforce_tool_pairing()
                     input_items = self._replay_input_items()
+
+            # A rewrite must never be undone by an old rollback snapshot.
+            before_capacity = len(self._interface.entries)
+            rollback_before_capacity = rollback_snapshot
+            rollback_snapshot = None
+            self._ensure_request_capacity(input_items, protected_entry_id=capacity_protected_id)
+            if len(self._interface.entries) == before_capacity:
+                rollback_snapshot = rollback_before_capacity
+            if self._stateless_replay:
+                input_items = self._replay_input_items()
 
             kwargs: dict[str, Any] = {
                 "model": self._model,
@@ -4885,6 +4942,24 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
             return
         self._ws_epoch_reset_turn_limit = _codex_ws_epoch_reset_turns()
 
+    def _on_capacity_history_rewritten(self) -> None:
+        self._reset_ws_epoch("capacity_rewrite")
+
+    def _estimate_request_tokens(self, extra_input=None) -> int:
+        from lingtai.kernel.token_counter import count_tokens
+
+        replay = self._compacted_replay_input()
+        if replay is None:
+            replay = self._frozen_responses_input(self._interface)
+        request = {
+            **self._extra_kwargs,
+            "input": [*replay, *(extra_input or [])],
+            "instructions": self._instructions,
+            "tools": self._tools,
+        }
+        wire = count_tokens(json.dumps(request, default=str))
+        return max(super()._estimate_request_tokens(extra_input), (wire * 110 + 99) // 100)
+
     def _reset_ws_epoch(self, reason: str) -> None:
         """Start a fresh websocket response-id epoch.
 
@@ -5873,8 +5948,24 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         # Pre-request hook — kernel-side splice point. Include hook-spliced
         # entries in the delta so notification wake pairs remain visible in the
         # same request even when previous_response_id is active.
+        capacity_protected_id = self._capacity_protected_entry_id()
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
+
+        prebuilt_items: list[dict[str, Any]] = []
+        if isinstance(message, dict):
+            prebuilt_items.append(message)
+        elif isinstance(message, list) and not (
+            message and all(isinstance(b, ToolResultBlock) for b in message)
+        ):
+            prebuilt_items.extend(self._convert_input(message))
+        budget = self._request_input_budget()
+        if self._compacted_items is not None and budget is not None and self._estimate_request_tokens(prebuilt_items) > budget:
+            self._reset_ws_epoch("capacity_rewrite")
+        self._ensure_request_capacity(prebuilt_items, protected_entry_id=capacity_protected_id)
+        # History counts used by continuation deltas are invalid after a trim;
+        # the epoch reset forces a full replay from the remaining entries.
+        interface_start = min(interface_start, len(self._interface.entries))
 
         # Capture EXACTLY ONE immutable runtime-effort decision for this logical
         # dispatch — after the pre-request stage above, before any request
@@ -5894,15 +5985,13 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
 
         try:
             self._interface.enforce_tool_pairing()
-            prebuilt_items: list[dict[str, Any]] = []
-            if isinstance(message, dict):
-                prebuilt_items.append(message)
-            elif isinstance(message, list) and not (
-                message and all(isinstance(b, ToolResultBlock) for b in message)
-            ):
-                prebuilt_items.extend(self._convert_input(message))
-
             self._maybe_compact_before_send(prebuilt_items)
+            # Compaction is optional and may produce a larger opaque prefix.
+            # Discard that replay basis rather than sending an oversized body.
+            budget = self._request_input_budget()
+            if budget is not None and self._estimate_request_tokens(prebuilt_items) > budget:
+                self._reset_ws_epoch("capacity_rewrite")
+            self._ensure_request_capacity(prebuilt_items, protected_entry_id=capacity_protected_id)
             compacted_replay = self._compacted_replay_input()
             if compacted_replay is not None:
                 # Standalone compaction is active: replay the opaque compacted
@@ -6030,6 +6119,14 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                 existing_client_metadata = dict(extra_body.get("client_metadata") or {})
                 extra_body["client_metadata"] = {**existing_client_metadata, **client_metadata}
                 kwargs["extra_body"] = extra_body
+            # Verify the final assembled full request too (including opaque
+            # replay and caller extras), before either transport can dispatch.
+            budget = self._request_input_budget()
+            wire_tokens = (count_tokens(json.dumps(kwargs, default=str)) * 110 + 99) // 100
+            if budget is not None and wire_tokens > budget:
+                detail = f"Local context capacity blocked: final request estimate {wire_tokens}; budget {budget}"
+                raise mark_llm_replay_terminal(ContextCapacityError(detail), no_aed_retry=True, message=detail)
+
             acc = StreamingAccumulator()
             response_id = None
             usage = UsageMetadata()
@@ -6363,6 +6460,8 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                             ),
                         )
         except Exception as exc:
+            if type(exc) is LLMReplayTerminalError and type(exc.original) is ContextCapacityError:
+                raise
             # Once provider-owned auth recovery consumed this logical request's
             # budget, every later event-processing/stream exception is terminal
             # before outer transient/AED replay. Partial-stream marking remains

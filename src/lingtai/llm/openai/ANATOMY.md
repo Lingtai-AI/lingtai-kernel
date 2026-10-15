@@ -1,5 +1,6 @@
 ---
 related_files:
+  - tests/contracts/llm_conversation_input/test_context_capacity.py
   - docs/references/codex-http-anatomy-investigation.md
   - src/lingtai/auth/ANATOMY.md
   - src/lingtai/llm/ANATOMY.md
@@ -683,3 +684,11 @@ The adapter send paths retain the optional caller-owned `pre_request_hook(self._
 ### Git history
 
 16 commits. Key: context overflow recovery (`f65e395`), orphan tool_call guard (`8197fdc`), Codex stateless path (`7e88f47`, `a4bf117`), per-phase HTTP timeout caps (`81b95e2`), `cached_tokens` None coercion (`1e715ab`), `_build_messages` hook refactor (`70c0357`), pre-request hook for mid-turn tc_inbox drain (`f46b346`, now dormant), `send(None)` continue-from-wire contract (`f596ec1`).
+
+Capacity dispatch: `ChatSession._ensure_request_capacity` owns the post-hook
+budget and bounded pair-aware oldest trim; `SessionManager.send` supplies the
+configured ceiling. `CodexResponsesSession._on_capacity_history_rewritten`
+invalidates compacted/continuation/frozen replay before request reconstruction.
+See the LLM adapter manual and focused conversation-input capacity tests.
+
+Generic Responses capacity accounting counts converted raw snapshots and request extras; a capacity rewrite clears continuation IDs and surviving raw snapshot metadata before rebuilding replay.

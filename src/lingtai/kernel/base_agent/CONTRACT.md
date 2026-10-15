@@ -3,6 +3,11 @@ name: agent-runtime
 contract_version: 1
 root_contract: CONTRACT.md
 related_files:
+  - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
+  - tests/contracts/llm_conversation_input/test_context_capacity.py
+  - src/lingtai/kernel/session.py
+  - src/lingtai/kernel/llm/base.py
+  - src/lingtai/llm/openai/adapter.py
   - tests/test_apriori_summary_session_cost.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/tools/context/manual/SKILL.md
@@ -680,6 +685,20 @@ exceptions, fabricate usage, or charge zero. The existing failed outcome exposes
 an unknown coverage gap to the consumer. Default summary policy and sibling
 parallelism are unchanged. Guarded by [BA010](BEHAVIORS.md#behavior-ba010);
 consumer procedure is the [Telegram manual](../../mcp_servers/telegram/task_card/SKILL.md).
+
+The pre-send capacity boundary applies to ordinary input, tool continuations,
+and notification `tc_wake` dispatches after the caller hook. Known capacities
+use the tighter configured/model window; requests must fit the documented
+output, framing and estimation reserves before provider I/O. Bounded oldest
+trimming preserves the latest user instruction and live tool pairs. Rewriting
+history invalidates remote continuation, compacted prefixes and frozen outputs.
+Irreducible input, zero progress or the round bound raises a trusted local
+terminal error: no provider call, transient retry, AED rebuild or automatic molt.
+Committed real results and event evidence remain available; saving canonical
+history cannot revive removed replay content. Focused executable guards:
+`tests/contracts/llm_conversation_input/test_context_capacity.py`.
+
+Generic Responses admission includes converted opaque snapshots and request extras in both send paths. Anthropic reserves its effective native max_tokens (8192 when omitted); max_tokens takes precedence over the max_output_tokens alias. Output allowance exceeding a known window fails locally through the trusted terminal boundary.
 
 ## Contract tests
 

@@ -1,5 +1,7 @@
 ---
 related_files:
+  - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
+  - tests/contracts/llm_conversation_input/test_context_capacity.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/llm/ANATOMY.md
   - src/lingtai/llm/service.py
@@ -110,3 +112,11 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
 - `add_system()` defers system/tool updates while the tail has unanswered tool calls so strict providers do not see a system entry between assistant tool calls and user tool results (`llm/interface.py:522-572`).
 - `close_pending_tool_calls()` closes unanswered tail tool calls by first accepting optional real recovered `ToolResultBlock`s from a recovery lookup and then synthesizing abort placeholders for any remaining misses (`llm/interface.py:445-521`, `llm/interface.py:99-186`).
 - `StreamingAccumulator` intentionally supports three provider styles in one place: sequential, index-keyed, and atomic tool calls (`llm/streaming.py:72-126`).
+
+Capacity dispatch: `ChatSession._ensure_request_capacity` owns the post-hook
+budget and bounded pair-aware oldest trim; `SessionManager.send` supplies the
+configured ceiling. `CodexResponsesSession._on_capacity_history_rewritten`
+invalidates compacted/continuation/frozen replay before request reconstruction.
+See the LLM adapter manual and focused conversation-input capacity tests.
+
+Output reservation resolves through `ChatSession._effective_output_tokens`; the Anthropic override shares its native allowance with request construction. Generic Responses estimates converted replay and request extras on every trim round.

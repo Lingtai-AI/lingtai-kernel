@@ -10,6 +10,10 @@ description: >
 version: 0.2.0
 last_changed_at: "2026-09-29T00:00:00Z"
 related_files:
+- src/lingtai/kernel/llm/base.py
+- src/lingtai/kernel/base_agent/CONTRACT.md
+- src/lingtai/kernel/base_agent/ANATOMY.md
+- src/lingtai/kernel/llm/ANATOMY.md
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/service.py
 - src/lingtai/llm/openai/adapter.py
@@ -233,3 +237,28 @@ Each backend page carries the same `## Subscription & auth` section, so "what do
 I need to pay for / how does LingTai connect" is answered per backend without
 reading the vendor's full billing docs. These pages are entrypoints, not flag
 catalogs; the installed CLI's live help remains the authority.
+
+## Local capacity fallback
+
+After input and the pre-request hook are staged, known context capacities use
+`min(model window, configured runtime context_limit)` (ignoring zero/unknown
+values). The guard reserves the explicit output cap when supplied, otherwise
+15% of the window; framing gets another 5%, at least 1024 tokens. Input
+estimates from the existing tokenizer receive a separate 10% allowance. This
+is a conservative estimate, not a provider tokenizer guarantee; unknown routes
+retain their existing behavior until a capacity is configured.
+
+The kernel drops oldest entries using its existing pair-aware trim foundation,
+protecting the latest user instruction and subsequent tool state. At most 64
+rounds recompute the full estimate. No removable entries, no token reduction,
+or exhaustion blocks locally before dispatch, using the trusted no-AED-retry
+terminal boundary. Current input and real results stay in canonical history;
+raw event evidence is untouched. Codex also measures its effective replay and
+final assembled request, clears opaque compaction/remote continuation/frozen
+outputs on history rewrite, and rebuilds a full request. Optional compaction
+runs only after admission and cannot be the required recovery mechanism.
+A refused dispatch sleeps through the existing terminal path; an unchanged
+oversized wake can be refused again locally without provider traffic. No
+identity/pad reset, automatic molt, or forced forgetting is performed.
+
+Anthropic retains its default output allowance of 8192 tokens and reserves that same allowance before dispatch. Set an explicit smaller max_tokens (or max_output_tokens alias) for a smaller context ceiling; native max_tokens wins if both are supplied. Generic Responses accounts for saved opaque output items and request extras, rebuilding after local trim.

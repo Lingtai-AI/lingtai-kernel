@@ -498,6 +498,7 @@ class SessionManager:
         self._chat.update_tools(tool_schemas)
 
         self._health_check(message)
+        self._chat.configure_context_capacity(self._config.context_limit)
 
         api_call_id = f"api_{uuid.uuid4().hex[:12]}"
         llm_call_fields: dict = {

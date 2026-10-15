@@ -375,13 +375,21 @@ class AnthropicChatSession(ChatSession):
             )
         )
 
+    def _effective_output_tokens(self, window: int = 0) -> int:
+        # Anthropic's native max_tokens wins if both spellings are supplied.
+        # Preserve the provider's existing default, including thinking budgets.
+        return self._extra_kwargs.get(
+            "max_tokens", self._extra_kwargs.get("max_output_tokens", 8192)
+        )
+
     def _build_request_kwargs(self, messages: list[dict]) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
-            "max_tokens": self._extra_kwargs.get("max_tokens", 8192),
             **self._extra_kwargs,
+            "max_tokens": self._effective_output_tokens(),
         }
+        kwargs.pop("max_output_tokens", None)
         if self._system:
             kwargs["system"] = self._system
         if self._tools:
@@ -423,8 +431,11 @@ class AnthropicChatSession(ChatSession):
         # Caller-owned pre-request hook. Tail is now tool results or text, so
         # has_pending_tool_calls() returns False; any (call, result) pair
         # the hook splices in will be included in this same API request.
+        capacity_protected_id = self._capacity_protected_entry_id()
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
+
+        self._ensure_request_capacity(protected_entry_id=capacity_protected_id)
 
         # Build kwargs from current interface state — re-runs inside the
         # overflow-recovery loop so each retry sees the post-trim interface.
@@ -510,8 +521,11 @@ class AnthropicChatSession(ChatSession):
             raise TypeError(f"Unsupported message type: {type(message)}")
 
         # Pre-request hook — see send() above for the contract.
+        capacity_protected_id = self._capacity_protected_entry_id()
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
+
+        self._ensure_request_capacity(protected_entry_id=capacity_protected_id)
 
         # Build ephemeral Anthropic messages from interface — re-runs inside
         # the overflow-recovery loop so each retry sees the post-trim interface.
