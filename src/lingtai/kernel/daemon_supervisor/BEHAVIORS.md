@@ -9,6 +9,8 @@ related_files:
   - src/lingtai/kernel/daemon_supervisor/ANATOMY.md
   - src/lingtai/kernel/daemon_supervisor/__init__.py
   - src/lingtai/kernel/daemon_supervisor/manifest.py
+  - src/lingtai/adapters/posix/daemon_mach.py
+  - tests/test_daemon_mach.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
@@ -45,3 +47,33 @@ commands must run from the repo root with the project's Python.
 
 ### Pass / Fail
 Pass when both suites pass and the run directory shows the secret boundary and one terminal notification. Fail on credential leakage into durable files, on a second terminal notification for one run, or on a supervisor that does not survive parent exit; record the evidence trail in the task report.
+
+## Behavior DS002
+
+- **id**: DS002
+- **title**: Darwin rendezvous preserves descriptor transfer without a local socket file
+- **guards**: [daemon-supervisor § Adapters](CONTRACT.md#adapters)
+- **runner**: an agent authorized to run deterministic local process fixtures
+- **prerequisites**: macOS 15.7.3; candidate checkout; Python test environment;
+  owned project scratch only. No model/provider calls are needed.
+- **estimate**: approximately one minute for focused automated checks
+
+### Steps
+1. Run `python -m pytest -q tests/test_daemon_mach.py tests/test_daemon_manager_socket_fallback.py`.
+2. Inspect the native tests: ensure SCM_RIGHTS payload and receiver EOF are
+   checked, not merely an ACK; verify wrong peer identity is refused before
+   capsule bytes and the listener survives rejected requests.
+3. Check repeated successful/failed rendezvous against both open-FD and Mach
+   port-name counts; malformed/oversized requests must not retire the listener.
+
+### Expected evidence
+- Native capsule and adopted FD round trip succeeds; rejected peers receive no
+  capsule bytes. All observed native rights and FDs return to baseline.
+- Restart retires the old service; unsupported-path selection stays inside the
+  project. Non-Darwin behavior is not represented as validated by these tests.
+
+### Pass / Fail
+Pass only if the focused suites pass on the stated host. Reject any silent FD
+omission, unexpected local-file fallback, leaked right, or accepted wrong peer.
+Actual filesystem-level acceptance additionally needs owned exFAT/APFS process
+fixtures; these unit tests alone do not prove absence of every system write.

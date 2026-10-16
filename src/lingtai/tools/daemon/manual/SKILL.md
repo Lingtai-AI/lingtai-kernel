@@ -15,6 +15,9 @@ related_files:
 - src/lingtai/tools/daemon/settings.py
 - src/lingtai/tools/daemon/execution_host.py
 - src/lingtai/tools/daemon/shell_prompt_events.py
+- src/lingtai/kernel/daemon_supervisor/ANATOMY.md
+- src/lingtai/kernel/daemon_supervisor/CONTRACT.md
+- src/lingtai/adapters/posix/daemon_mach.py
 - src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/cleanup/SKILL.md
@@ -66,6 +69,21 @@ daemon(action="emanate", input={
   "backend": "lingtai"
 }, reasoning="bounded delegation")
 ```
+
+## Local Darwin manager transport
+
+Short supported paths still use the project AF_UNIX socket. On Darwin, exFAT
+or an overlong path selects project `daemon/manager/capsule.endpoint.json`:
+ordinary metadata locating a kernel-only Mach rendezvous, not a secret or
+socket file. An authenticated anonymous socketpair preserves capsule and
+SCM_RIGHTS descriptor transfer; no TCP substitution is made. Startup errors
+remain visible in the manager state/stderr rather than falling back to a local
+disk. Do not edit endpoint metadata, copy it between projects, or infer that a
+source patch is installed. The local candidate was exercised only on macOS
+15.7.3 and depends on deprecated `bootstrap_register`; this is not a claim of
+cross-platform no-local-disk support. See the
+[supervisor contract](../../../kernel/daemon_supervisor/CONTRACT.md) for
+identity, ownership and failure boundaries.
 
 ## Actions and completion
 

@@ -10,6 +10,8 @@ related_files:
   - src/lingtai/adapters/posix/daemon_supervisor.py
   - src/lingtai/adapters/posix/daemon_capsule.py
   - src/lingtai/adapters/posix/daemon_manager.py
+  - src/lingtai/adapters/posix/daemon_mach.py
+  - tests/test_daemon_mach.py
   - src/lingtai/adapters/windows/daemon_supervisor.py
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/execution_host.py
@@ -47,6 +49,10 @@ The supervisor Port and durable run schemas define the narrow process boundary; 
 - `adapters/posix/daemon_capsule.py` — bounded capsule encoding plus optional
   one-descriptor `SCM_RIGHTS` transfer and explicit receiver ownership.
 - `tools/daemon/execution_host.py:24-224` — composition root that reuses manager setup and every `_BackendSpec` runner; selected Shell alone invokes its private composer for the run-local `shell_prompt_events.py` NotificationPort adapter and `<run>/shell-jobs` namespace, rather than the stub's absent Agent route or shared parent jobs.
+
+- `adapters/posix/daemon_mach.py` — Darwin file-free rendezvous for manager
+  socketpair endpoints, kernel audit identity gates and native right cleanup;
+  [DS002](BEHAVIORS.md#behavior-ds002) guards the local transport boundary.
 
 ## Connections
 

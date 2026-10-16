@@ -8,6 +8,7 @@ this module unless the caller explicitly enables a manager pool.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import socket
@@ -52,10 +53,76 @@ def _manager_dir(agent_working_dir: Path) -> Path:
     return Path(agent_working_dir) / MANAGER_DIR
 
 
+_SOCKET_UNSUPPORTED_ERRNOS = frozenset(
+    value
+    for value in (
+        getattr(errno, name, None)
+        for name in (
+            "EOPNOTSUPP",
+            "ENOTSUP",
+            "EAFNOSUPPORT",
+            "EPROTONOSUPPORT",
+            "ENOSYS",
+            "EINVAL",
+        )
+    )
+    if isinstance(value, int)
+)
+_SOCKET_DIR_PROBE_CACHE: dict[str, bool] = {}
+
+
+def _unix_socket_usable(directory: Path) -> bool:
+    """Cache only completed filesystem capability probes, process-locally.
+
+    The caller and resident manager independently probe the same filesystem;
+    the cache is not shared across processes. Unprobed directories and transient
+    errors must not become permanent positive capability results.
+    """
+    key = str(directory)
+    cached = _SOCKET_DIR_PROBE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        if not directory.is_dir():
+            return True
+    except OSError:
+        return True
+    # No longer than capsule.sock: a longer probe can hit the AF_UNIX limit
+    # before the filesystem has a chance to report EOPNOTSUPP.
+    probe = directory / f".p{uuid.uuid4().hex[:8]}"
+    probe_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    bound = False
+    try:
+        probe_socket.bind(str(probe))
+        bound = True
+        usable = True
+    except OSError as exc:
+        if exc.errno not in _SOCKET_UNSUPPORTED_ERRNOS:
+            # Keep real permission/resource errors on the direct startup path.
+            return True
+        usable = False
+    finally:
+        try:
+            probe_socket.close()
+        finally:
+            if bound:
+                try:
+                    probe.unlink()
+                except OSError:
+                    pass
+    _SOCKET_DIR_PROBE_CACHE[key] = usable
+    return usable
+
+
 def _capsule_socket_path(root: Path) -> Path:
+    root = Path(root)
     direct = root / _CAPSULE_SOCKET_NAME
-    if len(str(direct)) < _UNIX_SOCKET_PATH_LIMIT:
+    if len(os.fsencode(direct)) < _UNIX_SOCKET_PATH_LIMIT and _unix_socket_usable(root):
         return direct
+    if sys.platform == "darwin":
+        # This ordinary project file locates a kernel-only Mach rendezvous.
+        # It is not a filesystem socket and contains no capsule or credential.
+        return root / "capsule.endpoint.json"
     digest = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:24]
     fallback = Path("/tmp") / f"lingtai-dm-{os.getuid()}-{digest}" / _CAPSULE_SOCKET_NAME
     if len(str(fallback)) >= _UNIX_SOCKET_PATH_LIMIT:
@@ -274,16 +341,23 @@ def _ensure_manager_locked(agent_working_dir: Path, root: Path, *, pool_size: in
     )
     env = _manager_env()
     env["LINGTAI_DAEMON_MANAGER_TOKEN"] = token
-    subprocess.Popen(
-        [sys.executable, "-m", ENTRYPOINT_MODULE, str(agent_working_dir), str(pool_size)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=env,
-        cwd=str(agent_working_dir),
-        start_new_session=True,
-        close_fds=True,
-    )
+    with open(root / "manager.stderr.log", "ab", buffering=0) as manager_stderr:
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                ENTRYPOINT_MODULE,
+                str(agent_working_dir),
+                str(pool_size),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=manager_stderr,
+            env=env,
+            cwd=str(agent_working_dir),
+            start_new_session=True,
+            close_fds=True,
+        )
 
 
 def enqueue_manager_run(
@@ -384,8 +458,29 @@ def run_manager(agent_working_dir: Path, *, pool_size: int) -> None:
         },
     )
     manager = _DaemonManagerProcess(queue_dir, journal_dir, pool_size=pool_size, root=root)
-    manager.start_capsule_server(_capsule_socket_path(root))
-    manager.recover_interrupted_active_runs()
+    try:
+        manager.start_capsule_server(_capsule_socket_path(root))
+        manager.recover_interrupted_active_runs()
+    except Exception as exc:
+        if manager._capsule_socket is not None:
+            manager._capsule_socket.close()
+        # Record the reason: without it the pid file keeps claiming ``running``
+        # while the manager is already gone, and callers only see a capsule
+        # timeout five seconds later.
+        _write_private_json(
+            root / "manager.pid",
+            {
+                "pid": None,
+                "started_at": time.time(),
+                "pool_size": pool_size,
+                "state": "failed",
+                "failed_at": time.time(),
+                "error": f"{type(exc).__name__}: {exc}",
+                "manager_token": os.environ.get("LINGTAI_DAEMON_MANAGER_TOKEN"),
+                "manager_runtime_identity": _manager_runtime_identity(),
+            },
+        )
+        raise
     manager.run(idle_exit_s=_IDLE_EXIT_S)
 
 
@@ -407,19 +502,41 @@ class _DaemonManagerProcess:
         self.lock = threading.Lock()
         self.last_activity = time.monotonic()
         self.started_at = time.time()
-        self._capsule_socket: socket.socket | None = None
+        self._capsule_socket: Any = None  # socket or Darwin kernel rendezvous
         self._capsule_server_thread: threading.Thread | None = None
 
     def start_capsule_server(self, socket_path: Path) -> None:
         """Accept one-shot runtime capsules over a private local socket."""
-        _prepare_capsule_socket_path(socket_path)
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.bind(str(socket_path))
-        try:
-            socket_path.chmod(0o600)
-        except OSError:
-            pass
-        sock.listen()
+        if sys.platform == "darwin" and socket_path.name == "capsule.endpoint.json":
+            from lingtai.adapters.posix.daemon_mach import MachCapsuleListener
+
+            identity = _process_identity(os.getpid())
+            if not identity:
+                raise RuntimeError("daemon rendezvous requires process identity")
+            sock = MachCapsuleListener()
+            try:
+                _write_private_json(socket_path, {
+                    "transport": "darwin-mach-socketpair.v1",
+                    "service": sock.name,
+                    "pid": os.getpid(),
+                    "start_identity": identity,
+                })
+            except BaseException:
+                sock.close()
+                raise
+        else:
+            _prepare_capsule_socket_path(socket_path)
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                sock.bind(str(socket_path))
+                try:
+                    socket_path.chmod(0o600)
+                except OSError:
+                    pass
+                sock.listen()
+            except BaseException:
+                sock.close()
+                raise
         self._capsule_socket = sock
         thread = threading.Thread(
             target=self._serve_capsules,
@@ -540,6 +657,8 @@ class _DaemonManagerProcess:
                         idle_since = None
                 time.sleep(_POLL_INTERVAL_S)
         finally:
+            if self._capsule_socket is not None:
+                self._capsule_socket.close()
             with self.lock:
                 pending_capsules = list(self.capsules.values())
                 self.capsules.clear()
@@ -586,6 +705,8 @@ class _DaemonManagerProcess:
                     # ours to retire, and the record/socket must stay put.
                     return False
                 socket_path = _capsule_socket_path(self.root)
+                if self._capsule_socket is not None:
+                    self._capsule_socket.close()
                 try:
                     socket_path.unlink()
                 except OSError:
@@ -928,6 +1049,40 @@ def _mark_run_manager_owned(request: DaemonSupervisorRequest, root: Path) -> Non
     run_dir.update_state(**updates)
 
 
+def _manager_start_failure(root: Path) -> str | None:
+    """Return the recorded manager start error, when the resident manager died
+    while starting up (for example because the socket path is unusable)."""
+    try:
+        info = read_json(root / "manager.pid", default={}, expect=dict)
+    except TypeError:
+        return None
+    if not isinstance(info, dict) or info.get("state") != "failed":
+        return None
+    error = info.get("error")
+    return str(error) if error else "unknown startup error"
+
+
+def _connect_capsule_socket(root: Path, socket_path: Path) -> socket.socket:
+    if sys.platform == "darwin" and socket_path.name == "capsule.endpoint.json":
+        from lingtai.adapters.posix.daemon_mach import connect_mach_capsule
+
+        endpoint = read_json(socket_path, default={}, expect=dict)
+        pid = endpoint.get("pid")
+        if (endpoint.get("transport") != "darwin-mach-socketpair.v1"
+                or not isinstance(pid, int) or isinstance(pid, bool)
+                or not _process_identity_matches(pid, endpoint.get("start_identity"))):
+            raise ConnectionRefusedError("daemon rendezvous endpoint is stale or invalid")
+        return connect_mach_capsule(endpoint.get("service"), manager_pid=pid)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(0.5)
+        sock.connect(str(socket_path))
+        return sock
+    except BaseException:
+        sock.close()
+        raise
+
+
 def _send_capsule(
     root: Path,
     run_id: str,
@@ -947,9 +1102,8 @@ def _send_capsule(
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            with _connect_capsule_socket(root, socket_path) as sock:
                 sock.settimeout(0.5)
-                sock.connect(str(socket_path))
                 send_capsule(sock, payload, adopted_fd=adopted_fd)
                 ack = bytearray()
                 while len(ack) < 2:
@@ -961,6 +1115,11 @@ def _send_capsule(
                     return
                 raise RuntimeError("daemon manager rejected runtime capsule")
         except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError) as exc:
+            failure = _manager_start_failure(root)
+            if failure is not None:
+                raise RuntimeError(
+                    f"central daemon manager failed to start for {run_id!r}: {failure}"
+                ) from exc
             last_error = exc
             time.sleep(_POLL_INTERVAL_S)
     raise RuntimeError(

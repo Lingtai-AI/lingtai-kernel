@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import stat
 import socket
 import threading
@@ -28,10 +29,13 @@ def test_capsule_socket_fallback_ignores_overlong_ambient_temp_roots() -> None:
 
     socket_path = daemon_manager._capsule_socket_path(root)
 
-    assert socket_path.parent.parent == Path("/tmp")
-    assert socket_path.parent.name.startswith(f"lingtai-dm-{os.getuid()}-")
-    assert socket_path.name == "capsule.sock"
-    assert len(str(socket_path)) < daemon_manager._UNIX_SOCKET_PATH_LIMIT
+    if sys.platform == "darwin":
+        assert socket_path == root / "capsule.endpoint.json"
+    else:
+        assert socket_path.parent.parent == Path("/tmp")
+        assert socket_path.parent.name.startswith(f"lingtai-dm-{os.getuid()}-")
+        assert socket_path.name == "capsule.sock"
+        assert len(str(socket_path)) < daemon_manager._UNIX_SOCKET_PATH_LIMIT
 
 
 def test_capsule_socket_fallback_reuses_only_a_safe_stale_socket(monkeypatch) -> None:
@@ -385,6 +389,7 @@ def test_manager_sender_accepts_fragmented_ack(tmp_path, monkeypatch):
         def recv(self, _size: int) -> bytes:
             return next(self.ack_chunks)
 
+    monkeypatch.setattr(daemon_manager, "_capsule_socket_path", lambda root: root / "capsule.sock")
     monkeypatch.setattr(daemon_manager.socket, "socket", FragmentedAckSocket)
 
     daemon_manager._send_capsule(tmp_path, "em-fragmented-ack", {"task": "test"})
