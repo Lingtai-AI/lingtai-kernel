@@ -119,9 +119,12 @@ related_files:
   - tests/test_refresh_watcher_lease_probe.py
   - tests/test_refresh_watcher_windows.py
   - tests/test_risky_action_gate.py
+  - tests/test_shell_execution_context.py
   - tests/test_shell_kind_classifier.py
   - tests/test_shell_kind_spawn_args.py
   - tests/test_shell_pr1_contract.py
+  - tests/test_shell_policy_case_identity.py
+  - tests/test_shell_policy_path_repair.py
   - tests/test_shell_windows_native.py
   - tests/test_snapshot.py
   - tests/test_task_card_resident_shared.py

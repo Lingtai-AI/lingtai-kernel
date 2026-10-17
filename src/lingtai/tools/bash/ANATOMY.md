@@ -48,6 +48,9 @@ related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/execution_host.py
   - src/lingtai/tools/daemon/shell_prompt_events.py
+  - tests/test_shell_execution_context.py
+  - tests/test_shell_policy_case_identity.py
+  - tests/test_shell_policy_path_repair.py
   - tests/test_daemon_detached_supervisor.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -145,7 +148,7 @@ bash/__init__.py
   │   ├── from_file(path)            — loads policy from JSON file
   │   ├── yolo()                     — creates a policy that allows everything
   │   ├── describe()                 — human-readable summary of policy rules
-  │   ├── is_allowed(command)        — checks command against policy
+  │   ├── is_allowed(command, cwd=None, path=None) — checks command against policy; optional real execution context enables anchored filesystem identity checks
   │   ├── _check_single(cmd)         — checks a single command name
   │
   ├── ShellDialect / ShellInvocation — selected shell-language boundary and serializable invocation

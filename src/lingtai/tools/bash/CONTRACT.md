@@ -36,6 +36,9 @@ related_files:
   - src/lingtai/tools/daemon/execution_host.py
   - src/lingtai/tools/daemon/shell_prompt_events.py
   - src/lingtai/tools/daemon/CONTRACT.md
+  - tests/test_shell_execution_context.py
+  - tests/test_shell_policy_case_identity.py
+  - tests/test_shell_policy_path_repair.py
   - tests/test_daemon_detached_supervisor.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
@@ -95,7 +98,33 @@ invariants.
   policy modes exist:
   **allowlist** (only listed commands, active whenever an `allow` key is
   present) and **denylist** (everything except listed commands). The mode is
-  implicit.
+  implicit. Denylist checking first preserves exact raw-token matching. A deny
+  entry without a path separator also matches the extracted token's basename,
+  so `deny=["rm"]` covers `rm`, `./rm`, and `/bin/rm`; a path-bearing entry
+  such as `/bin/rm` remains an exact path rule. The manager and pure policy
+  use the same check. When the manager validates a run it threads the real
+  execution context (the command working dir and the host PATH), and a
+  surviving POSIX token is then denied only when it provably resolves, on
+  that real filesystem, to an executable file whose stored name equals a
+  pathless deny entry: on a case-insensitive filesystem ``RM`` is denied by
+  ``deny=["rm"]``, while case-sensitive distinct executables keep their
+  distinction. No command name or path is case-folded; configured
+  full-path deny entries remain exact-path rules. Without execution context
+  the historical token-only behavior is retained, and an unresolvable or
+  ambiguous identity never denies. Resolution follows ``execvp`` search
+  semantics anchored to that real execution cwd: an empty PATH entry means
+  the execution cwd, and a relative PATH entry is likewise joined against
+  the execution cwd — never against the Python process cwd that happens to
+  run the check; PATH ordering picks the first executable and missing or
+  non-executable candidates are skipped. The manager resolves the actual
+  final execution cwd once — explicit ``working_dir``, else the bound
+  execution-workspace root, else the manager workdir, with workspace-relative
+  paths resolved and contained by the workspace boundary — and shares that
+  single cwd with both policy validation and dispatch, so the gate always
+  judges the filesystem context the child would actually run in. This
+  contract does not claim to resolve
+  aliases, shell functions, wrappers, symlink targets, or dynamic dispatch
+  (``eval``/variable invocation).
 
 **Non-goals:** `shell` does not sandbox the command's own filesystem writes
 beyond the `working_dir` scope check; it does not manage agent lifecycle; it
@@ -485,6 +514,8 @@ for cancellation correctness.
 | A missing-module / traceback signature is detected in output | `src/lingtai/tools/bash/__init__.py` | `retired-test:test_bash_async::test_missing_module_is_detected` |
 | Warning-tail redaction fails open when the redactor is unavailable | `src/lingtai/tools/bash/__init__.py` | `retired-test:test_bash_async::test_fail_open_returns_input_when_redactor_unavailable` |
 | Allowlist mode permits only listed commands; denylist blocks listed ones | `src/lingtai/tools/bash/__init__.py` | `retired-test:test_layers_bash::test_allow_only`, `::test_deny_only`, `::test_pipe_awareness` |
+| Denylist raw-token, basename, and exact-path rules plus anchored filesystem case identity agree between the pure policy gate and the manager path, with conservative unresolvable-identity semantics | `src/lingtai/tools/bash/__init__.py` | `tests/test_shell_policy_path_repair.py`, `tests/test_shell_policy_case_identity.py` |
+| Relative/empty PATH entries anchor to the real execution cwd (`execvp` semantics), and the manager resolves one final execution cwd shared by policy validation and dispatch (workspace default, explicit relative `working_dir`, manager-workdir fallback, safe invalid-cwd refusal) | `src/lingtai/tools/bash/__init__.py` | `tests/test_shell_execution_context.py` |
 | Policy is enforced on async runs too | `src/lingtai/tools/bash/__init__.py` | `retired-test:test_bash_async::test_policy_applies_to_async` |
 | Neutral process refs are strict/JSON-safe, unknown identity is never same, and the POSIX adapter owns spawn plus exact wait | `src/lingtai/tools/bash/_async_process.py`, `src/lingtai/adapters/posix/bash_process.py` | `retired-test:test_bash_async_process_contract` |
 | Manager policy consumes neutral refs before v3 compatibility fields and refuses unverifiable cancellation | `src/lingtai/tools/bash/__init__.py` | `retired-test:test_bash_async::test_running_result_prefers_neutral_command_ref_over_legacy_fields`, `::test_cancel_refuses_unverifiable_neutral_supervisor_ref` |
