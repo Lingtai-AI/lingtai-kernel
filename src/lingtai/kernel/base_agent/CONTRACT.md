@@ -1,8 +1,15 @@
 ---
 name: agent-runtime
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
+  - src/lingtai/tools/daemon/CONTRACT.md
+  - src/lingtai/kernel/tool_result_recovery.py
+  - src/lingtai/llm/interface_converters.py
+  - src/lingtai/kernel/llm/interface.py
+  - src/lingtai/llm/ANATOMY.md
+  - src/lingtai/kernel/llm/ANATOMY.md
+  - tests/test_new_tool_result_projection.py
   - tests/test_agents_memory.py
   - src/lingtai/kernel/prompt.py
   - tests/test_apriori_summary_session_cost.py
@@ -678,6 +685,31 @@ Automatic notification delivery composes the [Notification contract](../../tools
    immediately preceding batch; an empty response at turn start or after a
    later unrelated batch remains a recovery event. Guarded by
    [BA007](BEHAVIORS.md#behavior-ba007).
+
+### New-only frozen tool-result projection
+
+Sidecar normalization precedes freezing: main freezes after its existing
+post-execution advisory, or immediately before an intercepted/cancelled terminal
+commit. Bulky source-signal values reuse the existing spill/artifact contract,
+not an aggregate HTTP-payload cap. New completed results freeze one additive internal `ToolResultBlock.model_projection`
+at their emit boundary, after runtime/notification attachment and before the first
+provider-visible send. Full canonical content, metadata, raw journal records and
+accounting/UI inputs remain intact. All three provider converters use the frozen
+value; unmarked legacy blocks take their unchanged prior conversion path. Load,
+rebuild and retained molt history MUST NOT opt old blocks into current policy.
+Tool-returned dictionary markers cannot authorize or replace this snapshot.
+Only known redundant presentation statistics/static explanations are compacted;
+unknown dynamic fields, errors, advisories, spill/overflow state and complete new
+notification/message records remain meaningful. Static interpretation/retrieval
+is taught once by loaded instructions, not repeated in every result.
+
+The separate origin-gated finalized journal extension supports bounded cold heal
+without masquerading as the original raw event. A failed extension append or a
+crash before it can leave only legacy raw recovery; this is not an atomic
+cross-journal/history crash guarantee. Existing explicit a-posteriori replacement
+and AED spilling invalidate only the block they intentionally change, retaining
+those operations' prior behavior. Guarded by [BA013](BEHAVIORS.md#behavior-ba013)
+and `tests/test_new_tool_result_projection.py`.
 
 ### A-priori summary usage receipts
 

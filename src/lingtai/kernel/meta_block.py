@@ -788,6 +788,18 @@ def build_meta_readme() -> dict:
     just structural orientation.
     """
     return {
+        "result_projection": (
+            "New results carry a frozen compact model view, while full canonical "
+            "content, metadata and accounting remain stored. Generated summaries "
+            "are runtime-generated, noncanonical and lossy; they may omit or "
+            "misstate information. Retrieve exact raw via raw_locator: match its "
+            "event_type and tool_call_id in its log relative to the working "
+            "directory; read that event's result, not a projection event. For "
+            "exact output rerun narrowly with summarize=false. Historical "
+            "unmarked results keep their original projection. Only the newest "
+            "runtime snapshot is current; earlier delivered messages remain "
+            "usable subject to newer instructions and producer safeguards."
+        ),
         TOOL_META_KEY: (
             "Immutable facts for one tool execution only: correlation id, tool "
             "name when needed, completion time, elapsed time, status/error phase, "
@@ -5207,6 +5219,116 @@ def attach_daemon_agent_meta(
         "agent_state": _copy.deepcopy(dict(state)),
     }
     return target
+
+
+def freeze_tool_result_projections(tool_results: list, *, logger_fn=None) -> None:
+    """Freeze newly emitted blocks only; never call from load or conversion.
+
+    Canonical content/metadata stay intact for accounting and UI. Only known
+    presentation redundancy is removed from a deep copy. Unknown/dynamic data,
+    producer notifications, advisories, and errors are not filtered by a safelist.
+    The additive journal extension is separate from the original raw event.
+    """
+    for block in tool_results:
+        if not _is_tool_result_block(block) or block.model_projection is not None:
+            continue
+        pending = block._model_pending or {}
+        body = _copy.deepcopy(block.content)
+        metadata = _copy.deepcopy(block.metadata)
+        trusted_summary = pending.get("summary") is True
+        if trusted_summary and isinstance(body, dict):
+            # Refusal/error detail stays complete. Successful-summary statistics
+            # and repeated provenance prose remain in canonical history only.
+            if body.get("summary_kind") == "apriori_generated":
+                for key in (
+                    "artifact", "tool_name", "tool_call_id", "summary_chars",
+                    "original_visible_chars", "summary_effect", "summary_input_chars",
+                    "summarized_at", "summary_reason", "canonical", "raw_preserved",
+                    "retrieval_hint",
+                ):
+                    body.pop(key, None)
+                if body.get("summary_input_truncated") is False:
+                    body.pop("summary_input_truncated")
+        tool = metadata.get(TOOL_META_KEY)
+        if isinstance(tool, dict):
+            for key in ("timestamp", "char_count", "elapsed_ms"):
+                tool.pop(key, None)
+            if not trusted_summary and pending.get("raw_locator"):
+                tool["raw_locator"] = _copy.deepcopy(pending["raw_locator"])
+            if pending.get("source_signals"):
+                tool["source_signals"] = _copy.deepcopy(pending["source_signals"])
+        agent = metadata.get(AGENT_META_KEY)
+        if isinstance(agent, dict):
+            if agent.get("instruction") == AGENT_META_INSTRUCTION:
+                agent.pop("instruction")
+            guidance = agent.get("guidance")
+            if isinstance(guidance, dict):
+                if guidance.get("persistent") == build_meta_guidance_ref():
+                    guidance.pop("persistent")
+                if guidance.get("transient") == {}:
+                    guidance.pop("transient")
+                if not guidance:
+                    agent.pop("guidance")
+            if agent.get("notifications") == {}:
+                agent.pop("notifications")
+            state = agent.get("agent_state")
+            usage = state.get("token_usage") if isinstance(state, dict) else None
+            if isinstance(usage, dict):
+                # Drop only known accounting counters, not arbitrary adapter or
+                # daemon state. Required context/budget warnings live alongside.
+                for lane in ("current_call", "session"):
+                    counters = usage.get(lane)
+                    if not isinstance(counters, dict):
+                        continue
+                    for key in (
+                        "input", "cache_miss", "output", "thinking", "cache_rate",
+                        "api_calls", "input_tokens", "cached_tokens", "output_tokens",
+                        "session_cache_rate", "avg_input_tokens_per_api_call",
+                        "cache_miss_tokens",
+                    ):
+                        counters.pop(key, None)
+                    if not counters:
+                        usage.pop(lane)
+                if usage.get("ref") == TOKEN_USAGE_GUIDANCE_REF:
+                    usage.pop("ref")
+                if not usage:
+                    state.pop("token_usage")
+        if metadata:
+            if isinstance(body, dict) and "_meta" not in body:
+                body["_meta"] = metadata
+            else:
+                body = {"result": body, "_meta": metadata}
+        block.model_projection = {"value": body}
+        block._model_pending = None
+        if logger_fn is not None:
+            try:
+                from .trace_redaction import redact_for_trajectory
+
+                record = {
+                    "result": _copy.deepcopy(block.content),
+                    "result_metadata": _copy.deepcopy(block.metadata),
+                    "model_projection": _copy.deepcopy(block.model_projection),
+                }
+                logger_fn(
+                    "tool_result_projection",
+                    origin="kernel_tool_result_finalization",
+                    tool_call_id=block.id,
+                    tool_name=block.name,
+                    synthesized=block.synthesized,
+                    redacted=redact_for_trajectory(record) != record,
+                    **record,
+                )
+            except Exception:
+                # Existing journal paths are best-effort. The in-memory/canonical
+                # snapshot still freezes before provider use; cold heal may fall
+                # back to the original raw event when this append fails.
+                try:
+                    logger_fn(
+                        "tool_result_projection_log_failed", tool_call_id=block.id,
+                        tool_name=block.name,
+                    )
+                except Exception:
+                    pass
 
 
 def finalize_two_axis_sidecars(tool_results: list) -> None:

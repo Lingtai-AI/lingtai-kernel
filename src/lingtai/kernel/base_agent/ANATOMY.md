@@ -1,5 +1,6 @@
 ---
 related_files:
+  - tests/test_new_tool_result_projection.py
   - tests/test_agents_memory.py
   - src/lingtai/kernel/prompt.py
   - tests/test_apriori_summary_session_cost.py
@@ -78,6 +79,14 @@ Generic agent kernel. Single class `BaseAgent` with methods distributed across 6
 > **History note:** the former `soul_flow.py` wire-splice logic moved to the legacy TCInbox, which is now retired. The Soul subsystem had already been removed; old patches remain historical context.
 
 ## Components
+
+- New-result projection: `kernel/meta_block.py:5224` freezes a copied compact
+  view once after final attachment; `kernel/llm/interface.py:53` persists the
+  optional block snapshot separately from full content/metadata. The main turn,
+  daemon local carrier and synthetic notification emit call this boundary;
+  `kernel/tool_result_recovery.py:181` reads only origin-gated finalized journal
+  extensions. Provider converters do not apply current policy to history.
+  Guarded by [BA013](BEHAVIORS.md#behavior-ba013).
 
 - `turn.py::_build_apriori_summarizer_fn` captures the helper's API id,
   requested model and molt generation around the existing untracked one-shot

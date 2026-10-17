@@ -5,6 +5,7 @@ labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - tests/test_new_tool_result_projection.py
   - tests/test_agents_memory.py
   - src/lingtai/kernel/prompt.py
   - tests/test_apriori_summary_session_cost.py
@@ -365,3 +366,38 @@ hermetic test does not establish live provider behavior or native Windows result
 ### Pass / Fail
 Pass only if the suite passes on the candidate tree. A compilation or unexecuted
 test is not startup proof; report exact failed or unexecuted checks.
+
+## Behavior BA013 — new results freeze model views without rewriting historical prefixes
+
+- **id**: BA013
+- **title**: new results freeze model views without rewriting historical prefixes
+- **guards**: [agent-runtime § New-only frozen tool-result projection](CONTRACT.md#new-only-frozen-tool-result-projection)
+- **runner**: a LingTai coding agent with Shell access
+- **prerequisites**: repository Python environment; fake providers only; no credentials
+- **estimate**: 3 minutes
+
+### Steps
+1. Run `.venv/bin/python -m pytest -q tests/test_new_tool_result_projection.py`.
+2. Inspect legacy embedded-envelope, string and full-sidecar controls across
+   Anthropic, OpenAI Chat and Responses; append new results and cold-roundtrip.
+3. Inspect real executor, main continuation-failure, notification and daemon
+   emit seams, journal replay, untrusted lookalike controls and explicit summary
+   or AED invalidation. Compare canonical content, metadata and raw log records.
+4. Separately compare a base-tree control and candidate provider payload using
+   the same persisted old history; rebuild/molt retained records and a valid-init
+   complete prompt require parent-owned integration evidence, not this unit suite.
+
+### Expected evidence
+- [ ] Historical unmarked result payload bytes are unchanged for all three converters.
+- [ ] New frozen projections persist and are not recalculated from later runtime state.
+- [ ] Canonical content, raw records and accounting/UI sidecars remain complete;
+      model-only redundancy shrinks, while source warnings, context and mail survive.
+- [ ] Handler lookalike projection/summary fields cannot authorize compaction;
+      raw locators resolve the original event, not the finalized projection event.
+- [ ] Explicit existing history mutators invalidate only the selected snapshot;
+      spill/refusal/error signals remain meaningful and output caps are not bypassed.
+
+### Pass / Fail
+Pass only with successful tests and separately identified integration evidence.
+Report unexecuted checks explicitly. Character counts are not provider-token or
+cache guarantees; the illustrative 75% reduction is not a required threshold.

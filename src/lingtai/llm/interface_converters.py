@@ -223,7 +223,9 @@ def _normalize_runtime_envelope(raw: Any) -> dict | None:
 
 
 def _project_tool_result(block: ToolResultBlock) -> Any:
-    """Project canonical sidecar metadata without rewriting block.content."""
+    """Use an emit-time snapshot, or the unchanged legacy projection path."""
+    if block.model_projection is not None:
+        return copy.deepcopy(block.model_projection["value"])
     if not isinstance(block.metadata, dict) or not block.metadata:
         # Historical/legacy content, including content["_meta"], is already
         # the holder that full-history replay must preserve verbatim.

@@ -48,6 +48,7 @@ from lingtai.kernel.tool_executor import ToolExecutor
 from lingtai.kernel.tool_result_artifacts import compact_oversized_history
 from lingtai.kernel.meta_block import (
     attach_daemon_agent_meta,
+    freeze_tool_result_projections,
     render_system_prompt_pressure_context,
 )
 from lingtai.kernel.token_counter import count_tokens
@@ -4300,6 +4301,7 @@ class DaemonManager:
                     tool_results,
                     agent_state=daemon_meta_state.snapshot(session),
                 )
+                freeze_tool_result_projections(tool_results, logger_fn=_daemon_tool_logger)
 
                 if intercepted:
                     # Preserve provider pairing by recording the synthesized tool

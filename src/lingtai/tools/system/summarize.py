@@ -585,6 +585,7 @@ def _summarize(agent, args: dict) -> dict:
         # Mutate the block content in place — pairing, id, name, synthesized
         # flag are untouched so provider wire alternation stays valid.
         entry.content[idx].content = replacement
+        entry.content[idx].model_projection = None
 
         agent._log(
             "tool_result_summarized",

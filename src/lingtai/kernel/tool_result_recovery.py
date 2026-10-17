@@ -5,12 +5,18 @@ model-visible ``ToolResultBlock`` was later rolled back by a failed LLM
 continuation.  Before synthesizing an abort placeholder, heal paths can ask
 this module to replay that already-executed result from ``logs/events.jsonl``.
 
+Newly finalized executed-tool blocks append a separate
+``tool_result_projection`` event with exact kernel finalization provenance.
+The bounded reverse scan restores its canonical content, metadata and frozen
+model snapshot without recomputing policy. It never replaces the original raw
+``tool_result`` event used by raw locators. Missing extensions keep legacy replay.
+
 Besides the canonical executed-tool record, a kernel-internal synthetic
 recovery record (``BaseAgent._inject_notification_pair``) may carry the
 extension fields ``result_metadata`` / ``synthesized`` / ``redacted``.  They
-are honored ONLY when the event has exactly ``origin="kernel_notification_sync"``
-and ``tool_name="notification"``; any other record — even with lookalike
-fields — recovers with the defaults (``metadata={}``, ``synthesized=False``).
+are honored only for that exact synthetic provenance or the finalized event
+above. Other records — even with lookalike fields — recover with the defaults
+(``metadata={}``, ``synthesized=False``, no frozen model snapshot).
 A ``redacted: true`` replay is lossy by design: the rebuilt block gets a
 ``metadata["redacted"] = True`` marker so callers trigger producer
 reconciliation (LICC contract "Synthetic pair durability and heal replay").
@@ -46,9 +52,10 @@ class _RecoveredEvent:
     event_ts: Any
     event_tool_name: str | None
     stats: _ScanStats
-    # Synthetic-recovery extension fields; populated only for
-    # origin="kernel_notification_sync" records (see module docstring).
+    # Internal recovery extension fields; populated only for exact synthetic
+    # or finalized-block provenance (see module docstring).
     result_metadata: dict = field(default_factory=dict)
+    model_projection: dict | None = None
     synthesized: bool = False
     redacted: bool = False
 
@@ -66,7 +73,7 @@ def recover_tool_result_block_from_events(
     """Return a real replayed result block, or ``None`` for synthetic fallback.
 
     Matching is deliberately strict:
-    - event type must be exactly ``tool_result``;
+    - event is ``tool_result`` or a trusted finalized ``tool_result_projection``;
     - event ``tool_call_id`` must exactly equal the pending call id;
     - when the event carries ``tool_name``, it must exactly equal the pending
       tool name.
@@ -162,6 +169,10 @@ def recover_tool_result_block_from_events(
         content=capped,
         metadata=metadata,
         synthesized=recovered.synthesized,
+        model_projection=(
+            copy.deepcopy(recovered.model_projection)
+            if capped is recovered.result else None
+        ),
     )
 
 
@@ -196,7 +207,12 @@ def _find_latest_tool_result_event(
             continue
         if not isinstance(event, dict):
             continue
-        if event.get("type", event.get("event")) != "tool_result":
+        event_type = event.get("type", event.get("event"))
+        finalized = (
+            event_type == "tool_result_projection"
+            and event.get("origin") == "kernel_tool_result_finalization"
+        )
+        if event_type != "tool_result" and not finalized:
             continue
         if event.get("tool_call_id") != tool_call_id:
             continue
@@ -208,15 +224,22 @@ def _find_latest_tool_result_event(
         # Extension fields trusted ONLY under the exact kernel provenance
         # discriminator; lookalike fields elsewhere keep the defaults.
         result_metadata: dict = {}
+        model_projection = None
         synthesized = False
         redacted = False
-        if (
+        if finalized or (
             event.get("origin") == "kernel_notification_sync"
             and event.get("tool_name") == "notification"
         ):
             raw_metadata = event.get("result_metadata")
             if isinstance(raw_metadata, dict):
                 result_metadata = raw_metadata
+            snapshot = event.get("model_projection")
+            if isinstance(snapshot, dict) and set(snapshot) == {"value"}:
+                model_projection = snapshot
+            elif finalized:
+                # A malformed extension must not shadow the original raw event.
+                continue
             synthesized = event.get("synthesized") is True
             redacted = event.get("redacted") is True
         return _RecoveredEvent(
@@ -225,6 +248,7 @@ def _find_latest_tool_result_event(
             event_tool_name=event.get("tool_name"),
             stats=stats,
             result_metadata=result_metadata,
+            model_projection=model_projection,
             synthesized=synthesized,
             redacted=redacted,
         )

@@ -67,12 +67,20 @@ class ToolResultBlock:
     # dataclass serialization or provider payload.
     _agent_pending: dict | None = field(default=None, repr=False, compare=False)
 
+    # Internal emit-time snapshot, never read from handler dictionaries. Absent
+    # on legacy records; history loaders retain it without running current policy.
+    model_projection: dict | None = field(default=None, repr=False)
+    # Trusted executor provenance and raw locator, consumed at finalization only.
+    _model_pending: dict | None = field(default=None, repr=False, compare=False)
+
     def to_dict(self) -> dict:
         d: dict = {"type": "tool_result", "id": self.id, "name": self.name, "content": self.content}
         if self.metadata:
             d["metadata"] = self.metadata
         if self.synthesized:
             d["synthesized"] = True
+        if self.model_projection is not None:
+            d["model_projection"] = self.model_projection
         return d
 
 
@@ -240,6 +248,7 @@ def content_block_from_dict(d: dict) -> ContentBlock:
             content=d["content"],
             metadata=d.get("metadata", {}),
             synthesized=d.get("synthesized", False),
+            model_projection=d.get("model_projection"),
         )
     elif btype == "thinking":
         return ThinkingBlock(text=d["text"], provider_data=d.get("provider_data", {}))

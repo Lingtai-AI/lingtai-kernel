@@ -421,9 +421,9 @@ def compact_oversized_history(
     Walks ``interface._entries`` and replaces ``ToolResultBlock.content``
     whose serialized length exceeds ``max_chars`` with the same compact
     manifest produced by ``spill_oversized_result``.  Entries are never
-    reordered, never deleted, and no field other than ``ToolResultBlock.content``
-    is touched — id / name / synthesized / pairing with ``ToolCallBlock``
-    remain intact.
+    reordered or deleted. The changed block's frozen model projection is
+    invalidated explicitly alongside ``content``; id / name / synthesized /
+    pairing with ``ToolCallBlock`` remain intact.
 
     Idempotent: content that is already a spill manifest (detected by
     ``is_spill_manifest``) is skipped, so repeated invocations across
@@ -477,6 +477,7 @@ def compact_oversized_history(
             # synthesized must survive untouched so the wire alternation
             # and tool_use/tool_result correlation stay valid.
             block.content = manifest
+            block.model_projection = None
             stats.compacted_blocks += 1
             stats.original_chars_total += current_chars
             stats.replacement_chars_total += _serialized_len(manifest)

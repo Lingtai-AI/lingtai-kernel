@@ -1,5 +1,7 @@
 ---
 related_files:
+  - src/lingtai/kernel/base_agent/CONTRACT.md
+  - tests/test_new_tool_result_projection.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/llm/ANATOMY.md
   - src/lingtai/llm/service.py
@@ -91,6 +93,12 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
 - **Siblings:** `session.py` persists and compacts `ChatInterface`; `token_ledger.py` persists usage; the intrinsic tool packages manufacture synthetic LLM blocks for context/email flows.
 
 ## State
+
+- New-result model views use the optional persisted `ToolResultBlock.model_projection`
+  (`llm/interface.py:53`), retained by `to_dict`/`content_block_from_dict` without
+  recomputation. Full content/metadata stay separate. Projection semantics are
+  owned by `kernel/base_agent/CONTRACT.md`; this protocol implementation adds no
+  independent projection Contract.
 
 - **Ephemeral:** `ChatInterface._entries`, `_next_id`, current system/tools, and `_pending_system` live in memory for one session (`llm/interface.py:305-318`).
 - **Ephemeral:** `StreamingAccumulator` stores partial text, tool args, and thoughts until `finalize()` (`llm/streaming.py:42-52`, `llm/streaming.py:148-184`).

@@ -39,6 +39,7 @@ from .tool_call_guard import GuardDecision, ToolCallGuard, ToolProposal
 from .tool_result_summary import (
     is_apriori_summary as _is_apriori_summary,
     maybe_summarize_result as _maybe_summarize_result,
+    _raw_locator,
 )
 from .tool_timing import ToolTimer
 from .execution_workspace import copy_execution_context
@@ -803,6 +804,7 @@ class ToolExecutor:
         tool_trace_id: str,
         status: str | None = None,
         elapsed_ms: int | float = 0,
+        summary_source: Any = None,
     ) -> Any:
         """Final boundary before a result reaches the LLM wire.
 
@@ -855,6 +857,36 @@ class ToolExecutor:
             agent_pending = tool_metadata.pop("_agent_pending", None)
             msg.metadata = {"tool_meta": tool_metadata}
             msg._agent_pending = agent_pending or None
+            # Identity, not a handler-supplied artifact marker, attests that the
+            # shared summary boundary actually returned a replacement. A spill
+            # must remain a full manifest rather than being mistaken for summary.
+            msg._model_pending = {
+                "summary": summary_source is not None and not spilled,
+                "raw_locator": _raw_locator(
+                    tool_call_id, self._raw_log_path, self._raw_event_type
+                ),
+            }
+            signal_source = summary_source if summary_source is not None else result if spilled else None
+            if isinstance(signal_source, dict):
+                # Summary text is lossy. Keep explicit source failure/partial and
+                # advisory signals independently of what the helper retained.
+                source_signals = {
+                    key: value for key, value in signal_source.items()
+                    if key in {
+                        "status", "error", "errors", "warning", "warnings",
+                        "_advisory", "tool_error", "partial", "truncated",
+                    }
+                }
+                # Reuse the existing cap/artifact contract: a raw warning/error
+                # must not bypass a refusal/spill through the model-only sidecar.
+                bounded_signals = _spill_oversized_result(
+                    source_signals, max_chars=self._max_result_chars,
+                    tool_name=tool_name, tool_call_id=tool_call_id,
+                    working_dir=self._working_dir, source="projection_signals",
+                )
+                if bounded_signals is not source_signals:
+                    bounded_signals["source_signal_keys"] = list(source_signals)
+                msg._model_pending["source_signals"] = bounded_signals
         self._log_lifecycle(
             "tool_result_model_visible",
             tool_name=tool_name,
@@ -1286,6 +1318,7 @@ class ToolExecutor:
             result_msg = self._build_result_message(
                 tc.name, visible, tool_call_id=tc_id, tool_trace_id=trace_id,
                 status=status, elapsed_ms=timer.elapsed_ms,
+                summary_source=result if visible is not result else None,
             )
 
             if isinstance(result, dict) and result.get("status") == "error":
@@ -1904,6 +1937,7 @@ class ToolExecutor:
                 result_msg = self._build_result_message(
                     tc.name,
                     visible_map[i],
+                    summary_source=result if visible_map[i] is not result else None,
                     tool_call_id=tc_id,
                     tool_trace_id=trace_id,
                     status=status,

@@ -1,5 +1,6 @@
 ---
 related_files:
+  - tests/test_new_tool_result_projection.py
   - src/lingtai/kernel/BEHAVIORS.md
   - src/lingtai/kernel/agent_readme/ANATOMY.md
   - src/lingtai/kernel/agent_readme/CONTRACT.md
@@ -396,6 +397,14 @@ This file is the top of the kernel anatomy tree. Each subfolder below has its ow
 - [`i18n/`](i18n/ANATOMY.md) — three-locale message catalog (en / zh / wen). Loaded by `t(language, key)`. Concrete tool strings now live in the `lingtai.tools` package (`lingtai/tools/i18n/`) and register into this cache via `register_strings` on import; the kernel keeps only machinery strings.
 
 ## Two-axis `_meta` boundary
+
+New completed blocks additionally freeze a compact model view through
+`meta_block.freeze_tool_result_projections` (`meta_block.py:5224`) after final
+attachment. `ToolResultBlock.model_projection` is an optional persisted snapshot,
+not a replacement for canonical content/metadata or the raw event. See the
+[Agent runtime promise](base_agent/CONTRACT.md#new-only-frozen-tool-result-projection)
+and BA013; converters/rebuild do not stamp old records. Explicit Context summary
+and AED spill assignments invalidate only their deliberately changed block.
 
 `ToolResultBlock.metadata` is the canonical runtime sidecar. It is serialized
 with chat history and projected by every provider converter, so handlers keep

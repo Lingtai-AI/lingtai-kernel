@@ -2281,6 +2281,9 @@ class BaseAgent:
             synthesized=True,
         )
 
+        from ..meta_block import freeze_tool_result_projections
+
+        freeze_tool_result_projections([result_block])
         iface.add_assistant_message(content=[call_block])
         iface.add_tool_results([result_block])
 
@@ -2300,6 +2303,7 @@ class BaseAgent:
                 "tool_args": copy.deepcopy(call_block.args),
                 "result": content_dict,
                 "result_metadata": copy.deepcopy(result_block.metadata),
+                "model_projection": copy.deepcopy(result_block.model_projection),
             }
             recovery_redacted = (
                 redact_for_trajectory(recovery_payload) != recovery_payload
@@ -2313,6 +2317,7 @@ class BaseAgent:
                 elapsed_ms=0,
                 result=content_dict,
                 result_metadata=recovery_payload["result_metadata"],
+                model_projection=recovery_payload["model_projection"],
                 synthesized=result_block.synthesized,
                 origin="kernel_notification_sync",
                 redacted=recovery_redacted,

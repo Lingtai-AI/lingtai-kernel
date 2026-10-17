@@ -38,6 +38,7 @@ from ..meta_block import (
     attach_active_runtime,
     attach_active_taskcard,
     finalize_two_axis_sidecars,
+    freeze_tool_result_projections,
     build_meta,
     build_reconstruction_tool_meta,
     render_meta,
@@ -3099,6 +3100,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
 
         if intercepted:
             if tool_results and agent._chat:
+                freeze_tool_result_projections(tool_results, logger_fn=agent._log)
                 agent._chat.commit_tool_results(tool_results)
                 # Settle point: no-API terminal commit returned.
                 scan_and_emit_committed_facts(agent)
@@ -3120,6 +3122,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # That broken wire then blocks all future notification injects.
         if agent._cancel_event.is_set():
             if tool_results and agent._chat:
+                freeze_tool_result_projections(tool_results, logger_fn=agent._log)
                 agent._chat.commit_tool_results(tool_results)
                 # Settle point: no-API terminal commit returned.
                 scan_and_emit_committed_facts(agent)
@@ -3130,6 +3133,9 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # Issue #63: dedup check — warn agent if it just re-sent
         # a duplicate message to an external channel.
         _check_external_send(agent, response.tool_calls, tool_results)
+        # Freeze only after the existing post-execution advisory mutation, and
+        # before any provider continuation or no-API terminal commit.
+        freeze_tool_result_projections(tool_results, logger_fn=agent._log)
         settled_visible_reply = _settled_visible_puffo_reply(
             response.tool_calls, tool_results,
         )

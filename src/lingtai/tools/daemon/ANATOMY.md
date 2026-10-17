@@ -1,5 +1,6 @@
 ---
 related_files:
+  - tests/test_new_tool_result_projection.py
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
   - src/lingtai/tools/daemon/CONTRACT.md
@@ -355,6 +356,12 @@ daemon/runtime.py
 - **Detached daemon supervisor (unconditional all-backend route).** `_handle_emanate` validates and writes a secret-free manifest, then the POSIX adapter launches one detached supervisor per run. `execution_host.py` composes the existing `DaemonManager`/`_BackendSpec` setup and runners in that process, so LingTai, Claude, Codex, OpenCode, MiMo, Qwen, Oh-My-Pi, Kimi, and Cursor retain one production parser each. The supervisor owns deadline/control, exact child process groups, run-owned diagnostics, terminal `DaemonRunDir` truth, and notification publication; the parent manager retains only submit/inspect/control state. Presets, selected skills, task MCP registrations, and the built-in `daemon_common.checkpoint` / `daemon_common.finish` surface are reconstructed from the validated manifest and run directory. POSIX lifecycle infrastructure can transfer one already-open child descriptor manager → supervisor → execution child with `SCM_RIGHTS`, closing every sender/failed/discarded owner; the host closes it if no runtime consumer claims it. Production Driver daemon dispatch still fails closed because this slice does not connect that descriptor to authority composition or remove the existing lease gate. Resolved credentials and descriptors are never written to the manifest; request/control files and supervisor logs use restrictive permissions where supported. `system.refresh`/agent stop only shuts down parent-local resources and cannot see detached futures or child handles.
 
 ## Two-axis `_meta` boundary
+
+After local-state attachment, the native loop freezes each newly completed
+block with `kernel/meta_block.freeze_tool_result_projections`
+(`daemon/__init__.py:4298`), before provider use. Canonical metadata/accounting
+remain full; retained compact/rebuild histories carry the snapshot unchanged.
+The common new-only promise is owned by `kernel/base_agent/CONTRACT.md` BA013.
 
 Daemon handlers are unchanged and their results use the canonical
 `ToolResultBlock.metadata` sidecar. The daemon loop projects a daemon-local

@@ -10,6 +10,8 @@ status: active
 contract_version: 17
 last_changed_at: "2026-09-08"
 related_files:
+  - src/lingtai/kernel/base_agent/CONTRACT.md
+  - tests/test_new_tool_result_projection.py
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
   - src/lingtai/tools/daemon/__init__.py
@@ -790,6 +792,15 @@ general skills/MCP/completion/backend-support invariants above:
   states only the daemon-task-object capability boundary.
 
 ## A-priori summary composition
+
+New native-worker results freeze the common compact model projection after
+local runtime attachment and before provider use, retaining full canonical
+records, raw locators, errors and context/countdown warnings. The optional
+block snapshot survives canonical roundtrip and retained compact history;
+converters never recompute it. See the Agent runtime's
+[new-only projection promise](../../kernel/base_agent/CONTRACT.md#new-only-frozen-tool-result-projection)
+and `tests/test_new_tool_result_projection.py`. This does not change summary
+policy, usage accounting, or the completion boundary below.
 
 The LingTai backend builds one daemon-local summary closure and passes it to the
 kernel `ToolExecutor`. The closure:

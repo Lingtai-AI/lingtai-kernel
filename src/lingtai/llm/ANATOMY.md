@@ -1,5 +1,7 @@
 ---
 related_files:
+  - src/lingtai/kernel/base_agent/CONTRACT.md
+  - tests/test_new_tool_result_projection.py
   - src/lingtai/ANATOMY.md
   - src/lingtai/llm/__init__.py
   - src/lingtai/llm/_register.py
@@ -81,6 +83,12 @@ LLM adapter layer — the four built-in provider families (`openai`, `anthropic`
 - **Claude Code factory** — `_register.py:_claude_code` builds `ClaudeCodeAdapter` (drops `api_key`/`base_url`: the `claude` CLI owns auth), registered only as `claude-code` (the removed `claude_code` spelling fails init validation with a pointer to `claude-code`). The adapter drives `claude -p --output-format json`: the canonical `ChatInterface` remains LingTai's source of truth, while the first successful CLI result provides a remote `session_id` used by later `--resume` calls. A resumed call serialises only canonical entries committed since the preceding successful response, so remote history is not duplicated; missing/failed/overflowed remote state is cleared and the next call rebuilds from full canonical history. `update_system_prompt` / `update_tools` clear that continuation **only when the content actually changes** (`_resync_stable_context` compares a sha256 over system prompt + tool schemas): `SessionManager.send` rebuilds both on *every* turn, so an unconditional reset there would clear the session ID before each call and `--resume` would never be sent. An explicit `request_history_rebuild()` clears the remote session ID and canonical-entry cursor, so the next request omits `--resume` and serialises canonical history from entry zero (`claude_code/adapter.py:243-253`, `claude_code/adapter.py:306-312`); focused resumed-summary, zero-pending, and cold-session regressions live in `retired-test:test_claude_code_adapter`. The CLI emits a single JSON action (`tool_call`/`tool_calls`/`final`) which is parsed back into an `LLMResponse`; LingTai's own loop executes the tools. The child env strips `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` so usage stays on the subscription/OAuth path; built-in CLI tools are disabled so it acts as a pure brain. `ClaudeCodeChatSession.send` snapshots the canonical history before mutating it and restores that snapshot if the hook / tool pairing / CLI call / parsing raises, so a failed turn never strands the just-added user / tool-result message; on *successful* context-overflow recovery (`rounds > 0`) it injects a `[kernel]` overflow notice via `_inject_overflow_notice` before recording the assistant turn (same idiom as `openai`/`anthropic`). For health checks it is the one *local CLI-login provider* (`lingtai.kernel.preset_connectivity._LOCAL_CLI_LOGIN_PROVIDERS`): gauged by module importability, never a TCP probe. See `claude_code/adapter.py`. The provider-local `live_effort.py` descriptor publishes the installed CLI vocabulary, exact model/CLI route fingerprint, and construction baseline to the neutral kernel port; `ClaudeCodeChatSession` snapshots that decision once per logical dispatch, reuses it for retries, and records safe emitted/omitted effort evidence in usage metadata.
 
 ## State
+
+The new-result projection slice is owned by `kernel/base_agent/CONTRACT.md`;
+this adapter implementation has no independent projection Contract.
+`interface_converters.py:225` first uses a trusted persisted block snapshot,
+returning a deep copy. Unmarked histories follow the unchanged legacy branch;
+no converter freezes or recomputes projections while replaying history.
 
 Tool-result metadata is stored canonically on `ToolResultBlock.metadata` and
 projected by the Anthropic, OpenAI Chat Completions, and OpenAI Responses

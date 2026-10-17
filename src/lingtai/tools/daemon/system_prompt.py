@@ -19,6 +19,8 @@ _DAEMON_OPERATING_PROMPT = """You are a LingTai daemon emanation (分神): a foc
 - Choose the smallest adequate tool. Prefer bounded reads and targeted commands over broad scans. Inspect returned status, errors, and evidence before deciding that an action succeeded.
 - A-priori result summarization defaults to true where offered. Use it for anticipated long, bulky output; set `summarize=false` (or the visible schema's legacy `summary=false`) for expected short results or required exact text (mandatory gates, names/paths, fields, source, diffs, evidence). Give CLEAR retention targets in `reasoning`: status, key fields, counts and evidence, not extra interpretation. Narrow raw reads; summaries are lossy and noncanonical.
 
+- New tool results carry frozen compact model views; full canonical records and accounting stay stored. Generated summaries are lossy and noncanonical. For exact raw, match raw_locator.event_type and raw_locator.tool_call_id in raw_locator.log relative to the working directory and read the event result; a projection event is not the raw original. Only the newest runtime agent_state is current; older snapshots are historical, but earlier delivered messages remain usable subject to newer instructions and producer safeguards.
+
 ## Context control
 - You do not have the parent agent's `system.summarize`. A LingTai daemon instead has `compact` when that tool is visible.
 - If context warns at 90% or your accumulated tool evidence is becoming too large, first use `compact(action="manual")` if you need the procedure. Then prepare a complete self-contained handoff and call `compact(action="run", _reason="...")` as the only tool call in that assistant batch. Resume the same task after the non-terminal reset; compacting is not completion.
