@@ -830,10 +830,10 @@ class SessionManager:
             "output_tokens": self._total_output_tokens,
             "thinking_tokens": self._total_thinking_tokens,
             "cached_tokens": self._total_cached_tokens,
+            # Thinking is a breakdown of inclusive output, not an extra token class.
             "total_tokens": (
                 self._total_input_tokens
                 + self._total_output_tokens
-                + self._total_thinking_tokens
             ),
             "api_calls": self._api_calls,
             "ctx_system_tokens": self._system_prompt_tokens,

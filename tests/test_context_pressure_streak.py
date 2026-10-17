@@ -158,3 +158,20 @@ def test_track_usage_unknown_window_preserves_pressure_state():
     assert reminder.streak == 3
     assert reminder.last_round_id == 4
     assert reminder.active is True
+
+
+def test_total_tokens_does_not_add_inclusive_thinking_twice():
+    from lingtai.kernel.llm.base import LLMResponse, UsageMetadata
+    events = []
+    sm, _, _ = make_session_manager(logger_fn=lambda kind, **fields: events.append((kind, fields)))
+    sm.ensure_session()
+    for index, (incoming, output, thinking, cached) in enumerate(((100, 60, 20, 30), (200, 90, 40, 50))):
+        sm._track_usage(LLMResponse(text="ok", api_call_id=f"inclusive-{index}",
+            usage=UsageMetadata(input_tokens=incoming, output_tokens=output,
+                                thinking_tokens=thinking, cached_tokens=cached)))
+    usage = sm.get_token_usage()
+    assert usage["total_tokens"] == 450  # 300 input + 150 inclusive output, not +60 thinking.
+    assert (usage["input_tokens"], usage["output_tokens"], usage["thinking_tokens"],
+            usage["cached_tokens"], usage["ctx_total_tokens"], usage["api_calls"]) == (300, 150, 60, 80, 200, 2)
+    rounds = [fields for kind, fields in events if kind == "llm_response"]
+    assert [(row["output_tokens"], row["thinking_tokens"]) for row in rounds] == [(60, 20), (90, 40)]
