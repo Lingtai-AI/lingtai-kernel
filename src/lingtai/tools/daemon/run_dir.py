@@ -670,19 +670,33 @@ class DaemonRunDir:
 
     def enqueue_followup(self, message: str) -> bool:
         """Persist a follow-up before acknowledging its control request."""
+        return self.enqueue_live_followup(message) is not None
+
+    def enqueue_live_followup(self, message: str) -> str | None:
+        """Queue the message for delivery at the next safe turn boundary.
+
+        Returns a delivery marker string once the message is durably queued,
+        or ``None`` when *message* is empty/non-string or the run is not
+        currently running/active. This is the same durable
+        ``pending_followups`` queue ``drain_followups`` and
+        ``drain_followups_or_finalize`` consume. It carries no interrupt
+        semantics in this slice — every accepted message waits for the next
+        turn boundary.
+        """
         if not isinstance(message, str) or not message:
-            return False
+            return None
         message = self._durable_value(message)
         with self._state_transaction():
             if self._state.get("state") not in {"running", "active"}:
-                return False
+                return None
             queue = self._state.setdefault("pending_followups", [])
             if not isinstance(queue, list):
                 queue = []
                 self._state["pending_followups"] = queue
             queue.append(message)
+            delivery = "turn_boundary"
             self._persist_daemon_state()
-            return True
+            return delivery
 
     def drain_followups(self) -> str | None:
         """Atomically consume queued follow-ups at a safe text-only boundary."""
@@ -694,6 +708,119 @@ class DaemonRunDir:
             self._state["pending_followups"] = []
             self._persist_daemon_state()
         return "\n\n".join(messages) or None
+
+    def drain_followups_or_finalize(
+        self, *, status: str, text: str = "", error: BaseException | None = None,
+    ) -> str | None:
+        """Atomically prefer a racing follow-up over finalizing a run.
+
+        Calling ``drain_followups()`` and then ``mark_done``/``mark_failed``
+        as two separate lock acquisitions leaves a real window open: an
+        ``ask``'s ``enqueue_live_followup`` call can land in the gap between the
+        empty drain and the terminal write, stranding an accepted,
+        already-ACKed message in ``pending_followups`` forever once the run
+        is terminal (confirmed by a deterministic probe reproducing the
+        exact scheduling boundary — the two-call version returned
+        ``{"status": "queued", ...}`` for a message that then sat
+        unconsumed in a `done` run's ``pending_followups``). This method
+        closes that window by draining and finalizing under the *same*
+        ``_state_transaction()`` lock ``enqueue_live_followup`` itself uses, so
+        the two calls are strictly ordered: either the enqueue is visible
+        here (returned instead of finalizing — the caller must send it and
+        call this again) or this commits terminal state first (and the
+        racing ``enqueue_live_followup`` then observes a non-running state and
+        returns ``None``, so its caller correctly falls through to the
+        terminal resume path instead of stranding an unacknowledged
+        "queued" receipt).
+
+        Uses the same lock-held terminal markers as ``mark_done`` and
+        ``mark_failed`` without acquiring a nested file lock. The artifact
+        manifest is written after releasing the state transaction.
+
+        Returns the drained message when one was pending (no terminal
+        state change — the caller must send it and is expected to call
+        this method again at the next turn boundary). Returns ``None``
+        after finalizing, or immediately if the run was already terminal
+        (a concurrent caller finalized first).
+        """
+        if status not in ("done", "failed"):
+            raise ValueError("status must be 'done' or 'failed'")
+        safe_text = self._durable_value(text or "")
+        finalized = False
+        with self._state_transaction():
+            if self._state.get('state') in self._TERMINAL_STATES:
+                return None
+            queue = self._state.get("pending_followups")
+            if isinstance(queue, list) and queue:
+                messages = [item for item in queue if isinstance(item, str) and item]
+                self._state["pending_followups"] = []
+                self._persist_daemon_state()
+                joined = "\n\n".join(messages) or None
+                if joined is not None:
+                    return joined
+            if status == 'done':
+                self._mark_done_locked(safe_text)
+            else:
+                self._mark_failed_locked(error if error is not None else RuntimeError(safe_text or 'run failed'))
+            finalized = True
+        if finalized:
+            self.write_manifest()
+        return None
+
+    _TURN_PREVIEW_MAX = 500
+
+    def record_turn_result(
+        self, *, turn: int, text: str, is_error: bool,
+        session_id: str | None = None,
+    ) -> str:
+        """Durably save one connection-owned turn's full result.
+
+        Writes the complete, un-truncated text to ``turns/turn-<N>.txt`` (so
+        a later ``ask`` or a parent molt/reconnect can recover the full body
+        without re-asking the model) and appends a bounded ``daemon_turn``
+        event. Called for every human-origin turn, whether or not the run
+        continues afterward, so no turn's result depends on the run's final
+        terminal state to become durable. Returns the file path's string so
+        the caller can fold it into a non-terminal notification body.
+        """
+        text = self._durable_value(text or "")
+        turns_dir = self.path / "turns"
+        turn_path = turns_dir / f"turn-{turn}.txt"
+        try:
+            turns_dir.mkdir(exist_ok=True)
+            turn_path.write_text(text, encoding="utf-8")
+            try:
+                turn_path.chmod(0o600)
+            except OSError:
+                pass
+        except OSError as e:
+            if self._log_callback is not None:
+                try:
+                    self._log_callback(
+                        "daemon_fs_error", em_id=self._handle, run_id=self._run_id,
+                        op="record_turn_result.write", error=str(e),
+                    )
+                except Exception:
+                    pass
+            return ""
+        preview = text[: self._TURN_PREVIEW_MAX]
+        self._safe_state(
+            "record_turn_result.event",
+            lambda: self._append_jsonl(
+                self.events_path,
+                {
+                    "event": "daemon_turn",
+                    "turn": turn,
+                    "is_error": bool(is_error),
+                    "session_id": session_id,
+                    "path": str(turn_path),
+                    "preview": preview,
+                    "ts": self._now_iso(),
+                },
+            ),
+        )
+        self._safe("record_turn_result.heartbeat", self.heartbeat_path.touch)
+        return str(turn_path)
 
     def enqueue_shell_prompt_event(
         self, *, kind: str, ref_id: str, job_id: str,
@@ -1501,6 +1628,10 @@ class DaemonRunDir:
     _RESULT_PREVIEW_MAX = 200
 
     def mark_done(self, text: str) -> None:
+        self._safe_state('mark_done', lambda: self._mark_done_locked(text))
+        self.write_manifest()
+
+    def _mark_done_locked(self, text: str) -> None:
         """Normal completion. Sets state=done, finished_at, result_preview.
 
         The complete terminal text is written to ``result.txt`` for deliberate
@@ -1559,13 +1690,13 @@ class DaemonRunDir:
                 },
             )
             self.heartbeat_path.touch()
-        self._safe_state("mark_done", _write)
-        # Manifest last: result.txt + daemon.json are now final, so the scan
-        # captures the terminal artifact set. Its own _safe means a manifest
-        # failure can't undo the terminal transition above.
-        self.write_manifest()
+        _write()
 
     def mark_failed(self, exc: BaseException) -> None:
+        self._safe_state('mark_failed', lambda: self._mark_failed_locked(exc))
+        self.write_manifest()
+
+    def _mark_failed_locked(self, exc: BaseException) -> None:
         """Exception in run loop. Sets state=failed, error.{type, message}.
 
         Defensive: a user-defined exception's `__str__` may itself raise
@@ -1605,8 +1736,7 @@ class DaemonRunDir:
                     "ts": self._now_iso(),
                 },
             )
-        self._safe_state("mark_failed", _write)
-        self.write_manifest()
+        _write()
 
     def record_cli_termination(
         self, *, reason: str, signal_name: str, returncode: int | None

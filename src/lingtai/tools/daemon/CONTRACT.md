@@ -8,7 +8,7 @@ description: >
   terminal notifications, and compaction boundaries.
 status: active
 contract_version: 17
-last_changed_at: "2026-09-08"
+last_changed_at: "2026-10-14"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
@@ -517,6 +517,18 @@ Run artifacts must make the daemon contract reviewable without leaking secrets.
 `DaemonRunDir` owns the run folder and persistent artifact set: `daemon.json`,
 `.prompt`, `.heartbeat`, `history/chat_history.jsonl`, `logs/events.jsonl`,
 `logs/token_ledger.jsonl`, `result.txt`, and `artifacts.json`.
+`DaemonRunDir.record_turn_result` additionally persists one connection-owned
+turn's complete text under `turns/turn-<N>.txt`, with a bounded preview on the
+matching `daemon_turn` event; this primitive and the atomic
+`drain_followups_or_finalize` queue-or-finalize finisher exist in the current
+codebase with no production caller yet — their connection-owned consumer
+lands in a later change. `enqueue_live_followup` is further along: the
+detached supervisor's control watcher already calls it, through the
+unchanged-contract `enqueue_followup` wrapper, to durably queue an incoming
+`ask` message against a live run. No backend yet drains or delivers that
+queued message to a running SDK session, so this is a staged intermediate —
+not a finished ask-delivery path — and the SDK production cutover that
+consumes it lands in a later change.
 `daemon.json.call_parameters` and `.prompt` may contain task surface,
 selected-skill catalog/path context, and redacted MCP registrations. Secret MCP
 values belong only in native run-scoped launch plumbing where a backend needs
