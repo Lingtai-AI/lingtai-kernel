@@ -5,8 +5,8 @@ description: |
   schema carries safe first-use guidance; call `manual` for the action map,
   inbound-first/reply routing, channel/media/rendering rules, settings, Task Card
   projection, and error handling.
-version: 1.9.3
-last_changed_at: 2026-09-15T00:00:00Z
+version: 1.9.4
+last_changed_at: 2026-10-16T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/task_card/event_projection.py
@@ -14,6 +14,8 @@ related_files:
 - src/lingtai/mcp_servers/local_commands/ANATOMY.md
 - src/lingtai/mcp_servers/local_commands/core.py
 - src/lingtai/mcp_servers/telegram/manager.py
+- src/lingtai/mcp_servers/telegram/mirror_index.py
+- tests/test_telegram_mirror_index.py
 - src/lingtai/mcp_servers/telegram/account.py
 - src/lingtai/mcp_servers/telegram/render.py
 - src/lingtai/mcp_servers/telegram/server.py
@@ -47,6 +49,29 @@ This progressive disclosure manual complements the routine schema. Use the schem
 `telegram(action='manual', input={}, reasoning='...')` loads deeper guidance.
 Registration, activation, private config, and setup belong
 to `mcp-manual` → `reference/curated-addons.md`.
+
+## Local mirror scan behavior
+
+`check` retains all conversations, including read history; `read.json` affects
+unread counts, not history visibility. A process-local metadata index reuses
+unchanged message previews and routing fields after checking file identity,
+size, mode and modification/change timestamps on each scan. `read` loads only
+its selected full bodies once metadata is available; compound-ID lookup uses
+the same metadata and reopens the selected body. The public `read` action is
+still chat-based, not a new message-ID API.
+
+The first scan after manager creation still reads historical bodies. No index
+is persisted, no history or read ledger is migrated, and the existing read
+marking semantics are unchanged. Folder enumeration/stat costs remain. Normal
+external edits/replacements/deletions are detected through filesystem metadata;
+internal message writes also invalidate explicitly for coarse-timestamp disks.
+Out-of-band rewrites preserving **all** signature fields are not detected by
+this metadata cache. It is not a content-integrity checker.
+
+Regex `search` remains a full **inbox** body scan (including already-read
+messages); it does not search sent records or claim a selective-search speedup.
+Cold metadata-index cost and warm-cache cost must be reported separately; neither
+label implies the operating-system or disk cache was cleared.
 
 ## First successful action: inbound first
 

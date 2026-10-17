@@ -48,6 +48,7 @@ from .. import _skill
 from . import _family
 from . import updates as tg_updates
 from .plugin import TELEGRAM_PLUGIN
+from .mirror_index import MirrorIndex
 from .task_card import api_cost as _api_cost
 from .account import TelegramRateLimitError
 from .service import _TASKCARD_DEFAULT_NORMAL_ROWS
@@ -924,6 +925,7 @@ class TelegramManager:
         self._working_dir = Path(working_dir)
         self._notification_store = notification_store
         self._on_inbound = on_inbound
+        self._mirror_index = MirrorIndex()
         # Duplicate send protection: (account, chat_id, text) → count
         self._last_sent: dict[tuple[str, int, str], int] = {}
         self._dup_free_passes = 2
@@ -1551,9 +1553,10 @@ class TelegramManager:
         # (Matched edits already carry their original envelope + history.)
         payload.setdefault("telegram", envelope)
 
-        (persist_dir / "message.json").write_text(
-            json.dumps(payload, indent=2, default=str), encoding="utf-8",
-        )
+        with self._mirror_index.writing(persist_dir / "message.json"):
+            (persist_dir / "message.json").write_text(
+                json.dumps(payload, indent=2, default=str), encoding="utf-8",
+            )
 
         # Forward to host via LICC. Body is a conversation preview showing the
         # last 20 messages. The agent uses telegram(action="check"|"read") to
@@ -1785,20 +1788,17 @@ class TelegramManager:
         messages.sort(key=lambda m: m.get("date", ""), reverse=True)
         return messages
 
+    def _message_summaries(self, account: str, folder: str) -> list[dict]:
+        """Fresh metadata view; unchanged bodies need not be reopened."""
+        messages = self._mirror_index.records(self._account_dir(account) / folder)
+        messages.sort(key=lambda m: m.get("date", ""), reverse=True)
+        return messages
+
     def _find_inbox_by_compound_id(self, account: str, compound_id: str) -> Path | None:
-        """Find an existing inbox message dir by compound ID. Returns dir Path or None."""
-        inbox_dir = self._account_dir(account) / "inbox"
-        if not inbox_dir.is_dir():
-            return None
-        for msg_dir in inbox_dir.iterdir():
-            msg_file = msg_dir / "message.json"
-            if msg_dir.is_dir() and msg_file.is_file():
-                try:
-                    data = json.loads(msg_file.read_text(encoding="utf-8"))
-                    if data.get("id") == compound_id:
-                        return msg_dir
-                except (json.JSONDecodeError, OSError):
-                    continue
+        """Find an existing inbox message dir, retaining filesystem tie order."""
+        for data in self._mirror_index.records(self._account_dir(account) / "inbox"):
+            if data.get("id") == compound_id:
+                return Path(data["_dir"])
         return None
 
     def _conversation_messages(
@@ -1858,15 +1858,13 @@ class TelegramManager:
         """
         acct_dir = self._account_dir(account_alias)
         for folder in ("inbox", "sent"):
-            folder_dir = acct_dir / folder
-            if not folder_dir.is_dir():
-                continue
-            for msg_dir in folder_dir.iterdir():
-                msg_file = msg_dir / "message.json"
-                if not (msg_dir.is_dir() and msg_file.is_file()):
+            for summary in self._mirror_index.records(acct_dir / folder):
+                if summary.get("id") != compound_id:
                     continue
                 try:
-                    data = json.loads(msg_file.read_text(encoding="utf-8"))
+                    data = json.loads(
+                        (Path(summary["_dir"]) / "message.json").read_text(encoding="utf-8"),
+                    )
                 except (json.JSONDecodeError, OSError):
                     continue
                 if data.get("id") == compound_id:
@@ -4816,9 +4814,10 @@ class TelegramManager:
             "sent_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "status": "placeholder" if placeholder else "sent",
         }
-        (sent_dir / "message.json").write_text(
-            json.dumps(sent_record, indent=2, default=str), encoding="utf-8",
-        )
+        with self._mirror_index.writing(sent_dir / "message.json"):
+            (sent_dir / "message.json").write_text(
+                json.dumps(sent_record, indent=2, default=str), encoding="utf-8",
+            )
 
         response: dict[str, Any] = {
             "status": "sent",
@@ -4848,8 +4847,8 @@ class TelegramManager:
 
     def _check(self, args: dict) -> dict:
         account = self._resolve_account(args)
-        inbox = self._list_messages(account, "inbox")
-        sent = self._list_messages(account, "sent")
+        inbox = self._message_summaries(account, "inbox")
+        sent = self._message_summaries(account, "sent")
         messages = inbox + sent
         messages.sort(key=lambda m: m.get("date", ""), reverse=True)
         read_ids = self._read_ids(account)
@@ -4905,8 +4904,8 @@ class TelegramManager:
 
         # Merge inbox and sent messages so post-molt agents can see their
         # own outgoing messages and avoid duplicate sends.
-        inbox = self._list_messages(account, "inbox")
-        sent = self._list_messages(account, "sent")
+        inbox = self._message_summaries(account, "inbox")
+        sent = self._message_summaries(account, "sent")
         combined = inbox + sent
         combined.sort(key=lambda m: m.get("date", ""), reverse=True)
 
@@ -4921,7 +4920,14 @@ class TelegramManager:
             return None
 
         filtered = [m for m in combined if _chat_id_of(m) == chat_id]
-        recent = filtered[:limit]
+        recent = []
+        for summary in filtered[:limit]:
+            try:
+                recent.append(json.loads(
+                    (Path(summary["_dir"]) / "message.json").read_text(encoding="utf-8"),
+                ))
+            except (json.JSONDecodeError, OSError):
+                continue
 
         # Mark as read
         compound_ids = [m["id"] for m in recent if m.get("id")]
