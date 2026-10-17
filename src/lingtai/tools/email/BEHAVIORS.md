@@ -9,6 +9,8 @@ related_files:
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/email/manager.py
+  - src/lingtai/tools/email/primitives.py
+  - tests/test_email_unread_scan.py
   - src/lingtai/tools/email/settings.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
@@ -115,3 +117,32 @@ Pass when all four steps hold and the official Email surface is mandatory by int
 
 ### Pass / Fail
 Pass when exact five-field inventory, manual pointers, full redaction, whole-action failure, and no-I/O behavior all hold. Fail on any extra field, mutation API, partial unavailable row, path/domain-data leak, missing manual target, or operational regression.
+
+## Behavior EM004 — unread scans skip read history without losing old mail
+
+- **id**: EM004
+- **title**: unread scans skip read history without losing old mail
+- **guards**: [email-contract § Unread scan and ordering](CONTRACT.md#unread-scan-and-ordering)
+- **runner**: an agent with shell access to an isolated checkout
+- **prerequisites**: repository test dependencies; no live mailbox needed
+- **estimate**: ≈ 2 minutes
+
+### Steps
+1. Run `python -m pytest -q tests/test_email_unread_scan.py` using the repository
+   test environment. Fixtures use only their own temporary mailbox and mock
+   notification publication; no real mail is sent.
+2. Inspect the read counters at 20 versus 2000 messages: with three unread,
+   digest/context/rerender/unread check each read three bodies and one ledger.
+   Read/dismiss of one unread reads its target plus two remaining unread.
+3. Confirm ancient unread, all-read clearing, equal-time ties, imported reversed
+   ID/time order, filters, corrupt/missing entries and FIFO exclusion pass.
+
+### Expected evidence
+- [ ] Body reads do not grow with already-read history; the full unread set is retained.
+- [ ] Generic check order/total/filters match the legacy full-scan oracle.
+- [ ] No mail, runtime configuration, cache, index or writer-format side effects.
+
+### Pass / Fail
+Pass when the tests and counters agree; fail on missed old unread, changed check
+semantics, repeated body scans during one rerender, or a blocking non-file read.
+The fixture is not a real-provider or multi-process delivery stress test.

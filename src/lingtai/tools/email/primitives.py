@@ -53,16 +53,30 @@ def _load_message(agent, msg_id: str) -> dict | None:
         return None
 
 
-def _list_inbox(agent) -> list[dict]:
-    """List all inbox messages, sorted newest first (by received_at)."""
+def _list_inbox(agent, *, read_ids: set[str] | None = None) -> list[dict]:
+    """List inbox messages by received_at, optionally excluding known-read IDs.
+
+    The directory pass is always complete: a long run of read messages must
+    never hide an old unread message. Dirent type checks avoid a separate stat
+    on ordinary message directories; known-read entries are skipped before any
+    body access. Keep received_at sorting (including stable ties), not an ID
+    timestamp heuristic: imported/delayed messages need not follow ID order.
+    """
     inbox = _inbox_dir(agent)
-    if not inbox.is_dir():
+    try:
+        with os.scandir(inbox) as entries:
+            message_dirs = [Path(e.path) for e in entries if e.is_dir()]
+    except (FileNotFoundError, NotADirectoryError):
         return []
+    # Compute the complete difference before opening any message body.
+    if read_ids is not None:
+        unread_ids = {p.name for p in message_dirs} - read_ids
+        message_dirs = [p for p in message_dirs if p.name in unread_ids]
     messages = []
-    for msg_dir in inbox.iterdir():
-        if not msg_dir.is_dir():
-            continue
+    for msg_dir in message_dirs:
         msg_file = msg_dir / "message.json"
+        # Keep the regular-file guard: opening a FIFO here could block forever.
+        # This stat is paid only for selected candidates, never known-read IDs.
         if not msg_file.is_file():
             continue
         try:
@@ -73,6 +87,12 @@ def _list_inbox(agent) -> list[dict]:
             continue
     messages.sort(key=lambda m: m.get("received_at", ""), reverse=True)
     return messages
+
+
+def _unread_snapshot(agent) -> tuple[set[str], list[dict]]:
+    """One read ledger + complete unread scan shared by notification views."""
+    read_ids = _read_ids(agent)
+    return read_ids, _list_inbox(agent, read_ids=read_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +338,7 @@ def _unread_notification_context(
     *,
     max_entries: int = EMAIL_UNREAD_MAX_ENTRIES,
     preview_chars: int = 500,
+    _snapshot: tuple[set[str], list[dict]] | None = None,
 ) -> tuple[list[dict], list[str]]:
     """Return full unread email bodies for notification persistence.
 
@@ -327,9 +348,7 @@ def _unread_notification_context(
     but is intentionally ignored here; preview/digest truncation no longer owns
     the unread-mail content boundary.
     """
-    read_ids = _read_ids(agent)
-    inbox = _list_inbox(agent)  # already newest-first per existing semantics
-    unread = [m for m in inbox if m.get("_mailbox_id") not in read_ids]
+    read_ids, unread = _unread_snapshot(agent) if _snapshot is None else _snapshot
     shown = unread[:max_entries]
     recipient_id = getattr(agent, "_agent_id", "")
     emails: list[dict] = []
@@ -390,6 +409,7 @@ def _render_unread_digest(
     *,
     max_entries: int = EMAIL_UNREAD_MAX_ENTRIES,
     preview_chars: int = 200,
+    _snapshot: tuple[set[str], list[dict]] | None = None,
 ) -> tuple[str, int, str | None]:
     """Compute and render the current unread mail digest.
 
@@ -405,9 +425,7 @@ def _render_unread_digest(
     from lingtai.kernel.i18n import t as _t
     from lingtai.kernel.time_veil import veil
 
-    read_ids = _read_ids(agent)
-    inbox = _list_inbox(agent)  # already newest-first per existing semantics
-    unread = [m for m in inbox if m.get("_mailbox_id") not in read_ids]
+    read_ids, unread = _unread_snapshot(agent) if _snapshot is None else _snapshot
     count = len(unread)
     if count == 0:
         return ("", 0, None)
@@ -481,14 +499,15 @@ def _rerender_unread_digest(agent) -> str | None:
     from lingtai.kernel.notifications import submit as publish_notification
     from lingtai.kernel.notifications import clear as clear_notification
 
-    body, count, newest_ts = _render_unread_digest(agent)
+    snapshot = _unread_snapshot(agent)
+    body, count, newest_ts = _render_unread_digest(agent, _snapshot=snapshot)
 
     if count == 0:
         clear_notification(agent, "email")
         agent._log("email_notification_cleared")
         return None
 
-    email_items, email_ids = _unread_notification_context(agent)
+    email_items, email_ids = _unread_notification_context(agent, _snapshot=snapshot)
 
     publish_notification(
         agent, "email",

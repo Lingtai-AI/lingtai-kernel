@@ -11,6 +11,8 @@ related_files:
   - src/lingtai/tools/email/_family_schema.py
   - src/lingtai/tools/email/schema.py
   - src/lingtai/tools/email/manager.py
+  - src/lingtai/tools/email/primitives.py
+  - tests/test_email_unread_scan.py
   - src/lingtai/tools/email/settings.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/email/BEHAVIORS.md
@@ -284,9 +286,36 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
   threads; `bcc` is stored in the sent record but not exposed to recipients.
 - Contacts are written atomically via a tempfile + `os.replace`.
 
+## Unread scan and ordering
+
+Guarded by [EM004](BEHAVIORS.md#behavior-em004).
+
+Unread projection and inbox `check` with `unread_only=true` must compute the
+complete directory-ID difference against one read-ledger snapshot before body
+access. Known-read bodies are not loaded merely to decide read status. All old
+unread messages remain eligible regardless of the number of newer read messages;
+rendering limits affect displayed entries, not the unread count. One notification
+rerender shares its unread snapshot between count/digest and full-body views.
+Each later operation rescans; no process cache or persistent index is introduced.
+
+Directory enumeration remains O(total entries). Body reads scale with unread
+candidates (including attempts on corrupt/unavailable unread entries), not read
+history. Dirent checks can still stat on filesystems without usable type data;
+selected message files retain a regular-file guard. A concurrently changing
+mailbox is not a transaction; this change adds no stronger cross-process locking
+promise than the previous reader.
+
+Sorting remains stable by `received_at` for inbox records. IDs are not a reliable
+ordering index: legacy/imported payloads can disagree with even timestamp-shaped
+names, and normal ID generation and receipt timestamps use separate clock reads.
+Generic `check` therefore retains its full scan, exact valid/matching total,
+filters and latest-N behavior. No bounded-cold-latest-N or universal slow-volume
+latency claim is made. A writer contract or durable ordering index is separate
+future work, not part of this optimization.
+
 ## Cross-platform invariants
 
-- All mailbox and contact file access is via `pathlib.Path` and
+- Mailbox directory enumeration uses cross-platform `os.scandir`; file and contact access is via `pathlib.Path` and
   `shutil.move`/`shutil.rmtree`; no shell-outs. DOCUMENT: contact writes use
   `tempfile.mkstemp` + `os.replace` for atomicity — `os.replace` is atomic on a
   single filesystem on both POSIX and Windows.

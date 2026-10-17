@@ -73,6 +73,20 @@ and rejects invalid regex; it accepts neither `filter` nor `n`. With no folder,
 `search` covers inbox + sent. Folder-less `read` searches inbox, sent, then archive;
 only inbox records are marked read.
 
+## Scan cost and ordering
+
+Unread notifications and inbox `check` with `unread_only=true` enumerate the full
+inbox, read `read.json` once per scan, and open only unread candidates. Old unread
+mail is never discarded behind a run of handled messages. Count and full-body
+notification views share a single operation-local snapshot; later calls rescan.
+
+Generic `check` still scans bodies to preserve `received_at` ordering, valid and
+filtered totals, and latest-N results. Directory timestamps are not a substitute
+for receipt times, especially for imported/legacy mail. This release adds no
+ordering cache/index, writer format, or configurable early-stop heuristic.
+Directory enumeration remains linear and filesystems may require type stats;
+this reduces read-history body I/O, not all slow-media latency.
+
 ## Read, mutate, and contacts
 
 - `read` takes mailbox IDs, returns source records including attachments, and marks

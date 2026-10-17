@@ -339,8 +339,15 @@ class EmailManager:
         sort = f.get("sort", "newest")
         truncate = f.get("truncate", 500)
 
-        emails = self._list_emails(folder)
         read_set = _read_ids(self._agent)
+        if folder == "inbox" and f.get("unread_only"):
+            emails = _list_inbox(self._agent, read_ids=read_set)
+            for email in emails:
+                email["_folder"] = "inbox"
+        else:
+            # Without an ordering index, ID order cannot preserve received_at,
+            # filtered totals or legacy/imported messages. Keep the full scan.
+            emails = self._list_emails(folder)
 
         if f.get("from"):
             ff = f["from"].lower()
