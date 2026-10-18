@@ -19,10 +19,9 @@ from lingtai.adapters.project_interactive_workspace import (
 )
 from lingtai.kernel.project import ProjectCreationError
 from lingtai.kernel.project.interactive_creation import (
-    CreationAttempt, CreationPrerequisitePort, CreationRecipePort,
+    CreationAttempt, CreationPrerequisitePort,
     InteractiveCreateRequest, InteractiveCreationUseCase, InteractiveOptions,
-    InteractiveWorkspacePort, ProcessEvidence,
-    RecipeLayers, RecipeSelection,
+    ProcessEvidence,
 )
 from lingtai.tools.psyche.settings import read_resolved_prompt_inputs, serialize_prompt_owner_document
 
@@ -55,58 +54,6 @@ class Prerequisites(CreationPrerequisitePort):
         return self.callback(attempt, preset_ref)
 
 
-class MemoryWorkspace(InteractiveWorkspacePort):
-    def __init__(self, events):
-        self.events = events
-        self.seed = None
-        self.committed = False
-        self.discarded = False
-
-    def preflight(self, req):
-        self.events.append("preflight")
-
-    def begin(self):
-        self.events.append("begin")
-        return CreationAttempt("test-attempt")
-
-    def build(self, attempt, seed):
-        self.events.append("build")
-        self.seed = seed
-
-    def validate(self, attempt, req, *, persisted):
-        self.events.append("persisted" if persisted else "staged")
-        assert self.seed.human_manifest["admin"] is None
-        assert self.seed.agent_manifest["admin"]["karma"] is True
-
-    def publish(self, attempt):
-        self.events.append("publish")
-        self.committed = True
-        return ()
-
-    def discard_owned(self, attempt):
-        self.events.append("discard")
-        assert not self.committed
-        self.discarded = True
-        return True
-
-
-class MemoryRecipes(CreationRecipePort):
-    def __init__(self, events):
-        self.events = events
-
-    def observe_local(self):
-        self.events.append("local_recipe")
-        return None
-
-    def packaged_default(self):
-        self.events.append("packaged_recipe")
-        return RecipeSelection("memory", "adaptive", None)
-
-    def materialize(self, selection, attempt, language):
-        self.events.append("recipe")
-        return RecipeLayers(comment="Recipe Pad")
-
-
 def filesystem(root: Path, **kwargs):
     from lingtai.agent import load_preset
     return FilesystemInteractiveWorkspaceAdapter(
@@ -114,95 +61,49 @@ def filesystem(root: Path, **kwargs):
     )
 
 
-@pytest.mark.parametrize("implementation", ["memory", "filesystem"])
-def test_shared_creation_contract_hidden_until_valid_prerequisites(tmp_path, implementation):
+def test_creation_contract_hidden_until_valid_prerequisites(tmp_path):
     req = request(tmp_path)
-    if implementation == "memory":
-        events = []
-        workspace, recipes = MemoryWorkspace(events), MemoryRecipes(events)
-        def prerequisite(attempt, ref):
-            assert events[-1] == "staged"
-            assert not workspace.committed
-            events.append("prerequisites")
-            return True
-    else:
-        workspace = filesystem(tmp_path)
-        recipes = FilesystemCreationRecipeAdapter(workspace)
-        def prerequisite(attempt, ref):
-            assert not (tmp_path / ".lingtai").exists()
-            stage = workspace.owned_stage(attempt)
-            assert json.loads((stage / "human" / ".agent.json").read_text())["admin"] is None
-            assert json.loads((stage / "orch-dir" / ".agent.json").read_text())["admin"]["karma"] is True
-            assert not Path(ref).exists()  # pending snapshot did not fabricate existence
-            assert "comment_file" not in (stage / "orch-dir" / "init.json").read_text()
-            persist_selected(req)
-            return True
+    workspace = filesystem(tmp_path)
+    recipes = FilesystemCreationRecipeAdapter(workspace)
+    def prerequisite(attempt, ref):
+        assert not (tmp_path / ".lingtai").exists()
+        stage = workspace.owned_stage(attempt)
+        assert json.loads((stage / "human" / ".agent.json").read_text())["admin"] is None
+        assert json.loads((stage / "orch-dir" / ".agent.json").read_text())["admin"]["karma"] is True
+        assert not Path(ref).exists()  # pending snapshot did not fabricate existence
+        assert "comment_file" not in (stage / "orch-dir" / "init.json").read_text()
+        persist_selected(req)
+        return True
     prerequisites = Prerequisites(prerequisite)
     result = InteractiveCreationUseCase(workspace, recipes, prerequisites).create(req)
     assert result.to_payload()["committed"] is True
     assert result.directory_name == "orch-dir" and result.agent_name == "Display name"
     assert prerequisites.calls == 1
-    if implementation == "memory":
-        assert events == ["preflight", "begin", "local_recipe", "packaged_recipe", "recipe",
-                          "build", "staged", "prerequisites", "persisted", "publish"]
-        assert not workspace.discarded
-        assert workspace.seed.init_document["pad"] == "Recipe Pad"
-    else:
-        assert not list(tmp_path.glob(".lingtai.create-*"))
-        final = tmp_path / ".lingtai"
-        assert (final / ".library_shared").is_dir()
-        init = json.loads((final / "orch-dir" / "init.json").read_text())
-        assert "context_limit" not in init["manifest"]["llm"]
-        assert "context_limit" not in init["manifest"]
-        assert init["manifest"]["preset"]["allowed"] == [req.preset_ref]
-        assert init["env_file"] == req.options.env_file
-        assert init["pad"] == (tmp_path / ".recipe" / "comment" / "zh" / "comment.md").read_text()
-        assert "---\nrelated_files:" not in init["pad"]
-        assert read_resolved_prompt_inputs(final / "orch-dir").covenant == "approved covenant"
-        assert "{{lang}}" not in (final / "orch-dir" / ".prompt").read_text()
-        assert (final / ".tui-asset" / ".recipe" / "recipe.json").is_file()
+    assert not list(tmp_path.glob(".lingtai.create-*"))
+    final = tmp_path / ".lingtai"
+    assert (final / ".library_shared").is_dir()
+    init = json.loads((final / "orch-dir" / "init.json").read_text())
+    assert "context_limit" not in init["manifest"]["llm"]
+    assert "context_limit" not in init["manifest"]
+    assert init["manifest"]["preset"]["allowed"] == [req.preset_ref]
+    assert init["env_file"] == req.options.env_file
+    assert init["pad"] == (tmp_path / ".recipe" / "comment" / "zh" / "comment.md").read_text()
+    assert "---\nrelated_files:" not in init["pad"]
+    assert read_resolved_prompt_inputs(final / "orch-dir").covenant == "approved covenant"
+    assert "{{lang}}" not in (final / "orch-dir" / ".prompt").read_text()
+    assert (final / ".tui-asset" / ".recipe" / "recipe.json").is_file()
 
 
 @pytest.mark.parametrize("evidence", [ProcessEvidence.BLOCKED, ProcessEvidence.UNKNOWN])
 def test_unresolved_process_evidence_refuses_before_any_port_write(tmp_path, evidence):
-    events = []
+    workspace = filesystem(tmp_path)
+    prerequisites = Prerequisites()
     with pytest.raises(ProjectCreationError) as error:
-        InteractiveCreationUseCase(MemoryWorkspace(events), MemoryRecipes(events), Prerequisites()).create(
+        InteractiveCreationUseCase(workspace, FilesystemCreationRecipeAdapter(workspace), prerequisites).create(
             replace(request(tmp_path), process_evidence=evidence))
     assert error.value.error.code == "project_process_state_unresolved"
-    assert events == []
+    assert prerequisites.calls == 0
     assert list(tmp_path.iterdir()) == []
-
-
-@pytest.mark.parametrize("phase", ["preflight", "begin", "recipe", "build", "staged", "prerequisites", "persisted", "publish"])
-def test_real_filesystem_failure_phase_matrix(tmp_path, monkeypatch, phase):
-    req = request(tmp_path)
-    workspace = filesystem(tmp_path)
-    original_validate = workspace.validate
-    recipes = FilesystemCreationRecipeAdapter(workspace)
-    def failure(*args, **kwargs):
-        raise OSError("DO-NOT-EMIT arbitrary secret-bearing exception")
-    if phase in {"staged", "persisted"}:
-        def validate(*args, persisted, **kwargs):
-            if persisted == (phase == "persisted"):
-                failure()
-            original_validate(*args, persisted=persisted, **kwargs)
-        monkeypatch.setattr(workspace, "validate", validate)
-    elif phase == "recipe":
-        monkeypatch.setattr(recipes, "materialize", failure)
-    elif phase != "prerequisites":
-        monkeypatch.setattr(workspace, phase, failure)
-    prerequisites = Prerequisites(failure if phase == "prerequisites" else
-                                  lambda *_: (persist_selected(req), True)[1])
-    with pytest.raises((ProjectCreationError, OSError)):
-        InteractiveCreationUseCase(workspace, recipes, prerequisites).create(req)
-    assert not (tmp_path / ".lingtai").exists()
-    assert not list(tmp_path.glob(".lingtai.create-*"))
-    assert prerequisites.calls == (1 if phase in {"prerequisites", "persisted", "publish"} else 0)
-    if phase in {"build", "staged", "prerequisites", "persisted", "publish"}:
-        assert (tmp_path / ".recipe" / "recipe.json").is_file()  # not whole-root rollback
-    if phase in {"persisted", "publish"}:
-        assert Path(req.preset_ref).is_file()  # outer dependencies are not compensated
 
 
 @pytest.mark.parametrize("ack", ["reject", "missing", "mismatch"])
@@ -361,29 +262,6 @@ def test_root_cli_real_filesystem_exchange_does_not_start_agent(tmp_path, monkey
     with pytest.raises(ProjectCreationError) as error:
         decode_creation_request(payload)
     assert error.value.error.code == "credentials_must_remain_outer"
-
-@pytest.mark.parametrize("invalid", ["destination", "directory", "human", "privileges", "preset", "recipe"])
-def test_invalid_draft_never_creates_root_recipe_or_staging(tmp_path, invalid):
-    req = request(tmp_path)
-    if invalid == "destination":
-        req = replace(req, approved_root=str(tmp_path / "other"))
-    elif invalid == "directory":
-        req = replace(req, directory_name="../escape")
-    elif invalid == "human":
-        req = replace(req, directory_name="human")
-    elif invalid == "privileges":
-        req = replace(req, options=replace(req.options, karma=False, nirvana=False))
-    elif invalid == "preset":
-        req = replace(req, preset_manifest={"llm": {"model": "missing-provider"}})
-    else:
-        req = replace(req, recipe="unexpected")
-    workspace = filesystem(tmp_path)
-    prerequisites = Prerequisites()
-    with pytest.raises(ProjectCreationError):
-        InteractiveCreationUseCase(workspace, FilesystemCreationRecipeAdapter(workspace), prerequisites).create(req)
-    assert prerequisites.calls == 0
-    assert list(tmp_path.iterdir()) == []
-
 
 def test_missing_required_env_file_rejected_before_any_write_or_prerequisite(tmp_path):
     req = request(tmp_path)

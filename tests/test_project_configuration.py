@@ -1,11 +1,10 @@
-"""Authored only: compact fake/filesystem Project configuration conformance."""
+"""Filesystem Project configuration smoke and partial-write boundaries."""
 from __future__ import annotations
 
 import copy
 import io
 import json
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,8 +13,8 @@ from lingtai.adapters.project_configuration import FilesystemProjectConfiguratio
 from lingtai.cli_project_configuration import execute, read_request
 from lingtai.kernel.project import ProjectCreationError
 from lingtai.kernel.project.configuration import (
-    ConfigurationOptions, ConfigurationResult, ConfigurationWriteReceipt, ConfigureMemberRequest,
-    MemberDocuments, ProjectConfigurationPort, ProjectConfigurationUseCase,
+    ConfigurationOptions, ConfigurationWriteReceipt, ConfigureMemberRequest,
+    ProjectConfigurationUseCase,
 )
 
 MATRIX = json.loads((Path(__file__).parent / "fixtures/project_configuration.json").read_text())
@@ -28,59 +27,12 @@ def write(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False))
 
 
-class MemoryWorkspace(ProjectConfigurationPort):
-    def __init__(self):
-        self.members = {}
-        self.seeds = []
-        self.fail = ""
-        self.human_exists = False
-
-    def human_manifest_exists(self):
-        return self.human_exists
-
-    def save_skeleton(self, manifest, mailboxes, helpers):
-        assert manifest["admin"] is None
-        assert mailboxes == ("inbox", "sent", "archive")
-        assert helpers == (".tui-asset", ".library_shared")
-        self.human_exists = True
-        return ConfigurationResult("initialized", "complete", updated=1)
-
-    def observe_member(self, name):
-        return copy.deepcopy(self.members.get(name, MemberDocuments(name, False, None, False, None)))
-
-    def observe_candidates(self):
-        return tuple(self.observe_member(name) for name in sorted(self.members))
-
-    def save_configured_member(self, seed):
-        self.seeds.append(seed)
-        self.members[seed.directory_name] = MemberDocuments(seed.directory_name, True,
-            copy.deepcopy(seed.init_document), True, copy.deepcopy(seed.agent_manifest))
-        return ConfigurationWriteReceipt(True, True, seed.psyche_settings_json is not None,
-                                         "READ_OK_WITH_IGNORED_FIELDS")
-
-    def save_policy_init(self, name, document):
-        if name == self.fail:
-            return ConfigurationWriteReceipt(code="init_write_failed")
-        member = self.observe_member(name)
-        self.members[name] = replace(member, init_present=True, init_document=copy.deepcopy(document))
-        return ConfigurationWriteReceipt(True)
-
-    def save_member_init(self, name, document, *, only_absent=False):
-        if name == self.fail:
-            return ConfigurationWriteReceipt(code="init_write_failed")
-        member = self.observe_member(name)
-        if only_absent and member.init_present:
-            return ConfigurationWriteReceipt(code="init_write_failed")
-        self.members[name] = replace(member, init_present=True, init_document=copy.deepcopy(document))
-        return ConfigurationWriteReceipt(True, reader_status="READ_OK_WITH_IGNORED_FIELDS")
-
-
 def filesystem(root):
     from lingtai.agent import load_preset
     return FilesystemProjectConfigurationAdapter(root, load_preset=load_preset)
 
 
-def fixture_workspace(root, kind):
+def fixture_workspace(root):
     references = {name: str(root / name) for name in ("old.json", "active.json", "selected.json")}
     for name in references:
         write(root / name, {"description": {"summary": "fixture"}, "manifest": PUBLIC_MANIFEST})
@@ -90,20 +42,15 @@ def fixture_workspace(root, kind):
         policy[key] = references[policy[key]]
     policy["allowed"] = [references[r] for r in policy["allowed"]]
     blueprint = copy.deepcopy(MATRIX["existing_blueprint"])
-    if kind == "memory":
-        workspace = MemoryWorkspace()
-        workspace.members["orch-dir"] = MemberDocuments("orch-dir", True, previous, True, blueprint)
-    else:
-        write(root / ".lingtai/orch-dir/init.json", previous)
-        write(root / ".lingtai/orch-dir/.agent.json", blueprint)
-        workspace = filesystem(root)
+    write(root / ".lingtai/orch-dir/init.json", previous)
+    write(root / ".lingtai/orch-dir/.agent.json", blueprint)
+    workspace = filesystem(root)
     return workspace, references
 
 
-@pytest.mark.parametrize("kind", ["memory", "filesystem"])
 @pytest.mark.parametrize("case", MATRIX["cases"], ids=lambda c: c["id"])
-def test_shared_setup_matrix(tmp_path, kind, case):
-    workspace, refs = fixture_workspace(tmp_path, kind)
+def test_shared_setup_matrix(tmp_path, case):
+    workspace, refs = fixture_workspace(tmp_path)
     request = ConfigureMemberRequest("orch-dir", "New Display", "" if case["keep_current"] else refs["selected.json"],
         case["keep_current"], PUBLIC_MANIFEST,
         ConfigurationOptions(preserve_active=True, allowed_presets=tuple(refs[r] for r in case["allowed"]),
@@ -122,26 +69,21 @@ def test_shared_setup_matrix(tmp_path, kind, case):
     for key in ("agent_id", "created_at", "molt_count", "nickname", "state", "custom_blueprint"):
         assert saved.blueprint[key] == MATRIX["existing_blueprint"][key]
     assert saved.blueprint["address"] == "orch-dir"
-    if kind == "filesystem":
-        from lingtai.init_reader import read_init, reader_callbacks
-        from lingtai.agent import load_preset
-        path = tmp_path / ".lingtai/orch-dir"
-        materialize, prepare = reader_callbacks(path, load_preset=load_preset)
-        actual = read_init(path, materialize=materialize, prepare=prepare)
-        assert actual.ok and result.source.reader_status == actual.status.value
+    from lingtai.init_reader import read_init, reader_callbacks
+    from lingtai.agent import load_preset
+    path = tmp_path / ".lingtai/orch-dir"
+    materialize, prepare = reader_callbacks(path, load_preset=load_preset)
+    actual = read_init(path, materialize=materialize, prepare=prepare)
+    assert actual.ok and result.source.reader_status == actual.status.value
 
 
-@pytest.mark.parametrize("kind", ["memory", "filesystem"])
-def test_shared_policy_and_config_propagation(tmp_path, kind):
-    workspace, refs = fixture_workspace(tmp_path, kind)
+def test_shared_policy_and_config_propagation(tmp_path):
+    workspace, refs = fixture_workspace(tmp_path)
     worker = copy.deepcopy(MATRIX["existing_init"])
     worker["manifest"]["preset"] = {"active": refs["active.json"], "default": refs["old.json"],
                                     "allowed": [refs["old.json"], refs["active.json"]], "custom_policy": 42}
     worker["manifest"]["admin"] = {"unknown_flag": True}
-    if kind == "memory":
-        workspace.members["worker"] = MemberDocuments("worker", True, worker, False, None)
-    else:
-        write(tmp_path / ".lingtai/worker/init.json", worker)
+    write(tmp_path / ".lingtai/worker/init.json", worker)
     usecase = ProjectConfigurationUseCase(workspace)
     assert usecase.propagate_policy("orch-dir", refs["selected.json"], (refs["selected.json"],)).updated == 1
     result = usecase.propagate_config("orch-dir")
@@ -154,24 +96,17 @@ def test_shared_policy_and_config_propagation(tmp_path, kind):
     assert saved["pad"] == "durable Pad" and saved["mcp"] == worker["mcp"]
 
 
-@pytest.mark.parametrize("kind", ["memory", "filesystem"])
 @pytest.mark.parametrize("state", ["absent", "present", "mixed"])
-def test_shared_rehydration_state_gate(tmp_path, kind, state):
-    workspace, refs = fixture_workspace(tmp_path, kind)
-    if kind == "memory":
-        for name in ("orch-dir", "a-worker", "z-worker", "human", ".helper"):
-            blueprint = {"agent_name": "Display " + name, "admin": None if name == "human" else {}}
-            init = {"manifest": copy.deepcopy(PUBLIC_MANIFEST), "pad": ""} if state == "present" or (state == "mixed" and name == "orch-dir") else None
-            workspace.members[name] = MemberDocuments(name, init is not None, init, True, blueprint)
-    if kind == "filesystem":
-        imported = tmp_path / "imported"
-        imported.mkdir()
-        for name in ("orch-dir", "a-worker", "z-worker", "human", ".helper"):
-            write(imported / ".lingtai" / name / ".agent.json",
-                  {"agent_name": "Display " + name, "admin": None if name == "human" else {}})
-            if state == "present" or (state == "mixed" and name == "orch-dir"):
-                write(imported / ".lingtai" / name / "init.json", {"manifest": PUBLIC_MANIFEST, "pad": ""})
-        workspace = filesystem(imported)
+def test_shared_rehydration_state_gate(tmp_path, state):
+    workspace, refs = fixture_workspace(tmp_path)
+    imported = tmp_path / "imported"
+    imported.mkdir()
+    for name in ("orch-dir", "a-worker", "z-worker", "human", ".helper"):
+        write(imported / ".lingtai" / name / ".agent.json",
+              {"agent_name": "Display " + name, "admin": None if name == "human" else {}})
+        if state == "present" or (state == "mixed" and name == "orch-dir"):
+            write(imported / ".lingtai" / name / "init.json", {"manifest": PUBLIC_MANIFEST, "pad": ""})
+    workspace = filesystem(imported)
     req = ConfigureMemberRequest("orch-dir", "must-not-replace-blueprint-name", refs["selected.json"], False,
                                  PUBLIC_MANIFEST, ConfigurationOptions(env_file="public.env", venv_path="venv"))
     usecase = ProjectConfigurationUseCase(workspace)
@@ -192,11 +127,17 @@ def test_shared_rehydration_state_gate(tmp_path, kind, state):
             assert workspace.observe_member(".helper").init_present is False
 
 
-def test_rehydration_failure_stops_and_preserves_prior_writes(tmp_path):
-    workspace, refs = fixture_workspace(tmp_path, "memory")
+def test_rehydration_failure_stops_and_preserves_prior_writes(tmp_path, monkeypatch):
+    workspace, refs = fixture_workspace(tmp_path)
+    (tmp_path / ".lingtai/orch-dir/init.json").unlink()
     for name in ("orch-dir", "a-worker", "z-worker"):
-        workspace.members[name] = MemberDocuments(name, False, None, True, {"agent_name": name, "admin": {}})
-    workspace.fail = "z-worker"
+        write(tmp_path / ".lingtai" / name / ".agent.json", {"agent_name": name, "admin": {}})
+    save = workspace.save_member_init
+    def fail_last(name, document, **kwargs):
+        if name == "z-worker":
+            return ConfigurationWriteReceipt(code="init_write_failed")
+        return save(name, document, **kwargs)
+    monkeypatch.setattr(workspace, "save_member_init", fail_last)
     req = ConfigureMemberRequest("orch-dir", "orch-dir", refs["selected.json"], False, PUBLIC_MANIFEST,
                                  ConfigurationOptions(env_file="public.env", venv_path="venv"))
     result = ProjectConfigurationUseCase(workspace).rehydrate(req)
@@ -246,7 +187,7 @@ def test_real_root_cli_initialize_protocol(monkeypatch, tmp_path, capsys):
 
 
 def test_filesystem_post_init_failure_retains_precise_receipt(monkeypatch, tmp_path):
-    workspace, refs = fixture_workspace(tmp_path, "filesystem")
+    workspace, refs = fixture_workspace(tmp_path)
     import lingtai.adapters.project_configuration as adapter
     original = adapter._atomic_json
     def fail_manifest(path, document, **kwargs):
@@ -264,7 +205,7 @@ def test_filesystem_post_init_failure_retains_precise_receipt(monkeypatch, tmp_p
 
 
 def test_prompts_use_owner_serializer_and_omission_preserves_bytes(tmp_path):
-    workspace, refs = fixture_workspace(tmp_path, "filesystem")
+    workspace, refs = fixture_workspace(tmp_path)
     from lingtai.tools.psyche.settings import serialize_prompt_owner_document, read_resolved_prompt_inputs
     path = tmp_path / ".lingtai/orch-dir/settings/psyche.json"
     path.parent.mkdir()
@@ -304,42 +245,33 @@ def test_actual_saved_legacy_alias_and_large_context_metadata_are_exact(tmp_path
     assert selected.read_bytes() == before  # owner normalization only in memory
 
 
-@pytest.mark.parametrize("kind", ["memory", "filesystem"])
-def test_shared_policy_empty_skip_preserves_all_member_mode(tmp_path, kind):
-    workspace, refs = fixture_workspace(tmp_path, kind)
+def test_shared_policy_empty_skip_preserves_all_member_mode(tmp_path):
+    workspace, refs = fixture_workspace(tmp_path)
     result = ProjectConfigurationUseCase(workspace).propagate_policy(
         "", refs["selected.json"], (refs["selected.json"],))
     assert result.updated == 1 and result.failed == 0
     assert workspace.observe_member("orch-dir").init_document["manifest"]["preset"]["default"] == refs["selected.json"]
 
 
-@pytest.mark.parametrize("kind", ["memory", "filesystem"])
-def test_policy_propagation_accepts_legacy_partial_init(tmp_path, kind):
+def test_policy_propagation_accepts_legacy_partial_init(tmp_path):
     # The old caller accepts a parsed preset block, not a bootable init. No Pad,
     # env, blueprint or preset file is required to maintain its authorization.
     original = {"manifest": {"preset": {"active": "old.json", "default": "old.json",
                 "allowed": ["old.json"], "custom_policy": 9007199254740993123456789},
                 "user_manifest": True}, "covenant_file": "legacy.md",
                 "user_config": {"keep": "exact"}}
-    if kind == "memory":
-        workspace = MemoryWorkspace()
-        for name in ("alice", "carol", "selected", "human"):
-            workspace.members[name] = MemberDocuments(name, True, copy.deepcopy(original), False, None)
-        workspace.members["broken"] = MemberDocuments("broken", True, None, False, None, init_error=True)
-        workspace.members["older"] = MemberDocuments("older", True, {"manifest": {}}, False, None)
-    else:
-        for name in ("alice", "carol", "selected", "human"):
-            write(tmp_path / ".lingtai" / name / "init.json", original)
-        (tmp_path / ".lingtai/broken").mkdir()
-        (tmp_path / ".lingtai/broken/init.json").write_text("{broken")
-        write(tmp_path / ".lingtai/older/init.json", {"manifest": {}})
-        # Unrelated malformed owner settings cannot gate a policy-only edit.
-        owner = tmp_path / ".lingtai/alice/settings/psyche.json"
-        owner.parent.mkdir()
-        owner.write_text("{unrelated malformed owner")
-        def no_runtime_preset_load(*args, **kwargs):
-            raise AssertionError("policy propagation is not reconstruction")
-        workspace = FilesystemProjectConfigurationAdapter(tmp_path, load_preset=no_runtime_preset_load)
+    for name in ("alice", "carol", "selected", "human"):
+        write(tmp_path / ".lingtai" / name / "init.json", original)
+    (tmp_path / ".lingtai/broken").mkdir()
+    (tmp_path / ".lingtai/broken/init.json").write_text("{broken")
+    write(tmp_path / ".lingtai/older/init.json", {"manifest": {}})
+    # Unrelated malformed owner settings cannot gate a policy-only edit.
+    owner = tmp_path / ".lingtai/alice/settings/psyche.json"
+    owner.parent.mkdir()
+    owner.write_text("{unrelated malformed owner")
+    def no_runtime_preset_load(*args, **kwargs):
+        raise AssertionError("policy propagation is not reconstruction")
+    workspace = FilesystemProjectConfigurationAdapter(tmp_path, load_preset=no_runtime_preset_load)
     result = ProjectConfigurationUseCase(workspace).propagate_policy("selected", "new.json", ("new.json",))
     assert (result.updated, result.skipped, result.failed, result.code) == (2, 3, 1, "member_document_unreadable")
     assert result.source.reader_status == "not_read"
@@ -350,9 +282,8 @@ def test_policy_propagation_accepts_legacy_partial_init(tmp_path, kind):
         assert saved.init_document == expected and not saved.blueprint_present
     for name in ("selected", "human"):
         assert workspace.observe_member(name).init_document == original
-    if kind == "filesystem":
-        assert owner.read_text() == "{unrelated malformed owner"
-        assert (tmp_path / ".lingtai/broken/init.json").read_text() == "{broken"
+    assert owner.read_text() == "{unrelated malformed owner"
+    assert (tmp_path / ".lingtai/broken/init.json").read_text() == "{broken"
 
 
 def test_policy_write_failure_continues_without_runtime_preflight(monkeypatch, tmp_path):

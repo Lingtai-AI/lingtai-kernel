@@ -117,7 +117,7 @@ interactive creation. Its Contract defines the CLI-visible behavior.
 - JSON-lines driving/prerequisite adapter validates the operation-specific
   request and emits ready/consumes bound ack
   (`src/lingtai/adapters/project_creation_exchange.py:25-114`).
-- Shared fake/filesystem and actual root CLI source tests are in
+- Filesystem and actual root CLI source tests are in
   `tests/test_project_interactive_creation.py`; manual acceptance is PRJ002.
 
 ## Connections
@@ -178,7 +178,7 @@ The public command procedure is
 - `ProjectConfigurationUseCase`/`ProjectConfigurationPort` and operation receipts: `src/lingtai/kernel/project/configuration.py:24-366`;
   sequential filesystem reads/writes and owner-reader seams: `src/lingtai/adapters/project_configuration.py:68-229`.
 - Strict stdin driver/preset-Psyche composition: `src/lingtai/cli_project_configuration.py:148-199`;
-  shared fake/filesystem matrix: `tests/test_project_configuration.py`, public cases: `tests/fixtures/project_configuration.json` (PRJ003).
+  filesystem preservation cases: `tests/test_project_configuration.py`, public cases: `tests/fixtures/project_configuration.json` (PRJ003).
 - Covenant precedence and policy-only versus reader-enforcing writes belong to the
   [configuration contract](CONTRACT.md#existing-project-configuration-candidate-slice), not this map.
 - Interactive selected-load diagnostic containment/restoration: `src/lingtai/cli_project.py:147-158`;

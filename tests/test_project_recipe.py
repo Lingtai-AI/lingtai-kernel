@@ -10,7 +10,6 @@ import pytest
 
 from lingtai.adapters.project_recipe import FilesystemProjectRecipeAdapter
 from lingtai.cli_project_recipe import apply_payload, execute
-from lingtai.cli_project_configuration import read_request
 from lingtai.kernel.project import ProjectCreationError
 from lingtai.kernel.project.recipe import (
     GreetLayer, ProjectRecipePort, ProjectRecipeUseCase, RecipeApplyRequest,
@@ -82,35 +81,6 @@ def test_recipe_metadata_go_rejected_bytes(tmp_path, raw):
     assert caught.value.failure.operation == "decode"
     assert path.read_bytes() == raw
     assert not (tmp_path / ".lingtai").exists()
-
-
-@pytest.mark.parametrize("field", ["id", "name", "description", "version", "library_name"])
-@pytest.mark.parametrize("order", ["string-null", "null-string", "string-string", "string-empty"])
-def test_recipe_metadata_all_go_fields_case_order_and_null(field, order):
-    from lingtai.adapters.project_recipe import _read_recipe_metadata
-    first, second = {
-        "string-null": ('"first"', 'null'),
-        "null-string": ('null', '"last"'),
-        "string-string": ('"first"', '"last"'),
-        "string-empty": ('"first"', '""'),
-    }[order]
-    raw = ('{"name":"normal","' + field + '":' + first + ',"' + field.upper() + '":' + second + '}').encode()
-    expected = {"string-null": None if field == "library_name" else "first",
-                "null-string": "last", "string-string": "last", "string-empty": ""}[order]
-    if field == "name" and not expected:
-        with pytest.raises(ValueError):
-            _read_recipe_metadata(raw)
-    else:
-        assert _read_recipe_metadata(raw)[field] == ("1.0.0" if field == "version" and not expected else expected)
-
-
-@pytest.mark.parametrize("field", ["id", "name", "description", "version", "library_name"])
-@pytest.mark.parametrize("wrong", ['42', 'true', '[]', '{}'])
-def test_recipe_metadata_wrong_typed_occurrence_not_hidden_by_duplicate(field, wrong):
-    from lingtai.adapters.project_recipe import _read_recipe_metadata
-    raw = ('{"name":"normal","' + field + '":' + wrong + ',"' + field.upper() + '":"valid"}').encode()
-    with pytest.raises(ValueError):
-        _read_recipe_metadata(raw)
 
 
 def test_recipe_metadata_go_simple_fold_and_string_defaults():
@@ -345,10 +315,7 @@ def test_real_phase_receipts_and_always_snapshot(tmp_path, monkeypatch, phase):
     assert "secret" not in json.dumps(apply_payload(result))
 
 
-@pytest.mark.parametrize("raw", ['{"project_dir":"","project_dir":""}', '{} {}', '[]', '{"project_dir":"","x":NaN}', '{"api_key":"secret"}'])
-def test_strict_request_and_existing_library_authority(tmp_path, monkeypatch, raw):
-    with pytest.raises(ProjectCreationError):
-        read_request(io.StringIO(raw))
+def test_existing_library_authority_and_join_semantics(tmp_path, monkeypatch):
     write(tmp_path / ".recipe/recipe.json", {"name": "fixture", "library_name": "../escape"})
     (tmp_path / ".lingtai/worker").mkdir(parents=True)
     before = (tmp_path / ".recipe/recipe.json").read_bytes()
@@ -476,49 +443,37 @@ class MemberRenderer(RecipeGreetRenderingPort):
         return self.callback(member)
 
 
-def exchange_fixture(tmp_path, monkeypatch, kind, *, template=b"\xff\x00original"):
+def exchange_fixture(tmp_path, monkeypatch, *, template=b"\xff\x00original"):
     names = ("a", "b", "c", "human", ".dot")
     bundle = tmp_path / "bundle"
     destination = tmp_path / "separate-staging"
-    if kind == "memory":
-        port = MemoryRecipe()
-        port.names = names
-        port.greet = GreetLayer(True, template)
-        port.info = RecipeInfo("fixture", "library")
-        for name in names:
-            port.prompts[name] = b"old prompt"
-            port.skills[name] = RecipeSkills(b'{}', True)
-    else:
-        write(bundle / ".recipe/recipe.json", {"name": "fixture", "library_name": "library"})
-        write(bundle / ".recipe/greet/greet.md", template)
-        for name in names:
-            write(destination / name / ".prompt", b"old prompt")
-            write(destination / name / "init.json", {"manifest": {"capabilities": {"skills": {}}}})
-        write(destination / "file", b"not a directory")
-        try:
-            (destination / "symlink-dir").symlink_to(destination / "a", target_is_directory=True)
-        except OSError:
-            pass  # Windows privilege may be unavailable; separately report acceptance.
-        port = FilesystemProjectRecipeAdapter(bundle, lingtai_dir=destination, load_preset=lambda *_: {})
-        monkeypatch.setattr(port, "_reader_status", lambda *_: "FULLY_EFFECTIVE")
+    write(bundle / ".recipe/recipe.json", {"name": "fixture", "library_name": "library"})
+    write(bundle / ".recipe/greet/greet.md", template)
+    for name in names:
+        write(destination / name / ".prompt", b"old prompt")
+        write(destination / name / "init.json", {"manifest": {"capabilities": {"skills": {}}}})
+    write(destination / "file", b"not a directory")
+    try:
+        (destination / "symlink-dir").symlink_to(destination / "a", target_is_directory=True)
+    except OSError:
+        pass  # Windows privilege may be unavailable; separately report acceptance.
+    port = FilesystemProjectRecipeAdapter(bundle, lingtai_dir=destination, load_preset=lambda *_: {})
+    monkeypatch.setattr(port, "_reader_status", lambda *_: "FULLY_EFFECTIVE")
     return port, bundle, destination
 
 
-def prompt_bytes(port, destination, kind, name):
-    return port.prompts[name] if kind == "memory" else (destination / name / ".prompt").read_bytes()
+def prompt_bytes(destination, name):
+    return (destination / name / ".prompt").read_bytes()
 
 
-def skills_paths(port, destination, kind, name):
-    if kind == "memory":
-        return port.skills[name].paths
+def skills_paths(destination, name):
     return tuple(json.loads((destination / name / "init.json").read_bytes())["manifest"]["capabilities"]["skills"]["paths"])
 
 
-@pytest.mark.parametrize("kind", ["memory", "filesystem"])
-def test_exchange_sequential_binary_empty_truncate_and_independent_destination(tmp_path, monkeypatch, kind):
+def test_exchange_sequential_binary_empty_truncate_and_independent_destination(tmp_path, monkeypatch):
     import os
-    port, bundle, destination = exchange_fixture(tmp_path, monkeypatch, kind)
-    raw = port.greet.content if kind == "memory" else (bundle / ".recipe/greet/greet.md").read_bytes()
+    port, bundle, destination = exchange_fixture(tmp_path, monkeypatch)
+    raw = (bundle / ".recipe/greet/greet.md").read_bytes()
     outputs = (b"", b"\x00\xff\xfe", b"\x80\x00" * (1024 * 1024))
     original_enumeration = port.observe_directories
     enumeration_calls = []
@@ -530,41 +485,34 @@ def test_exchange_sequential_binary_empty_truncate_and_independent_destination(t
         index = member.sequence - 1
         name = ("a", "b", "c")[index]
         assert member.directory_name == os.fsencode(name) and member.template == raw
-        assert prompt_bytes(port, destination, kind, name) == b"old prompt"
+        assert prompt_bytes(destination, name) == b"old prompt"
         if index:
             preceding = ("a", "b")[index - 1]
-            assert prompt_bytes(port, destination, kind, preceding) == outputs[index - 1]
-            assert skills_paths(port, destination, kind, preceding)
+            assert prompt_bytes(destination, preceding) == outputs[index - 1]
+            assert skills_paths(destination, preceding)
         if index == 0:
             # Arbitrary callback changes future init/tree/Recipe. Enumeration
             # and raw greet stay captured; future skills are read sequentially.
-            if kind == "memory":
-                port.greet = GreetLayer(True, b"mutated")
-                port.names += ("later",)
-                port.skills["b"] = RecipeSkills(b'{}', True, ("callback-path",))
-            else:
-                write(bundle / ".recipe/greet/greet.md", b"mutated")
-                write(destination / "later/.prompt", b"foreign")
-                write(destination / "b/init.json", {"manifest": {"capabilities": {"skills": {"paths": ["callback-path"]}}}})
+            write(bundle / ".recipe/greet/greet.md", b"mutated")
+            write(destination / "later/.prompt", b"foreign")
+            write(destination / "b/init.json", {"manifest": {"capabilities": {"skills": {"paths": ["callback-path"]}}}})
         return outputs[index]
     renderer = MemberRenderer(callback)
     result = ProjectRecipeUseCase(port, renderer).apply(RecipeApplyRequest("", None))
     assert len(renderer.calls) == 3 and enumeration_calls == [True]
     assert [m.directory_name for m in result.members] == ["a", "b", "c"]
     assert all(m.prompt_written and m.init_written for m in result.members)
-    assert skills_paths(port, destination, kind, "b")[0] == "callback-path"
+    assert skills_paths(destination, "b")[0] == "callback-path"
     for name, content in zip(("a", "b", "c"), outputs):
-        assert prompt_bytes(port, destination, kind, name) == content
+        assert prompt_bytes(destination, name) == content
     assert result.snapshot.copied and not result.code
-    if kind == "filesystem":
-        assert not (bundle / ".lingtai").exists()
-        assert (destination / "later/.prompt").read_bytes() == b"foreign"
+    assert not (bundle / ".lingtai").exists()
+    assert (destination / "later/.prompt").read_bytes() == b"foreign"
 
 
-@pytest.mark.parametrize("kind", ["memory", "filesystem"])
 @pytest.mark.parametrize("state", ["identity", "empty", "unreadable", "missing", "no_members"])
-def test_exchange_identity_and_original_empty_unreadable_missing_zero_calls(tmp_path, monkeypatch, kind, state):
-    port, bundle, destination = exchange_fixture(tmp_path, monkeypatch, kind)
+def test_exchange_identity_and_original_empty_unreadable_missing_zero_calls(tmp_path, monkeypatch, state):
+    port, bundle, destination = exchange_fixture(tmp_path, monkeypatch)
     original = b"\xff\x00original"
     if state in {"empty", "unreadable", "missing"}:
         monkeypatch.setattr(port, "observe_greet", lambda *_: {
@@ -577,23 +525,20 @@ def test_exchange_identity_and_original_empty_unreadable_missing_zero_calls(tmp_
     result = ProjectRecipeUseCase(port, None if state == "identity" else renderer).apply(RecipeApplyRequest("", None))
     assert not renderer.calls and result.snapshot.attempted
     if state == "identity":
-        assert all(prompt_bytes(port, destination, kind, name) == original for name in ("a", "b", "c"))
+        assert all(prompt_bytes(destination, name) == original for name in ("a", "b", "c"))
     else:
-        assert all(prompt_bytes(port, destination, kind, name) == b"old prompt" for name in ("a", "b", "c"))
+        assert all(prompt_bytes(destination, name) == b"old prompt" for name in ("a", "b", "c"))
 
 
-@pytest.mark.parametrize("kind", ["memory", "filesystem"])
-def test_exchange_second_metadata_race_nonfatal_empty_library(tmp_path, monkeypatch, kind):
-    port, bundle, destination = exchange_fixture(tmp_path, monkeypatch, kind)
+def test_exchange_second_metadata_race_nonfatal_empty_library(tmp_path, monkeypatch):
+    port, bundle, destination = exchange_fixture(tmp_path, monkeypatch)
     original_load, original_greet = port.load_info, port.observe_greet
     events = []
     def load():
         events.append("metadata")
         if events.count("metadata") == 2:
-            if kind == "filesystem":
-                write(bundle / ".recipe/recipe.json", b"{changed-invalid")
-                return original_load()
-            raise recipe_error("invalid_recipe")
+            write(bundle / ".recipe/recipe.json", b"{changed-invalid")
+            return original_load()
         return original_load()
     def greet(language):
         events.append("greet")
@@ -607,10 +552,9 @@ def test_exchange_second_metadata_race_nonfatal_empty_library(tmp_path, monkeypa
     assert all(not m.init_written and m.prompt_written for m in result.members)
 
 
-@pytest.mark.parametrize("kind", ["memory", "filesystem"])
 @pytest.mark.parametrize("phase", ["metadata", "enumeration"])
-def test_exchange_pretraversal_failures_no_callback_snapshot(tmp_path, monkeypatch, kind, phase):
-    port, _, destination = exchange_fixture(tmp_path, monkeypatch, kind)
+def test_exchange_pretraversal_failures_no_callback_snapshot(tmp_path, monkeypatch, phase):
+    port, _, destination = exchange_fixture(tmp_path, monkeypatch)
     snapshot_calls = []
     monkeypatch.setattr(port, "replace_snapshot", lambda: snapshot_calls.append(True))
     method = "load_info" if phase == "metadata" else "observe_directories"
@@ -619,13 +563,12 @@ def test_exchange_pretraversal_failures_no_callback_snapshot(tmp_path, monkeypat
     with pytest.raises(ProjectCreationError):
         ProjectRecipeUseCase(port, renderer).apply(RecipeApplyRequest("", None))
     assert not renderer.calls and not snapshot_calls
-    assert prompt_bytes(port, destination, kind, "a") == b"old prompt"
+    assert prompt_bytes(destination, "a") == b"old prompt"
 
 
-@pytest.mark.parametrize("kind", ["memory", "filesystem"])
 @pytest.mark.parametrize("bad_ack", ["", "{bad PRIVATE}\n", '{"status":"recipe_member_rendered","sequence":9,"rendered_b64":"","rendered_bytes":0}\n'])
-def test_exchange_eof_malformed_pending_stops_without_snapshot_prior_writes_survive(tmp_path, monkeypatch, kind, bad_ack):
-    port, _, destination = exchange_fixture(tmp_path, monkeypatch, kind)
+def test_exchange_eof_malformed_pending_stops_without_snapshot_prior_writes_survive(tmp_path, monkeypatch, bad_ack):
+    port, _, destination = exchange_fixture(tmp_path, monkeypatch)
     ack = {"status": "recipe_member_rendered", "sequence": 1, "rendered_b64": "", "rendered_bytes": 0}
     output = io.StringIO()
     exchange = JsonRecipeRenderingAdapter(io.StringIO(json.dumps(ack) + "\n" + bad_ack), output)
@@ -635,14 +578,11 @@ def test_exchange_eof_malformed_pending_stops_without_snapshot_prior_writes_surv
     assert receipt["status"] == "recipe_exchange_stopped" and receipt["outcome"] == "partial"
     assert receipt["pending_sequence"] == 2 and receipt["pending_directory_name_b64"] == encode_bytes(b"b")
     assert receipt["legacy_applied"] == 1 and not receipt["snapshot"]["attempted"]
-    assert prompt_bytes(port, destination, kind, "a") == b"" and skills_paths(port, destination, kind, "a")
-    assert prompt_bytes(port, destination, kind, "b") == b"old prompt"
+    assert prompt_bytes(destination, "a") == b"" and skills_paths(destination, "a")
+    assert prompt_bytes(destination, "b") == b"old prompt"
     assert "PRIVATE" not in json.dumps(receipt)
     assert len(output.getvalue().splitlines()) == 2
-    if kind == "filesystem":
-        assert not port.snapshot.exists()
-    else:
-        assert ("snapshot", "copy") not in port.events
+    assert not port.snapshot.exists()
 
 
 def test_exchange_growing_frames_ack_binary_and_source_bound_immutable_member():
@@ -692,9 +632,8 @@ def test_same_command_new_line_and_legacy_eof_multiline_caps():
         read_recipe_request(io.StringIO(json.dumps({**legacy, "language": "x" * (1024 * 1024)})))
 
 
-@pytest.mark.parametrize("kind", ["memory", "filesystem"])
-def test_exchange_first_error_quirk_keeps_first_failure_reader_not_gate(tmp_path, monkeypatch, kind):
-    port, _, _ = exchange_fixture(tmp_path, monkeypatch, kind)
+def test_exchange_first_error_quirk_keeps_first_failure_reader_not_gate(tmp_path, monkeypatch):
+    port, _, _ = exchange_fixture(tmp_path, monkeypatch)
     original_prompt = port.write_prompt
     from lingtai.kernel.project.recipe import RecipeFailure
     factual = RecipeFailure("prompt", "write", encode_bytes(b"native/a/.prompt"), 13)

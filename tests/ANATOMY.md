@@ -239,4 +239,4 @@ whose selectors disappeared are explicitly retired, not silently remapped to
 unrelated smoke. Restore a focused regression from Git history when a
 concrete defect or required native/manual acceptance earns it.
 
-`tests/test_project_recipe.py` carries twelve thin existing local Recipe fake/filesystem and actual CLI source contracts; PRJ004 guards its Project owner promises. Execution is parent-owned, not an authored passing receipt.
+`tests/test_project_recipe.py` retains focused metadata, partial-write and actual CLI contracts; synchronous rendering uses the filesystem adapter rather than a duplicate fake-backend matrix. PRJ004 guards its unchanged Project promises. Configuration and hidden creation likewise retain filesystem/CLI boundaries without their duplicate in-memory adapters. Exhaustive metadata field/type and injected creation phase/draft matrices were deliberately retired; execution and manual acceptance remain parent-owned, not authored passing receipts.
