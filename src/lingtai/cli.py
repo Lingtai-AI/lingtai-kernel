@@ -33,6 +33,80 @@ from lingtai.kernel.process_match import match_agent_acp, match_agent_run
 from lingtai.tools.system.settings import resolve_runtime_policy
 
 
+def inspect_init(working_dir: Path) -> tuple[dict[str, Any], int]:
+    """Project safe identity/source facts through the real reader, without writes.
+
+    Observe the loader the reader actually calls; missing-active fallback remains
+    kernel-owned. Never load environment values, resolve credentials, construct a
+    service, or publish the boot path's resolved-manifest artifact.
+    """
+    import logging
+
+    previous_disable = logging.root.manager.disable
+    try:
+        # Like the Project machine drivers, contain raw reader diagnostics for
+        # this whole boundary, including callback/loader work. Boot is unchanged.
+        logging.disable(logging.CRITICAL)
+        return _inspect_init(working_dir)
+    finally:
+        logging.disable(previous_disable)
+
+
+def _inspect_init(working_dir: Path) -> tuple[dict[str, Any], int]:
+    from lingtai.agent import load_preset
+    from lingtai.kernel.config_resolve import load_jsonc
+
+    root = working_dir.expanduser().resolve()
+    selected_source: dict[str, str] = {}
+
+    def observed_loader(name: str, working_dir: Path | None = None) -> dict:
+        preset = load_preset(name, working_dir=working_dir)
+        path = Path(name).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        path = path.resolve()
+        authored = load_jsonc(path)
+        selected_source.update(kind="preset", path=str(path),
+                               pointer="/llm" if "llm" in authored else "/manifest/llm")
+        return preset
+
+    materialize, prepare = reader_callbacks(root, load_preset=observed_loader)
+
+    def observed_prepare(data: dict) -> None:
+        prepare(data)
+        if not selected_source:
+            authored = load_jsonc(root / "init.json")
+            selected_source.update(kind="init", path=str(root / "init.json"),
+                                   pointer="/manifest/llm" if "manifest" in authored else "/llm")
+
+    outcome = read_init(root, materialize=materialize, prepare=observed_prepare)
+    payload: dict[str, Any] = {
+        "schema": "lingtai.init.inspection/v1",
+        "reader_status": outcome.status.value,
+        "shape_decision": outcome.shape_decision.value,
+        "failure_stage": outcome.stage if not outcome.ok else None,
+        "next_step": outcome.next_step,
+    }
+    if outcome.json_path is not None:
+        payload["json_path"] = outcome.json_path
+    if not outcome.ok:
+        return payload, 1
+    data = outcome.data or {}
+    manifest = data.get("manifest") or {}
+    llm = manifest.get("llm") or {}
+    # Positive field projection, not redaction of a whole effective document.
+    payload["llm"] = {key: llm[key] for key in
+                      ("provider", "model", "wire_api", "thinking", "service_tier")
+                      if isinstance(llm.get(key), str) and "://" not in llm[key]}
+    payload["agent"] = {key: manifest[source] for key, source in
+                        (("name", "agent_name"), ("language", "language"))
+                        if isinstance(manifest.get(source), str)}
+    payload["host"] = {key: data[key] for key in ("venv_path", "env_file")
+                       if isinstance(data.get(key), str)}
+    payload["llm_source"] = selected_source
+    return payload, 0
+
+
 def load_init(working_dir: Path) -> dict:
     """Read ``init.json`` through the shared real-reader path.
 
@@ -680,6 +754,9 @@ def main() -> None:
 
     sub.add_parser("check-caps", help="Output capability provider metadata as JSON")
 
+    inspection_parser = sub.add_parser("inspect-init", help="Read safe init identity and source facts as JSON")
+    inspection_parser.add_argument("--agent-dir", type=Path, required=True)
+
     liveness_parser = sub.add_parser(
         "liveness",
         help="Emit the kernel-owned published-Agent liveness result as JSON",
@@ -766,6 +843,11 @@ def main() -> None:
         from lingtai.adapters.acp.resident_socket import resident_acp_socket_path
 
         print(resident_acp_socket_path(args.working_dir))
+    elif args.command == "inspect-init":
+        payload, exit_code = inspect_init(args.agent_dir)
+        print(json.dumps(payload, ensure_ascii=False))
+        if exit_code:
+            sys.exit(exit_code)
     elif args.command == "check-caps":
         from lingtai.tools.registry import get_all_providers
         print(json.dumps(get_all_providers()))

@@ -284,20 +284,33 @@ class FilesystemProjectRecipeAdapter(ProjectRecipePort):
                 return RecipeSkills()
             if not isinstance(document, dict):
                 raise ValueError("invalid init")
-            manifest = document.get("manifest")
-            if not isinstance(manifest, dict):
-                return RecipeSkills()
-            capabilities = manifest.get("capabilities")
-            if not isinstance(capabilities, dict):
-                return RecipeSkills()
-            from lingtai.tools.registry import normalize_capabilities
-            operation = "normalize"
-            normalized = normalize_capabilities(capabilities)
-            changed = normalized != capabilities
-            skills = normalized.get("skills")
-            if not isinstance(skills, dict):
-                return RecipeSkills()
-            manifest["capabilities"] = normalized
+            canonical = "manifest" not in document
+            if canonical:
+                from lingtai.kernel.config_resolve import normalize_init
+                normalize_init(document)  # conflict/type gate, never resolve a model
+                capabilities = document.setdefault("tools", {})
+                skills = capabilities.get("skills", {})
+                if skills is False:
+                    return RecipeSkills()
+                if not isinstance(skills, dict):
+                    raise ValueError("invalid skills config")
+                changed = False
+                capabilities.setdefault("skills", skills)
+            else:
+                manifest = document.get("manifest")
+                if not isinstance(manifest, dict):
+                    return RecipeSkills()
+                capabilities = manifest.get("capabilities")
+                if not isinstance(capabilities, dict):
+                    return RecipeSkills()
+                from lingtai.tools.registry import normalize_capabilities
+                operation = "normalize"
+                normalized = normalize_capabilities(capabilities)
+                changed = normalized != capabilities
+                skills = normalized.get("skills")
+                if not isinstance(skills, dict):
+                    return RecipeSkills()
+                manifest["capabilities"] = normalized
             # Exact old strip only carried to disk when Core requests a write.
             document.pop("principle_file", None)
             document.pop("procedures_file", None)
@@ -328,7 +341,9 @@ class FilesystemProjectRecipeAdapter(ProjectRecipePort):
             # Only the specialized skills-path field is written; raw owner
             # evidence preserves unmaterialized preset references and integers.
             document = _read_init_bytes(evidence.owner_content)
-            document["manifest"]["capabilities"]["skills"]["paths"] = list(paths)
+            capabilities = (document["manifest"]["capabilities"] if "manifest" in document
+                            else document["tools"])
+            capabilities["skills"]["paths"] = list(paths)
             _legacy_init_write(path / "init.json", document)
             written = True
             code = "recipe_reader_failed"

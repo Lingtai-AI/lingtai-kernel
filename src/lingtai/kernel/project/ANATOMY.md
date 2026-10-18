@@ -46,6 +46,7 @@ related_files:
   - src/lingtai/adapters/project_configuration.py
   - src/lingtai/cli_project_configuration.py
   - tests/test_project_configuration.py
+  - tests/test_init_ownership.py
   - tests/fixtures/project_configuration.json
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/project/CONTRACT.md
@@ -107,7 +108,7 @@ interactive creation. Its Contract defines the CLI-visible behavior.
 
 - `interactive_creation.py` — typed draft/options/attempt/seed/result, specialized
   workspace/Recipe/prerequisite Ports, pure membership and seed policy, and the
-  real ordered use case (`src/lingtai/kernel/project/interactive_creation.py:16-254`).
+  real ordered use case (`src/lingtai/kernel/project/interactive_creation.py:16-240`).
 - Hidden filesystem workspace uses owner writers/readers and native exclusive
   rename (`src/lingtai/adapters/project_interactive_workspace.py:25-208`); pending
   init preflight forwards the explicit env-file path and translates owner validation
@@ -175,6 +176,23 @@ The public command procedure is
 
 ## Existing configuration slice
 
+- `configuration.py::configuration_seed` creates reference-only canonical init
+  for fresh members and preserves legacy shape on explicit edits; preset tools
+  never enter the seed. `ConfiguredMemberSeed.pad_seed` carries memory outside
+  init to `adapters/project_configuration.py::save_configured_member/save_member_init`.
+  `interactive_creation.py::make_interactive_seed` and the staged workspace use
+  the same separate seed ownership. `adapters/project_recipe.py::observe_skills`
+  recognizes canonical default-on skills; native Recipe frames are unchanged.
+  Guarded by PRJ011 and `tests/test_init_ownership.py`.
+  `configuration.py::_initial_agent_tools` authors the shared skill shelves once for fresh Project agents, independently of model presets; explicit existing tool configuration is not changed.
+
+- `propagate_config` preserves existing target model policy and its authoritative effective source; canonical reference-bound `llm` stays exact. Legacy inline raw-copy compatibility remains beside legacy policy. Only a target without policy receives the source model source; init-owned tools/env/worker permissions still follow the distinct config-copy operation, never preset tools. Shared memory/filesystem and supported-API tests guard revocation/opaque-policy retention (PRJ011).
+- `adapters/project_configuration.py::_seed_legacy_addon_mcp` completes only
+  Core-selected legacy addon seeds before preflight/publication, using the bundled
+  catalog and inherited public config references. It owns no activation list or
+  credential reads; Core conversion and explicit MCP precedence stay unchanged.
+  PRJ003 guards the supported `execute("configure", ...)` proof in
+  `tests/test_project_configuration.py::test_configure_legacy_addon_catalog_seeds_at_supported_entry`.
 - `ProjectConfigurationUseCase`/`ProjectConfigurationPort` and operation receipts: `src/lingtai/kernel/project/configuration.py:24-366`;
   sequential filesystem reads/writes and owner-reader seams: `src/lingtai/adapters/project_configuration.py:68-229`.
 - Strict stdin driver/preset-Psyche composition: `src/lingtai/cli_project_configuration.py:148-199`;

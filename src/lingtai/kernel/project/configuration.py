@@ -9,6 +9,11 @@ from dataclasses import dataclass, field, replace
 from . import ProjectCreationError, ProjectError
 
 
+def _initial_agent_tools() -> dict:
+    """Shared shelves are creation-owned init config, never model-preset data."""
+    return {"skills": {"paths": ["../.library_shared", "~/.lingtai-tui/utilities"]}}
+
+
 def configuration_error(code: str) -> ProjectCreationError:
     # Static vocabulary: neither input documents nor caught exceptions escape.
     return ProjectCreationError(ProjectError(code, "Project configuration could not complete"))
@@ -70,6 +75,8 @@ class ConfiguredMemberSeed:
     agent_manifest: dict[str, object]
     psyche_settings_json: str | None
     only_absent: bool = False
+    pad_seed: str = ""
+    legacy_mcp_venv_path: str = ""  # original request seed input, not the preserved host
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +139,7 @@ class ProjectConfigurationPort(ABC):
 
     @abstractmethod
     def save_member_init(self, directory_name: str, document: dict[str, object],
-                         *, only_absent: bool = False) -> ConfigurationWriteReceipt:
+                         *, only_absent: bool = False, pad_seed: str = "") -> ConfigurationWriteReceipt:
         """Write one init and read it using current owners. Absent-only refuses races."""
 
 
@@ -159,7 +166,14 @@ def configuration_seed(request: ConfigureMemberRequest, previous: MemberDocument
     if not isinstance(request.preset_manifest.get("llm"), dict):
         raise configuration_error("invalid_preset")
     document = _object(previous.init_document)
-    manifest = _object(document.get("manifest"))
+    fresh = not document
+    legacy = "manifest" in document
+    if legacy:
+        # Legacy remains its authored shape on explicit edits; never infer a migration.
+        manifest = _object(document.get("manifest"))
+    else:
+        from ..config_resolve import normalize_init
+        manifest = normalize_init(document)["manifest"] if document else {}
     old_policy = _object(manifest.get("preset"))
     default = request.preset_ref
     active = default
@@ -186,53 +200,55 @@ def configuration_seed(request: ConfigureMemberRequest, previous: MemberDocument
             active = default  # explicit revocation is authoritative
         else:
             allowed.append(active)
-    manifest.update({"agent_name": request.agent_name, "language": opts.language or "en",
-                     "llm": deepcopy(request.preset_manifest["llm"]),
-                     "admin": {"karma": opts.karma, "nirvana": opts.nirvana},
-                     "context_limit": opts.context_limit, "max_turns": 500,
-                     "max_rpm": opts.max_rpm, "streaming": False,
-                     "max_aed_attempts": 5 if opts.max_aed_attempts < 1 else min(100, opts.max_aed_attempts),
-                     "preset": {"active": active, "default": default, "allowed": allowed}})
-    if "capabilities" in request.preset_manifest:
-        manifest["capabilities"] = deepcopy(request.preset_manifest["capabilities"])
-    llm = manifest["llm"]
-    llm.pop("api_compat", None)
-    # This is matching public reference metadata, not provider implementation selection.
-    caps = manifest.get("capabilities")
-    if isinstance(caps, dict) and llm.get("provider") and llm.get("api_key_env"):
-        for cfg in caps.values():
-            if isinstance(cfg, dict) and cfg.get("provider") == llm["provider"]:
-                cfg["api_key_env"] = llm["api_key_env"]
-    _strip_explicit_legacy(document)
-    document["manifest"] = manifest
-    covenant_file = opts.covenant_file or _reference(document.get("covenant_file")) or opts.default_covenant_file
-    if covenant_file:
-        document["covenant_file"] = covenant_file
-    document["env_file"] = _reference(document.get("env_file")) or opts.env_file
-    document["venv_path"] = _reference(document.get("venv_path")) or opts.venv_path
-    if opts.pad is not None:
-        document["pad"] = opts.pad
+    policy = {"active": active, "default": default, "allowed": allowed}
+    permissions = {"karma": opts.karma, "nirvana": opts.nirvana}
+    if legacy:
+        manifest.update({"agent_name": request.agent_name, "language": opts.language or "en",
+                         "admin": permissions, "preset": policy})
+        # References are the only model owner on disk. Never copy preset tools.
+        manifest.pop("llm", None)
+        _strip_explicit_legacy(document)
+        document["manifest"] = manifest
+        for key in ("env_file", "venv_path"):
+            document[key] = _reference(document.get(key)) or getattr(opts, key)
+        covenant = opts.covenant_file or _reference(document.get("covenant_file")) or opts.default_covenant_file
+        if covenant:
+            document["covenant_file"] = covenant
+        # Preserve the inherited explicit legacy addon conversion/seed promise.
+        old_addons = document.get("addons")
+        if isinstance(old_addons, dict):
+            old_addons = sorted(k for k in old_addons if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", k))
+        addons = old_addons if isinstance(old_addons, list) else list(opts.addons)
+        if isinstance(old_addons, (dict, list)) or addons:
+            document["addons"] = addons
+        mcp = _object(document.get("mcp"))
+        for name in addons:
+            if isinstance(name, str) and name not in mcp and name in opts.mcp:
+                mcp[name] = deepcopy(opts.mcp[name])
+        if mcp:
+            document["mcp"] = mcp
+        # Preserve legacy seed inputs exactly; explicit new seed is out-of-band.
     else:
-        document.setdefault("pad", "")
-    old_addons = document.get("addons")
-    if isinstance(old_addons, dict):
-        # Go legacy names are identifier-filtered; deterministic order replaces map iteration.
-        old_addons = sorted(k for k in old_addons if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", k))
-    addons = old_addons if isinstance(old_addons, list) else list(opts.addons)
-    if isinstance(old_addons, (dict, list)) or addons:
-        document["addons"] = addons
-    mcp = _object(document.get("mcp"))
-    for name in addons:
-        if isinstance(name, str) and name not in mcp and name in opts.mcp:
-            mcp[name] = deepcopy(opts.mcp[name])
-    if mcp:
-        document["mcp"] = mcp
+        agent = _object(document.get("agent"))
+        agent.update({"name": request.agent_name, "language": opts.language or "en", "permissions": permissions})
+        document.update({"agent": agent, "llm": {"preset": policy}})
+        document.setdefault("tools", _initial_agent_tools() if fresh else {})
+        document.setdefault("plugins", [])
+        document.setdefault("mcp", deepcopy(opts.mcp))
+        host = _object(document.get("host"))
+        for key in ("env_file", "venv_path"):
+            value = _reference(host.get(key)) or getattr(opts, key)
+            if value:
+                host[key] = value
+        if host:
+            document["host"] = host
     blueprint = _object(previous.blueprint)
     if not previous.blueprint_present:
         blueprint["state"] = ""
     blueprint.update({"agent_name": request.agent_name, "address": request.directory_name,
                       "admin": {"karma": opts.karma, "nirvana": opts.nirvana}})
-    return ConfiguredMemberSeed(request.directory_name, document, blueprint, request.psyche_settings_json)
+    return ConfiguredMemberSeed(request.directory_name, document, blueprint, request.psyche_settings_json,
+                                pad_seed=opts.pad or "", legacy_mcp_venv_path=opts.venv_path)
 
 
 class ProjectConfigurationUseCase:
@@ -272,7 +288,8 @@ class ProjectConfigurationUseCase:
                 continue
             document = _object(member.init_document)
             manifest = document.get("manifest")
-            policy = manifest.get("preset") if isinstance(manifest, dict) else None
+            policy = (manifest.get("preset") if isinstance(manifest, dict)
+                      else document.get("llm", {}).get("preset") if isinstance(document.get("llm"), dict) else None)
             if not isinstance(policy, dict):
                 skipped += 1
                 continue
@@ -292,8 +309,9 @@ class ProjectConfigurationUseCase:
         source = self.workspace.observe_member(selected)
         if source.init_error or not source.init_present:
             raise configuration_error("source_document_unreadable")
-        source_manifest = _object(_object(source.init_document).get("manifest"))
-        if not isinstance(source_manifest.get("llm"), dict):
+        from ..config_resolve import normalize_init
+        source_manifest = normalize_init(_object(source.init_document))["manifest"]
+        if not isinstance(source_manifest.get("llm"), dict) and not source_manifest.get("preset"):
             return ConfigurationResult("config_propagated", "unchanged")
         updated = skipped = failed = 0
         first_code = ""
@@ -302,21 +320,55 @@ class ProjectConfigurationUseCase:
                 skipped += 1
                 continue
             document = _object(member.init_document)
-            manifest = document.get("manifest")
-            if not isinstance(manifest, dict):
+            legacy = "manifest" in document
+            target = document.get("manifest") if legacy else document.setdefault("agent", {})
+            if not isinstance(target, dict):
                 skipped += 1
                 continue
-            manifest["llm"] = deepcopy(source_manifest["llm"])
-            if "capabilities" in source_manifest:
-                manifest["capabilities"] = deepcopy(source_manifest["capabilities"])
+            source_policy = source_manifest.get("preset")
+            # Config copying is not model authorization. An existing policy
+            # keeps its authoritative source, including revoked/opaque fields.
+            # Only legacy mixed inline inputs retain the historical raw-LLM
+            # copy beside a legacy target policy (which still wins at read).
+            target_llm = document.get("llm")
+            target_policy = (target.get("preset") if legacy else
+                             target_llm.get("preset") if isinstance(target_llm, dict) else None)
+            source_inline = source_manifest.get("llm")
+            legacy_inline = "manifest" in source.init_document and bool(source_inline)
+            if legacy:
+                if not isinstance(target_policy, dict):
+                    if source_policy and not legacy_inline:
+                        target["preset"] = deepcopy(source_policy)
+                        target.pop("llm", None)
+                    else:
+                        target["llm"] = deepcopy(source_inline)
+                elif legacy_inline:
+                    target["llm"] = deepcopy(source_inline)
+                target["admin"] = {"karma": False, "nirvana": False}
             else:
-                manifest.pop("capabilities", None)
-            if "context_limit" in source_manifest:
-                manifest["context_limit"] = source_manifest["context_limit"]
-            manifest["admin"] = {"karma": False, "nirvana": False}
+                if not isinstance(target_policy, dict):
+                    document["llm"] = ({"preset": deepcopy(source_policy)} if source_policy and not legacy_inline
+                                       else deepcopy(source_inline))
+                target["permissions"] = {"karma": False, "nirvana": False}
+            # This explicit config propagation operation historically copies
+            # init-owned tool configuration. Never obtain it from a preset.
+            source_caps = _object(source_manifest.get("capabilities"))
+            if legacy:
+                target["capabilities"] = source_caps
+            elif "manifest" not in source.init_document:
+                document["tools"] = deepcopy(source.init_document.get("tools", {}))
+            else:
+                document["tools"] = {name: False if config is None else deepcopy(config)
+                                     for name, config in source_caps.items()}
+                for name in source_manifest.get("disable", []):
+                    document["tools"][name] = False
             document.pop("addons", None)
-            if _reference(source.init_document.get("env_file")):
-                document["env_file"] = source.init_document["env_file"]
+            source_env = normalize_init(source.init_document).get("env_file")
+            if _reference(source_env):
+                if legacy:
+                    document["env_file"] = source_env
+                else:
+                    document.setdefault("host", {})["env_file"] = source_env
             receipt = self.workspace.save_member_init(member.directory_name, document)
             updated += int(receipt.init_written)
             failed += int(bool(receipt.code))
@@ -356,10 +408,15 @@ class ProjectConfigurationUseCase:
                 continue
             document = deepcopy(seed.init_document)
             _strip_explicit_legacy(document)
-            document["manifest"]["agent_name"] = _reference(member.blueprint.get("agent_name")) or member.directory_name
-            document["manifest"]["admin"] = {}
+            if "manifest" in document:
+                document["manifest"]["agent_name"] = _reference(member.blueprint.get("agent_name")) or member.directory_name
+                document["manifest"]["admin"] = {}
+            else:
+                document["agent"]["name"] = _reference(member.blueprint.get("agent_name")) or member.directory_name
+                document["agent"]["permissions"] = {}
             document.pop("addons", None)
-            result = self.workspace.save_member_init(member.directory_name, document, only_absent=True)
+            result = self.workspace.save_member_init(member.directory_name, document, only_absent=True,
+                                                     pad_seed=seed.pad_seed)
             updated += int(result.init_written)
             if result.code:
                 return ConfigurationResult("rehydrated", "partial", updated, 0, 1, result.code, receipt)

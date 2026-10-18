@@ -31,6 +31,11 @@ Avatar creates a **persistent, independent peer** as a detached process. Use
 `daemon` for disposable work and `shell` for a one-off command. After launch,
 communicate by mail/email; there is no ongoing Avatar handle.
 
+Children keep the parent's authored init shape (canonical or legacy), retain
+init-owned tool configuration, and start on the parent's default model reference.
+Model presets never replace child tools. Canonical bootstrap paths live under
+`host`; spawning does not move or choose a new parent interpreter.
+
 ## Routine spawn: direct path
 
 The schema is enough for a routine call; do not load this manual as a ritual.

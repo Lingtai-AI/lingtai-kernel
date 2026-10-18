@@ -1,6 +1,6 @@
 ---
 name: project-creation
-contract_version: 6
+contract_version: 7
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/project/inventory.py
@@ -49,6 +49,7 @@ related_files:
   - src/lingtai/adapters/project_configuration.py
   - src/lingtai/cli_project_configuration.py
   - tests/test_project_configuration.py
+  - tests/test_init_ownership.py
   - tests/fixtures/project_configuration.json
   - src/lingtai/kernel/project/ANATOMY.md
   - src/lingtai/kernel/project/__init__.py
@@ -96,6 +97,37 @@ caller-selected existing directory. It writes a `human` pseudo-agent and one
 named agent with mailboxes, manifests, an `init.json` based on the caller's
 preset, and `settings/psyche.json` containing the caller covenant. It does not start an Agent or create
 runtime, provider, MCP, registry, venv, or TUI state.
+
+## Init/preset ownership
+
+Guarded by [PRJ011](BEHAVIORS.md#behavior-prj011). New headless/interactive/
+configure/rehydrate seeds use the canonical init owner sections and save only
+`llm.preset` references, never preset LLM/capabilities copies. Tools default to
+all shipped selectable builtins independently of the chosen model; Recipe library
+paths are explicit init-owned skills overrides. Fresh Project agents retain the standard shared skill shelves (`../.library_shared` and `~/.lingtai-tui/utilities`) as creation-owned `tools.skills.paths`; Recipe paths append without replacing them, and existing explicit paths/off values are preserved. Existing canonical/legacy init
+keeps its authored shape on configure; no implicit conversion is authorized.
+Configure preserves target tool kwargs/skills, plugin roots and MCP; preset
+capabilities never enter that ownership. Explicit config propagation retains its
+existing distinct promise to copy SOURCE INIT-owned tools, not preset tools. Explicit name/language/
+permission edits retain their existing requested meaning and blueprint history.
+
+`ConfiguredMemberSeed.pad_seed` and `InteractiveProjectSeed.pad_seed` are additive
+string fields (default empty); `ProjectConfigurationPort.save_member_init` adds
+keyword `pad_seed: str = ""` for imported workers. The concrete publication
+adapter calls the existing Pad `_seed_pad` only after init publication and before
+reader validation (interactive: inside owned staging). It fills absent/empty
+canonical Pad only, never nonempty memory. Pad text/pointers are not serialized
+in new init. Old pad/pad_file/lingtai inputs and original legacy files remain
+untouched; no new memory schema or ongoing binding exists. Seed failure reports
+`pad_seed_failed` with truthful earlier-write receipts, no rollback. Existing
+request `options.pad` carries typed creation data; no CLI/exchange field or
+native callback frame was added. Headless create has no new seed flag.
+
+Legacy options addons/runtime knobs/covenant fallback metadata remain accepted
+for paired-caller compatibility, but never author those retired fields into a
+new canonical init. Existing legacy declarations are preserved, not activated by
+model selection. New explicit MCP desired selection comes solely from `options.mcp`. Compatibility-only missing addon launchers retain the original request venv seed via `ConfiguredMemberSeed.legacy_mcp_venv_path`; that input does not replace the authored host or existing MCP kwargs.
+Psyche prompt edits still use its serializer; System policy is unchanged.
 
 ## Boundary
 
@@ -369,7 +401,7 @@ EOF, malformed/mismatched ack, rejection or failed verification cannot publish.
    Parsed local bundles are never replaced just because a declared library is
    unsupported: an escaping/non-segment library fails with local bytes retained.
    Recipe procedures are preserved in the snapshot, not emitted as inert init
-   overrides. Library paths append only to an already-present skills config.
+   overrides. Library paths append to canonical default-on skills, unless explicitly false; legacy init retains its already-present-skills gate.
    Greet substitutes time, human address, language and outer location/commands;
    no location network lookup or runtime invocation occurs here.
 5. Read actual staged membership and current init/Psyche seams with an explicit
@@ -453,18 +485,18 @@ nonempty values win. Optional strings `language` (default en), `pad`; literal
 booleans `karma` (true), `nirvana` (false), `preserve_active` (false); arrays of
 nonempty strings `addons`, `allowed_presets`; object `mcp` is an outer-generated
 public activation-spec seed, **not secrets/config contents**. Existing MCP
-entries win, seeds are used only for selected addons missing entries. Go keeps
-its curated addon-module/config-reference catalog. Optional integer legacy Go
+entries win. Fresh canonical output uses explicit mcp selection, not addons;
+Go may keep its curated module/config-reference presentation catalog. Optional integer legacy Go
 writer inputs `context_limit` (500000), `max_rpm` (60), `max_aed_attempts` (5)
-retain their old explicit writer semantics, including 1..100 AED clamping and
-max_turns=500/streaming=false. They are not new runtime settings; current init
-owner may report them ignored. No default600 or System policy is changed.
+remain accepted compatibility request data but are not written into canonical
+init or used as runtime settings. Existing legacy values are preserved in place.
+No System policy or defaults change.
 
 `prompts`, when present, is a closed string-only partial edit of `base_prompt`,
 `base_prompt_file`, `covenant`, `covenant_file`. Composition merges the existing
 strict Psyche owner values with the edit and calls its public serializer. Core
 receives opaque bytes. When absent, existing owner bytes/settings routes stay
-untouched. Explicit Pad uses current `pad`, not retired comment fields. Go's
+untouched. Explicit Pad is typed creation-seed data, not a saved init field. Go's
 legacy CovenantFile/CommentFile choices map to `prompts.covenant_file` and Pad
 content supplied after its selected public Recipe layer read. The inherited Go
 writer's supported legacy `init.covenant_file` path also remains: optional public
@@ -502,11 +534,22 @@ not exclusive fresh creation or imported initialization.
 Configure preserves root/manifest unknown fields, exact integer values and
 kernel-owned blueprint identity/history (agent_id, created_at, molt_count,
 nickname, custom state and settings); only wizard name/address/admin overwrite
-blueprint fields. Existing pad/env/venv/addons/MCP win except explicit Pad edit;
-legacy addon dict names use the same identifier filter. The selected public
-preset overwrites LLM and present capabilities, current owner canonicalizes
-legacy capability aliases, and only the inherited explicit retired stripping
-(principle_file, procedures_file and LLM api_compat) occurs. Unknown preset-block
+blueprint fields. Existing Pad/env/venv/addons/MCP win; typed Pad seeds fill absent/empty memory
+only. The selected preset updates reference policy only; authored tools and
+kwargs remain unchanged. Legacy addon dictionaries retain their inherited
+identifier-filtered explicit conversion/selected-MCP-seed behavior. After Core's
+conversion and explicit-request seeding, the filesystem adapter fills only missing
+selected legacy curated entries using bundled launcher metadata and the inherited
+public config references. Existing MCP kwargs win, then explicit request kwargs;
+unknown addons remain unseeded unless explicitly supplied. List order and sorted
+identifier-filtered dictionary order are unchanged. The original request venv supplies
+the fallback interpreter path, without replacing the preserved init host venv.
+Canonical/fresh empty selection never consults this
+compatibility fallback, and unrelated bundled accounts remain absent. Guarded by
+`tests/test_project_configuration.py::test_configure_legacy_addon_catalog_seeds_at_supported_entry`.
+Current owner canonicalizes legacy capability aliases
+only at existing explicit-write seams, and inherited retired top-field stripping
+(principle_file, procedures_file) remains legacy-only. Unknown preset-block
 fields retain the existing Go generator's replacement behavior on configure;
 policy propagation instead edits only active/default/allowed in the existing
 block. Active survives when still authorized. Nonempty explicit allowed revokes
@@ -515,7 +558,8 @@ allowed and adds real default/active as before. Malformed selected documents are
 refused rather than erased (intentional fail-loud adapter boundary).
 
 Configured source ordering is actual owner preflight, init write, mailboxes,
-blueprint write, optional opaque Psyche write, then actual readers. A missing
+blueprint write, optional opaque Psyche write, optional absent/empty Pad seed,
+then actual readers. A missing
 required env_file fails preflight without any operation write. Individual files
 are replaced atomically, but this is **not a multi-document transaction**. Later
 manifest/Psyche/reader failure retains earlier writes and receipts; there is no
@@ -532,11 +576,21 @@ without whole-init preflight or init/Psyche readers: the old supported input is
 any parsed init with a preset block, even without Pad, env, blueprint, loadable
 preset references or valid unrelated owner settings. This is authorization
 maintenance, not proof of runtime readiness; runtime validation is unchanged.
-Config propagation copies selected public LLM/capabilities/context_limit and nonempty env_file, strips
-worker admin to false karma/nirvana and deletes top-level addons, preserves
-worker identity/pad/venv/MCP/other settings, skips unreadable/absent/no-manifest
-init, continues on write failure. Former silent errors are now explicit partial
-receipts; no copied Soul or runtime settings expansion.
+Config propagation copies nonempty env_file and source INIT-owned tools, strips
+worker admin to false karma/nirvana and deletes legacy top-level addons. It MUST
+NOT change an existing target model policy: active/default/allowed, revocations
+and opaque fields remain authoritative. Canonical reference-bound targets retain
+their entire `llm` owner exactly; reference-only sources never pop or replace a
+legacy target model owner. Legacy inline sources retain the historical raw-LLM
+copy beside a legacy target policy, which remains the effective model source.
+Only targets without an existing policy may receive the source model source.
+Use explicit `propagate-policy` for authorization changes; config copying never
+smuggles a model switch through an existing policy. Guarded by
+[PRJ011](BEHAVIORS.md#behavior-prj011) and supported-API propagation tests.
+Target plugin roots, identity, Pad/venv/MCP/other settings remain unchanged; both
+owner shapes are supported. Unreadable/absent or unclassifiable init is skipped,
+write failures do not stop later targets, and partial receipts remain explicit.
+No copied memory or System runtime policy expansion is implied.
 
 Rehydrate MUST replace the old **configure-source then RehydrateNetwork** pair,
 not run after Go has already created source init. It observes the full blueprint
@@ -567,7 +621,7 @@ Static failure codes are `invalid_project_request`, `credentials_must_remain_out
 `project_observation_failed`, `blueprint_unreadable`, `rehydration_source_missing`,
 `mixed_initialization_state`, `skeleton_initialization_failed`,
 `configuration_preflight_failed`, `init_write_failed`, `manifest_write_failed`,
-`psyche_write_failed`, `configuration_reader_failed`, `configuration_request_failed`.
+`psyche_write_failed`, `pad_seed_failed`, `configuration_reader_failed`, `configuration_request_failed`.
 Current-reader diagnostic logging is disabled only within this short-lived JSON
 handler and restored afterward, preventing arbitrary unknown-field names from
 escaping into its protocol. Newly allocated per-write temporary files alone are

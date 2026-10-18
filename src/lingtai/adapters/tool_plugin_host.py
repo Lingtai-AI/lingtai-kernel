@@ -596,6 +596,7 @@ class AgentDaemonRuntimeAdapter:
         "_authorize_derived_launch",
         "_manager_options",
         "_setup_preset_capability",
+        "_read_preset_capability_defaults",
         "_requires_explicit_preset",
         "_is_preset_authorized",
         "_load_preset",
@@ -627,6 +628,7 @@ class AgentDaemonRuntimeAdapter:
         read_task_card_watch: Callable[[], bool | None],
         now_iso: Callable[[], str],
         log: Callable[..., None],
+        read_preset_capability_defaults: Callable[[], Mapping[str, Any]] = lambda: {},
     ) -> None:
         self._read_service = read_service
         self._read_schemas = read_schemas
@@ -639,6 +641,7 @@ class AgentDaemonRuntimeAdapter:
         self._authorize_derived_launch = authorize_derived_launch
         self._manager_options = dict(manager_options)
         self._setup_preset_capability = setup_preset_capability
+        self._read_preset_capability_defaults = read_preset_capability_defaults
         self._requires_explicit_preset = requires_explicit_preset
         self._is_preset_authorized = is_preset_authorized
         self._load_preset = load_preset
@@ -686,6 +689,11 @@ class AgentDaemonRuntimeAdapter:
     @property
     def manager_options(self) -> Mapping[str, Any]:
         return dict(self._manager_options)
+
+    @property
+    def preset_capability_defaults(self) -> Mapping[str, Any]:
+        """Detached Web/Vision config from this host's current registration."""
+        return deepcopy(dict(self._read_preset_capability_defaults()))
 
     def setup_preset_capability(
         self, name: str, kwargs: Mapping[str, Any]
@@ -855,6 +863,10 @@ def daemon_runtime_for_agent(
         authorize_derived_launch=_authorize_derived_launch,
         manager_options=manager_options,
         setup_preset_capability=_setup_preset_capability,
+        read_preset_capability_defaults=lambda: {
+            name: kwargs for name, kwargs in getattr(agent, "_capabilities", ())
+            if name in {"web", "vision"}
+        },
         requires_explicit_preset=lambda: False,
         is_preset_authorized=_is_preset_authorized,
         load_preset=getattr(agent, "load_preset", _missing_load_preset),

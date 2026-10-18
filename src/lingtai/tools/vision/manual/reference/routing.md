@@ -58,9 +58,16 @@ A non-null preset is explicit one-call borrowing, never fallback:
    "preset": "<allowed reference>"}, reasoning="...")` sends one image through
    that selected service.
 
-The reference must be present in `manifest.preset.allowed`; Vision loads it
-read-only and uses its own `manifest.llm` plus `manifest.capabilities.vision`
-identity. It cannot switch the active preset, lend active credentials, or invoke
+The reference must be present in canonical `llm.preset.allowed` (or legacy
+`manifest.preset.allowed`); Vision normalizes init/JSONC through the shared
+reader gate and loads the preset read-only. Only its LLM provides preset
+identity; explicit current-init `tools.vision` (legacy `manifest.capabilities.vision`)
+kwargs still apply, including dynamic `provider=inherit`. Preset capability
+bundles never return as tool configuration. A borrowed API key remains tied to
+its preset provider/endpoint: a different current-init Vision endpoint/provider
+needs its own explicit key/env reference, otherwise resolution is manual-only
+before constructing a client. Same-endpoint borrowing and Codex's own OAuth
+identity are unchanged. It cannot switch the active preset, lend active credentials, or invoke
 another provider after failure. An unlisted, unreadable, or incomplete preset
 fails closed. Ask the human before changing authorization or configuration.
 

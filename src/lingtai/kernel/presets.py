@@ -335,11 +335,21 @@ def load_preset(
     if not isinstance(data, dict):
         raise ValueError(f"preset {name!r} ({p}): expected object, got {type(data).__name__}")
 
+    if "llm" in data:
+        if "manifest" in data:
+            raise ValueError("preset: choose llm or legacy manifest, not both")
+        if set(data) - {"name", "description", "llm"}:
+            raise ValueError("preset: canonical fields are name, description, llm; tools belong to init")
+        # Preserve the historical returned manifest ABI for internal consumers.
+        llm = data.pop("llm")
+        data = {**data, "manifest": {"llm": llm}}
     manifest = data.get("manifest")
     if not isinstance(manifest, dict):
-        raise ValueError(f"preset {name!r} ({p}): missing or invalid 'manifest' object")
+        raise ValueError(f"preset {name!r} ({p}): missing or invalid 'llm' object")
 
     _normalize_legacy_manifest_context_limit(manifest, preset_name=name, preset_path=p)
+    manifest = {"llm": manifest.get("llm")}
+    data["manifest"] = manifest
 
     llm = manifest.get("llm")
     if not isinstance(llm, dict):
@@ -406,64 +416,12 @@ def materialize_active_preset(
     *,
     load_preset: Callable[..., dict],
 ) -> None:
-    """Substitute the active preset's llm + capabilities into init.json data.
+    """Resolve only the selected LLM in memory; init owns every capability.
 
-    If ``manifest.preset.active`` is set, load that preset and copy its
-    ``manifest.llm`` and ``manifest.capabilities`` into ``data["manifest"]``
-    so downstream validators and consumers see a fully-resolved manifest.
-
-    The active preset owns explicit opt-in capability/tier choices (atomic
-    swap is the whole point of presets), but it must not silently discard
-    per-agent capability kwargs declared in init.json. Two layers preserve
-    those:
-
-    - **Per-key override** (any capability the preset *also* enables):
-      init.json's kwargs win key-by-key over the preset's — e.g. init.json's
-      ``daemon.manager_pool_size`` survives a preset that also enables daemon
-      with a different ceiling.
-    - **Core-default carry-forward** (capabilities the preset *omits*): for
-      capability names in ``core_defaults`` — the always-on floor
-      (``knowledge``/``skills``/``shell``/``avatar``/``daemon``/``mcp``/
-      ``read``/``write``/``edit``/``glob``/``grep``) — init.json's kwargs are
-      carried into the materialized manifest even when the preset never
-      mentions the capability. Without this, a preset that omits ``daemon``
-      drops init.json's ``daemon.manager_pool_size``, and ``apply_core_defaults``
-      later re-adds ``daemon={}`` (losing the override). Non-core optional
-      capabilities (``vision``/``web_search``/...) the preset omits are NOT
-      carried — that omission is the swap.
-
-    ``core_defaults`` is the set/dict/list of always-on capability names; pass
-    ``lingtai.tools.registry.CORE_DEFAULTS`` from the wrapper. It lives in
-    ``lingtai`` (not the kernel), so it is injected rather than imported —
-    the kernel must not depend on the wrapper. When ``None`` (legacy callers
-    and the no-core tests), only the per-key override layer runs.
-
-    ``load_preset`` is the required preset-loader callback supplied by Agent/CLI
-    (``Callable[[name, working_dir], dict]``): it resolves a preset, builds the
-    preset-library adapter, and calls Core ``load_preset`` — never constructed here.
-
-    The ``skills.paths`` carve-out (init.json extras append to the preset's
-    skills paths, deduped, preset defaults first) layers on top of both —
-    ``skills`` is excluded from the generic merge so this append-dedup logic
-    stays in charge.
-
-    Mutates ``data`` in place. No-op when ``manifest.preset.active`` is unset
-    or when the manifest already has a literal ``llm`` and no preset block.
-
-    When the active preset file is missing (the file referenced by
-    ``manifest.preset.active`` does not exist on disk — e.g. a hard-copied
-    project where the previous machine's preset library wasn't carried over),
-    fall back to ``manifest.preset.default`` if it points to a different,
-    loadable preset. The fallback rewrites ``manifest.preset.active`` in place
-    so the corrected value is persisted on the next init.json regen and the
-    schema's "active must appear in allowed" invariant still holds (default
-    is always in allowed by construction).
-
-    Raises:
-        KeyError: the active preset is missing AND no usable default exists.
-        ValueError: the active preset file exists but is malformed. Malformed
-            presets are an authoring error and surface unchanged — they are
-            not silently swapped for the default.
+    Missing active files retain the existing default fallback. Malformed files
+    still fail rather than silently changing models. ``core_defaults`` remains
+    accepted for source compatibility but never participates in LLM selection.
+    No authored file is rewritten.
     """
     manifest = data.get("manifest")
     if not isinstance(manifest, dict):
@@ -500,76 +458,6 @@ def materialize_active_preset(
     preset_llm.pop("context_limit", None)
     manifest["llm"] = preset_llm
 
-    # The preset chooses *which* opt-in capabilities run (atomic swap is the
-    # whole point of presets), but it must not clobber per-agent capability
-    # kwargs declared in init.json. Two layers preserve those (see docstring):
-    #   1. Per-key override — for capabilities the preset ALSO enables,
-    #      init.json's kwargs win key-by-key.
-    #   2. Core-default carry-forward — for always-on capabilities (in
-    #      `core_defaults`) the preset OMITS, init.json's kwargs are carried in
-    #      anyway, since those capabilities boot regardless of the preset.
-    # `skills` is excluded from both generic passes; its dedicated append-dedup
-    # block below owns it (and skills is itself a core default).
-    # If you need to add another carve-out, do it here — keep the list short.
-    if isinstance(core_defaults, dict):
-        core_names: set[str] = set(core_defaults.keys())
-    elif core_defaults is not None:
-        core_names = set(core_defaults)
-    else:
-        core_names = set()
-
-    init_caps = manifest.get("capabilities", {}) if isinstance(
-        manifest.get("capabilities"), dict) else {}
-    init_skill_paths: list[str] = []
-    cfg = init_caps.get("skills")
-    if isinstance(cfg, dict) and isinstance(cfg.get("paths"), list):
-        for path in cfg.get("paths", []):
-            if isinstance(path, str) and path not in init_skill_paths:
-                init_skill_paths.append(path)
-
-    new_caps = preset_manifest.get("capabilities", init_caps)
-    if isinstance(new_caps, dict) and isinstance(init_caps, dict):
-        merged_caps = dict(new_caps)
-        # 1. Per-key override for capabilities the preset also enables.
-        for cap_name, preset_kwargs in new_caps.items():
-            if cap_name == "skills":
-                continue
-            init_kwargs = init_caps.get(cap_name)
-            if isinstance(preset_kwargs, dict) and isinstance(init_kwargs, dict):
-                merged_caps[cap_name] = {**preset_kwargs, **init_kwargs}
-        # 2. Carry forward init kwargs for always-on capabilities the preset
-        #    omits — these boot via apply_core_defaults regardless, so their
-        #    per-agent kwargs must not be lost. `skills` stays with its block.
-        for cap_name in core_names:
-            if cap_name == "skills" or cap_name in new_caps:
-                continue
-            init_kwargs = init_caps.get(cap_name)
-            if isinstance(init_kwargs, dict):
-                merged_caps[cap_name] = dict(init_kwargs)
-        new_caps = merged_caps
-    if isinstance(new_caps, dict) and init_skill_paths:
-        # Make sure we have a skills entry to merge into. If the preset didn't
-        # enable skills, init.json's paths alone are enough to enable it.
-        skills_kwargs = new_caps.get("skills", {})
-        if not isinstance(skills_kwargs, dict):
-            skills_kwargs = {}
-        preset_paths = skills_kwargs.get("paths", []) or []
-        # Order: preset paths first (the curated defaults), then init.json
-        # extras unique to it. Dedupe by raw string — `~/foo` and the
-        # absolute form count as different so the user's intent shows up
-        # in info() output verbatim.
-        merged: list[str] = list(preset_paths)
-        seen = set(preset_paths)
-        for p in init_skill_paths:
-            if p not in seen:
-                merged.append(p)
-                seen.add(p)
-        skills_kwargs = dict(skills_kwargs)
-        skills_kwargs["paths"] = merged
-        new_caps = dict(new_caps)
-        new_caps["skills"] = skills_kwargs
-
-    manifest["capabilities"] = new_caps
 
 
 # ---------------------------------------------------------------------------

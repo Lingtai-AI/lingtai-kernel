@@ -98,43 +98,29 @@ class InteractiveProjectSeed:
     language: str
     location: str
     commands: str
+    pad_seed: str = ""
 
 
 def make_interactive_seed(request: InteractiveCreateRequest, layers: RecipeLayers) -> InteractiveProjectSeed:
+    from .configuration import _initial_agent_tools
+
     options = request.options
-    llm = copy.deepcopy(request.preset_manifest["llm"])
-    llm.pop("context_limit", None)
-    llm.pop("api_compat", None)
-    caps = copy.deepcopy(request.preset_manifest.get("capabilities", {}))
-    if layers.library_path:
-        skills = caps.get("skills")
-        # Existing opt-in only; preserve prior paths and append once.
-        if isinstance(skills, dict):
-            paths = skills.get("paths", [])
-            if not isinstance(paths, list):
-                raise creation_error("invalid_preset")
-            if layers.library_path not in paths:
-                skills["paths"] = [*paths, layers.library_path]
+    tools = {**_initial_agent_tools(), "email": {"pseudo_agent_subscriptions": ["../human"]}}
+    if layers.library_path and layers.library_path not in tools["skills"]["paths"]:
+        tools["skills"]["paths"].append(layers.library_path)
     admin = {"karma": options.karma, "nirvana": options.nirvana}
-    manifest = {"llm": llm, "capabilities": caps,
-                "agent_name": request.agent_name, "language": options.language,
-                "admin": admin, "pseudo_agent_subscriptions": ["../human"],
-                "preset": {"active": request.preset_ref, "default": request.preset_ref,
-                           "allowed": list(dict.fromkeys((*options.allowed_presets, request.preset_ref)))}}
-    document = {"manifest": manifest, "pad": options.pad or layers.comment}
-    for key in ("env_file", "venv_path"):
-        value = getattr(options, key)
-        if value:
-            document[key] = value
-    if options.addons:
-        document["addons"] = list(options.addons)
-    if options.mcp:
-        document["mcp"] = copy.deepcopy(options.mcp)
+    document = {"agent": {"name": request.agent_name, "language": options.language, "permissions": admin},
+                "llm": {"preset": {"active": request.preset_ref, "default": request.preset_ref,
+                        "allowed": list(dict.fromkeys((*options.allowed_presets, request.preset_ref)))}},
+                "tools": tools, "plugins": [], "mcp": copy.deepcopy(options.mcp or {})}
+    host = {key: getattr(options, key) for key in ("env_file", "venv_path") if getattr(options, key)}
+    if host:
+        document["host"] = host
     return InteractiveProjectSeed(
         request.directory_name, {"agent_name": "human", "address": "human", "admin": None},
         {"agent_name": request.agent_name, "address": request.directory_name, "admin": admin},
         document, options.base_prompt, None if layers.covenant_file else options.covenant,
-        layers.covenant_file, layers.greet, options.language, request.location, request.commands,
+        layers.covenant_file, layers.greet, options.language, request.location, request.commands, options.pad or layers.comment,
     )
 
 

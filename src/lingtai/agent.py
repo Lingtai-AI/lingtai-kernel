@@ -103,7 +103,6 @@ def _validate_preset_llm_routes(preset: dict, name: str) -> None:
     from lingtai.init_schema import (
         is_removed_llm_provider,
         removed_provider_message,
-        validate_capability_providers,
         validate_llm_standard_parameters,
     )
 
@@ -118,9 +117,6 @@ def _validate_preset_llm_routes(preset: dict, name: str) -> None:
                     removed_provider_message("manifest.llm.provider", llm["provider"])
                 )
             validate_llm_standard_parameters(llm, prefix="manifest.llm")
-        caps = manifest.get("capabilities")
-        if isinstance(caps, dict):
-            validate_capability_providers(caps, prefix="manifest.capabilities")
     except ValueError as exc:
         raise ValueError(f"preset {name!r}: {exc}") from exc
 
@@ -887,7 +883,8 @@ class Agent(BaseAgent):
         if not init_path.is_file():
             return {}
         try:
-            raw = json.loads(init_path.read_text(encoding="utf-8"))
+            from lingtai.kernel.config_resolve import normalize_init, parse_jsonc
+            raw = normalize_init(parse_jsonc(init_path.read_text(encoding="utf-8")))
         except (OSError, ValueError):
             return {}
         manifest = raw.get("manifest") if isinstance(raw, dict) else None
@@ -1185,9 +1182,22 @@ class Agent(BaseAgent):
                                self.agent_name, name, source, e)
                 return None
 
-        # Source 1: legacy mcp/servers.json
+        from lingtai.kernel.config_resolve import parse_jsonc
+        init_path = self._working_dir / "init.json"
+        try:
+            init_data = parse_jsonc(init_path.read_text(encoding="utf-8"))
+            canonical = isinstance(init_data, dict) and "manifest" not in init_data
+        except (ValueError, OSError):
+            # Direct legacy Agent callers may have only a servers file. Keep
+            # that old source behavior; canonical boot is gated by read_init.
+            init_data = {}
+            canonical = False
+
+        # Legacy documents retain the old explicit servers-file behavior. A new
+        # document is gated by the shared reader before teardown if this file
+        # still contains declarations, requiring an explicit conversion.
         legacy_config = self._working_dir / "mcp" / "servers.json"
-        if legacy_config.is_file():
+        if not canonical and legacy_config.is_file():
             try:
                 servers = json.loads(legacy_config.read_text(encoding="utf-8"))
                 if isinstance(servers, dict):
@@ -1198,28 +1208,31 @@ class Agent(BaseAgent):
                 logger.warning("[%s] mcp/servers.json: failed to read: %s",
                                self.agent_name, e)
 
-        # Source 2: init.json top-level mcp section, gated by registry.
-        init_path = self._working_dir / "init.json"
-        if not init_path.is_file():
-            return
-        try:
-            init_data = json.loads(init_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
-
+        # The canonical map is the sole desired list; catalog/plugin discovery
+        # alone never launches a server.
         init_mcp = init_data.get("mcp")
         if not isinstance(init_mcp, dict) or not init_mcp:
             return
 
-        # Cross-reference against the registry.
+        declared_records = None
+        if canonical:
+            from .services.mcp_registry import register_declared_mcps
+            declared_records = register_declared_mcps(self._working_dir, init_mcp, init_data.get("plugins", []))
+
+        # Legacy uses registry provenance. Canonical declarations derive current
+        # metadata without erasing or trusting stale historical registry lines.
         try:
             from .services.mcp_registry import read_registry
             registered, _problems = read_registry(self._working_dir)
+            if declared_records is not None:
+                registered = declared_records
             registered_sources = {r["name"]: r.get("source") for r in registered}
+            registered_specs = {r["name"]: r for r in registered}
         except Exception as e:
             logger.warning("[%s] mcp registry read failed: %s",
                            self.agent_name, e)
             registered_sources = {}
+            registered_specs = {}
 
         for name, cfg in init_mcp.items():
             if not isinstance(cfg, dict):
@@ -1243,6 +1256,9 @@ class Agent(BaseAgent):
                     # Fail loud/skip: do not spawn and do not track for
                     # retry — there is no safe launcher to retry with.
                     continue
+            elif canonical and str(registered_sources.get(name, "")).startswith("plugin:"):
+                from .services.mcp_registry import merge_plugin_launch
+                cfg = merge_plugin_launch(registered_specs[name], cfg)
             client = _spawn(name, cfg, source="init.json:mcp")
             # Record every registered init.json mcp entry — failures (client
             # is None) and successes alike — so `_retry_failed_mcps` can
@@ -1983,8 +1999,8 @@ class Agent(BaseAgent):
     def _read_init(self) -> dict | None:
         """Read and validate init.json from working directory.
 
-        If ``manifest.preset.active`` is set, materialize the named preset's
-        ``llm`` and ``capabilities`` into the manifest before validation. The
+        If the authored preset active reference is set, materialize only its
+        ``llm`` into the manifest before validation. Init-owned tools are unchanged. The
         running agent thus always sees a fully resolved manifest.
 
         On success, the resolved (secret-redacted) manifest is also published
@@ -2024,64 +2040,33 @@ class Agent(BaseAgent):
         return None
 
     def _activate_preset(self, name: str) -> None:
-        """Substitute a preset's llm + capabilities into init.json on disk.
-
-        `name` is the preset's path (absolute, ~-prefixed, or relative to
-        working_dir). Substitutes the file's `manifest.llm` and
-        `manifest.capabilities` into the agent's init.json, sets
-        `manifest.preset.active = name` (storing the path string verbatim —
-        no canonicalization), and writes atomically.
-
-        Other manifest fields are preserved, except retired/hidden runtime
-        knobs such as ``manifest.stamina``.
-
-        Raises:
-            KeyError: the preset file does not exist
-            ValueError: the preset file is malformed or the name is invalid
-            OSError: the on-disk write failed (init.json untouched)
-        """
+        """Persist only a selected reference; retain historical direct-caller widening."""
         import json
         import os
+        from lingtai.kernel.config_resolve import normalize_init, parse_jsonc
 
         init_path = self._working_dir / "init.json"
-        data = json.loads(init_path.read_text(encoding="utf-8"))
-        manifest = data.setdefault("manifest", {})
-
-        # Use the wrapper preset-loader; this explicit activation may write the
-        # selected preset, while production preset reads remain migration-free.
-        preset = load_preset(name, working_dir=self._working_dir)
-        preset_manifest = preset.get("manifest", {})
-
-        preset_llm = dict(preset_manifest.get("llm") or manifest.get("llm") or {})
-        # Context limits are System-owned runtime policy, never init.json
-        # configuration.  Keep a preset's provider/model selection but do not
-        # hand its context value into the activated init document.
-        preset_llm.pop("context_limit", None)
-        manifest["llm"] = preset_llm
-        manifest["capabilities"] = preset_manifest.get(
-            "capabilities", manifest.get("capabilities", {}))
-
-        # Set active in the umbrella. Preserve default if already set; otherwise
-        # initialize default to the same value as active (first activation).
-        # Also ensure `name` appears in `allowed` — _activate_preset is the
-        # final gate and the manifest must remain self-consistent. The caller
-        # (system._refresh) also validates against `allowed` before invoking
-        # us; this is belt-and-braces for direct callers and AED auto-fallback.
-        preset_block = manifest.setdefault("preset", {})
-        preset_block["active"] = name
-        if not preset_block.get("default"):
-            preset_block["default"] = name
-        allowed = preset_block.get("allowed")
+        data = parse_jsonc(init_path.read_text(encoding="utf-8"))
+        normalize_init(data)  # ownership conflict gate; never copy effective data back
+        load_preset(name, working_dir=self._working_dir)
+        if "manifest" in data:
+            authored = data["manifest"].setdefault("preset", {})
+            data["manifest"].pop("llm", None)
+        else:
+            # Direct callers historically may select and authorize a new ref.
+            # System refresh enforces its allowlist before entering this method.
+            data["llm"] = {"preset": data.get("llm", {}).get("preset", {})}
+            authored = data["llm"]["preset"]
+        allowed = authored.get("allowed")
         if not isinstance(allowed, list):
-            preset_block["allowed"] = [name]
-            self._log("preset_allowed_widened", name=name,
-                      reason="allowed_field_initialized")
+            authored["allowed"] = [name]
+            self._log("preset_allowed_widened", name=name, reason="allowed_field_initialized")
         elif name not in allowed:
-            preset_block["allowed"] = [*allowed, name]
-            self._log("preset_allowed_widened", name=name,
-                      reason="direct_activate_bypassed_gate")
-
-        self._strip_hidden_runtime_manifest_settings(data)
+            authored["allowed"] = [*allowed, name]
+            self._log("preset_allowed_widened", name=name, reason="direct_activate_bypassed_gate")
+        authored["active"] = name
+        if not authored.get("default"):
+            authored["default"] = name
 
         # Atomic write
         tmp = init_path.with_suffix(".json.tmp")
@@ -2091,8 +2076,8 @@ class Agent(BaseAgent):
 
     def _activate_default_preset(self) -> None:
         """Read manifest.preset.default and activate it. Used by AED auto-fallback."""
-        import json
-        data = json.loads((self._working_dir / "init.json").read_text(encoding="utf-8"))
+        from lingtai.kernel.config_resolve import normalize_init, parse_jsonc
+        data = normalize_init(parse_jsonc((self._working_dir / "init.json").read_text(encoding="utf-8")))
         preset = data.get("manifest", {}).get("preset") or {}
         default_name = preset.get("default")
         if not default_name:

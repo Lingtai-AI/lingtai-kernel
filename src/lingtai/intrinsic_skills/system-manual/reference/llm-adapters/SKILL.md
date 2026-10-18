@@ -36,6 +36,38 @@ registration and dispatch table lives in `src/lingtai/llm/_register.py` and
 `init.json` `llm` blocks. This page is the progressive-disclosure route from
 the system manual; source remains the behavioral authority.
 
+## Authoring and switching
+
+Use the canonical `src/lingtai/init.jsonc` ownership shape: `llm` is either an
+inline route or `{ "preset": { "active": "path", "default": "path", "allowed": ["path"] } }`.
+A preset file authors `{ "name": "main", "description": { "summary": "main" }, "llm": { ... } }`.
+Legacy manifest presets read into the same effective LLM ABI, but preset tools
+never enable/disable tools or replace kwargs/skills. Configure tools in init's
+`tools` map (`{}` defaults all shipped selectable builtins; false is off).
+Declare external servers explicitly in `mcp`; availability/plugin installation
+alone never activates them. Host bootstrap paths are `host.env_file/venv_path`.
+Ordinary reads never convert saved files; mixed owners require explicit repair.
+System's allowed/default/active behavior is unchanged. New init stores no Pad
+seed; creation seeds travel separately to absent/empty-only canonical Pad.
+
+## Inspect an unbooted init
+
+Run `lingtai-agent inspect-init --agent-dir DIR` with the installed agent-host
+interpreter. It emits one machine-only `lingtai.init.inspection/v1` JSON object;
+exit 0 means the shared reader succeeded (possibly with ignored fields), exit 1
+means READ_FAILED with typed stage and a static repair hint. It does not boot an
+Agent, load environment values, resolve credentials, write artifacts or launch
+providers/MCP. Safe identity and host references are separate from
+`llm_source` `{kind,path,pointer}`; the kernel selects the actual source,
+including missing-active fallback, and identifies its `/llm` or `/manifest/llm`
+location. No effective-config, capability/MCP kwargs, URLs or credentials are
+printed, including reader/loader diagnostic values on stderr. Inspection scopes
+logging containment to that read and restores it afterward; ordinary boot keeps
+its diagnostics. Authorized local auth tooling may use that pointer to access the chosen
+source locally; never print its credential content or duplicate selection policy.
+An older CLI without this command is unavailable/unknown, not permission to
+install, retry, or use a global fallback. Resolved-manifest v1 is unchanged.
+
 ## Named adapters
 
 LingTai ships exactly four LLM provider families (source of truth:

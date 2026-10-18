@@ -450,8 +450,10 @@ class AvatarManager:
             return {"error": "parent has no init.json — cannot spawn avatar"}
 
         try:
-            parent_init = json.loads(parent_init_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
+            from lingtai.kernel.config_resolve import parse_jsonc, normalize_init
+            parent_init = parse_jsonc(parent_init_path.read_text(encoding="utf-8"))
+            normalize_init(parent_init)
+        except (ValueError, OSError) as e:
             return {"error": f"failed to read parent init.json: {e}"}
         try:
             from lingtai.tools.psyche.settings import read_prompt_owner_values
@@ -519,17 +521,18 @@ class AvatarManager:
         # Keep the one remaining active init path meaningful from the child.
         # Psyche owner pointers are resolved by its reader against the parent
         # workdir before the narrow child document is produced below.
+            host = parent_init if "manifest" in parent_init else parent_init.setdefault("host", {})
             for key in ("env_file",):
-                val = parent_init.get(key)
+                val = host.get(key)
                 if val and not os.path.isabs(val):
                     resolved = parent_working_dir / val
                     if resolved.is_file():
-                        parent_init[key] = str(resolved)
+                        host[key] = str(resolved)
 
         # Inherit the parent runtime location through Avatar's narrow host port.
             venv_path = self._host.avatar_parent.venv_path
             if venv_path:
-                parent_init["venv_path"] = venv_path
+                host["venv_path"] = venv_path
 
         # Clean stale signal files before launch
             for sig in (".suspend", ".sleep", ".interrupt"):
@@ -542,7 +545,7 @@ class AvatarManager:
         # file — picked up by the kernel's signal-file watcher on first poll
         # and delivered as a one-shot system message (consumed-once via unlink).
             parent_address = parent_working_dir.name
-            avatar_lang = parent_init.get("manifest", {}).get("language", "en")
+            avatar_lang = normalize_init(parent_init)["manifest"].get("language", "en")
             parent_prompt = t(
                 avatar_lang, "avatar.parent_prompt",
                 parent_name=parent_name,
@@ -711,12 +714,21 @@ class AvatarManager:
         own working dir doesn't change their meaning.
         """
         init = json.loads(json.dumps(parent_init))  # deep copy
-        init["manifest"]["agent_name"] = name
+        canonical = "manifest" not in init
+        if canonical:
+            from lingtai.kernel.config_resolve import normalize_init
+            normalize_init(init)  # refuse mixed ownership before constructing child
+            init.setdefault("agent", {})["name"] = name
+        else:
+            init["manifest"]["agent_name"] = name
         # Retired character seed inputs are not inherited or regenerated.
         init.pop("lingtai", None)
         init.pop("lingtai_file", None)
         # Avatar has no admin privileges
-        init["manifest"]["admin"] = {}
+        if canonical:
+            init["agent"]["permissions"] = {}
+        else:
+            init["manifest"]["admin"] = {}
         # Psyche owns all configurable prompt pairs. Their old init spellings
         # are deliberately removed rather than copied as inert compatibility
         # data; the spawn-specific owner document is built separately below.
@@ -738,7 +750,8 @@ class AvatarManager:
         # avatar's different working directory. Absolute and ~-prefixed
         # entries pass through unchanged.
         if parent_working_dir is not None:
-            preset_block = init["manifest"].get("preset")
+            preset_block = (init.get("llm", {}).get("preset") if canonical
+                            else init["manifest"].get("preset"))
             if isinstance(preset_block, dict):
                 def _reroot(s: object) -> object:
                     if not isinstance(s, str) or not s:
@@ -760,15 +773,16 @@ class AvatarManager:
         # stable home base, not whatever transient preset the parent happened
         # to be on at spawn time.
         #
-        # Strip materialized llm + capabilities unconditionally so the avatar's
+        # Strip only legacy materialized llm so the avatar's
         # _read_init re-materializes from the (possibly-rewritten) active on
         # first boot. Letting the existing materialization path do its job
         # is cleaner than manually re-substituting here.
-        preset_block = init["manifest"].get("preset")
+        preset_block = (init.get("llm", {}).get("preset") if canonical
+                            else init["manifest"].get("preset"))
         if isinstance(preset_block, dict) and preset_block.get("default"):
             preset_block["active"] = preset_block["default"]
-            init["manifest"].pop("llm", None)
-            init["manifest"].pop("capabilities", None)
+            if not canonical:
+                init["manifest"].pop("llm", None)
 
         return init
 
@@ -862,7 +876,8 @@ class AvatarManager:
         init_data = None
         if init_path.is_file():
             try:
-                init_data = json.loads(init_path.read_text(encoding="utf-8"))
+                from lingtai.kernel.config_resolve import parse_jsonc
+                init_data = parse_jsonc(init_path.read_text(encoding="utf-8"))
             except (ValueError, OSError):
                 pass
         venv_dir = resolve_venv(init_data)

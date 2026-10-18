@@ -5,6 +5,7 @@ from __future__ import annotations
 # The implementation lives in the kernel so system and daemon share one
 # normalization primitive; see `lingtai.kernel.presets._preset_ref_in`.
 from lingtai.kernel.presets import _preset_ref_in  # noqa: F401
+from lingtai.kernel.config_resolve import normalize_init, parse_jsonc
 
 
 def _update_default_preset(agent, preset_name: str) -> None:
@@ -16,8 +17,12 @@ def _update_default_preset(agent, preset_name: str) -> None:
     import json as _json
     try:
         init_path = agent._working_dir / "init.json"
-        data = _json.loads(init_path.read_text(encoding="utf-8"))
-        preset_block = data.setdefault("manifest", {}).setdefault("preset", {})
+        data = parse_jsonc(init_path.read_text(encoding="utf-8"))
+        effective = normalize_init(data)
+        policy = effective["manifest"].get("preset") or {}
+        if not _preset_ref_in(preset_name, policy.get("allowed"), working_dir=agent._working_dir):
+            raise ValueError("default preset is not authorized")
+        preset_block = data["manifest"]["preset"] if "manifest" in data else data["llm"]["preset"]
         if preset_block.get("default") != preset_name:
             preset_block["default"] = preset_name
             init_path.write_text(
@@ -106,7 +111,7 @@ def _refresh(agent, args: dict) -> dict:
         try:
             import json as _json
             init_path = agent._working_dir / "init.json"
-            data = _json.loads(init_path.read_text(encoding="utf-8"))
+            data = normalize_init(parse_jsonc(init_path.read_text(encoding="utf-8")))
             preset_block = data.get("manifest", {}).get("preset") or {}
             default_name = preset_block.get("default") if isinstance(preset_block, dict) else None
         except Exception as e:
@@ -130,7 +135,7 @@ def _refresh(agent, args: dict) -> dict:
         try:
             import json as _json
             init_path = agent._working_dir / "init.json"
-            data = _json.loads(init_path.read_text(encoding="utf-8"))
+            data = normalize_init(parse_jsonc(init_path.read_text(encoding="utf-8")))
             preset_block = data.get("manifest", {}).get("preset") or {}
             allowed = preset_block.get("allowed") if isinstance(preset_block, dict) else None
         except Exception:
@@ -222,7 +227,7 @@ def _presets(agent, args: dict) -> dict:
 
     init_path = agent._working_dir / "init.json"
     try:
-        raw = json.loads(init_path.read_text(encoding="utf-8"))
+        raw = normalize_init(parse_jsonc(init_path.read_text(encoding="utf-8")))
     except Exception as e:
         return {"status": "error", "message": f"failed to read init.json: {e}"}
 

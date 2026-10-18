@@ -1278,7 +1278,8 @@ def _perform_refresh(
 def _can_fallback_preset(agent) -> bool:
     """True if init.json has manifest.preset and active != default."""
     try:
-        data = json.loads((agent._working_dir / "init.json").read_text(encoding="utf-8"))
+        from ..config_resolve import normalize_init, parse_jsonc
+        data = normalize_init(parse_jsonc((agent._working_dir / "init.json").read_text(encoding="utf-8")))
         preset = data.get("manifest", {}).get("preset") or {}
         if not isinstance(preset, dict):
             return False

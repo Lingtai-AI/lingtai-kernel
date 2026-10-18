@@ -1,7 +1,7 @@
 ---
 name: avatar-contract
 tool: avatar
-contract_version: 11
+contract_version: 12
 related_files:
   - src/lingtai/tools/avatar/BEHAVIORS.md
   - src/lingtai/tools/avatar/__init__.py
@@ -321,7 +321,11 @@ Guarded by [AV003](BEHAVIORS.md#behavior-av003).
 The avatar's `init.json` is a deep copy of the parent's with: `agent_name` set,
 retired `lingtai`/`lingtai_file` keys removed, `admin` cleared, inert legacy and retired prompt fields and
 kernel/secretary prompt-override fields plus `addons` stripped, relative preset
-paths re-rooted, and the avatar pinned to the parent's **default** preset. Its
+paths re-rooted, and the avatar pinned to the parent's **default** preset.
+Canonical init uses agent/llm/tools/host owners; legacy init remains legacy.
+Only materialized legacy LLM is stripped: init-owned tools/kwargs/skills/plugin
+roots are retained, never supplied by the chosen model. Host binding and language
+read the same authored ownership shape without moving the parent's interpreter. Its
 separate Psyche document retains only parent base/covenant inputs and anchors
 relative pointers to the parent workdir. The public spawn `comment` argument,
 settings row and Psyche persistence are retired. Root `reasoning` remains the

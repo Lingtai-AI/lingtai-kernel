@@ -65,7 +65,8 @@ class MemoryWorkspace(ProjectConfigurationPort):
         self.members[name] = replace(member, init_present=True, init_document=copy.deepcopy(document))
         return ConfigurationWriteReceipt(True)
 
-    def save_member_init(self, name, document, *, only_absent=False):
+    def save_member_init(self, name, document, *, only_absent=False, pad_seed=""):
+        assert isinstance(pad_seed, str)
         if name == self.fail:
             return ConfigurationWriteReceipt(code="init_write_failed")
         member = self.observe_member(name)
@@ -149,6 +150,12 @@ def test_shared_policy_and_config_propagation(tmp_path, kind):
     saved = workspace.observe_member("worker").init_document
     assert saved["manifest"]["preset"]["active"] == refs["selected.json"]
     assert saved["manifest"]["preset"]["custom_policy"] == 42
+    source = workspace.observe_member("orch-dir").init_document
+    assert saved["manifest"]["llm"] == source["manifest"]["llm"]
+    assert saved["manifest"]["capabilities"] == source["manifest"].get("capabilities", {})
+    assert saved["env_file"] == source["env_file"]
+    assert saved["manifest"]["agent_name"] == worker["manifest"]["agent_name"]
+    assert saved["venv_path"] == worker["venv_path"]
     assert saved["manifest"]["admin"] == {"karma": False, "nirvana": False}
     assert "addons" not in saved
     assert saved["pad"] == "durable Pad" and saved["mcp"] == worker["mcp"]
@@ -185,8 +192,9 @@ def test_shared_rehydration_state_gate(tmp_path, kind, state):
         assert result.updated == (3 if state == "absent" else 0)
         if state == "absent":
             saved = workspace.observe_member("a-worker")
-            assert saved.init_document["manifest"]["agent_name"] == "Display a-worker"
-            assert saved.init_document["manifest"]["admin"] == {}
+            assert saved.init_document["agent"]["name"] == "Display a-worker"
+            assert saved.init_document["agent"]["permissions"] == {}
+            assert saved.init_document["llm"]["preset"]["active"] == refs["selected.json"]
             assert "addons" not in saved.init_document
             assert workspace.observe_member("human").init_present is False
             assert workspace.observe_member(".helper").init_present is False
@@ -298,9 +306,23 @@ def test_actual_saved_legacy_alias_and_large_context_metadata_are_exact(tmp_path
         "options": {"env_file": "", "venv_path": "fixture-venv", "context_limit": huge},
     })
     assert not result.code
-    saved = filesystem(tmp_path).observe_member("orch").init_document["manifest"]
-    assert saved["context_limit"] == huge and saved["llm"]["context_limit"] == huge
-    assert saved["capabilities"] == {"shell": {"yolo": False}}
+    from lingtai.agent import load_preset
+    from lingtai.init_reader import read_init, reader_callbacks
+    from lingtai.tools.registry import classify_capabilities
+    path = tmp_path / ".lingtai/orch"
+    saved = filesystem(tmp_path).observe_member("orch").init_document
+    assert saved["llm"] == {"preset": {"active": str(selected), "default": str(selected),
+                                         "allowed": [str(selected)]}}
+    assert saved["tools"] == {"skills": {"paths": ["../.library_shared", "~/.lingtai-tui/utilities"]}}  # creation-owned, not preset tool kwargs
+    loaded = load_preset(str(selected), working_dir=path)
+    assert loaded["manifest"]["llm"]["context_limit"] == huge  # preset-local owner
+    normalized, _ = classify_capabilities(raw["capabilities"])
+    assert normalized == {"shell": {"yolo": False}}  # retain both legacy alias cases
+    assert raw["context_limit"] == huge
+    materialize, prepare = reader_callbacks(path, load_preset=load_preset)
+    actual = read_init(path, materialize=materialize, prepare=prepare)
+    assert actual.ok and actual.data["manifest"]["llm"] == raw["llm"]
+    assert "context_limit" not in actual.data["manifest"]
     assert selected.read_bytes() == before  # owner normalization only in memory
 
 
@@ -402,7 +424,12 @@ def test_configure_legacy_covenant_path_precedence_preserves_psyche(tmp_path, ca
     result = execute("configure", payload)
     assert not result.code and result.source.psyche_written == (case == "explicit")
     saved = json.loads((path / "init.json").read_text())
-    assert saved["covenant_file"] == {"fresh": default, "existing": prior, "explicit": str(explicit)}[case]
+    if case == "fresh":
+        assert "covenant_file" not in saved  # canonical init has no prompt owner
+        prompts = read_resolved_prompt_inputs(path)
+        assert prompts.covenant == "durable Covenant" and prompts.base_prompt == "durable base"
+    else:
+        assert saved["covenant_file"] == {"existing": prior, "explicit": str(explicit)}[case]
     if case != "fresh":
         assert saved["pad"] == "durable Pad" and saved["user_config"] == {"keep": True}
     if case != "explicit":
@@ -410,3 +437,116 @@ def test_configure_legacy_covenant_path_precedence_preserves_psyche(tmp_path, ca
     else:
         prompts = read_resolved_prompt_inputs(path)
         assert prompts.covenant == "explicit Covenant" and prompts.base_prompt == "durable base"
+
+
+@pytest.mark.parametrize("mapping", [False, True], ids=["ordered-list", "filtered-dict"])
+def test_configure_legacy_addon_catalog_seeds_at_supported_entry(tmp_path, mapping):
+    """UI feishu is not an all-catalog seed bag; prior addon selection wins."""
+    path = tmp_path / ".lingtai/orch"
+    selected = tmp_path / "selected.json"
+    write(selected, {"description": {"summary": "supported legacy seed fixture"}, "manifest": PUBLIC_MANIFEST})
+    custom = {"type": "stdio", "command": "custom-python", "args": ["custom-module"]}
+    addons = {"telegram": {}, "not-valid!": {}, "imap": {}, "custom_addon": {}} if mapping else ["telegram", "imap", "custom_addon"]
+    write(path / "init.json", {"manifest": PUBLIC_MANIFEST, "pad": "durable Pad",
+                               "env_file": "public.env", "venv_path": "chosen-venv",
+                               "addons": addons, "mcp": {"custom": custom}})
+    payload = {"project_dir": str(tmp_path), "directory_name": "orch", "agent_name": "Display",
+               "preset_ref": str(selected), "keep_current": False,
+               "options": {"env_file": "public.env", "venv_path": "request-venv",
+                           "mcp": {"feishu": {"command": "ui-selected-only"}}}}
+    result = execute("configure", payload)
+    assert not result.code
+    saved = json.loads((path / "init.json").read_text())
+    assert saved["addons"] == (["custom_addon", "imap", "telegram"] if mapping else addons)
+    assert saved["venv_path"] == "chosen-venv"  # preserved host, distinct from seed input
+    assert set(saved["mcp"]) == {"custom", "imap", "telegram"}
+    assert saved["mcp"]["custom"] == custom
+    for name in ("imap", "telegram"):
+        spec = saved["mcp"][name]
+        assert spec["args"] == ["-m", "lingtai.mcp_servers." + name]
+        assert Path(spec["command"]).parts[0] == "request-venv"
+        assert spec["env"] == {"LINGTAI_" + name.upper() + "_CONFIG": str(Path(".secrets") / (name + ".json"))}
+    # Existing kwargs beat request defaults; explicit request kwargs fill an
+    # absent selected name before the adapter considers bundled fallback.
+    del saved["mcp"]["telegram"]
+    write(path / "init.json", saved)
+    payload["options"]["mcp"] = {"imap": {"command": "must-not-replace"}, "telegram": custom}
+    assert not execute("configure", payload).code
+    repeated = json.loads((path / "init.json").read_text())
+    assert repeated["mcp"]["imap"] == saved["mcp"]["imap"]
+    assert repeated["mcp"]["telegram"] == custom
+    # Fresh empty selection must never inherit this compatibility catalog.
+    payload["directory_name"] = "fresh"
+    payload["options"]["mcp"] = {}
+    assert not execute("configure", payload).code
+    assert json.loads((tmp_path / ".lingtai/fresh/init.json").read_text())["mcp"] == {}
+
+
+@pytest.mark.parametrize("source_kind", ["canonical-reference", "legacy-reference", "canonical-inline"])
+@pytest.mark.parametrize("legacy_target", [False, True])
+def test_supported_config_propagation_preserves_target_model_policy(tmp_path, source_kind, legacy_target):
+    from lingtai.init_reader import read_init, reader_callbacks
+    from lingtai.agent import load_preset
+
+    a, b = (str(tmp_path / f"{name}.json") for name in ("a", "b"))
+    for ref, model in ((a, "a"), (b, "b")):
+        write(Path(ref), {"description": {"summary": model}, "llm": {"provider": "openai", "model": model}})
+    source_policy = {"active": b, "default": b, "allowed": [a, b]}
+    target_policy = {"active": a, "default": a, "allowed": [a], "custom_policy": {"opaque": 42}}
+    env_ref = str(tmp_path / "fixture.env")
+    Path(env_ref).write_text("# nonsecret fixture only\n")
+    tools = {"shell": {"yolo": False}, "web": False}
+    source = {"llm": {"preset": source_policy}, "tools": tools, "host": {"env_file": env_ref}}
+    if source_kind == "legacy-reference":
+        source = {"manifest": {"preset": source_policy, "capabilities": {"shell": {"yolo": False}, "web": None}},
+                  "env_file": env_ref, "pad": "source pad"}
+    elif source_kind == "canonical-inline":
+        source["llm"] = {"provider": "openai", "model": "source-inline"}
+    target = {"agent": {"name": "worker", "permissions": {"karma": True}},
+              "llm": {"preset": target_policy}, "tools": {"vision": False}, "plugins": [], "mcp": {}}
+    if legacy_target:
+        target = {"manifest": {"agent_name": "worker", "preset": target_policy,
+                               "llm": {"provider": "openai", "model": "legacy-inline-not-authoritative"},
+                               "capabilities": {"vision": None}, "admin": {"karma": True}},
+                  "pad": "target pad", "mcp": {}}
+    source_path = tmp_path / ".lingtai/source/init.json"
+    target_path = tmp_path / ".lingtai/worker/init.json"
+    write(source_path, source)
+    initially_allowed = copy.deepcopy(target)
+    initial_policy = (initially_allowed["manifest"]["preset"] if legacy_target else initially_allowed["llm"]["preset"])
+    initial_policy["allowed"] = [a, b]
+    write(target_path, initially_allowed)
+    revoked = execute("propagate-policy", {"project_dir": str(tmp_path), "directory_name": "source",
+                                          "default_ref": a, "allowed_presets": [a]})
+    assert revoked.updated == 1 and revoked.failed == 0
+    source_bytes = source_path.read_bytes()
+    result = execute("propagate-config", {"project_dir": str(tmp_path), "directory_name": "source"})
+    assert result.updated == 1 and result.failed == 0 and not result.code
+    saved = json.loads(target_path.read_text())
+    if legacy_target:
+        assert saved["manifest"]["preset"] == target_policy
+        assert saved["manifest"]["llm"] == target["manifest"]["llm"]  # preserve raw owner as well as effective policy
+        assert saved["manifest"]["capabilities"] == {"shell": {"yolo": False}, "web": None}
+        assert saved["pad"] == "target pad" and saved["env_file"] == env_ref
+        assert saved["manifest"]["admin"] == {"karma": False, "nirvana": False}
+    else:
+        assert saved["llm"] == target["llm"]  # exact canonical model-owner retention
+        assert saved["tools"] == tools and saved["host"]["env_file"] == env_ref
+        assert saved["agent"]["permissions"] == {"karma": False, "nirvana": False}
+    assert saved["mcp"] == {} and source_path.read_bytes() == source_bytes
+    materialize, prepare = reader_callbacks(target_path.parent, load_preset=load_preset)
+    outcome = read_init(target_path.parent, materialize=materialize, prepare=prepare)
+    assert outcome.ok and outcome.data["manifest"]["llm"]["model"] == "a"
+    assert outcome.data["manifest"]["preset"] == target_policy
+
+
+def test_supported_config_propagation_can_copy_model_source_without_target_policy(tmp_path):
+    preset = str(tmp_path / "chosen.json")
+    write(Path(preset), {"description": {"summary": "chosen"}, "llm": {"provider": "openai", "model": "chosen"}})
+    policy = {"active": preset, "default": preset, "allowed": [preset]}
+    write(tmp_path / ".lingtai/source/init.json", {"llm": {"preset": policy}})
+    target = tmp_path / ".lingtai/worker/init.json"
+    write(target, {"llm": {"provider": "openai", "model": "before"}})
+    result = execute("propagate-config", {"project_dir": str(tmp_path), "directory_name": "source"})
+    assert result.updated == 1 and result.failed == 0
+    assert json.loads(target.read_text())["llm"] == {"preset": policy}

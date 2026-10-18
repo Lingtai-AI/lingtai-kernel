@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .init_schema import DEPRECATED_TOP_FIELDS, LEGACY_MIGRATED_TOP_FIELDS, validate_init
-from .kernel.config_resolve import parse_jsonc, resolve_paths
+from .kernel.config_resolve import normalize_init, parse_jsonc, resolve_paths
 from .kernel.workdir import _redact_secrets
 from .tools.registry import (
     classify_capabilities,
@@ -131,6 +131,23 @@ Materialize = Callable[[dict[str, Any]], None]
 Prepare = Callable[[dict[str, Any]], None]
 
 
+def normalize_authored_init(working_dir: str | Path, data: dict[str, Any]) -> dict[str, Any]:
+    """The shared read-only canonical declaration/conflict gate, also for preflight."""
+    if "manifest" not in data:
+        from .services.mcp_registry import validate_declared_mcps
+        validate_declared_mcps(Path(working_dir), data.get("mcp", {}), data.get("plugins", []))
+        legacy_mcp = Path(working_dir) / "mcp" / "servers.json"
+        if legacy_mcp.is_file():
+            legacy = parse_jsonc(legacy_mcp.read_text(encoding="utf-8"))
+            if legacy:
+                raise ValueError(
+                    "mcp/servers.json still declares servers: explicitly move each desired spec "
+                    "into canonical mcp, compare effective activation, then retire that file; "
+                    "use legacy manifest init until conversion is authorized"
+                )
+    return normalize_init(data)
+
+
 def reader_callbacks(
     working_dir: str | Path,
     *,
@@ -147,6 +164,10 @@ def reader_callbacks(
     root = Path(working_dir)
 
     def materialize(data: dict[str, Any]) -> None:
+        if "manifest" not in data:
+            normalized = normalize_authored_init(root, data)
+            data.clear()
+            data.update(normalized)
         materialize_active_preset(
             data,
             root,
@@ -240,6 +261,17 @@ def read_init(
             shape_decision=InitShapeDecision.UNKNOWN,
             behavior=failure_behavior,
             next_step="Make the top-level init.json value an object, then rerun the same reader.",
+            effective_config_source=effective_source,
+        )
+
+    try:
+        data = normalize_authored_init(working_dir, data)
+    except (ValueError, OSError) as exc:
+        return InitReadOutcome(
+            InitReadStatus.READ_FAILED, display_path, stage="CONFLICT",
+            json_path="$", safe_excerpt=str(exc),
+            shape_decision=InitShapeDecision.BLOCKED, behavior=failure_behavior,
+            next_step="Choose one authored ownership shape; do not duplicate manifest and canonical fields.",
             effective_config_source=effective_source,
         )
 

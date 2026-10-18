@@ -94,6 +94,13 @@ capability names and lazy adapters.
 
 ## Components
 
+- `registry.py::CORE_DEFAULTS` derives all shipped selectable builtin defaults
+  from `BUILTIN_TOOLS`; `apply_core_defaults` retains explicit off/config and
+  mandatory notification. Canonical Core owner groups are projected and stripped
+  by `kernel/config_resolve.py::normalize_init`, not capability setup. The init
+  reader Contract and IR002 own authoring/selection semantics; no external MCP
+  activation follows from this catalog.
+
 - `CONTRACT.md` — the LingTai Tool Protocol (LTP): the future canonical
   model-facing tool call contract, the two-level family/action settings
   addressing and ownership rules, the explicit per-tool migration boundary, and

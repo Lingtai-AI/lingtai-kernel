@@ -140,6 +140,44 @@ class FilesystemProjectConfigurationAdapter(ProjectConfigurationPort):
         except Exception:
             raise configuration_error("project_observation_failed") from None
 
+    def _seed_legacy_addon_mcp(self, document: dict, request_venv_path: str) -> dict:
+        """Complete Core-selected legacy seeds, never activate the catalog.
+
+        Core already converted/ordered addons and applied explicit request MCP
+        kwargs. This compatibility projection fills only still-missing entries;
+        catalog records supply launch metadata, not another activation list.
+        """
+        if "manifest" not in document or not isinstance(document.get("addons"), list):
+            return document
+        from lingtai.services.mcp_registry import load_catalog
+
+        catalog = load_catalog()
+        # The inherited Go explicit writer's public config references. No
+        # credential file is read, created, resolved or authorized here.
+        references = {
+            "imap": ("LINGTAI_IMAP_CONFIG", Path(".secrets") / "imap.json"),
+            "telegram": ("LINGTAI_TELEGRAM_CONFIG", Path(".secrets") / "telegram.json"),
+            "feishu": ("LINGTAI_FEISHU_CONFIG", Path(".secrets") / "feishu.json"),
+            "wechat": ("LINGTAI_WECHAT_CONFIG", Path(".secrets") / "wechat" / "config.json"),
+            "whatsapp": ("LINGTAI_WHATSAPP_CONFIG", Path(".secrets") / "whatsapp.json"),
+        }
+        result = copy.deepcopy(document)
+        mcp = result.get("mcp")
+        if not isinstance(mcp, dict):
+            mcp = {}
+        venv = Path(request_venv_path)
+        python = venv / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
+        for name in result["addons"]:
+            if not isinstance(name, str) or name in mcp or name not in references or name not in catalog:
+                continue
+            record = catalog[name]
+            env, reference = references[name]
+            mcp[name] = {"type": "stdio", "command": str(python),
+                         "args": copy.deepcopy(record["args"]), "env": {env: str(reference)}}
+        if mcp:
+            result["mcp"] = mcp
+        return result
+
     def _preflight(self, path: Path, document: dict) -> None:
         from lingtai.init_reader import reader_callbacks
         from lingtai.init_schema import validate_init
@@ -167,7 +205,8 @@ class FilesystemProjectConfigurationAdapter(ProjectConfigurationPort):
         reader_status = "not_read"
         try:
             path = self._member(seed.directory_name)
-            self._preflight(path, seed.init_document)
+            document = self._seed_legacy_addon_mcp(seed.init_document, seed.legacy_mcp_venv_path)
+            self._preflight(path, document)
             if seed.psyche_settings_json is not None:
                 # Serialization already used the owning writer; existing strict owner is
                 # read by the composition edge, then actual written bytes read below.
@@ -175,7 +214,7 @@ class FilesystemProjectConfigurationAdapter(ProjectConfigurationPort):
                 read_prompt_owner_values(path)
             phase = "init_write_failed"
             self._safe_parent(path)
-            _atomic_json(path / "init.json", seed.init_document, only_absent=seed.only_absent)
+            _atomic_json(path / "init.json", document, only_absent=seed.only_absent)
             init_written = True
             phase = "manifest_write_failed"
             for sub in ("inbox", "sent", "archive"):
@@ -187,6 +226,11 @@ class FilesystemProjectConfigurationAdapter(ProjectConfigurationPort):
                 self._safe_parent(path / "settings")
                 _atomic_text(path / "settings" / "psyche.json", seed.psyche_settings_json)
                 psyche_written = True
+            phase = "pad_seed_failed"
+            if seed.pad_seed:
+                from lingtai.tools.pad._pad import _seed_pad
+                self._safe_parent(path / "system")
+                _seed_pad(path / "system", seed.pad_seed)
             phase = "configuration_reader_failed"
             reader_status = self._read_status(path)
             if reader_status == "READ_FAILED":
@@ -209,7 +253,7 @@ class FilesystemProjectConfigurationAdapter(ProjectConfigurationPort):
             return ConfigurationWriteReceipt(code="init_write_failed")
 
     def save_member_init(self, directory_name: str, document: dict,
-                         *, only_absent: bool = False) -> ConfigurationWriteReceipt:
+                         *, only_absent: bool = False, pad_seed: str = "") -> ConfigurationWriteReceipt:
         written = False
         phase = "configuration_preflight_failed"
         reader_status = "not_read"
@@ -220,6 +264,11 @@ class FilesystemProjectConfigurationAdapter(ProjectConfigurationPort):
             self._safe_parent(path)
             _atomic_json(path / "init.json", document, only_absent=only_absent)
             written = True
+            phase = "pad_seed_failed"
+            if pad_seed:
+                from lingtai.tools.pad._pad import _seed_pad
+                self._safe_parent(path / "system")
+                _seed_pad(path / "system", pad_seed)
             phase = "configuration_reader_failed"
             reader_status = self._read_status(path)
             if reader_status == "READ_FAILED":

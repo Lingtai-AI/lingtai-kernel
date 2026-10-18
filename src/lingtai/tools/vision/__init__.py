@@ -672,9 +672,9 @@ class VisionManager:
     def _build_service_from_preset(self, preset_ref: str) -> tuple[Any, str]:
         """Borrow another preset's vision service for one call.
 
-        The preset must appear in ``manifest.preset.allowed`` (same
-        authorization surface as preset swapping). Its ``manifest.llm`` plus
-        ``manifest.capabilities.vision`` provide the provider/model/credential
+        The preset must appear in the normalized init preset allowlist (same
+        authorization surface as preset swapping). Its LLM plus explicit current
+        init vision kwargs provide the provider/model/credential
         identity; ``_resolve_direct_service`` is invoked with an identity shim
         built from that preset so the borrowed provider resolves its own route
         and credentials (e.g. a ``codex`` preset with its own
@@ -684,15 +684,17 @@ class VisionManager:
         ``identity`` is a dict of the resolved provider/model identity (empty
         on failure).
         """
-        import json as _json
-
+        from lingtai.init_reader import normalize_authored_init
+        from lingtai.kernel.config_resolve import load_jsonc
         from lingtai.kernel.presets import load_preset, resolve_allowed_presets
+        from lingtai.kernel.config_resolve import resolve_env
+        from lingtai.llm.service import build_provider_defaults_from_manifest_llm
 
         init_path = Path(self._workdir.path) / "init.json"
         if not init_path.is_file():
             return None, "No init.json is available to resolve manifest.preset.allowed.", {}
         try:
-            init_data = _json.loads(init_path.read_text(encoding="utf-8"))
+            init_data = normalize_authored_init(self._workdir.path, load_jsonc(init_path))
         except Exception:
             return None, "init.json could not be parsed while resolving preset.allowed.", {}
         manifest = init_data.get("manifest") or {}
@@ -715,8 +717,13 @@ class VisionManager:
             return None, f"Failed to load preset {preset_ref!r}: {type(exc).__name__}.", {}
         pm = preset.get("manifest") or {}
         llm = pm.get("llm") or {}
-        vision_cap = (pm.get("capabilities") or {}).get("vision") or {}
-        provider = vision_cap.get("provider") or llm.get("provider")
+        # Borrow only the preset LLM; tool kwargs remain current-init-owned.
+        vision_cap = dict((manifest.get("capabilities") or {}).get("vision") or {})
+        # Resolve only the provider sentinel here. Borrowed credentials must
+        # remain on the identity, never become explicit tool-owned kwargs.
+        provider = vision_cap.get("provider")
+        if not provider or provider == "inherit":
+            provider = llm.get("provider")
         if not provider:
             return None, f"Preset {preset_ref!r} declares no vision provider.", {}
         identity = {
@@ -729,10 +736,10 @@ class VisionManager:
         # Carry the preset's own Codex identity into the identity bucket so a
         # borrowed ``codex`` preset binds its ``codex_auth_path`` rather than
         # the default token file.
-        preset_defaults: dict = {}
+        preset_defaults = build_provider_defaults_from_manifest_llm(llm, max_rpm=0) or {}
         preset_auth_path = _normalize_codex_auth_path(llm.get("codex_auth_path"))
         if preset_auth_path and isinstance(preset_provider, str):
-            preset_defaults[preset_provider.lower()] = {"codex_auth_path": preset_auth_path}
+            preset_defaults.setdefault(preset_provider.lower(), {})["codex_auth_path"] = preset_auth_path
 
         class _PresetIdentity:
             provider = preset_provider
@@ -741,13 +748,10 @@ class VisionManager:
             # A preset that omits ``base_url`` uses its provider's default
             # endpoint; the vision service then applies the same SDK default.
             effective_base_url = llm.get("base_url")
-            api_key = None
+            api_key = resolve_env(llm.get("api_key"), llm.get("api_key_env"))
             _provider_defaults: dict = preset_defaults
 
         kwargs = dict(vision_cap)
-        for key in ("model", "base_url", "api_key_env", "wire_api"):
-            if key in llm and key not in kwargs:
-                kwargs[key] = llm[key]
         api_key = kwargs.pop("api_key", None)
         api_key_env = kwargs.pop("api_key_env", None)
         # ``provider`` is passed positionally below; drop the capability copy so
@@ -905,7 +909,8 @@ class VisionManager:
 
     def _dispatch_list(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
         # mechanical enumeration; never constructs a service or makes a provider call
-        import json as _json
+        from lingtai.init_reader import normalize_authored_init
+        from lingtai.kernel.config_resolve import load_jsonc
         from lingtai.kernel.presets import load_preset
 
         active_service = self._active_provider.service
@@ -921,10 +926,11 @@ class VisionManager:
             "responses_vision": _responses_vision(active_provider),
         }
         allowed: list[str] = []
+        manifest: dict[str, Any] = {}
         init_path = Path(self._workdir.path) / "init.json"
         if init_path.is_file():
             try:
-                init_data = _json.loads(init_path.read_text(encoding="utf-8"))
+                init_data = normalize_authored_init(self._workdir.path, load_jsonc(init_path))
                 manifest = init_data.get("manifest") or {}
                 # One row per physical preset. A raw ``~/x.json`` entry and
                 # its expanded absolute path are the same file, so key on the
@@ -945,8 +951,10 @@ class VisionManager:
                 continue
             pm = preset.get("manifest") or {}
             llm = pm.get("llm") or {}
-            vision_cap = (pm.get("capabilities") or {}).get("vision") or {}
-            provider = vision_cap.get("provider") or llm.get("provider")
+            vision_cap = (manifest.get("capabilities") or {}).get("vision") or {}
+            provider = vision_cap.get("provider")
+            if not provider or provider == "inherit":
+                provider = llm.get("provider")
             if not provider:
                 continue
             presets.append({

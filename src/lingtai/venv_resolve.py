@@ -85,6 +85,15 @@ def resolve_venv(init_data: dict | None = None) -> Path:
     Tries init.json venv_path first, then ~/.lingtai-tui/runtime/venv/.
     Auto-creates the global venv if nothing works.
     """
+    # Read either authored host nesting or the normalized effective ABI. Do not
+    # resolve another owner (or materialize an LLM) merely to select a launcher.
+    if init_data and "host" in init_data:
+        if "manifest" in init_data or "venv_path" in init_data or "env_file" in init_data:
+            raise ValueError("host: mixed legacy/canonical bootstrap owners; choose one explicitly")
+        host = init_data["host"]
+        if not isinstance(host, dict) or set(host) - {"venv_path", "env_file"}:
+            raise ValueError("host: expected venv_path/env_file object")
+        init_data = host
     # 1. init.json venv_path
     if init_data and init_data.get("venv_path"):
         venv = Path(init_data["venv_path"]).expanduser()
