@@ -4,12 +4,14 @@ description: >
   Use for unfamiliar daemon delegation, backend-specific work, stalled or
   failed runs, completion checks, or consent-gated cleanup. Routine calls can
   start from the advertised schema.
-version: 0.18.0
+version: 0.19.0
 last_changed_at: 2026-09-09T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/services/daemon.py
+- src/lingtai/tools/web_search/__init__.py
+- src/lingtai/tools/web_search/manual/SKILL.md
 - src/lingtai/cli_daemon.py
 - src/lingtai/tools/daemon/system_prompt.py
 - src/lingtai/tools/daemon/settings.py
@@ -146,8 +148,12 @@ key. `emanate.timeout` overrides one batch, not this manager setting.
 
 `DaemonService(state_root)` is not an Agent and owns no Agent lease, prompt,
 identity, lifecycle, or manager-control authority. Native standalone LingTai
-tasks require a directly loadable preset; external CLIs retain no-preset
-mechanics. Daemon capability does not authorize software installation, credential changes,
+tasks require a directly loadable model preset. Standalone native API/CLI
+omitted `tools` selects `shell` and `web` (DDG public search and static HTTP
+browse, no provider credentials); explicit `tools=[]` grants no host tools,
+and explicit lists stay narrow. A model-only preset needs no Shell/Web block.
+Daemon completion/checkpoint/compact remain protocol tools, not host authority.
+External CLIs retain their existing no-preset mechanics. Daemon capability does not authorize software installation, credential changes,
 evidence deletion, or other work beyond the approved scope. `reclaim` stops work but does not clean
 folders; molt clears conversation context and does not wipe durable stores or
 daemon run folders.

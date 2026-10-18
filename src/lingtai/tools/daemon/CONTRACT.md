@@ -7,9 +7,10 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 18
+contract_version: 19
 last_changed_at: "2026-10-14"
 related_files:
+  - tests/test_daemon_standalone_tools.py
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
   - src/lingtai/tools/daemon/__init__.py
@@ -29,6 +30,8 @@ related_files:
   - src/lingtai/services/mcp.py
   - src/lingtai/services/ANATOMY.md
   - src/lingtai/services/daemon.py
+  - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/kernel/llm/base.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/kernel/notification_store/CONTRACT.md
@@ -260,6 +263,26 @@ the service MUST NOT locate, parse, materialize, validate, or derive policy from
 Agent-bound daemon composition retains its existing optional inherited-preset
 route and explicit-preset allowlist. External CLI backends return through their
 existing no-preset path before the native gate.
+
+Standalone native host-tool composition is independent of the model preset
+([D011](BEHAVIORS.md#behavior-d011)). The official Shell adapter supplies the
+host floor even when `manifest.capabilities` is absent. The service also
+supplies Web's supported DDG-only search and static HTTP browse composition;
+no parent LLM credentials, provider search, external MCP, accounts, contacts,
+or Agent lifecycle tools are implicitly activated. Explicit preset capability
+configuration still takes precedence. Effective host Web configuration crosses
+the existing detached capability manifest lane; preset files and `manifest.llm`
+are unchanged. The detached official collector projects a real workdir Port.
+
+For standalone native API/CLI tasks only, omitted `tools` selects `shell` and
+`web`; explicit `tools=[]` exposes no host tools, and explicit lists remain
+narrowed. Daemon-local completion/checkpoint/compact protocol remains available.
+Agent-bound selection/borrowing and external CLI tool policy are unchanged.
+Availability grants no side-effect authority: the task's approved paths and
+operations remain binding, and Shell uses its existing policy/risky-action gate.
+`list`/`check` never mount host tools. Automated evidence is
+`tests/test_daemon_standalone_tools.py` (production dispatch/manifest/capsule,
+fresh-process official Shell execution, fixture-backed Web, no live provider).
 
 The service exposes only `emanate`, `list`, `check`, and `reclaim` for this
 vertical slice. `list` and `check` bind the engine's ledger-driven handlers

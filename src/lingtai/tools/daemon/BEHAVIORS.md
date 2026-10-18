@@ -5,6 +5,7 @@ labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - tests/test_daemon_standalone_tools.py
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/_tool_family.py
@@ -530,3 +531,34 @@ delta is negative; record the evidence trail in the task report.
 Pass when all evidence holds. Fail on a missing or extra key, a sixth public
 field, a dangling manual pointer, any settings mutation route, partial output
 on failure, or a regression in the unchanged `list` action.
+
+
+<a id="behavior-d011"></a>
+## Behavior D011 — standalone model-only workers get real host tools
+
+- **id**: D011
+- **guards**: [Standalone service boundary](CONTRACT.md#standalone-service-boundary)
+- **runner**: coding agent with a local Python test interpreter; no live provider
+- **prerequisites**: source checkout and test dependencies; task-local pytest root
+- **estimate**: 1 min
+
+### Steps
+1. Run `python -m pytest -q -s tests/test_daemon_standalone_tools.py` with
+   task-local `--basetemp` and `-o cache_dir`.
+2. Inspect the model-only preset dispatch through service and public CLI, then
+   the production manifest/capsule reconstructed in a fresh detached host process.
+3. Retain `standalone-shell-ok`, DDG search and static browse fixture outputs.
+
+### Expected evidence
+- [ ] Requested Shell executes a harmless real local command without preset caps.
+- [ ] Omission selects Shell/Web; explicit empty/narrow lists expose only their
+      selected host tools, alongside existing daemon-local protocol tools.
+- [ ] Web's admitted search engines are DDG-only even with synthetic ambient
+      provider credentials; search/browse fixture dispatch succeeds without a
+      provider call, auth lookup, or public-network request.
+- [ ] Model preset bytes remain unchanged; list/check mount no host tools.
+
+### Pass / Fail
+Pass only when every assertion passes. Failure, timeout, or mere schema presence
+is not execution proof. This does not claim live provider, public network,
+resident refresh, or native Windows acceptance.

@@ -2,7 +2,8 @@
 
 ``DaemonService`` owns one caller-chosen filesystem state root.  It is not an
 Agent and does not construct one; native LingTai requests instead name the
-preset path that supplies their LLM and capability configuration.
+preset path that supplies their LLM configuration. Host tools are composed
+here independently of that model selection.
 """
 from __future__ import annotations
 
@@ -43,6 +44,7 @@ class _StandaloneDaemonRuntime:
         self._intrinsic_modules: dict[str, Any] = {}
         self._mcp_tool_names: set[str] = set()
         self._manager: Any = None
+        self._host_surface: tuple[dict, dict] | None = None
 
     @property
     def service(self) -> Any:
@@ -50,13 +52,27 @@ class _StandaloneDaemonRuntime:
             "standalone LingTai daemon requests require an explicit preset"
         )
 
+    def _host_tools(self) -> tuple[dict, dict]:
+        # Official Shell adapter, not a second executor or a full Agent. Lazy
+        # composition keeps list/check entirely read-only.
+        if self._host_surface is None:
+            self._host_surface = self.setup_preset_capability("shell", {})
+        return self._host_surface
+
     @property
     def tool_schemas(self) -> tuple[Any, ...]:
-        return ()
+        return tuple(self._host_tools()[0].values())
 
     @property
     def tool_handlers(self) -> Mapping[str, Callable[[dict], dict]]:
-        return {}
+        return self._host_tools()[1]
+
+    @property
+    def preset_capability_defaults(self) -> Mapping[str, Any]:
+        # Host-owned public Web composition, not LLM preset configuration.
+        # Only DDG is admitted: no provider credentials or accounts are borrowed.
+        # Effective configuration travels the existing detached manifest lane.
+        return {"web": {"engines": {"duckduckgo": {}}}}
 
     @property
     def mcp_tool_names(self) -> frozenset[str]:
@@ -271,7 +287,11 @@ class DaemonService:
         return self._invoke(
             "emanate",
             {
-                "tasks": [dict(task) for task in tasks],
+                "tasks": [
+                    {**task, "tools": task.get("tools", ["shell", "web"])}
+                    if backend == "lingtai" else dict(task)
+                    for task in tasks
+                ],
                 "backend": backend,
                 "max_turns": max_turns,
                 "timeout": timeout,

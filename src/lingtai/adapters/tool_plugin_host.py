@@ -496,6 +496,12 @@ class _DaemonPresetToolCollector:
         self._official_tool_bindings: dict[str, Any] = {}
 
     @property
+    def working_dir(self) -> Path:
+        # Detached supervisor stubs expose the private runtime path, not the
+        # full Agent facade. Official plugins still receive a real WorkdirPort.
+        return Path(self._agent._working_dir)
+
+    @property
     def official_tool_plugins(self):
         return MappingProxyType(self._official_tool_plugins)
 

@@ -5064,12 +5064,18 @@ class DaemonManager:
                 return {"status": "error",
                         "message": f"preset {preset_name!r}: {conn['status']} — "
                                    f"{conn.get('error', 'cannot reach LLM')}"}
-            preset_caps = preset.get("manifest", {}).get("capabilities", {})
+            # Standalone composition may supply credential-free host defaults.
+            # Keep disk presets/manifest.llm untouched; serialize the effective
+            # capability config on the existing detached handoff so handlers
+            # are reconstructed there, rather than lost with this process.
+            preset_caps = {
+                **getattr(self._runtime, "preset_capability_defaults", {}),
+                **preset.get("manifest", {}).get("capabilities", {}),
+            }
             # Instantiate preset capabilities into a sandbox up front so any
             # setup-time failure refuses the whole batch (consistent with
-            # connectivity refusal). Empty caps dict → empty sandbox surface,
-            # which means the emanation only gets task-scoped MCP tools —
-            # that's a valid if unusual configuration.
+            # connectivity refusal). With no effective capabilities, only the
+            # host floor and daemon-local/task-scoped tools remain available.
             try:
                 preset_schemas, preset_handlers = self._instantiate_preset_capabilities(
                     preset_caps,

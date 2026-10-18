@@ -1,5 +1,6 @@
 ---
 related_files:
+  - tests/test_daemon_standalone_tools.py
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
   - src/lingtai/tools/daemon/CONTRACT.md
@@ -23,6 +24,8 @@ related_files:
   - src/lingtai/services/mcp.py
   - src/lingtai/services/ANATOMY.md
   - src/lingtai/services/daemon.py
+  - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/cli_daemon.py
   - src/lingtai/llm/service.py
   - src/lingtai/llm/interface_converters.py
@@ -108,6 +111,15 @@ tools by the LingTai backend, mounted in-process via
 backend, mounted through native stdio MCP config for the Codex/OpenCode/Qwen
 CLI backends, and mounted through native stdio/HTTP MCP config for Kimi Code
 via a run-private `$KIMI_CODE_HOME/mcp.json`.
+Standalone host tools (D011) use the official Shell collector in
+`src/lingtai/services/daemon.py`, plus a DDG-only Web default merged into the
+existing effective capability handoff by `__init__.py`. No preset file or
+Agent defaults registry is changed. `src/lingtai/adapters/tool_plugin_host.py`
+projects the detached preset collector's workdir into the official plugin Port.
+`tests/test_daemon_standalone_tools.py` guards service/public CLI selection,
+production manifest/capsule preparation, and actual fresh-process Shell/Web
+handler dispatch; live public network/provider acceptance remains separate.
+
 The reusable standalone boundary lives in `services/daemon.py`: it composes this
 same manager, family dispatcher, run directories, notification store, and ledger
 against one caller-selected state root. It constructs no Agent and owns no Agent
