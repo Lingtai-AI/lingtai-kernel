@@ -20,10 +20,9 @@ def _write_init(path: Path, text: str) -> None:
 def test_kernel_canonical_init_jsonc_is_parseable_and_has_current_shape():
     root = Path(__file__).parents[1]
     data = load_jsonc(root / "src/lingtai/init.jsonc")
-    assert data["manifest"]["llm"]["provider"] == "openai"
-    assert data["manifest"]["capabilities"]["shell"] == {}
-    assert "covenant" not in data
-    assert data["pad"] == ""
+    assert data["llm"]["provider"] == "openai"
+    assert data["tools"] == {}
+    assert not {"manifest", "pad", "covenant"}.intersection(data)
 
 
 def test_real_reader_reports_ignored_legacy_paths_without_mutating_input(tmp_path):

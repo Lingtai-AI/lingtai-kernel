@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/manual/SKILL.md
+  - tests/test_init_ownership.py
   - src/lingtai/tools/vision/settings.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
 maintenance: |
@@ -97,6 +98,7 @@ failed route does not cause an implicit fallback.
 
 - **id**: VN003
 - **title**: check reports default or allowed-preset identity without sending an image
+- **ownership evidence**: acceptance owner runs `tests/test_init_ownership.py -k vision_canonical`; canonical JSONC authorization works for list/borrow, preset capability poison is ignored, current-init kwargs and explicit inherit remain effective, and unlisted references fail before the resolver. This thin test does not construct a provider or claim image/network conformance.
 - **guards**: `vision-contract` § Routing and preset authorization; § Results, errors, and state
 - **runner**: any LingTai agent with shell access to this repository
 - **prerequisites**: the disposable allowed-preset fixture in the migration test
@@ -186,9 +188,12 @@ has no provider/configuration side effects.
    **Automated step unavailable: pytest recipe retired (2026-10-12); no replacement conformance claimed**.
 2. Inspect `DECLARATION.requires` and record `workdir`, `active_provider`, and
    `configuration`; record that `VisionConfiguration` is the only setup snapshot.
-3. Borrow an allowed preset whose fixture declares an `api_key_env`; record that
-   the resolver receives that preset's environment name/identity, not the active
-   preset's credential, and that no credential value is printed or asserted.
+3. Run `tests/test_init_ownership.py -k vision` through the authorized test owner.
+   Use only nonsecret inline/env fixtures and a recording factory. Same-provider,
+   same-endpoint borrow succeeds; a different endpoint/provider without its own
+   init key fails manual-only before the factory. Explicit init key/env succeeds
+   at its selected endpoint, including `provider=inherit`; Codex keeps its own
+   auth identity. No provider request or real credential is permitted.
 
 ### Expected evidence
 - [ ] The Vision declaration requires exactly the three narrow ports and setup

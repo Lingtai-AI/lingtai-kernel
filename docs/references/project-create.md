@@ -211,6 +211,13 @@ Pad/env/blueprint/preset files or malformed unrelated Psyche do not block this
 policy-only write, and reader status stays `not_read`. Malformed init and write
 failures remain explicit partial counts while later members continue. Configure,
 config propagation and rehydrate keep their actual runtime-owner reader checks.
+Config propagation copies init-owned tools/nonempty env references and worker
+permissions, not model authorization. An existing target policy and its effective
+model source stay authoritative (including revocations and opaque fields);
+canonical reference-bound `llm` stays exact. Legacy inline inputs keep their old
+raw-LLM copy beside legacy target policy, which still wins at read. Only targets
+without a policy may receive the source model source. Use `propagate-policy`
+for authorization changes rather than treating config copy as a model switch.
 
 Imported all-absent rehydrate includes selected-source configuration. Do not
 write source init first: a mixed project is refused, not automatically repaired.

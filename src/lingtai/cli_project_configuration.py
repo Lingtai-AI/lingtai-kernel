@@ -116,7 +116,14 @@ def _configure_request(value: dict, workspace) -> ConfigureMemberRequest:
         if value["preset_ref"] or not opts.preserve_active:
             raise configuration_error("invalid_project_request")
         prior = workspace.observe_member(value["directory_name"])
-        manifest = (prior.init_document or {}).get("manifest")
+        from lingtai.init_reader import reader_callbacks
+        from lingtai.agent import load_preset
+        from lingtai.kernel.config_resolve import normalize_init
+        candidate = normalize_init(prior.init_document or {})
+        materialize, prepare = reader_callbacks(workspace._member(value["directory_name"]), load_preset=load_preset)
+        materialize(candidate)
+        prepare(candidate)
+        manifest = candidate.get("manifest")
     else:
         from lingtai.agent import load_preset
         ref = Path(value["preset_ref"]).expanduser()

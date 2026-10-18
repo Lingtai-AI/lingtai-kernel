@@ -138,29 +138,10 @@ BUILTIN_TOOLS: dict[str, str] = {
 # init.json's ``manifest.capabilities`` only needs to declare overrides (kwargs)
 # or opt-ins beyond this set; ``manifest.disable`` is the opt-out channel.
 #
-# ``shell`` has no default kwargs: its binding resolves omitted config to yolo
-# (unsandboxed). Sandboxing hosts pass {"policy_file": ...} or {"yolo": false}.
-# ``vision`` is always registered: its provider defaults to the active LLM
-# (the agent's own Responses API), and the analyze call may explicitly borrow
-# another preset's vision service via the ``preset`` option. ``web_search``
-# is NOT in this set — it requires provider config and API keys, so it stays
-# explicit opt-in.
-CORE_DEFAULTS: dict[str, dict] = {
-    "knowledge": {},
-    "skills": {},
-    "shell": {},
-    "avatar": {},
-    "daemon": {},
-    # Notification keeps its former mandatory availability, now through the
-    # declared official-plugin registrar rather than direct intrinsic wiring.
-    "notification": {},
-    # Default-on for both Plugin and MCP queries: the capability is pure
-    # presentation. It renders a read-only catalog and writes nothing at all,
-    # so booting it on every agent costs one directory scan and risks nothing.
-    "plugin": {},
-    "task_card": {},
-    "vision": {},
-}
+# Every shipped selectable builtin follows the same default, including future
+# registry entries. This mounts available tool surfaces, not providers/accounts
+# or external MCPs. Explicit off/config remains init-owned, never preset-owned.
+CORE_DEFAULTS: dict[str, dict] = {name: {} for name in BUILTIN_TOOLS}
 
 
 def apply_core_defaults(

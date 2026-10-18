@@ -1,6 +1,6 @@
 ---
 name: init-reader
-contract_version: 6
+contract_version: 7
 root_contract: CONTRACT.md
 related_files:
   - tests/test_agents_memory.py
@@ -27,6 +27,9 @@ related_files:
   - src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
   - ENVIRONMENT_VARIABLES.md
   - tests/test_init_reader.py
+  - tests/test_init_ownership.py
+  - src/lingtai/adapters/tool_plugin_host.py
+  - tests/test_agent_capabilities.py
   - src/lingtai/adapters/project_interactive_workspace.py
   - tests/test_project_interactive_creation.py
   - src/lingtai/kernel/project/CONTRACT.md
@@ -53,7 +56,7 @@ that same JSONC file and accepted only while reading legacy local files.
 ## Behavior
 
 The boot CLI and live-refresh `Agent` use one real reader path:
-parse JSON/JSONC → materialize the active preset in memory → apply existing
+parse JSON/JSONC → normalize authored ownership once → materialize only the selected LLM in memory → apply existing
 capability preparation → validate with `init_schema.validate_init` → resolve
 paths in memory → publish the existing secret-redacted
 `system/manifest.resolved.json` artifact. The reader returns
@@ -98,6 +101,77 @@ There is no automatic rewrite, strip-and-write-back, migration registry, version
 chain, stored progress, or remote runtime dependency in this read path. Explicit
 agent/human actions such as an intentional preset activation remain separate
 writes and are not reader side effects.
+
+## Authored ownership
+
+Guarded by [IR002](BEHAVIORS.md#behavior-ir002). New init owns `agent`
+(name, language, permissions, time_awareness, timezone_awareness), `llm`
+(preset active/default/allowed OR inline route), `tools`, `mcp`, `plugins`,
+and optional `host` (venv_path/env_file). `normalize_init` projects these once
+into the historical internal manifest ABI; awareness names/defaults are unchanged.
+`tools: {}` enables every shipped selectable builtin; false disables an ordinary
+builtin. Mandatory Core and notification cannot be disabled. Email subscriptions
+and Context result-hint threshold are stripped from tool setup and mapped to
+existing internal fields. No System/Psyche settings schema changes occur.
+
+Presets author only name/description/llm. Legacy manifest presets remain readable
+into `manifest.llm`, but never supply capabilities. Materialization changes only
+LLM and existing missing-active/default fallback state in memory. Explicit
+activation persists reference policy only, never expanded LLM/tools. System's
+runtime swap still enforces allowed; historical direct activation callers may
+widen allowed. All other owners, including tools/kwargs/skills/plugin roots,
+MCP, permissions, System policy and canonical memory, remain unchanged.
+
+The main Agent's Daemon runtime adapter exposes `preset_capability_defaults`
+from current successfully registered Web/Vision kwargs only, using the existing
+sanitized registration snapshot and a deep-copy return. Disabled/unregistered
+families are absent; no parent handlers, Email/MCP/auth/context lifecycle or
+System authority are added. All-builtin defaults mount available surfaces, not
+external accounts: default Web composes its lazy built-in engines, while Vision
+may provide only a manual route when its provider is unavailable. Existing child
+request restrictions remain authoritative. The detached lane consumes this
+optional host property via its separately owned default-before-legacy-capabilities
+merge; no tool config is read from a preset by this adapter, and presets are not
+mutated. `tests/test_agent_capabilities.py::test_daemon_adapter_registered_tool_defaults`
+is an actual Agent/production-adapter/sandbox proof, not detached-launch evidence.
+
+Legacy init stays read-only compatible without auto conversion. Mixing canonical
+owners with manifest-era sections, or preset reference and inline route, fails
+with an actionable repair. Canonical MCP declarations alone select external
+servers: curated names derive bundled metadata, declared plugin names reuse
+package specs merged with activation overrides through the registry owner's
+`merge_plugin_launch`; the exact merged launcher must validate before teardown.
+Third-party specs validate at the same registry owner. Registration
+alone never activates; stale history is retained, not an activation source.
+Curated launchers use the running Agent interpreter and source. Nonempty legacy
+mcp/servers.json conflicts with canonical init and requires explicit conversion;
+legacy manifest init retains its old servers-file behavior. No MCP is launched
+by validation. New init omits Pad text/pointers; Project carries creation seeds
+separately to the existing absent/empty-only Pad publication adapter. Existing
+Pad and one-way legacy character preservation are unchanged.
+
+### Read-only init inspection
+
+Guarded by [IR002](BEHAVIORS.md#behavior-ir002).
+`lingtai-agent inspect-init --agent-dir DIR` calls `cli.inspect_init` and the
+existing reader/callbacks with the actual preset loader, not `cli.load_init`.
+It emits one JSON object with schema `lingtai.init.inspection/v1`: reader_status,
+shape_decision, failure_stage (null on success), next_step, optional json_path;
+on success agent name/language, LLM provider/model/wire_api/thinking/service_tier,
+host venv_path/env_file references, and llm_source {kind, path, pointer}.
+Paths resolve against the agent directory. Source is the actual selected preset
+(including the reader's active-to-default fallback) or init; pointer is `/llm`
+or `/manifest/llm` according to that source's authored shape. No consumer may
+reimplement model-selection precedence. Successful reader statuses exit 0;
+READ_FAILED exits 1 with the same typed stage/static repair hint and no identity.
+Inspection never writes resolved-manifest artifacts, loads env files, resolves
+credentials, constructs Agent/services or calls providers/MCP. It projects a
+positive field allowlist, never effective_config, tool/MCP config, URLs, keys,
+headers or environment values. Reader/loader logging is contained for the entire
+inspection boundary and restored in `finally`; ignored legacy and plugin
+warnings must not disclose raw values on stderr. Ordinary boot diagnostics are
+unchanged. The existing resolved-manifest v1 ABI is unchanged.
+Procedure: [LLM adapters manual](intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md).
 
 ## Port
 

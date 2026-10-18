@@ -66,6 +66,7 @@ See [PD001](BEHAVIORS.md#behavior-pd001) for lossless/idempotent migration and
 real init/rebuild/molt acceptance. No instruction-file bodies are auto-injected.
 
 The fresh interactive Project Core seed carries optional Recipe comment content
-as the current init `pad` seed; its outside workspace serializes that seed.
-Existing Agent startup remains the Pad materializer, with no new public action
-or hot-load path. The linked Project Contract owns the creation transaction.
+as typed out-of-band creation data, not an init field. Its publication adapter
+calls the existing `_seed_pad` only for absent/empty canonical Pad; nonempty
+memory survives. No public action or hot-load path is added. The linked Project
+Contract owns the creation transaction and PRJ011 guards this publication seam.

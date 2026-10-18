@@ -90,8 +90,8 @@ class FilesystemInteractiveWorkspaceAdapter(InteractiveWorkspacePort):
         manifest = _preset_manifest(request)
         # Honor the same explicit env-file input as the current seed writer;
         # never synthesize one or bypass the owner's conditional requirement.
-        pending = {"manifest": {"llm": manifest["llm"],
-                                "capabilities": manifest.get("capabilities", {})}, "pad": ""}
+        from lingtai.kernel.config_resolve import normalize_init
+        pending = normalize_init({"llm": manifest["llm"], "tools": {}, "mcp": request.options.mcp or {}})
         if request.options.env_file:
             pending["env_file"] = request.options.env_file
         # Validate pending shape without pretending the preset or credentials exist.
@@ -142,6 +142,8 @@ class FilesystemInteractiveWorkspaceAdapter(InteractiveWorkspacePort):
         agent = stage / seed.directory_name
         _write(agent / ".agent.json", seed.agent_manifest)
         _write(agent / "init.json", seed.init_document)
+        from lingtai.tools.pad._pad import _seed_pad
+        _seed_pad(agent / "system", seed.pad_seed)
         (agent / "settings").mkdir()
         psyche = self.serialize_psyche(base_prompt=seed.base_prompt,
                                       covenant=seed.covenant, covenant_file=seed.covenant_file)
@@ -169,20 +171,13 @@ class FilesystemInteractiveWorkspaceAdapter(InteractiveWorkspacePort):
 
         if persisted:
             observed_preset = self.load_preset(request.preset_ref)
-            observed_manifest = copy.deepcopy(observed_preset.get("manifest"))
-            requested_manifest = copy.deepcopy(request.preset_manifest)
-            from lingtai.tools.registry import normalize_capabilities
-            try:
-                for manifest in (observed_manifest, requested_manifest):
-                    if isinstance(manifest, dict) and isinstance(manifest.get("capabilities"), dict):
-                        manifest["capabilities"] = normalize_capabilities(manifest["capabilities"])
-            except ValueError:
-                raise creation_error("preset_dependency_mismatch") from None
+            observed_manifest = {"llm": copy.deepcopy(observed_preset.get("manifest", {}).get("llm"))}
+            requested_manifest = {"llm": copy.deepcopy(request.preset_manifest.get("llm"))}
             if observed_manifest != requested_manifest:
                 raise creation_error("preset_dependency_mismatch")
             observed_preset["manifest"] = observed_manifest
         else:
-            observed_preset = {"manifest": copy.deepcopy(request.preset_manifest)}
+            observed_preset = {"manifest": {"llm": copy.deepcopy(request.preset_manifest["llm"])}}
         # Bind reader materialization to the very preset observation compared
         # above, not a second potentially different disk read. Only persisted
         # validation gets this object from the real owner loader.

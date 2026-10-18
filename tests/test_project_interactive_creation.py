@@ -146,18 +146,26 @@ def test_shared_creation_contract_hidden_until_valid_prerequisites(tmp_path, imp
         assert events == ["preflight", "begin", "local_recipe", "packaged_recipe", "recipe",
                           "build", "staged", "prerequisites", "persisted", "publish"]
         assert not workspace.discarded
-        assert workspace.seed.init_document["pad"] == "Recipe Pad"
+        assert workspace.seed.pad_seed == "Recipe Pad"
+        assert "pad" not in workspace.seed.init_document
     else:
         assert not list(tmp_path.glob(".lingtai.create-*"))
         final = tmp_path / ".lingtai"
         assert (final / ".library_shared").is_dir()
         init = json.loads((final / "orch-dir" / "init.json").read_text())
-        assert "context_limit" not in init["manifest"]["llm"]
-        assert "context_limit" not in init["manifest"]
-        assert init["manifest"]["preset"]["allowed"] == [req.preset_ref]
-        assert init["env_file"] == req.options.env_file
-        assert init["pad"] == (tmp_path / ".recipe" / "comment" / "zh" / "comment.md").read_text()
-        assert "---\nrelated_files:" not in init["pad"]
+        assert "context_limit" not in init["llm"] and "context_limit" not in init
+        assert init["llm"]["preset"]["allowed"] == [req.preset_ref]
+        assert init["host"]["env_file"] == req.options.env_file
+        pad = (final / "orch-dir" / "system" / "pad.md").read_text()
+        assert pad == (tmp_path / ".recipe" / "comment" / "zh" / "comment.md").read_text()
+        assert "---\nrelated_files:" not in pad and "pad" not in init
+        from lingtai.init_reader import read_init, reader_callbacks
+        from lingtai.agent import load_preset
+        materialize, prepare = reader_callbacks(final / "orch-dir", load_preset=load_preset)
+        actual = read_init(final / "orch-dir", materialize=materialize, prepare=prepare)
+        assert actual.ok and actual.data["manifest"]["llm"] == {
+            key: value for key, value in req.preset_manifest["llm"].items() if key != "context_limit"}
+        assert "shell" not in init["tools"]
         assert read_resolved_prompt_inputs(final / "orch-dir").covenant == "approved covenant"
         assert "{{lang}}" not in (final / "orch-dir" / ".prompt").read_text()
         assert (final / ".tui-asset" / ".recipe" / "recipe.json").is_file()
@@ -288,8 +296,9 @@ def test_valid_local_recipe_locale_library_and_optional_layer_precedence(tmp_pat
     assert before == after
     agent = tmp_path / ".lingtai" / "orch-dir"
     init = json.loads((agent / "init.json").read_text())
-    assert init["pad"] == "root-local Pad"
-    assert init["manifest"]["capabilities"]["skills"]["paths"] == ["../.library_shared", "../../library"]
+    assert (agent / "system/pad.md").read_text() == "root-local Pad"
+    assert "pad" not in init
+    assert init["tools"]["skills"]["paths"] == ["../.library_shared", "~/.lingtai-tui/utilities", "../../library"]
     assert read_resolved_prompt_inputs(agent).covenant == "localized covenant"
     assert (agent / ".prompt").read_text() == "human zh unknown  {{soul_delay}}"
 

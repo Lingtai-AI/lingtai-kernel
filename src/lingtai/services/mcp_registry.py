@@ -387,6 +387,90 @@ def decompress_addons(working_dir: Path, addons: list[str]) -> dict:
     }
 
 
+def merge_plugin_launch(record: dict, overrides: dict) -> dict:
+    """One plugin launch merge for read-time preflight and Agent activation."""
+    return {
+        **{key: record[key] for key in ("command", "args", "url", "env", "headers") if key in record},
+        "type": record["transport"],
+        **overrides,
+    }
+
+
+def validate_declared_mcps(working_dir: Path, declarations: dict, plugins: list[str] | None = None) -> list[dict]:
+    """Validate new explicit declarations and derive metadata without writing.
+
+    Registry membership never enables a server. Existing records keep their
+    provenance; plugin names use package metadata registered before mounting.
+    """
+    if not isinstance(declarations, dict):
+        raise ValueError("mcp: expected object")
+    catalog = _load_catalog()
+    if plugins is not None and (not isinstance(plugins, list)
+                               or not all(isinstance(path, str) and path for path in plugins)):
+        raise ValueError("plugins: expected a list of nonempty package paths")
+    from .plugin_registry import read_plugins, to_registry_record
+    packages, _, _ = read_plugins(working_dir, plugins or [])
+    plugin_specs = {}
+    for package in packages:
+        for name, spec in package["mcp_specs"].items():
+            record, error = to_registry_record(package["name"], name, spec)
+            if record is not None:
+                if name in plugin_specs and plugin_specs[name] != record:
+                    raise ValueError("mcp: multiple declared plugins own the same server name")
+                plugin_specs[name] = record
+    derived = []
+    for name, config in declarations.items():
+        if not isinstance(config, dict):
+            raise ValueError("mcp declaration must be an object")
+        if "type" in config and (not isinstance(config["type"], str) or config["type"] not in {"stdio", "http"}):
+            raise ValueError(f"mcp.{name}.type: expected stdio or http")
+        for field in ("env", "headers"):
+            value = config.get(field, {})
+            if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                                      for k, v in value.items()):
+                raise ValueError(f"mcp.{name}.{field}: expected string mapping")
+        if name in catalog:
+            if name in plugin_specs:
+                raise ValueError("mcp: curated and plugin metadata conflict; choose one server identity")
+            derived.append(dict(catalog[name]))
+            continue
+        if name in plugin_specs:
+            record = plugin_specs[name]
+            launch = merge_plugin_launch(record, config)
+            effective = {**record, **launch, "transport": launch["type"]}
+            valid, error = validate_record(effective)
+            launcher = effective.get("command" if launch["type"] == "stdio" else "url")
+            if not valid or not launcher:
+                raise ValueError(f"mcp.{name}: plugin launcher is invalid: {error or 'empty launcher'}")
+            derived.append(record)
+            continue
+        transport = config.get("type", "stdio")
+        record = {"name": name, "summary": f"Explicitly declared MCP {name}",
+                  "transport": transport, "source": "init-declared"}
+        for key in ("command", "args", "url"):
+            if key in config:
+                record[key] = config[key]
+        valid, error = validate_record(record)
+        if not valid or not record.get("command" if transport == "stdio" else "url"):
+            raise ValueError(f"mcp.{name}: explicit launcher is invalid: {error or 'empty launcher'}")
+        derived.append(record)
+    return derived
+
+
+def register_declared_mcps(working_dir: Path, declarations: dict, plugins: list[str] | None = None) -> list[dict]:
+    """Append derived metadata only; never replace authored historical records."""
+    derived = validate_declared_mcps(working_dir, declarations, plugins)
+    catalog = _load_catalog()
+    decompress_addons(working_dir, [name for name in declarations if name in catalog])
+    records, _ = read_registry(working_dir)
+    existing = {record["name"] for record in records}
+    for record in derived:
+        if record["name"] not in existing:
+            _append_record(working_dir, record)
+            existing.add(record["name"])
+    return derived
+
+
 # ---------------------------------------------------------------------------
 # XML registry builder (rendered into system prompt)
 # ---------------------------------------------------------------------------

@@ -85,6 +85,7 @@ spawn/rules behavior changes.
 ### Steps
 1. From the repo root run `.venv/bin/python -m pytest -q tests/test_tool_family_avatar_migration.py -k avatar_spawn_carries_only_psyche_prompt_owner_for_both_modes`.
 2. Inspect both shallow/deep child-init assertions and the unchanged Covenant inheritance proof.
+3. Run `.venv/bin/python -m pytest -q tests/test_init_ownership.py -k model_switch` from the same candidate root; both canonical and legacy Avatar seed helpers must preserve init-owned capabilities/kwargs while pinning the default model and clearing child permissions. No child process or provider is invoked.
 
 ### Expected evidence
 - [ ] Both cases pass without launching a child process or contacting a provider.

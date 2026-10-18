@@ -25,9 +25,10 @@ def test_agent_no_capabilities_boots_core_floor(tmp_path):
 
     The default-on set covers knowledge/skills/shell/avatar/daemon/mcp;
     vision is always registered (provider-bound, defaults to the active LLM).
-    The opt-in capability (web) stays off until requested.
+    All shipped selectable builtins (including web) are enabled when omitted.
     """
-    from lingtai.tools.registry import CORE_DEFAULTS
+    from lingtai.tools.registry import BUILTIN_TOOLS, CORE_DEFAULTS
+    assert set(CORE_DEFAULTS) == set(BUILTIN_TOOLS)
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     registered = {name for name, _ in agent._capabilities}
     assert registered == set(CORE_DEFAULTS), (
@@ -41,7 +42,10 @@ def test_agent_no_capabilities_boots_core_floor(tmp_path):
         assert agent.has_capability(name) is True
         assert name in manifest_registered
     assert "vision" in registered
-    assert "web" not in registered
+    assert "web" in registered
+    from lingtai.adapters.tool_plugin_host import daemon_runtime_for_agent
+    assert daemon_runtime_for_agent(agent, {}).preset_capability_defaults == {"web": {}, "vision": {}}
+    assert manifest_registered == set(BUILTIN_TOOLS)
     agent.stop(timeout=1.0)
 
 
@@ -180,3 +184,40 @@ def test_web_defaults_to_duckduckgo(tmp_path):
     assert mgr is not None
     assert "web" in {s.name for s in agent._tool_schemas}
     agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize("disabled", [False, True], ids=["configured", "explicit-off"])
+def test_daemon_adapter_registered_tool_defaults(tmp_path, disabled):
+    """Actual Agent adapter replays config, not parent handlers or preset tools."""
+    from copy import deepcopy
+    from lingtai.adapters.tool_plugin_host import daemon_runtime_for_agent
+
+    tools = {"web": {"engines": {"duckduckgo": {"max_results": 3}}},
+             "vision": {"provider": "not-real"}}
+    agent = Agent(service=make_mock_service(), agent_name="host",
+                  working_dir=tmp_path / "host", capabilities=tools,
+                  disable=["web", "vision"] if disabled else [])
+    try:
+        runtime = daemon_runtime_for_agent(agent, {})
+        expected = {} if disabled else tools
+        assert runtime.preset_capability_defaults == expected
+        parent_schemas = tuple(agent._tool_schemas)
+        parent_handlers = dict(agent._tool_handlers)
+        if not disabled:
+            snapshot = runtime.preset_capability_defaults
+            snapshot["web"]["engines"]["duckduckgo"]["max_results"] = 99
+            assert runtime.preset_capability_defaults == tools
+            for name, kwargs in runtime.preset_capability_defaults.items():
+                schemas, handlers = runtime.setup_preset_capability(name, kwargs)
+                assert set(schemas) == set(handlers) == {name}
+                assert handlers[name] is not parent_handlers[name]
+            assert tuple(agent._tool_schemas) == parent_schemas
+            assert agent._tool_handlers == parent_handlers
+            # A runtime bound before reconstruction must observe current
+            # registration, not replay an older init snapshot after disable.
+            before = deepcopy(agent._capabilities)
+            agent._capabilities = [(n, k) for n, k in before if n != "web"]
+            assert set(runtime.preset_capability_defaults) == {"vision"}
+            agent._capabilities = before
+    finally:
+        agent.stop(timeout=1.0)

@@ -219,6 +219,80 @@ def _resolve_env_fields(d: dict) -> dict:
     return result
 
 
+def normalize_init(data: dict) -> dict:
+    """Copy authored init into the existing effective manifest ABI, read-only.
+
+    Legacy documents keep their permissive validation and precedence. A new
+    document has exactly one LLM owner and may not mix manifest-era owners.
+    No filesystem, credentials, identities or policy documents are changed.
+    """
+    from copy import deepcopy
+
+    if not isinstance(data, dict):
+        raise ValueError("init: expected an object")
+    canonical = {"agent", "llm", "tools", "plugins", "host"}
+    if "manifest" in data:
+        if canonical.intersection(data):
+            raise ValueError("init: choose canonical agent/llm/tools or legacy manifest, not both")
+        return deepcopy(data)
+    unknown = set(data) - (canonical | {"mcp"})
+    if unknown:
+        raise ValueError("init: move legacy fields to their owning configuration before authoring canonical init")
+    agent = data.get("agent", {})
+    llm = data.get("llm")
+    tools = data.get("tools", {})
+    host = data.get("host", {})
+    for name, value in (("agent", agent), ("llm", llm), ("tools", tools), ("host", host)):
+        if not isinstance(value, dict):
+            raise ValueError(f"{name}: expected object")
+    if set(agent) - {"name", "language", "permissions", "time_awareness", "timezone_awareness"}:
+        raise ValueError("agent: expected name, language, permissions, time_awareness, timezone_awareness")
+    if set(host) - {"venv_path", "env_file"}:
+        raise ValueError("host: expected only venv_path, env_file")
+    manifest = {}
+    for authored, effective in (("name", "agent_name"), ("language", "language"), ("permissions", "admin"),
+                                ("time_awareness", "time_awareness"), ("timezone_awareness", "timezone_awareness")):
+        if authored in agent:
+            manifest[effective] = deepcopy(agent[authored])
+    if "preset" in llm:
+        if set(llm) != {"preset"}:
+            raise ValueError("llm: choose preset reference OR inline provider/model route, not both")
+        manifest["preset"] = deepcopy(llm["preset"])
+        manifest["llm"] = {}
+    else:
+        manifest["llm"] = deepcopy(llm)
+    capabilities = {}
+    core_tools = {"email", "system", "context", "psyche"}
+    owner_fields = {"email": "pseudo_agent_subscriptions", "context": "summarize_notification_threshold"}
+    for name, config in tools.items():
+        if name in core_tools:
+            if config is False:
+                continue  # Mandatory Core cannot be disabled.
+            if not isinstance(config, dict):
+                raise ValueError(f"tools.{name}: expected object or false")
+            field = owner_fields.get(name)
+            if set(config) - ({field} if field else set()):
+                raise ValueError(f"tools.{name}: unsupported Core owner setting")
+            if field in config:
+                manifest[field] = deepcopy(config[field])
+            continue
+        if config is False:
+            capabilities[name] = None
+        elif isinstance(config, dict):
+            capabilities[name] = deepcopy(config)
+        else:
+            raise ValueError(f"tools.{name}: expected object or false (explicit off)")
+    manifest["capabilities"] = capabilities
+    plugins = data.get("plugins", [])
+    if not isinstance(plugins, list) or not all(isinstance(path, str) and path for path in plugins):
+        raise ValueError("plugins: expected a list of nonempty package paths")
+    if not isinstance(data.get("mcp", {}), dict):
+        raise ValueError("mcp: expected object")
+    manifest["plugins"] = deepcopy(plugins)
+    return {"manifest": manifest, "mcp": deepcopy(data.get("mcp", {})),
+            **deepcopy(host), "pad": ""}
+
+
 def resolve_paths(data: dict, working_dir: str | Path) -> None:
     """Make every path field in init.json absolute, resolved against working_dir.
 

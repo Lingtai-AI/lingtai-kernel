@@ -50,8 +50,9 @@ def test_core_forwards_one_psyche_serialized_seed_through_its_port() -> None:
     assert workspace.seed.psyche_settings_json == (
         psyche_settings.serialize_prompt_owner_document(covenant="caller covenant")
     )
-    assert init["manifest"]["preset"]["allowed"] == ["/presets/local.json"]
-    assert "context_limit" not in init["manifest"]
+    assert init["llm"]["preset"]["allowed"] == ["/presets/local.json"]
+    assert "context_limit" not in init and "context_limit" not in init["llm"]
+    assert "manifest" not in init and "shell" not in init["tools"]
     assert result.to_payload()["status"] == "created"
 
 
@@ -107,7 +108,14 @@ def test_root_cli_creates_reader_accepted_data_without_starting_agent(
     assert json.loads(capsys.readouterr().out)["agent_name"] == "alpha"
     init = json.loads((tmp_path / ".lingtai" / "alpha" / "init.json").read_text(encoding="utf-8"))
     psyche = json.loads((tmp_path / ".lingtai" / "alpha" / "settings" / "psyche.json").read_text(encoding="utf-8"))
-    assert "context_limit" not in init["manifest"]
-    assert "context_limit" not in init["manifest"]["llm"]
+    assert "context_limit" not in init and "context_limit" not in init["llm"]
+    assert init["llm"]["preset"]["active"] == str(preset)
+    assert "shell" not in init["tools"]
+    from lingtai.agent import load_preset
+    from lingtai.init_reader import read_init, reader_callbacks
+    agent_dir = tmp_path / ".lingtai/alpha"
+    materialize, prepare = reader_callbacks(agent_dir, load_preset=load_preset)
+    actual = read_init(agent_dir, materialize=materialize, prepare=prepare)
+    assert actual.ok and actual.data["manifest"]["llm"] == {"provider": "openai", "model": "test-model"}
     assert psyche == {"covenant": "caller covenant", "schema_version": 1}
     assert json.loads(preset.read_text(encoding="utf-8"))["manifest"]["llm"]["context_limit"] == 8192

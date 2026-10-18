@@ -3,6 +3,7 @@ related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/vision/BEHAVIORS.md
   - src/lingtai/tools/vision/__init__.py
+  - tests/test_init_ownership.py
   - src/lingtai/tools/vision/CONTRACT.md
   - src/lingtai/tools/vision/glossary-en.md
   - src/lingtai/tools/vision/glossary-zh.md
@@ -70,19 +71,25 @@ Vision result shape.
 - `__init__.py:643-666` — `VisionManager` retains only the granted workdir and
   live active-provider ports, the resolved service/reason, and the installed
   manual child; it does not retain an Agent.
-- `__init__.py:672-765` — `_build_service_from_preset` checks
-  `manifest.preset.allowed`, loads the authorized preset read-only, and passes
-  that preset's provider/model/endpoint/credential identity (an identity shim
+- `__init__.py:672-767` — `_build_service_from_preset` checks
+  normalized canonical/legacy preset.allowed (JSONC through the shared init
+  gate), loads the authorized preset read-only, and combines only its LLM with
+  explicit current-init vision kwargs (never preset tools). The thin ownership
+  test in `tests/test_init_ownership.py` guards list/borrow and dynamic inherit.
+  It passes that preset's provider/model/endpoint/credential identity (an identity shim
   whose `effective_base_url` is the preset's own `base_url`) to the resolver.
-- `__init__.py:767-854` — `_dispatch_analyze` resolves relative image paths,
+  Inline/env credentials resolve on that borrowed identity, with provider defaults,
+  not as explicit tool kwargs; the existing provider/endpoint guard applies.
+  Recording-factory proofs cover both credential forms and explicit own keys.
+- `__init__.py:769-856` — `_dispatch_analyze` resolves relative image paths,
   performs one request on either the default or explicitly borrowed service, and
   returns the exact success/error shapes.
-- `__init__.py:856-904` — `_dispatch_check` constructs/resolves the selected route
+- `__init__.py:858-906` — `_dispatch_check` constructs/resolves the selected route
   and reports provider/model without sending an image request.
-- `__init__.py:906-959` — `_dispatch_list` mechanically classifies the active route
+- `__init__.py:908-965` — `_dispatch_list` mechanically classifies the active route
   and only the authorized preset definitions, one row per physical preset in its
   declared spelling; it constructs no provider service.
-- `__init__.py:961-1011` — `manual` reads the installed package manual through the
+- `__init__.py:967-1017` — `manual` reads the installed package manual through the
   reserved child, then the host flattens its canonical body/path result once.
   `manual/SKILL.md` is the short operational router; its `reference/actions.md`,
   `routing.md`, `settings.md`, and `backends.md` children own the progressively

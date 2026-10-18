@@ -63,6 +63,9 @@ related_files:
   - src/lingtai/tools/psyche/settings.py
   - src/lingtai/init_reader.py
   - src/lingtai/init_schema.py
+  - tests/test_init_ownership.py
+  - src/lingtai/adapters/tool_plugin_host.py
+  - tests/test_agent_capabilities.py
   - src/lingtai/intrinsic_skills/ANATOMY.md
   - src/lingtai/intrinsic_skills/__init__.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
@@ -116,6 +119,14 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues.
 
 ## Components
+
+- `kernel/config_resolve.py::normalize_init` owns the pure canonical-to-internal
+  manifest projection; `init_reader.py::normalize_authored_init` adds the shared
+  read-only MCP/preflight gate. `kernel/presets.py::materialize_active_preset`
+  and `agent.py::_activate_preset` select only model route/reference, never tools.
+  `services/mcp_registry.py::validate_declared_mcps/register_declared_mcps`
+  derives current explicit metadata without replacing registry history. IR002 and
+  `tests/test_init_ownership.py` cover the ownership boundaries.
 
 | File | Role |
 |---|---|
@@ -173,7 +184,7 @@ generation. The four former init keys are compatibility-known but inert. See
 
 **`network.py`**: `build_network` :310 · `_discover_agents` :147 · `_build_avatar_edges` :172
 
-**`venv_resolve.py`**: `resolve_venv` :82 · `venv_python` :115 · `_is_default_runtime_dir` :156 · `_test_venv` :166 · `_test_venv_detail` :172 · `_create_venv` :246 · `_PythonSelectionPolicy` :290 · `_normalize_selector_architecture` :306 · `_parse_macos_major` :316 · `_python_selection_policy` :330 · `_probe_python_candidate` :402 · `_selection_remedy` :495 · `_find_python` :509 · `_env_marker_status` :635 · `_env_marker_status_detail` :640 · `_remove_mismatched_managed_venv` :726 · `_env_marker_main` :741
+**`venv_resolve.py`**: `resolve_venv` :82 · `venv_python` :115 · `_is_default_runtime_dir` :156 · `_test_venv` :166 · `_test_venv_detail` :172 · `_create_venv` :246 · `_PythonSelectionPolicy` :290 · `_normalize_selector_architecture` :306 · `_parse_macos_major` :316 · `_python_selection_policy` :330 · `_probe_python_candidate` :402 · `_selection_remedy` :495 · `_find_python` :518 · `_env_marker_status` :635 · `_env_marker_status_detail` :640 · `_remove_mismatched_managed_venv` :726 · `_env_marker_main` :741
 
 > Config-resolution helpers (`load_jsonc`/`resolve_env`/`resolve_paths`/`_resolve_capabilities`) and preset-connectivity probing (`check_connectivity`/`check_many`) live in the kernel — import directly from `lingtai.kernel.config_resolve` / `lingtai.kernel.preset_connectivity`. The former wrapper-side compatibility shims were removed (no back-compat shims per repo policy).
 
@@ -199,7 +210,7 @@ unsupported platforms fail loudly.
 
 **Capability registration:** `setup_capability()` in `lingtai/tools/registry.py`; the registry is `BUILTIN_TOOLS` (per-tool module paths under `lingtai.tools.<pkg>`) plus `CORE_DEFAULTS` (which boot automatically). Agent calls `apply_core_defaults` + `_setup_capability` (agent.py) during `__init__` and `_setup_from_init`. Hosts disable defaults via the `disable=[...]` kwarg or `manifest.disable` in init.json. The six mandatory intrinsics are injected separately as `BaseAgent(intrinsics=lingtai.tools.registry.INTRINSICS)`.
 
-**Agent init reader + preset materialization:** `cli.load_init` (boot) and `Agent._read_init` (refresh) are composition roots that both delegate the shared `lingtai.init_reader.read_init` parse/materialize/validate/resolve path; neither constructs a migration workspace or rewrites user-owned init.json. Then `materialize_active_preset` (`lingtai/kernel/presets.py`) reads `manifest.preset.active`, loads preset via the **required injected preset-loader callback** (the wrapper module-level `agent.load_preset`, whose production read callback is migration-free), and substitutes `llm`+`capabilities` into manifest before validation. Daemon/system tools resolve presets through the fail-loud `BaseAgent.load_preset` hook (`Agent` sets `_preset_loader = agent.load_preset`); preset materialization mutates only the in-memory effective mapping and the existing redacted manifest artifact is derived separately. The preset owns explicit opt-in capabilities, but per-agent init.json kwargs survive in two ways: (1) for capabilities the preset *also* enables, init.json wins key-by-key; (2) for always-on `CORE_DEFAULTS` capabilities the preset *omits* (daemon, bash, knowledge, …), init.json kwargs are carried forward so `apply_core_defaults` doesn't re-add an empty entry and lose e.g. `daemon.manager_pool_size`. Non-core optional caps the preset omits are dropped (the swap). `CORE_DEFAULTS` lives in `lingtai.tools.registry` and is injected via the `core_defaults=` arg by both callers (`agent._read_init` :1224, `cli.load_init` :62) — the kernel does not import the `lingtai.tools` package. `skills.paths` additionally append-merges (preset defaults first). For the LingTai-agent-facing preset runtime model (raw vs. resolved `init.json`, preset identity, the two catalogs, main-agent swap/refresh, and the daemon task/CLI distinction), read `src/lingtai/intrinsic_skills/system-manual/SKILL.md` → `reference/substrate-manual/SKILL.md` §11 — the canonical detailed reference this Anatomy routes coding agents toward.
+**Agent init reader + preset materialization:** `cli.load_init` (boot) and `Agent._read_init` (refresh) delegate the shared `init_reader.read_init` path and `reader_callbacks`. `kernel.presets.materialize_active_preset` substitutes only LLM identity through the injected read-only loader; init owns tool kwargs, skills, plugins, permissions and MCP. No preset capability bundle is projected or synthesized; explicitly authored `provider=inherit` remains dynamic. `cli.inspect_init` exposes the same reader without boot/artifact writes: machine-only `lingtai.init.inspection/v1` contains reader/loader logging with finally restoration and projects only safe identity, host references, and the actual successful loader's source path/pointer, including kernel-owned missing-active fallback. IR002 and `tests/test_init_ownership.py` guard these boundaries. The operating reference is `intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md`.
 
 ## Composition
 
@@ -241,7 +252,7 @@ Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai/kernel/` (
 - **Addon decompression** runs BEFORE capability setup so `mcp` capability sees populated `mcp_registry.jsonl` on first reconcile (`Agent.__init__` :33, `_setup_from_init` :1338).
 - **MCP retry contract (issue #34):** `_load_mcp_from_workdir` :376 records every registered init.json mcp entry into `self._mcp_init_specs` (name → `{cfg, source, client}`). `_retry_failed_mcps` :524 walks this dict, closes any dead client (`is_connected()` False), respawns with the original config, and reports `{retried, recovered, still_failed, healthy}`. `system(action="refresh")` calls it via `lingtai/tools/system/preset.py:_refresh` before `_perform_refresh` so the documented "fix config → refresh" recovery path works without full process restart.
 - **Curated MCP launcher ownership:** `_load_mcp_from_workdir` :795 looks up each init.json mcp entry's `source` in `mcp_registry.jsonl`; when it is exactly `"lingtai-curated"` (the imap/telegram/feishu/wechat/whatsapp/cloud_mail addons from `mcp_catalog.json`), the entry's `init.json` config is activation-only — its presence activates the addon and its non-launch `env` (account/config keys) passes through — while `_resolve_curated_launch` builds the *complete* launcher (transport/`type`, interpreter, module `args`) fresh from `services.mcp_registry.load_catalog()` (the running kernel's own packaged `mcp_catalog.json`, never the registry's decompressed-at-addon-time copy) plus this Agent's own `sys.executable` and currently-imported `lingtai` source root, set as the child's entire `PYTHONPATH`. Interpreter alone is not enough because the MCP stdio transport's default env allowlist excludes `PYTHONPATH`, so a curated child on the right interpreter could still resolve `lingtai` from that interpreter's own site-packages instead of this Agent's actual source. A curated entry's `command`/`args`/`type`/`env.PYTHONPATH` fields are read-compatible legacy inputs: present, they are ignored with one bounded warning naming them, never read for the launch, and never rewritten or migrated on disk. If the catalog cannot supply a safe stdio launcher for a name registered as curated (missing entry, non-stdio transport, malformed `args`), the entry is skipped with a warning — fail loud, never fall back to a stale launcher field. `_mcp_init_specs[name]["cfg"]` holds the resolved effective cfg, so `_retry_failed_mcps` respawns with the same catalog-derived launcher. Non-curated (third-party/plugin/legacy `mcp/servers.json`) entries are unaffected — their `command`/`args`/`type`/`env` still come entirely from their own activation spec — and daemon task/plugin MCPs, which spawn from their own task/plugin configs (never from `mcp_registry.jsonl`), are unaffected by this resolution or by any registry reconcile.
-- **Managed-runtime Python selection:** before auto-creating a venv, `venv_resolve.py:_find_python` :509 derives policy from the current process (`sys.platform`, normalized `platform.machine()`, and the macOS product major read directly from `platform.mac_ver()`). On macOS the managed cap is Python 3.11–3.13 across all supported cells (the release workflow builds only cp311/cp312/cp313 wheels, so a managed 3.14 choice would fall onto a source build); Apple Silicon on macOS 14+ and Apple Silicon on macOS 13 plus x86_64/translated Rosetta on macOS 13+ therefore accept 3.11–3.13. Non-macOS targets retain the open-ended Python >=3.11 baseline. Versioned names are tried newest-first on macOS while generic aliases stay first elsewhere; resolved aliases are deduplicated, and each candidate receives one five-second JSON probe of version/platform/architecture/macOS class. Bad probes fall through, while invalid macOS targets and exhausted searches fail actionably before venv or pip subprocesses start.
+- **Managed-runtime Python selection:** before auto-creating a venv, `venv_resolve.py:_find_python` :518 derives policy from the current process (`sys.platform`, normalized `platform.machine()`, and the macOS product major read directly from `platform.mac_ver()`). On macOS the managed cap is Python 3.11–3.13 across all supported cells (the release workflow builds only cp311/cp312/cp313 wheels, so a managed 3.14 choice would fall onto a source build); Apple Silicon on macOS 14+ and Apple Silicon on macOS 13 plus x86_64/translated Rosetta on macOS 13+ therefore accept 3.11–3.13. Non-macOS targets retain the open-ended Python >=3.11 baseline. Versioned names are tried newest-first on macOS while generic aliases stay first elsewhere; resolved aliases are deduplicated, and each candidate receives one five-second JSON probe of version/platform/architecture/macOS class. Bad probes fall through, while invalid macOS targets and exhausted searches fail actionably before venv or pip subprocesses start.
 - **Runtime venv markers:** `venv_resolve.py` accepts legacy managed venvs without `.lingtai-env.json` if `import lingtai` succeeds, then stamps the marker best-effort. Marker read/parse/probe failures are `error`, not `mismatch`, and never delete the managed runtime. A valid marker that proves a different OS/arch/Python environment is a confirmed mismatch: explicit `init.venv_path` candidates are rejected but left on disk, while only the managed global runtime venv (`~/.lingtai-tui/runtime/venv/`) may be removed before auto-create. The TUI calls this same logic through `python -m lingtai.venv_resolve env-marker {check,stamp} --venv <path>`.
 - **Lazy top-level facade:** `src/lingtai/__init__.py` uses PEP-562 ``__getattr__`` to resolve every public name lazily from its canonical source module (`_LAZY_EXPORTS`, ``__init__.py:21-79``). A bare ``import lingtai`` performs only stdlib/importlib.metadata work and uses the established `0+unknown` sentinel when distribution metadata is unavailable; it must not load `lingtai.agent`, `lingtai.kernel`, `tools`, `lingtai.llm`, services, MCP servers, or concrete providers. ``__dir__`` returns standard module globals unioned with ``__all__`` (``__init__.py:136-137``). Verified by `tests/test_lingtai_facade.py` and `tests/test_kernel_isolation.py`.
 
@@ -263,6 +274,19 @@ latest-state/historical-notification safety rule, shared with the daemon static
 prompt and optional readme; new `meta_block` sidecars omit `instruction` at
 construction, not through a history projection. The old comment and rules loaders and
 heartbeat consumer are removed; existing runtime files are never purged.
+
+## Main Agent native-child tool configuration
+
+`adapters/tool_plugin_host.py::daemon_runtime_for_agent` binds a live narrow
+reader of successfully registered `_capabilities` to
+`AgentDaemonRuntimeAdapter.preset_capability_defaults`. Only sanitized Web/Vision
+kwargs are projected, with a defensive deep-copy return; current registration
+therefore honors init disable/reconstruction without rereading presets or
+borrowing parent tool handlers. The existing isolated setup collector is reused.
+[IR002](BEHAVIORS.md#behavior-ir002) and
+`tests/test_agent_capabilities.py::test_daemon_adapter_registered_tool_defaults`
+guard this adapter seam. The separately owned detached engine must consume the
+optional defaults property before this is a complete native-child path.
 
 ## Loaded memory advisory lifecycle seam
 

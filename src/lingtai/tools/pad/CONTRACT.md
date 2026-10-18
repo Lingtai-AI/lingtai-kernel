@@ -75,8 +75,9 @@ compact real-startup/lifecycle smoke for injected memory and one-time preservati
 It is not exhaustive coverage of crash windows or every legacy-seed combination.
 Parent must execute the smoke and complete-prompt proof before acceptance.
 
-Fresh interactive Project seeds may put the selected Recipe comment body in the
-current init `pad` seed (explicit nonempty caller Pad wins), never the retired
-`comment_file` field. This initializes durable Pad through existing startup
-composition; it does not hot-load or expand this capability's public actions.
+Fresh interactive Project seeds carry the selected Recipe comment body as typed
+out-of-band creation data (explicit nonempty caller Pad wins), never in new init
+or the retired `comment_file` field. The Project publication adapter fills only
+absent/empty canonical Pad through the existing `_seed_pad` owner; nonempty Pad
+survives. This does not hot-load or expand this capability's public actions.
 The Project transaction Contract owns that fresh-writer ordering.

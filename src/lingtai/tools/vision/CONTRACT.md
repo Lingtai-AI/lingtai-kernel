@@ -1,9 +1,10 @@
 ---
 name: vision-contract
 tool: vision
-contract_version: 3
+contract_version: 4
 related_files:
   - src/lingtai/tools/vision/__init__.py
+  - tests/test_init_ownership.py
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/BEHAVIORS.md
   - src/lingtai/tools/vision/settings.py
@@ -149,11 +150,17 @@ different provider, legacy credential, or MCP route. An endpoint that cannot do
 vision simply fails the request.
 
 With a non-null `preset`, Vision first requires the reference to be present in
-`manifest.preset.allowed` and then loads it read-only. The borrowed route uses
-the allowed preset's own `manifest.llm` and `manifest.capabilities.vision`
-identity: its provider/model/base URL and, where declared, its own
-`api_key`/`api_key_env` or Codex OAuth identity. Resolving that explicitly
-allowed preset credential is an intentional consequence of the caller's borrow
+the canonical `llm.preset.allowed` (or legacy `manifest.preset.allowed`) and
+then loads it read-only. Init authorization is normalized by the shared init
+gate, including JSONC; no model service is constructed by the read. The borrowed
+route uses only the allowed preset's LLM plus explicit current-init vision tool
+kwargs, never a preset capability bundle. Explicit `provider=inherit` remains
+dynamic. Its provider/model/base URL and, where declared, its own
+`api_key`/`api_key_env` or Codex OAuth identity. Borrowed API credentials remain
+identity-owned and pass the existing same-provider/endpoint guard, never becoming
+explicit tool keys. Different tool endpoints/providers require their own explicit
+init key/env reference or fail manual-only before client construction. Resolving
+that explicitly allowed preset credential is an intentional consequence of the caller's borrow
 request; it is not an active-preset switch and is not an automatic fallback.
 An unlisted, unreadable, or incomplete preset fails closed with a sanitized
 manual pointer. A direct request failure likewise offers alternatives only as

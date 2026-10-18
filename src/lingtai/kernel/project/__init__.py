@@ -87,17 +87,13 @@ def _validate(request: ProjectCreateRequest) -> None:
 
 
 def _seed(request: ProjectCreateRequest) -> ProjectSeed:
-    manifest: dict[str, object] = {
-        "agent_name": request.agent_name,
-        "llm": dict(request.llm),
-        "capabilities": dict(request.capabilities),
-        "preset": {
-            "active": request.preset_ref,
-            "default": request.preset_ref,
-            "allowed": [request.preset_ref],
-        },
-        "pseudo_agent_subscriptions": ["../human"],
-    }
+    from .configuration import _initial_agent_tools
+
+    document = {"agent": {"name": request.agent_name},
+                "llm": {"preset": {"active": request.preset_ref, "default": request.preset_ref,
+                                    "allowed": [request.preset_ref]}},
+                "tools": {**_initial_agent_tools(), "email": {"pseudo_agent_subscriptions": ["../human"]}},
+                "plugins": [], "mcp": {}}
     return ProjectSeed(
         agent_name=request.agent_name,
         preset_ref=request.preset_ref,
@@ -107,7 +103,7 @@ def _seed(request: ProjectCreateRequest) -> ProjectSeed:
             "address": request.agent_name,
             "admin": {},
         }),
-        init_json=_json({"manifest": manifest, "pad": ""}),
+        init_json=_json(document),
         psyche_settings_json=request.psyche_settings_json,
     )
 
