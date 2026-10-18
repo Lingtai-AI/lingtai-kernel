@@ -14,7 +14,8 @@ _DESCRIPTION = (
     "Independent opt-in workflow; daemon remains directly available. "
     "Auto-continuation requires file authorization; default pauses. "
     "Terminal/pause/uncertain outcomes notify main; do not poll for progress. "
-    "Use check after notification. Read manual before unfamiliar use."
+    "Use check after notification. Keep an ad hoc workflow progress note in the existing "
+    "Task Card, updated on meaningful changes. Read manual before unfamiliar use."
 )
 
 

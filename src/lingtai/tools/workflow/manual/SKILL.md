@@ -5,6 +5,7 @@ related_files:
   - src/lingtai/tools/workflow/ANATOMY.md
   - src/lingtai/tools/workflow/CONTRACT.md
   - src/lingtai/tools/workflow/__init__.py
+  - src/lingtai/tools/task_card/manual/SKILL.md
 maintenance: |
   Keep run/check/stop, continuation and failure guidance aligned with the owner
   Contract and focused workflow tests. No live plugin activation instructions.
@@ -101,6 +102,12 @@ submit the same work under a new ID. Reconcile external effects before authorizi
 new work. This slice intentionally has no automatic recovery/retry engine.
 
 ## Presentation
+
+Use the existing [Task Card](../../task_card/manual/SKILL.md) for a short,
+free-form, agent-authored account of the workflow process and progress. Update
+it on meaningful state changes; choose wording suited to the work, without a
+fixed template or generated diagram. Retire the card at completion; do not poll
+the workflow just to refresh it.
 
 Root summarize defaults on. Run/stop normally have short receipts; check can
 include bulky worker results. Use summarize=false for exact IDs/paths, receipts,

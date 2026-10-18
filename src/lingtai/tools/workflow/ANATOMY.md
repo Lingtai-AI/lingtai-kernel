@@ -21,7 +21,7 @@ Independent opt-in ordered stage coordinator with an external daemon CLI boundar
 
 ## Components
 
-- `__init__.py:73` declares the static official identity; its binder composes
+- `__init__.py:74` declares the static official identity; its binder composes
   the CLI adapter and retains one manager across refresh (WF001–WF003).
 - `core.py:16` owns `WorkerBatches`, the external batch Port;
   `core.py:69` owns ordered policy in `WorkflowManager` (WF001–WF003).
