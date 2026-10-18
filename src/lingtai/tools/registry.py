@@ -108,6 +108,7 @@ BUILTIN_TOOLS: dict[str, str] = {
     "shell": "lingtai.tools.bash",
     "avatar": "lingtai.tools.avatar",
     "daemon": "lingtai.tools.daemon",
+    "workflow": "lingtai.tools.workflow",  # Explicit opt-in; never CORE_DEFAULTS.
     # Notification is always-on like the former intrinsic, but now mounts only
     # through its declared official host-plugin route.
     "notification": "lingtai.tools.notification",

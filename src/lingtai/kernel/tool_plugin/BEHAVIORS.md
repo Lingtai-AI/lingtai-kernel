@@ -5,6 +5,7 @@ labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - src/lingtai/tools/workflow/BEHAVIORS.md
   - src/lingtai/tools/plugin/_mcp.py
   - tests/test_plugin_mcp_mode.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
@@ -136,6 +137,7 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    'daemon_runtime', 'email_runtime', 'plugin_catalog', 'psyche_settings',
    'notification_state', 'notifications', 'configuration',
    'system_runtime', 'identity', 'shutdown', 'task_card_lifecycle',
+   'workflow_lifecycle',
    'task_card_notifications', 'active_provider', 'web_runtime',
    'provider_identity') ('workdir', 'notifications', 'configuration')` printed,
    then an `AttributeError` whose message says the plugin *did not require host
@@ -396,3 +398,9 @@ post-name-check failure rolls back or conceals an earlier member; or a refresh
 leaves a Web claim, schema, or handler out of sync with its opt-in capability.
 Record the exact command output in the task report. This task performs no
 writes.
+
+Workflow is the independent opt-in official slice added after these earlier
+family recipes; its executable ordering, strict envelope, stop-race and real
+host startup evidence lives in `src/lingtai/tools/workflow/BEHAVIORS.md`
+(WF001–WF003). The reserved inventory includes `workflow` and grants its
+`workflow_lifecycle` current/retain-manager slot only to that declaration.

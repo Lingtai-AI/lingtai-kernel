@@ -2,6 +2,7 @@
 name: component-contract-convention
 contract_version: 4
 related_files:
+  - src/lingtai/tools/workflow/CONTRACT.md
   - ANATOMY.md
   - BEHAVIORS.md
   - ENVIRONMENT_VARIABLES.md

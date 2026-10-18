@@ -3,6 +3,7 @@ name: declared-host-tool-plugin
 contract_version: 9
 root_contract: CONTRACT.md
 related_files:
+  - src/lingtai/tools/workflow/CONTRACT.md
   - tests/test_plugin_mcp_mode.py
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/BEHAVIORS.md
@@ -165,7 +166,7 @@ Coding agents and LingTai agents MUST observe the following.
 - **Do not claim blanket conformance.** A family conforms only once its own
   vertical slice lands with its own evidence. Today `avatar`, `context`,
   `daemon`, `email`, `plugin`, `psyche`, `notification`, `shell`,
-  `system`, `task_card`, `vision`, and `web` are declared, in that official
+  `system`, `task_card`, `vision`, `web`, and `workflow` are declared, in that official
   order; the former later-family target register is now empty. Task Card is a
   channel-neutral intrinsic dynamic capability: its one `TaskCardManager` is
   retained on the current Agent through `TaskCardLifecyclePort` and rebound on
@@ -210,6 +211,14 @@ Coding agents and LingTai agents MUST observe the following.
 
 ## Port
 
+Workflow is a separately reserved static official family, explicit opt-in and
+never a core default. It preserves daemon and binds only `workdir`, existing
+`notifications` and `shutdown`, plus `workflow_lifecycle`: exactly
+`current_manager()` and `retain_manager(manager)` for one current-host manager
+across refresh. No dispatch, Agent, generic executor or discovery authority is
+granted by that slot. Its worker boundary uses the existing public daemon CLI;
+see [workflow Contract](../../tools/workflow/CONTRACT.md) and its WF001–WF003 behaviors.
+
 Ports are capability-native and narrow (root `CONTRACT.md`
 `### Capability-native interfaces`). There is deliberately no single host
 interface: each port carries the smallest vocabulary that expresses one
@@ -239,11 +248,11 @@ capability.
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-exactly twenty grantable names: `workdir`, `prompt_section`, `mcp_prompt_section`, `avatar_parent`,
+exactly twenty-one grantable names: `workdir`, `prompt_section`, `mcp_prompt_section`, `avatar_parent`,
 `context_runtime`,
 `daemon_runtime`, `email_runtime`, `plugin_catalog`,
 `psyche_settings`, `notification_state`, `notifications`, `configuration`,
-`system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
+`system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`, `workflow_lifecycle`,
 `task_card_notifications`, `active_provider`, `web_runtime`, and
 `provider_identity` (`file_io` is no longer grantable): Avatar, Context, and Daemon
 consume their respective narrow runtime ports; Email consumes `workdir` plus its

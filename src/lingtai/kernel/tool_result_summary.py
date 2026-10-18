@@ -157,7 +157,7 @@ _LTP_V2_MIGRATED_FAMILIES = frozenset(
     {
         "web", "plugin", "vision", "avatar",
         "shell", "notification", "system", "daemon", "email",
-        "task_card",
+        "task_card", "workflow",
         "context",
         # Kernel-shipped curated MCP roots expose the same LTP control.
         # Exact public names only; arbitrary external MCP domain fields are not

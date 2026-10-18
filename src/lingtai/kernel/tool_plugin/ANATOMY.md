@@ -1,5 +1,7 @@
 ---
 related_files:
+  - src/lingtai/tools/workflow/__init__.py
+  - src/lingtai/tools/workflow/ANATOMY.md
   - tests/test_plugin_mcp_mode.py
   - src/lingtai/tools/plugin/_mcp.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
@@ -94,6 +96,11 @@ rules are in the paired [`CONTRACT.md`](CONTRACT.md); the agent-executable proof
 is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
 ## Components
+
+- `src/lingtai/tools/workflow/ANATOMY.md` maps the independent opt-in
+  workflow slice (WF001–WF003): static declaration, safe public daemon CLI
+  adapter, ordered snapshots and the narrow `workflow_lifecycle` manager slot.
+  Existing daemon routes and roots are unchanged.
 
 - Detached selected Shell reuses the same declared `notifications` key only through `DetachedDaemonExecutionHost`'s private `bash._setup_detached_daemon_shell()` composer; the registrar's per-declaration extra-port precedence substitutes a RunDir event sink without widening `NotificationPort` or mounting a live Agent capability. Public Shell setup/manifest values cannot reach this override.
 - `src/lingtai/kernel/tool_plugin/__init__.py` — the whole Core. One module,

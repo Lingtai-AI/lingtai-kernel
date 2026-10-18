@@ -3,6 +3,7 @@ name: lingtai-tool-protocol
 contract_version: 3
 root_contract: CONTRACT.md
 related_files:
+  - src/lingtai/tools/workflow/CONTRACT.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/tools/bash/CONTRACT.md
@@ -306,21 +307,29 @@ an unrelated domain field that happens to be named `summary` — see
 `### Envelope`.
 
 ### Tool-to-MCP Plugin Contract
+
+Workflow is a separately reserved static official family, explicit opt-in and
+never a core default. It preserves daemon and binds only `workdir`, existing
+`notifications` and `shutdown`, plus `workflow_lifecycle`: exactly
+`current_manager()` and `retain_manager(manager)` for one current-host manager
+across refresh. No dispatch, Agent, generic executor or discovery authority is
+granted by that slot. Its worker boundary uses the existing public daemon CLI;
+see [workflow Contract](workflow/CONTRACT.md) and its WF001–WF003 behaviors.
 Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 
 **Status.** This section fixes the declaration, activation, dispatch, manual,
 host, identifier, and migration vocabulary that every official model-facing tool
-family shares. The accepted declared evidence is exactly the twelve static
+family shares. The accepted declared evidence is exactly the thirteen static
 official families `avatar`, `context`, `daemon`, `email`,
 `plugin`, `psyche`, `notification`, `shell`, `system`, `task_card`,
-`vision`, and `web`, in that order. Plugin owns MCP registry queries through
+`vision`, `web`, and `workflow`, in that order. Plugin owns MCP registry queries through
 explicit root mode, with no separate MCP mount or alias. These are accepted
 vertical slices with their narrow earned ports. The
-kernel's closed `GRANTABLE_HOST_PORTS` inventory has twenty grantable names:
+kernel's closed `GRANTABLE_HOST_PORTS` inventory has twenty-one grantable names:
 `workdir`, `prompt_section`, `mcp_prompt_section`, `avatar_parent`, `context_runtime`,
 `daemon_runtime`, `email_runtime`, `plugin_catalog`, `psyche_settings`,
 `notification_state`, `notifications`, `configuration`,
-`system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
+`system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`, `workflow_lifecycle`,
 `task_card_notifications`, `active_provider`, `web_runtime`, and
 `provider_identity` (the former `file_io` port left with the removed `file`
 family). Email retains its call-time manager port,

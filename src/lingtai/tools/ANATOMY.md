@@ -1,5 +1,7 @@
 ---
 related_files:
+  - src/lingtai/tools/workflow/__init__.py
+  - src/lingtai/tools/workflow/ANATOMY.md
   - tests/test_plugin_mcp_mode.py
   - src/lingtai/tools/plugin/_mcp.py
   - ANATOMY.md
@@ -93,6 +95,11 @@ onto an Agent. The kernel owns generic tool machinery; this layer owns public
 capability names and lazy adapters.
 
 ## Components
+
+- `src/lingtai/tools/workflow/ANATOMY.md` maps the independent opt-in
+  workflow slice (WF001–WF003): static declaration, safe public daemon CLI
+  adapter, ordered snapshots and the narrow `workflow_lifecycle` manager slot.
+  Existing daemon routes and roots are unchanged.
 
 - `CONTRACT.md` — the LingTai Tool Protocol (LTP): the future canonical
   model-facing tool call contract, the two-level family/action settings

@@ -5,6 +5,7 @@ labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - src/lingtai/tools/workflow/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/_catalog.py
@@ -37,7 +38,7 @@ maintenance: |
   wording — current `mcp` base evidence and the separately landed `avatar`,
   `context`, `daemon`, `email`, `plugin`, `psyche`, `notification`, `shell`,
   `system`, `task_card`, `vision`, and `web` vertical evidence; the
-  exact twenty-name grantable-host inventory; and the empty former later-family
+  exact twenty-one-name grantable-host inventory; and the empty former later-family
   target register — its two-class governed surface, its single selected form as
   the kernel-owned declared host-plugin contract, the retained and reclassified
   curated transport route, the resolved official-name collision decision and
@@ -84,10 +85,10 @@ repo root with the project's Python.
 ### Pass / Fail
 Pass when the suite passes and the closed-envelope observation holds for a real migrated family. Fail on an extra root property, on `reasoning`/`summarize` leaking into `input`, or on a summary replacing the recorded raw output; record the evidence trail in the task report.
 
-## Behavior LP002 — the shared declared host-plugin contract matches the current twelve-family and twenty-grant inventory
+## Behavior LP002 — the shared declared host-plugin contract matches the current thirteen-family and twenty-one-grant inventory
 
 - **id**: LP002
-- **title**: the shared declared host-plugin contract matches the current twelve-family and twenty-grant inventory
+- **title**: the shared declared host-plugin contract matches the current thirteen-family and twenty-one-grant inventory
 - **guards**: `lingtai-tool-protocol` §
   [Tool-to-MCP Plugin Contract](CONTRACT.md#tool-to-mcp-plugin-contract)
 - **runner**: any LingTai agent with `shell` access to a clean
@@ -105,14 +106,14 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 1. Read `src/lingtai/tools/CONTRACT.md`, section `### Tool-to-MCP Plugin
    Contract` (it sits under `## Contract rules`, between `### Non-goals` and
    `### Relationship to current runtime`). Confirm its opening **Status**
-   paragraph names exactly the twelve static official families: `avatar`, `context`, `daemon`, `email`, `plugin`, `psyche`,
-   `notification`, `shell`, `system`, `task_card`, `vision`, and `web`, in that order;
-   identifies Plugin's private MCP mode as the reference; names the exact twenty grantable host
+   paragraph names exactly the thirteen static official families: `avatar`, `context`, `daemon`, `email`, `plugin`, `psyche`,
+   `notification`, `shell`, `system`, `task_card`, `vision`, `web`, and `workflow`, in that order;
+   identifies Plugin's private MCP mode as the reference; names the exact twenty-one grantable host
    names (`workdir`, `prompt_section`, `mcp_prompt_section`, `avatar_parent`, `context_runtime`,
    `daemon_runtime`, `email_runtime`, `plugin_catalog`,
    `psyche_settings`, `notification_state`, `notifications`, `configuration`,
    `system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
-   `task_card_notifications`, `active_provider`, `web_runtime`, and
+   `workflow_lifecycle`, `task_card_notifications`, `active_provider`, `web_runtime`, and
    `provider_identity`); and says the former later-family target register is
    empty. Confirm each claim is scoped to declaration clauses; other registry
    families remain future migration units, kernel-shipped curated MCP families
@@ -307,8 +308,8 @@ No replacement conformance claimed for: test_mcp_capability, test_tool_plugin_de
 
 ### Expected evidence
 
-- [ ] Step 1: the Status paragraph names the twelve static official families
-      in official order, the exact twenty grantable host names, and the empty
+- [ ] Step 1: the Status paragraph names the thirteen static official families
+      in official order, the exact twenty-one grantable host names, and the empty
       former later-family target register; its remaining claims stay scoped to
       their current declaration, registry, transport, or LTP-envelope owner.
 - [ ] Step 2: no unqualified "No LingTai-owned family ships as an MCP plugin"
@@ -345,7 +346,7 @@ Pass when every box above is observed. **Fail loudly** — do not soften the
 report — if the contract section does not name exactly `avatar`,
 `context`, `daemon`, `email`, `plugin`, `psyche`, `notification`, `shell`,
 `system`, `task_card`, `vision`, and `web` as the static official
-families, does not name the exact twenty grantable host names, or leaves the
+families, does not name the exact twenty-one grantable host names, or leaves the
 former later-family target register nonempty; if any `file` declaration,
 `file_io` grant, or `lingtai.tools.file` module reappears; if Plugin does not require exactly
 `workdir`/`prompt_section`/`mcp_prompt_section`/`plugin_catalog`, gains registration/prune/launch/
@@ -430,3 +431,9 @@ raw history is replaced, required manuals lose their explicit opt-out guidance,
 or an unrelated domain field changes meaning. These are hermetic presentation
 probes, not proof of live-provider startup, pricing, or full prompt construction;
 those acceptance gates belong to the integrating parent/reviewer.
+
+Workflow is the independent opt-in official slice added after these earlier
+family recipes; its executable ordering, strict envelope, stop-race and real
+host startup evidence lives in `src/lingtai/tools/workflow/BEHAVIORS.md`
+(WF001–WF003). The reserved inventory includes `workflow` and grants its
+`workflow_lifecycle` current/retain-manager slot only to that declaration.

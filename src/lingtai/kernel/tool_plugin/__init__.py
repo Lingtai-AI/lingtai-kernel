@@ -61,6 +61,7 @@ __all__ = [
     "IdentityPort",
     "ShutdownPort",
     "TaskCardLifecyclePort",
+    "WorkflowLifecyclePort",
     "TaskCardNotificationsPort",
     "ToolMountPort",
     "ToolPluginHost",
@@ -138,6 +139,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "identity",
     "shutdown",
     "task_card_lifecycle",
+    "workflow_lifecycle",
     "task_card_notifications",
     "active_provider",
     "web_runtime",
@@ -155,7 +157,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: import, or any knowledge of what the family does.
 OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
     "avatar", "context", "daemon", "email", "plugin", "psyche",
-    "notification", "shell", "system", "task_card", "vision", "web",
+    "notification", "shell", "system", "task_card", "vision", "web", "workflow",
 )
 
 
@@ -633,6 +635,16 @@ class ShutdownPort(Protocol):
 
     def is_set(self) -> bool:
         """Return true after the current Agent has begun shutdown."""
+
+
+class WorkflowLifecyclePort(Protocol):
+    """One current-host manager slot; prevents duplicate monitors on refresh."""
+
+    def current_manager(self) -> Any | None:
+        """Return this host's retained workflow manager, if bound before."""
+
+    def retain_manager(self, manager: Any) -> None:
+        """Retain the single bound manager; no dispatch or tool access."""
 
 
 class TaskCardLifecyclePort(Protocol):
