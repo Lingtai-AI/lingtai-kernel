@@ -80,6 +80,7 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "admin": dict,
     "time_awareness": bool,
     "timezone_awareness": bool,
+    "tool_decision_enabled": bool,
     "pseudo_agent_subscriptions": list,
     "preset": dict,
     # Large-result hint threshold.  `current_tool_result_chars` always ranks

@@ -158,6 +158,7 @@ def build_agent_config(
         # Keep AgentConfig.max_turns at its default for API compatibility, but
         # deliberately ignore stale init.json values here.
         language=manifest.get("language", defaults.language),
+        tool_decision_enabled=manifest.get("tool_decision_enabled", False),
         activeness=policy.get("activeness", defaults.activeness),
         context_limit=policy.get("context_limit", defaults.context_limit),
         # Providers that own their omitted-thinking default keep the "default"
@@ -505,6 +506,21 @@ class Agent(BaseAgent):
         # Re-write manifest now that capabilities are registered
         if self._capabilities:
             self._workdir.write_manifest(self._build_manifest())
+
+    def _get_tool_decision_phase(self):
+        if self._tool_decision_phase is not None:
+            return self._tool_decision_phase
+        from lingtai.adapters.tool_decision import ActivePresetToolDecisionPhase
+        from lingtai.kernel.base_agent.turn import _record_apriori_summary_usage
+
+        def record_usage(response, tool_name, tool_call_id):
+            _record_apriori_summary_usage(
+                self, response, tool_name, tool_call_id,
+                requested_model=self._config.model or self.service.model,
+                source="tool_decision", event_type="tool_decision_usage",
+            )
+
+        return ActivePresetToolDecisionPhase(self.service, self._config, record_usage)
 
     def _persist_llm_config(self) -> None:
         """Persist LLM config to llm.json for agent revive.

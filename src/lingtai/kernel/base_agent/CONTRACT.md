@@ -3,6 +3,10 @@ name: agent-runtime
 contract_version: 3
 root_contract: CONTRACT.md
 related_files:
+  - src/lingtai/kernel/tool_decision.py
+  - src/lingtai/adapters/tool_decision.py
+  - tests/test_tool_decision_phase.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
   - tests/test_agents_memory.py
   - src/lingtai/kernel/prompt.py
   - tests/test_apriori_summary_session_cost.py
@@ -744,3 +748,56 @@ never fork or duplicate the capability's normative text into this file.
 Cross-repository acceptance state changes (proposed → accepted) require both
 repositories' revisions to reference each other and explicit maintainer
 authorization.
+
+## Tool decision prototype
+
+Guarded by [BA013](BEHAVIORS.md#behavior-ba013). The explicit
+`AgentConfig.tool_decision_enabled` defaults to false: disabled or pure-text
+responses do not construct a phase, reviewer session or review request. A bare
+enabled BaseAgent needs an injected `ToolDecisionPhase`; absent/failed phases
+produce denials, not provider-send exceptions that could replay effects.
+
+`SessionManager.send` reviews the complete main API response **after** provider
+return (after full streaming assembly) and **before** returning it to a dispatch
+loop. All returned calls, including parallel siblings, are reviewed before any
+handler executes. The wrapper's default `ActivePresetToolDecisionPhase` uses
+the effective service's exact provider/model/endpoint/auth/defaults. Each call
+gets a fresh untracked direct ChatSession: fixed policy plus only this typed
+call's name and raw argument object, treated as untrusted DATA. No history,
+main prompt, Pad, notifications, schemas, other calls/results or tools are
+supplied; ids stay local. No recursive SessionManager or tool guard inference.
+
+`LLMResponse.tool_decisions` carries one Core `ToolDecisionBatch`. Receipts bind
+the original typed call object, id/name/argument snapshot and API round, and are
+consumed once by ToolExecutor. Missing, changed, stale or consumed receipts deny
+when review is required. Both sequential and parallel paths consume the same
+already-reviewed outcomes, then independently apply the existing deterministic
+ToolCallGuard checks. There is no second inference path in ToolCallGuard.
+Original assistant text/calls/history are preserved, including refused calls;
+denials use ordinary paired ToolResultBlocks, not omitted calls or forged
+assistant text. Existing invalid-tool, cancellation and intercept behavior stays.
+
+`ToolDecisionResult` requires boolean dangerous, boolean pass (`passed` in
+Python), and finite numeric confidence in [0,1]. Only pass gates; no confidence
+cutoff or dangerous-implies-deny rule is added. Pass=true still requires all
+other existing guards. Refusal, malformed/extra/duplicate fields, reviewer tool
+output, exception, missing phase or unsupported transport denies without a
+handler effect or main API retry. CLI/unknown transports without a supported
+tool-free route block explicitly, never switch to a paid/direct API.
+
+The `tool_decision` event contains correlation, decision/failure and latency,
+never raw arguments or reviewer text. Returned reviewer usage (even malformed
+or refused) reuses the existing ledger sink with `source="tool_decision"` and
+`tool_decision_usage`; a thrown call without normalized usage stays unknown.
+Review does not advance main history/config/counters; existing summary-specific
+SESSION/UI reducers are not expanded. This classification cannot prove human
+authorization or provide a hard sandbox guarantee.
+
+Native daemons have their [own independent opt-in](../../tools/daemon/CONTRACT.md#native-tool-decision-phase),
+not Agent inheritance. This baseline has no `multi_tool_use.parallel` parser or
+executor expansion: a literal wrapper is unknown, not authorization to execute
+its embedded calls. Typed provider-returned sibling calls are reviewed individually.
+A host-supplied wrapper that performs its own nested execution needs an explicit
+pre-review normalization/ID contract; its hidden children are not covered by an
+outer-call approval. External CLI internal tools outside kernel dispatch are
+excluded. [Enablement and SDK injection](../../intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md#opt-in-tool-decision-prototype).

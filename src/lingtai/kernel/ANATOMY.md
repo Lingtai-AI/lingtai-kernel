@@ -1,5 +1,9 @@
 ---
 related_files:
+  - src/lingtai/kernel/tool_decision.py
+  - src/lingtai/adapters/tool_decision.py
+  - tests/test_tool_decision_phase.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
   - src/lingtai/kernel/project/configuration.py
   - src/lingtai/kernel/BEHAVIORS.md
   - src/lingtai/kernel/agent_readme/ANATOMY.md
@@ -450,3 +454,16 @@ communication state.
 Existing Project configuration is implemented by `src/lingtai/kernel/project/configuration.py`
 and governed by the Project Contract/PRJ003; outside filesystem and strict JSON
 composition adapters perform owner reads/writes, never runtime or fleet control.
+
+## Opt-in tool decision phase
+
+`tool_decision.py:17-154` owns `ToolDecisionResult`, the `ToolDecisionPhase` SDK Port,
+`review_tool_response` and single-use `ToolDecisionBatch` receipts.
+`session.py:544-550` (`SessionManager.send`) invokes review after the complete main API
+response. `llm/base.py:LLMResponse.tool_decisions` carries receipts;
+`tool_executor.py:ToolExecutor._evaluate_call` consumes them without inference,
+then applies existing deterministic guards. The native daemon direct-session
+loop calls the same Core review helper at its API-return boundary with a separate
+opt-in. [Runtime Contract](base_agent/CONTRACT.md#tool-decision-prototype) and
+[manual](../intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md#opt-in-tool-decision-prototype)
+own semantics and procedure; no ambient interception or new provider registry.

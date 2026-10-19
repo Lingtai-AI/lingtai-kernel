@@ -1,5 +1,6 @@
 ---
 related_files:
+  - tests/test_tool_decision_phase.py
   - src/lingtai/kernel/daemon_supervisor/BEHAVIORS.md
   - src/lingtai/kernel/daemon_supervisor/CONTRACT.md
   - src/lingtai/kernel/ANATOMY.md
@@ -63,3 +64,15 @@ Persistent state is the per-run manifest, restrictive supervisor logs, control r
 ## Notes
 
 A supervisor is never adopted or restarted. Parent refresh is ordinary and cannot terminate it; explicit reclaim and timeout are the only cancellation paths.
+
+## Native review manifest option
+
+`manifest.py:build_manifest` / `read_manifest` carry optional boolean
+`tool_decision_enabled` (omitted means false). The native daemon host writes its
+own setup flag, not the parent Agent flag; `DetachedDaemonExecutionHost` restores
+it for the shared post-response review phase. Non-booleans are invalid. This
+additive value does not change supervisor identity, launch, cancellation or
+resume ownership. See the [daemon owner contract](../../tools/daemon/CONTRACT.md#native-tool-decision-phase),
+[manual](../../tools/daemon/manual/SKILL.md#native-tool-decision-phase) and
+[D012](../../tools/daemon/BEHAVIORS.md#behavior-d012); the offline manifest and
+native-loop regressions live in `tests/test_tool_decision_phase.py`.

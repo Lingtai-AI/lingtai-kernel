@@ -81,6 +81,10 @@ class DetachedDaemonExecutionHost:
         self._cancel_event = cancel_event
         self._timeout_event = timeout_event
         self._manifest = manifest
+        decision_enabled = manifest.get("tool_decision_enabled", False)
+        if type(decision_enabled) is not bool:
+            raise ValueError("manifest tool_decision_enabled must be a boolean")
+        self._tool_decision_enabled = decision_enabled
         self._capsule = capsule if isinstance(capsule, dict) else {}
         self._adopted_fd = adopted_fd
         self._driver_authority = None

@@ -3,6 +3,9 @@ name: init-reader
 contract_version: 6
 root_contract: CONTRACT.md
 related_files:
+  - tests/test_tool_decision_phase.py
+  - src/lingtai/adapters/tool_decision.py
+  - src/lingtai/kernel/tool_decision.py
   - tests/test_agents_memory.py
   - src/lingtai/ANATOMY.md
   - src/lingtai/init.jsonc
@@ -282,3 +285,15 @@ publication: pending-snapshot materialization first, actual exact persisted
 preset second, with no input write-back. Its outside workspace validates the
 current Psyche owner separately. See the linked Project Contract for that
 operation's prerequisite ordering and outcomes; boot/refresh behavior is unchanged.
+
+## Tool decision opt-in
+
+Guarded by [IR002](BEHAVIORS.md#behavior-ir002). The reader accepts exactly one
+new boolean manifest field, `tool_decision_enabled`; omission is false.
+`build_agent_config` carries it through the existing CLI `_setup_from_init`
+composition without writing raw init, changing preset selection or adding a
+provider route. This is an explicit prototype opt-in, not a default activation.
+The runtime's [tool decision contract](kernel/base_agent/CONTRACT.md#tool-decision-prototype)
+owns dispatch and failure semantics; the
+[LLM adapter manual](intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md#opt-in-tool-decision-prototype)
+owns enablement and SDK injection.

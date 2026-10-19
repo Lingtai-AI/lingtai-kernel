@@ -2462,6 +2462,7 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
     """
     from ..turn_tool_overlay import current_turn_tool_overlay
     overlay = current_turn_tool_overlay(agent)
+
     return ToolExecutor(
         dispatch_fn=agent._dispatch_tool,
         make_tool_result_fn=lambda name, result, **kw: agent.service.make_tool_result(
@@ -2483,6 +2484,7 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
         summarize_notification_threshold=getattr(
             agent, "_summarize_notification_threshold", None
         ),
+        tool_decision_required=agent._config.tool_decision_enabled is True,
         reconstruction_event_fn=lambda: build_reconstruction_tool_meta(agent),
         summarizer_fn=_build_apriori_summarizer_fn(agent),
     )
@@ -2490,9 +2492,13 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
 
 def _record_apriori_summary_usage(
     agent, response, tool_name, tool_call_id, *, api_call_id=None, molt_count=None,
-    requested_model=None,
+    requested_model=None, source=APRIORI_SUMMARY_LEDGER_SOURCE,
+    event_type="apriori_summary_usage",
 ) -> None:
-    """Append the a-priori summarizer call's token usage to the MAIN ledger.
+    """Append isolated helper usage to the MAIN ledger (summary by default).
+
+    Tool-decision composition reuses this sink with its own source/event; it
+    does not advance the main session or masquerade as a summary receipt.
 
     The one-shot summarizer session is created with ``tracked=False`` and is
     driven outside ``BaseAgent``'s main-loop ``session.send`` hook, so its
@@ -2530,8 +2536,10 @@ def _record_apriori_summary_usage(
         # replace latest input/context, stream timing, or its API-call index.
         try:
             agent._log(
-                "apriori_summary_usage", schema="lingtai.apriori_summary.usage/v1",
-                source=APRIORI_SUMMARY_LEDGER_SOURCE, api_call_id=call_id,
+                event_type, schema=("lingtai.apriori_summary.usage/v1"
+                                    if source == APRIORI_SUMMARY_LEDGER_SOURCE
+                                    else "lingtai.tool_decision.usage/v1"),
+                source=source, api_call_id=call_id,
                 molt_count=generation, tool_name=tool_name, tool_call_id=tool_call_id,
                 usage_billing=billing, **counts,
             )
@@ -2545,8 +2553,11 @@ def _record_apriori_summary_usage(
             return
         service = getattr(agent, "service", None)
         ledger_path = working_dir / "logs" / "token_ledger.jsonl"
-        model = getattr(service, "model", None)
-        endpoint = getattr(service, "_base_url", None)
+        model = (requested_model if source == "tool_decision"
+                 else getattr(service, "model", None))
+        # A configured URL may embed credentials. New review rows omit it;
+        # the existing summary attribution is unchanged.
+        endpoint = None if source == "tool_decision" else getattr(service, "_base_url", None)
         append_token_entry(
             ledger_path,
             input=getattr(usage, "input_tokens", 0),
@@ -2556,10 +2567,11 @@ def _record_apriori_summary_usage(
             model=model,
             endpoint=endpoint,
             extra={
-                "source": APRIORI_SUMMARY_LEDGER_SOURCE,
+                "source": source,
                 "tool_name": tool_name,
                 "tool_call_id": tool_call_id,
-                "apriori_tool_result_summary": True,
+                **({"apriori_tool_result_summary": True}
+                   if source == APRIORI_SUMMARY_LEDGER_SOURCE else {}),
                 "api_call_id": call_id,
                 "molt_count": generation,
                 "usage_billing": billing,
@@ -2568,9 +2580,12 @@ def _record_apriori_summary_usage(
         )
     except Exception as e:  # accounting must never break the summary path
         name = getattr(agent, "agent_name", "?")
-        logger.warning(
-            f"[{name}] Failed to append a-priori summary token ledger: {e}"
-        )
+        if source == "tool_decision":
+            logger.warning("Failed to append tool-decision token ledger")
+        else:
+            logger.warning(
+                f"[{name}] Failed to append a-priori summary token ledger: {e}"
+            )
 
 
 def _build_apriori_summarizer_fn(agent):
@@ -2982,6 +2997,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             tool_results, intercepted, intercept_text = agent._executor.execute(
                 response.tool_calls,
                 api_call_id=getattr(response, "api_call_id", None),
+                tool_decisions=getattr(response, "tool_decisions", None),
                 on_result_hook=agent._on_tool_result_hook,
                 on_pre_dispatch_hook=getattr(
                     agent, "_on_tool_pre_dispatch_hook", None

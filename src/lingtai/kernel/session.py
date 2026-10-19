@@ -60,6 +60,7 @@ logger = get_logger()
 
 if TYPE_CHECKING:
     from .llm.interface import ChatInterface
+    from .tool_decision import ToolDecisionPhase
 
 
 def _elapsed_ms(start: float) -> int:
@@ -192,6 +193,8 @@ class SessionManager:
         tool_result_recovery_lookup_fn: Callable[[Any], Any] | None = None,
         molt_count_fn: Callable[[], int] | None = None,
         cache_miss_budget_fn: Callable[[], int] | None = None,
+        tool_decision_phase_fn: Callable[[], ToolDecisionPhase | None] | None = None,
+        tool_decision_cancelled_fn: Callable[[], bool] | None = None,
     ):
         self._llm_service = llm_service
         self._config = config
@@ -204,6 +207,8 @@ class SessionManager:
         self._tool_result_recovery_lookup_fn = tool_result_recovery_lookup_fn
         self._molt_count_fn = molt_count_fn
         self._cache_miss_budget_fn = cache_miss_budget_fn
+        self._tool_decision_phase_fn = tool_decision_phase_fn
+        self._tool_decision_cancelled_fn = tool_decision_cancelled_fn
         # Optional batched system-prompt builder. When provided, adapters
         # that support per-block caching receive mutation-frequency batches
         # and can place cache breakpoints between them. When absent, the
@@ -536,6 +541,12 @@ class SessionManager:
         # Preserve interaction ID for session reuse
         if hasattr(self._chat, "interaction_id") and self._chat.interaction_id:
             self._interaction_id = self._chat.interaction_id
+        if self._config.tool_decision_enabled is True:
+            from .tool_decision import review_tool_response
+            review_tool_response(
+                response, self._tool_decision_phase_fn or (lambda: None),
+                self._log, self._tool_decision_cancelled_fn,
+            )
         return response
 
     def _send_streaming(

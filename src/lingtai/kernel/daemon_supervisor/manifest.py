@@ -265,10 +265,14 @@ def build_manifest(
     backend_argv: list[str] | None = None, language: str = "en",
     preset_name: str | None = None, preset_llm: dict | None = None,
     preset_capabilities: dict | None = None,
+    tool_decision_enabled: bool = False,
 ) -> dict:
     """Build the supervisor input record without resolved credentials."""
+    if type(tool_decision_enabled) is not bool:
+        raise ValueError("tool_decision_enabled must be a boolean")
     return {
         "schema": MANIFEST_SCHEMA,
+        "tool_decision_enabled": tool_decision_enabled,
         "run_id": run_id,
         "backend": backend,
         "parent_working_dir": parent_working_dir,
@@ -313,6 +317,8 @@ def read_manifest(path: Path) -> dict:
             f"daemon supervisor manifest at {path} has unexpected schema "
             f"{data.get('schema')!r}, expected {MANIFEST_SCHEMA!r}"
         )
+    if type(data.get("tool_decision_enabled", False)) is not bool:
+        raise ValueError("manifest tool_decision_enabled must be a boolean")
     missing = [field for field in _REQUIRED_FIELDS if field not in data]
     if missing:
         raise ValueError(f"daemon supervisor manifest at {path} missing fields: {missing!r}")

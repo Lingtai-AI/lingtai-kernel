@@ -36,6 +36,7 @@ from .tool_result_artifacts import (
     spill_oversized_result as _spill_oversized_result,
 )
 from .tool_call_guard import GuardDecision, ToolCallGuard, ToolProposal
+from .tool_decision import ToolDecisionBatch, missing_tool_decision
 from .tool_result_summary import (
     is_apriori_summary as _is_apriori_summary,
     maybe_summarize_result as _maybe_summarize_result,
@@ -103,6 +104,7 @@ class ToolExecutor:
         summarizer_fn: Callable[[str, str, str, str | None], str] | None = None,
         raw_log_path: str | None = None,
         raw_event_type: str | None = None,
+        tool_decision_required: bool = False,
     ) -> None:
         self._dispatch_fn = dispatch_fn
         self._make_tool_result_fn = make_tool_result_fn
@@ -116,6 +118,8 @@ class ToolExecutor:
         self._max_result_chars = _resolve_max_result_chars(max_result_chars)
         self._tool_call_guard = tool_call_guard or ToolCallGuard()
         self._current_api_call_id: str | None = None
+        self._tool_decision_required = tool_decision_required is True
+        self._current_tool_decisions: ToolDecisionBatch | None = None
         self._summarize_notification_threshold = _resolve_hint_threshold(
             summarize_notification_threshold
         )
@@ -650,6 +654,16 @@ class ToolExecutor:
             self._append_advisory(result, self._guard.advisory_metadata(verdict))
         return result
 
+    def _evaluate_call(self, tc: ToolCall, proposal: ToolProposal) -> GuardDecision:
+        # Inference already finished at the API return boundary. Never review here.
+        if self._tool_decision_required:
+            batch = self._current_tool_decisions
+            decision = (batch.consume(tc, self._current_api_call_id)
+                        if type(batch) is ToolDecisionBatch else missing_tool_decision())
+            if not decision.allowed:
+                return decision
+        return self._tool_call_guard.evaluate(proposal)
+
     def _proposal(self, tc: ToolCall, args: dict, trace_id: str) -> ToolProposal:
         return ToolProposal(
             tool_name=tc.name,
@@ -1003,6 +1017,7 @@ class ToolExecutor:
         cancel_event: Any | None = None,
         collected_errors: list[str] | None = None,
         api_call_id: str | None = None,
+        tool_decisions: ToolDecisionBatch | None = None,
     ) -> tuple[list, bool, str]:
         """Execute tool calls. Returns (results, intercepted, intercept_text).
 
@@ -1018,6 +1033,8 @@ class ToolExecutor:
         if collected_errors is None:
             collected_errors = []
 
+        previous_decisions = self._current_tool_decisions
+        self._current_tool_decisions = tool_decisions
         previous_api_call_id = self._current_api_call_id
         self._current_api_call_id = api_call_id
         try:
@@ -1030,6 +1047,7 @@ class ToolExecutor:
             )
         finally:
             self._current_api_call_id = previous_api_call_id
+            self._current_tool_decisions = previous_decisions
             # A tool batch is this process's largest transient allocation, so
             # it is the only point where returning empty heap regions could pay
             # off. This global executor path includes ordinary main-agent and
@@ -1174,7 +1192,7 @@ class ToolExecutor:
                 return result_msg, False, ""
 
             proposal = self._proposal(tc, args, trace_id)
-            decision = self._tool_call_guard.evaluate(proposal)
+            decision = self._evaluate_call(tc, proposal)
             if not decision.allowed:
                 result_msg = self._deny_tool_call(
                     tc=tc,
@@ -1468,7 +1486,7 @@ class ToolExecutor:
                 collected_errors.append(f"{tc.name}: {result['message']}")
             else:
                 proposal = self._proposal(tc, args, trace_id)
-                decision = self._tool_call_guard.evaluate(proposal)
+                decision = self._evaluate_call(tc, proposal)
                 if not decision.allowed:
                     result_msg = self._deny_tool_call(
                         tc=tc,

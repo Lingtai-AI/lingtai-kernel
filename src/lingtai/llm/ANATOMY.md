@@ -1,5 +1,8 @@
 ---
 related_files:
+  - src/lingtai/adapters/tool_decision.py
+  - src/lingtai/kernel/tool_decision.py
+  - tests/test_tool_decision_phase.py
   - src/lingtai/ANATOMY.md
   - src/lingtai/llm/__init__.py
   - src/lingtai/llm/_register.py
@@ -116,3 +119,16 @@ historical holders.
 - **Pre-request hook convention** (`f46b346`, dormant after notification redesign) — every adapter `send()` / `send_stream()` checks `self.pre_request_hook` after committing the message to the canonical `ChatInterface` and before the API call. Historically the kernel used this to drain the involuntary tool-call inbox mid-turn. Post-`.notification/`-redesign the queue is always empty; ACTIVE notifications now defer until the post-turn IDLE boundary instead of using a send-time prefix hook. Phase 3 will remove the hook. See kernel `src/lingtai/kernel/llm/ANATOMY.md` for the ABC contract and root `ANATOMY.md` for the full notification architecture.
 - **`send(None)` contract** — every adapter `send()` / `send_stream()` accepts `None` as the "continue from wire" signal: caller has already pre-staged the canonical interface (e.g. `BaseAgent._inject_notification_pair` spliced a synthesized `notification(action="check")` `(call, result)` pair); the adapter must skip the input-append step, send the wire as-is, and on API failure must NOT run `drop_trailing` (which would corrupt the pre-staged pair). Driven from `src/lingtai/kernel/base_agent/turn.py:_handle_tc_wake` — the LLM sees the synthesized pair at the wire tail and reacts as if the agent had voluntarily called the tool.
 - **Git history** — 16 commits. Key: Codex stateless path (`7e88f47`, `a4bf117`), context overflow recovery (`f65e395`), orphan tool_call guard (`8197fdc`), per-call HTTP timeout (`e279965`), pre-request hook for mid-turn tc_inbox drain (`f46b346`, now dormant), `send(None)` continue-from-wire contract (`f596ec1`).
+
+## Tool-free decision review consumer
+
+`lingtai.Agent` and the independently opted-in native daemon compose
+`adapters/tool_decision.ActivePresetToolDecisionPhase`
+as a consumer of this layer's existing `LLMService.create_session`, not a new
+provider/registry. It reuses the active service's settings and creates a fresh
+untracked tool-free chat per call. Anthropic's `json_schema` option creates a
+pseudo-tool, so review deliberately omits that option on Anthropic and always
+strictly validates returned JSON locally. CLI/unknown transports are explicitly
+unsupported by the default review adapter. Runtime ownership:
+`kernel/base_agent/CONTRACT.md#tool-decision-prototype`; procedure:
+[LLM adapter manual](../intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md#opt-in-tool-decision-prototype).

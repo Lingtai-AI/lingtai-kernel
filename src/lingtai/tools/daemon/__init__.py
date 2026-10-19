@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import yaml
 from lingtai.services import plugin_registry as _plugin_registry
 from copy import deepcopy
@@ -292,6 +293,49 @@ def _build_daemon_apriori_summarizer_fn(service, run_dir, *, provider, model, en
         return getattr(response, "text", "") or ""
 
     return _summarize
+
+
+def _review_native_tool_response(response, service, run_dir, *, enabled=False,
+                                 model=None, endpoint=None, cancelled=None,
+                                 phase_factory=None):
+    """Native API return seam; independent of the parent Agent opt-in.
+
+    Reuse the exact worker service and existing dual-ledger sink, never the
+    parent's history/model/endpoint. External CLI internal tools do not pass here.
+    """
+    if enabled is not True or not response.tool_calls:
+        return response
+    from types import SimpleNamespace
+    from lingtai.adapters.tool_decision import ActivePresetToolDecisionPhase
+    from lingtai.kernel.tool_decision import review_tool_response
+
+    response.api_call_id = response.api_call_id or f"api_{uuid.uuid4().hex[:12]}"
+
+    def record_usage(review, tool_name, tool_call_id):
+        usage = review.usage
+        if usage is not None:
+            extra = dict(getattr(usage, "extra", None) or {})
+            run_dir.append_tokens(
+                input=usage.input_tokens, output=usage.output_tokens,
+                thinking=usage.thinking_tokens, cached=usage.cached_tokens,
+                model=model, endpoint=endpoint, usage_extra=extra,
+            )
+        run_dir.append_event(
+            "tool_decision_usage", source="tool_decision", api_call_id=review.api_call_id,
+            tool_name=tool_name, tool_call_id=tool_call_id, model=model,
+            input_tokens=usage.input_tokens if usage is not None else None,
+            output_tokens=usage.output_tokens if usage is not None else None,
+            thinking_tokens=usage.thinking_tokens if usage is not None else None,
+            cached_tokens=usage.cached_tokens if usage is not None else None,
+        )
+
+    return review_tool_response(
+        response,
+        phase_factory or (lambda: ActivePresetToolDecisionPhase(
+            service, SimpleNamespace(model=model, thinking="default"), record_usage,
+        )),
+        lambda kind, **fields: run_dir.append_event(kind, **fields), cancelled,
+    )
 
 
 class _DaemonMetaState:
@@ -1470,6 +1514,7 @@ def _bind_daemon(host) -> BoundToolPlugin:
         manager_pool_size=options["manager_pool_size"],
         system_prompt_budget_chars=options["system_prompt_budget_chars"],
         workdir=host.workdir,
+        tool_decision_enabled=options.get("tool_decision_enabled", False),
         process_port=options.get("process_port"),
         interactive_terminal_port=options.get("interactive_terminal_port"),
     )
@@ -1641,7 +1686,8 @@ class DaemonManager:
                  notify_threshold: int = 20,
                  manager_pool_size: int = 100,
                  system_prompt_budget_chars: int = DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
-                 *, workdir: Any | None = None,
+                 *, tool_decision_enabled: bool = False,
+                 workdir: Any | None = None,
                  process_port: DaemonProcessPort | None = None,
                  interactive_terminal_port: InteractiveTerminalPort | None = None):
         """Construct against Daemon's narrow runtime/workdir ports.
@@ -1664,6 +1710,9 @@ class DaemonManager:
                 lambda: getattr(agent, "_working_dir")
                 if hasattr(agent, "_working_dir") else agent.working_dir
             )
+        if type(tool_decision_enabled) is not bool:
+            raise ValueError("daemon tool_decision_enabled must be a boolean")
+        self._tool_decision_enabled = tool_decision_enabled
         self._runtime = runtime
         self._workdir = workdir
         self._max_turns = self._env_positive_int(
@@ -3475,6 +3524,7 @@ class DaemonManager:
             preset_name=preset_name,
             preset_llm=preset_llm,
             preset_capabilities=preset_capabilities,
+            tool_decision_enabled=getattr(self, "_tool_decision_enabled", False),
         )
         write_manifest(run_dir.path, manifest)
 
@@ -3870,12 +3920,22 @@ class DaemonManager:
             meta_fn=lambda: {"agent_state": daemon_meta_state.snapshot(session)},
             working_dir=self._workdir.path,
             tool_call_guard=self._runtime.tool_call_guard,
+            tool_decision_required=getattr(self, "_tool_decision_enabled", False),
             summarizer_fn=daemon_summarizer_fn,
             raw_log_path=run_dir.events_path.relative_to(
                 self._workdir.path
             ).as_posix(),
             raw_event_type="daemon_tool_result",
         )
+
+        def _send(message):
+            response = session.send(message)
+            return _review_native_tool_response(
+                response, service, run_dir,
+                enabled=getattr(self, "_tool_decision_enabled", False),
+                model=effective_model, endpoint=endpoint,
+                cancelled=cancel_event.is_set,
+            )
 
         def _accum(resp):
             if resp.usage is None:
@@ -3942,7 +4002,7 @@ class DaemonManager:
                 f"events={run_dir.events_path}."
             )
             run_dir.record_user_send(recovery, kind="mechanical_compact_recovery")
-            response = session.send(recovery)
+            response = _send(recovery)
             daemon_meta_state.note_response(response, session)
             _accum(response)
             return response
@@ -4036,7 +4096,7 @@ class DaemonManager:
             event = events[0]
             guidance = shell_prompt_event_guidance(event)
             run_dir.record_user_send(guidance, kind=event["kind"])
-            event_response = session.send(guidance)
+            event_response = _send(guidance)
             daemon_meta_state.note_response(event_response, session)
             _accum(event_response)
             return event_response
@@ -4092,7 +4152,7 @@ class DaemonManager:
                         return None
                     retry_message = _daemon_aed_retry_message(error)
                     run_dir.record_user_send(retry_message, kind="aed_transient")
-                    response = session.send(retry_message)
+                    response = _send(retry_message)
                     daemon_meta_state.note_response(response, session)
                     _accum(response)
                     _record_recovery_response(response)
@@ -4141,7 +4201,7 @@ class DaemonManager:
                 )
                 retry_message = _daemon_aed_retry_message(error)
                 run_dir.record_user_send(retry_message, kind="aed")
-                response = session.send(retry_message)
+                response = _send(retry_message)
                 daemon_meta_state.note_response(response, session)
                 _accum(response)
                 _record_recovery_response(response)
@@ -4156,7 +4216,7 @@ class DaemonManager:
         try:
             kickoff = prompt or "Begin the assigned daemon task."
             run_dir.record_user_send(kickoff, kind="kickoff")
-            response = session.send(kickoff)
+            response = _send(kickoff)
             daemon_meta_state.note_response(response, session)
             _accum(response)
             # A detached watchdog may fire while a provider call is in flight.
@@ -4215,6 +4275,7 @@ class DaemonManager:
                     tool_results, intercepted, intercept_text = executor.execute(
                         response.tool_calls,
                         api_call_id=getattr(response, "api_call_id", None),
+                        tool_decisions=getattr(response, "tool_decisions", None),
                     )
                     executor.guard.clear_progress_notice()
 
@@ -4280,7 +4341,7 @@ class DaemonManager:
                         json.dumps([str(r) for r in tool_results], ensure_ascii=False),
                         kind="tool_results",
                     )
-                    response = session.send(tool_results)
+                    response = _send(tool_results)
                     daemon_meta_state.note_response(response, session)
                     _accum(response)
                 turns += 1
@@ -4353,7 +4414,7 @@ class DaemonManager:
                         empty_transient_attempts = 0
                         empty_aed_attempts = 0
                         run_dir.record_user_send(followup, kind="followup")
-                        response = session.send(followup)
+                        response = _send(followup)
                         daemon_meta_state.note_response(response, session)
                         _accum(response)
                         turns += 1
@@ -9204,6 +9265,7 @@ def setup(agent: "Agent",
           notify_threshold: int = 20,
           manager_pool_size: int | None = None,
           system_prompt_budget_chars: int | None = None,
+          tool_decision_enabled: bool = False,
           process_port: DaemonProcessPort | None = None,
           interactive_terminal_port: InteractiveTerminalPort | None = None) -> DaemonManager:
     """Set up Daemon through its official declared-host plugin route.
@@ -9245,6 +9307,7 @@ def setup(agent: "Agent",
         "notify_threshold": notify_threshold,
         "manager_pool_size": manager_pool_size,
         "system_prompt_budget_chars": system_prompt_budget_chars,
+        "tool_decision_enabled": tool_decision_enabled,
         "process_port": process_port,
         "interactive_terminal_port": interactive_terminal_port,
     }
@@ -9280,6 +9343,7 @@ def setup(agent: "Agent",
         notify_threshold=notify_threshold,
         manager_pool_size=manager_pool_size,
         system_prompt_budget_chars=system_prompt_budget_chars,
+        tool_decision_enabled=tool_decision_enabled,
         process_port=process_port,
         interactive_terminal_port=interactive_terminal_port,
     )

@@ -5,6 +5,10 @@ labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - tests/test_tool_decision_phase.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
+  - src/lingtai/adapters/tool_decision.py
+  - src/lingtai/kernel/tool_decision.py
   - tests/test_agents_memory.py
   - src/lingtai/CONTRACT.md
   - src/lingtai/ANATOMY.md
@@ -51,3 +55,25 @@ must run from the repo root with the project's Python.
 
 ### Pass / Fail
 Pass when the suite passes, `init.json` is untouched, and the outcome is typed rather than fabricated. Fail on any auto-rewrite of `init.json`, on a claimed success for an ignored-field read, or on a missing redacted manifest artifact; record the evidence trail in the task report.
+
+## Behavior IR002
+
+- **id**: IR002
+- **title**: tool-decision init opt-in reaches the real Agent executor without rewriting raw init
+- **guards**: `init-reader` § [Tool decision opt-in](CONTRACT.md#tool-decision-opt-in)
+- **runner**: parent-authorized validation agent
+- **prerequisites**: offline checkout with test dependencies
+- **estimate**: ≈ 2 minutes
+
+### Steps
+1. Run `.venv/bin/python -m pytest -q tests/test_tool_decision_phase.py`.
+2. Inspect the real init-reader → config hydration → real Agent minimal CLI-construction seam → `SessionManager.send` → `_make_tool_executor` test, and the disabled no-op regression.
+
+### Expected evidence
+- [ ] The default is off, and explicit true reaches reviewer composition.
+- [ ] The raw init bytes, main prompt and main chat identity remain unchanged.
+- [ ] Returned reviewer usage is attributed separately and the recording handler executes only after an allow.
+
+### Pass / Fail
+Pass requires successful offline tests, not authorship. Full live
+`_setup_from_init`, provider transport and platform acceptance remain separate.

@@ -10,6 +10,10 @@ status: active
 contract_version: 19
 last_changed_at: "2026-10-14"
 related_files:
+  - tests/test_tool_decision_phase.py
+  - src/lingtai/kernel/tool_decision.py
+  - src/lingtai/adapters/tool_decision.py
+  - src/lingtai/kernel/daemon_supervisor/manifest.py
   - tests/test_daemon_standalone_tools.py
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
@@ -1294,3 +1298,48 @@ creates a parent wake per job, or waits for a future event. Once this daemon is
 terminal, enqueue fails and no event revives or holds it; the supervisor's
 existing terminal daemon receipt remains the only final parent wake. These events
 are neither `daemon_common` checkpoint traffic nor `.notification` artifacts.
+
+## Native tool decision phase
+
+Guarded by [D012](BEHAVIORS.md#behavior-d012). Native `backend="lingtai"`
+review has a separate boolean `tool_decision_enabled` on daemon setup/manager,
+default false. It is never inherited from `AgentConfig.tool_decision_enabled`.
+`DaemonService(state_root, tool_decision_enabled=True)` is the explicit
+standalone host route; there is no new model-facing action, environment key,
+settings row or CLI flag. Invalid non-boolean construction/manifest values fail.
+The optional typed supervisor manifest field preserves the host-selected value
+in detached execution; older manifests omit it and remain off. Scheduling,
+rebuild, cancellation, Shell/Web setup and process lifecycle are unchanged.
+
+The existing direct-session loop wraps **every** main `ChatSession.send` return
+(kickoff, tool results, recovery, followup and Shell-event delivery) before any
+dispatch loop can consume it. It calls Core `review_tool_response` after the
+complete response, not from ToolCallGuard. All siblings are reviewed before
+execution. The worker's actual effective preset service/model/endpoint supplies
+the isolated reviewer, never the parent's session or a fallback provider.
+The reviewer receives only fixed policy and this raw typed tool name/arguments;
+no main history, prompt, tool schemas, other calls/results or tools.
+Pure text and disabled routes perform no review work.
+
+Core single-use receipts bind call identity, typed id/name/args and API round.
+Native ToolExecutor consumes them before independently applying the existing
+deterministic guard. Missing/changed/stale/replayed receipts deny. Original
+assistant calls/history are never filtered, and denials/failures retain ordinary
+ToolResult pairing. Only boolean pass gates; dangerous and finite [0,1]
+confidence are independent reported fields without thresholds. Invalid/refused
+output or review exception denies without retrying the main API call or running
+a handler. Full strict parsing is owned by the
+[shared runtime contract](../../kernel/base_agent/CONTRACT.md#tool-decision-prototype).
+
+Reviewer usage reuses `DaemonRunDir.append_tokens`, hence the existing native
+and parent dual ledgers retain their `source="daemon"`, run/model/endpoint
+attribution. A separate `tool_decision_usage` event identifies review calls and
+normalized counts (including refused/malformed outputs); it does not invent
+usage for a thrown call. `tool_decision` events contain only correlation,
+result/failure and latency, never raw arguments or reviewer text. Main daemon
+response counters/history are not advanced by reviewer responses.
+
+This is tool-call-only classification, not proof of human authority or a
+sandbox. External CLI internal calls outside the kernel are excluded. Unsupported
+review transports deny, never silently trial another provider.
+[Enablement procedure](manual/SKILL.md#native-tool-decision-phase).

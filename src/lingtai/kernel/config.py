@@ -246,7 +246,11 @@ class AgentConfig:
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes
     snapshot_interval: float | None = None  # seconds between git snapshots; None = off
 
+    tool_decision_enabled: bool = False  # opt-in tool-call-only pre-execution review
+
     def __post_init__(self):
+        if type(self.tool_decision_enabled) is not bool:
+            raise TypeError("tool_decision_enabled must be a bool")
         # Clamp max_aed_attempts to at least 1.  A value of 0 or negative
         # causes the AED retry loop in turn.py to spin forever: aed_attempts
         # starts at 1 (incremented before the equality check) and never equals

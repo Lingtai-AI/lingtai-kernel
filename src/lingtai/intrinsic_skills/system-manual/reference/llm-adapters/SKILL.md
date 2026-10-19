@@ -10,6 +10,19 @@ description: >
 version: 0.2.0
 last_changed_at: "2026-09-29T00:00:00Z"
 related_files:
+- src/lingtai/tools/daemon/CONTRACT.md
+- src/lingtai/tools/daemon/ANATOMY.md
+- src/lingtai/tools/daemon/manual/SKILL.md
+- src/lingtai/kernel/tool_decision.py
+- src/lingtai/adapters/tool_decision.py
+- src/lingtai/agent.py
+- src/lingtai/kernel/config.py
+- src/lingtai/init.jsonc
+- src/lingtai/kernel/base_agent/ANATOMY.md
+- src/lingtai/kernel/base_agent/CONTRACT.md
+- src/lingtai/ANATOMY.md
+- src/lingtai/CONTRACT.md
+- tests/test_tool_decision_phase.py
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/service.py
 - src/lingtai/llm/openai/adapter.py
@@ -233,3 +246,84 @@ Each backend page carries the same `## Subscription & auth` section, so "what do
 I need to pay for / how does LingTai connect" is answered per backend without
 reading the vendor's full billing docs. These pages are entrypoints, not flag
 catalogs; the installed CLI's live help remains the authority.
+
+## Opt-in tool decision prototype
+
+Default **off**. In an authorized agent working directory's `init.json`, set
+`manifest.tool_decision_enabled` to `true`, then use the existing normal boot or
+refresh procedure. Set false (or omit) and refresh to disable. Native daemons
+have a separate default-off opt-in through their owning daemon setup (see below);
+no separate reviewer provider/model/credential selector exists.
+The shipped `init.jsonc` example remains false. Authoring this prototype does
+not authorize activation.
+
+The first phase reuses the **active effective LLM service**: same provider,
+model, endpoint, credentials and preset-derived adapter defaults; never a
+fallback paid/direct API. It creates an isolated untracked session for each
+current typed tool name and raw argument object from the complete API response. Fixed safety /
+classification instructions tell the reviewer to treat all argument content as
+DATA, not instructions. It receives no main system prompt, conversation, user
+request, Pad, notifications, other tools/schemas/results or call metadata.
+The reviewer has **no tools**. The main chat/history/config are not changed.
+
+The output must be exactly JSON `{ "dangerous": boolean, "pass": boolean,
+"confidence": number }`, with finite confidence in [0,1]. Pass=false blocks;
+pass=true permits only subject to the existing other guards. Dangerous and
+confidence are recorded, not extra thresholds. Refusal, malformed/extra/duplicate
+fields, unexpected tool output or inference failure blocks before handler
+execution, using the existing paired tool rejection. No side effect is retried.
+
+The default adapter supports the existing tool-free SDK transports `openai`,
+`anthropic`, `codex`; actual model/endpoint JSON support still requires validation.
+OpenAI-family calls request wire structured output. Anthropic's current
+`json_schema` option synthesizes a tool, so review omits that option and enforces
+strict JSON/types locally instead. `claude-code` and unknown transports block
+explicitly (`ToolDecisionTransportUnavailable`) when review is enabled; they
+never run CLI internal tools for classification. A host using a custom safe
+transport may inject a phase implementing the Core Protocol:
+
+```python
+from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.tool_decision import ToolDecisionPhase, ToolDecisionResult
+
+# Supply an implementation of review(call: ToolCall) -> ToolDecisionResult.
+# It receives a detached current call, not the Agent; it must never dispatch tools.
+# Pass these arguments to ordinary Agent/BaseAgent construction:
+# config=AgentConfig(tool_decision_enabled=True), tool_decision_phase=my_phase
+```
+
+For enabled Agent/BaseAgent instances, `SessionManager.send` reviews the complete
+API response after streaming assembly and before returning to the tool loop.
+Every sibling is reviewed before any tool executes. Original assistant text,
+tool calls and history stay intact; refusals receive ordinary paired error
+ToolResults. Executors consume single-use receipts bound to call identity,
+id/name/arguments and API round; missing, changed or replayed receipts deny.
+Dispatch never invokes inference, and deterministic guards still apply.
+
+Native `backend="lingtai"` daemons use the same Core post-response phase at
+their direct ChatSession send boundary. They have a **separate default-off**
+`capabilities={"daemon": {"tool_decision_enabled": True}}` setup flag; the parent
+Agent flag does not enable daemon review. Standalone hosts explicitly select
+`DaemonService(state_root, tool_decision_enabled=True)`. This uses the worker's
+actual effective preset/service/model/endpoint and existing daemon dual-ledger
+sink. See the [daemon manual](../../../../tools/daemon/manual/SKILL.md#native-tool-decision-phase).
+External CLI-owned internal tools outside kernel `ToolExecutor` remain **outside
+coverage**. No backend scheduling, Shell/Web defaults or lifecycle rules change.
+
+`tool_decision` records correlation, structured decision/failure and review
+latency without adding raw arguments or reviewer text to new logs. Returned
+normalized usage (also on malformed/refused output) goes to the existing
+Agent token ledger under `source="tool_decision"` plus `tool_decision_usage`. Native
+daemons retain the existing dual-ledger `source="daemon"` attribution and add
+distinct review usage events. Exceptions without usage remain unknown, never
+fabricated free calls. Existing
+summary-specific SESSION/UI reducers are not extended: use these receipts and
+the lifetime ledger for prototype cost inspection. Reviews add provider calls
+and latency (parallel-batch reviews currently run serially before dispatch).
+
+**Limit:** a tool-call-only classifier cannot prove human authorization or
+conversation context, and is not a hard security/sandbox guarantee. This is an
+opt-in prototype, not live-provider, CLI or platform acceptance. Offline checks:
+`tests/test_tool_decision_phase.py`; runtime contract/acceptance:
+`kernel/base_agent/CONTRACT.md` / BA013. Keep this manual linked from both owning
+Anatomy/Contract twins when changing enablement or input isolation.
