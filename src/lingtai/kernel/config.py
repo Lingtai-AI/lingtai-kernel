@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 # Accepted manifest.llm.thinking values, mirroring the upstream Responses
@@ -246,11 +246,13 @@ class AgentConfig:
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes
     snapshot_interval: float | None = None  # seconds between git snapshots; None = off
 
-    tool_decision_enabled: bool = False  # opt-in tool-call-only pre-execution review
+    tool_decision_tools: list[str] = field(default_factory=list)  # exact tool-name opt-in
 
     def __post_init__(self):
-        if type(self.tool_decision_enabled) is not bool:
-            raise TypeError("tool_decision_enabled must be a bool")
+        if not isinstance(self.tool_decision_tools, list) or not all(
+            isinstance(name, str) for name in self.tool_decision_tools
+        ):
+            raise TypeError("tool_decision_tools must be a list[str]")
         # Clamp max_aed_attempts to at least 1.  A value of 0 or negative
         # causes the AED retry loop in turn.py to spin forever: aed_attempts
         # starts at 1 (incremented before the equality check) and never equals

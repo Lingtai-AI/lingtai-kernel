@@ -579,12 +579,13 @@ resident refresh, or native Windows acceptance.
 
 ### Steps
 1. Run `.venv/bin/python -m pytest -q tests/test_tool_decision_phase.py`.
-2. Inspect the actual `_run_emanation` fake-provider loop: complete API response → review → dispatch → paired results. Parent and native flags intentionally disagree.
+2. Inspect the actual `_run_emanation` fake-provider loop: complete API response → review → dispatch → paired results. Parent and native exact-name lists intentionally disagree.
 3. Inspect standalone default-off, typed manifest roundtrip and native detached-host restoration; verify external CLI internal tools remain excluded.
 
 ### Expected evidence
 - [ ] Default-off native path makes no reviewer session even with parent opt-in.
-- [ ] Enabled review uses worker model/endpoint; all reviews finish before dispatch.
+- [ ] Selected review uses worker model/endpoint; all selected reviews finish before dispatch.
+- [ ] Empty/no matches constructs zero reviewers; mixed Shell/Telegram failures block only selected Shell.
 - [ ] Invalid/pass=false responses have no handler effect and retain call/result ids.
 - [ ] Reviewer usage uses the existing daemon token sink with distinct review events.
 - [ ] Ordinary deterministic guards remain independently enforced; no review inference in the executor.

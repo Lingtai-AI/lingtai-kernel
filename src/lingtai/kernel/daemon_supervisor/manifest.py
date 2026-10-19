@@ -265,14 +265,18 @@ def build_manifest(
     backend_argv: list[str] | None = None, language: str = "en",
     preset_name: str | None = None, preset_llm: dict | None = None,
     preset_capabilities: dict | None = None,
-    tool_decision_enabled: bool = False,
+    tool_decision_tools: list[str] | None = None,
 ) -> dict:
     """Build the supervisor input record without resolved credentials."""
-    if type(tool_decision_enabled) is not bool:
-        raise ValueError("tool_decision_enabled must be a boolean")
+    if tool_decision_tools is None:
+        tool_decision_tools = []
+    if not isinstance(tool_decision_tools, list) or not all(
+        isinstance(name, str) for name in tool_decision_tools
+    ):
+        raise ValueError("tool_decision_tools must be a list[str]")
     return {
         "schema": MANIFEST_SCHEMA,
-        "tool_decision_enabled": tool_decision_enabled,
+        "tool_decision_tools": list(tool_decision_tools),
         "run_id": run_id,
         "backend": backend,
         "parent_working_dir": parent_working_dir,
@@ -317,8 +321,11 @@ def read_manifest(path: Path) -> dict:
             f"daemon supervisor manifest at {path} has unexpected schema "
             f"{data.get('schema')!r}, expected {MANIFEST_SCHEMA!r}"
         )
-    if type(data.get("tool_decision_enabled", False)) is not bool:
-        raise ValueError("manifest tool_decision_enabled must be a boolean")
+    decision_tools = data.get("tool_decision_tools", [])
+    if not isinstance(decision_tools, list) or not all(
+        isinstance(name, str) for name in decision_tools
+    ):
+        raise ValueError("manifest tool_decision_tools must be a list[str]")
     missing = [field for field in _REQUIRED_FIELDS if field not in data]
     if missing:
         raise ValueError(f"daemon supervisor manifest at {path} missing fields: {missing!r}")

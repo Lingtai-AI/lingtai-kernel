@@ -541,11 +541,12 @@ class SessionManager:
         # Preserve interaction ID for session reuse
         if hasattr(self._chat, "interaction_id") and self._chat.interaction_id:
             self._interaction_id = self._chat.interaction_id
-        if self._config.tool_decision_enabled is True:
+        if self._config.tool_decision_tools:
             from .tool_decision import review_tool_response
             review_tool_response(
                 response, self._tool_decision_phase_fn or (lambda: None),
                 self._log, self._tool_decision_cancelled_fn,
+                tool_decision_tools=self._config.tool_decision_tools,
             )
         return response
 

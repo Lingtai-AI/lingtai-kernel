@@ -1302,11 +1302,11 @@ are neither `daemon_common` checkpoint traffic nor `.notification` artifacts.
 ## Native tool decision phase
 
 Guarded by [D012](BEHAVIORS.md#behavior-d012). Native `backend="lingtai"`
-review has a separate boolean `tool_decision_enabled` on daemon setup/manager,
-default false. It is never inherited from `AgentConfig.tool_decision_enabled`.
-`DaemonService(state_root, tool_decision_enabled=True)` is the explicit
+review has a separate `tool_decision_tools: list[str]` on daemon setup/manager,
+default empty. It is never inherited from `AgentConfig.tool_decision_tools`.
+`DaemonService(state_root, tool_decision_tools=["shell"])` is the explicit
 standalone host route; there is no new model-facing action, environment key,
-settings row or CLI flag. Invalid non-boolean construction/manifest values fail.
+settings row or CLI flag. Non-list/non-string-entry construction/manifest values fail.
 The optional typed supervisor manifest field preserves the host-selected value
 in detached execution; older manifests omit it and remain off. Scheduling,
 rebuild, cancellation, Shell/Web setup and process lifecycle are unchanged.
@@ -1314,8 +1314,10 @@ rebuild, cancellation, Shell/Web setup and process lifecycle are unchanged.
 The existing direct-session loop wraps **every** main `ChatSession.send` return
 (kickoff, tool results, recovery, followup and Shell-event delivery) before any
 dispatch loop can consume it. It calls Core `review_tool_response` after the
-complete response, not from ToolCallGuard. All siblings are reviewed before
-execution. The worker's actual effective preset service/model/endpoint supplies
+complete response, not from ToolCallGuard. Only exact-name matches are selected;
+all selected siblings are reviewed before any execution. Empty/no matches create
+zero reviewers. In mixed batches, review failures/denials affect selected calls
+only; unselected calls execute normally under existing guards. The worker's actual effective preset service/model/endpoint supplies
 the isolated reviewer, never the parent's session or a fallback provider.
 The reviewer receives only fixed policy and this raw typed tool name/arguments;
 no main history, prompt, tool schemas, other calls/results or tools.

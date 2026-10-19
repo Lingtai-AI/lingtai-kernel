@@ -249,12 +249,18 @@ catalogs; the installed CLI's live help remains the authority.
 
 ## Opt-in tool decision prototype
 
+`tool_decision_tools` is a list of exact SDK/custom tool names, not capability
+aliases or action names. Empty/no matches constructs zero reviewer sessions.
+The first runtime trial selects `["shell"]` only. In a mixed Shell/Telegram batch,
+review denial/provider failure blocks only selected Shell; unselected Telegram
+continues normally. Original batch order and call/result pairing are preserved.
+
 Default **off**. In an authorized agent working directory's `init.json`, set
-`manifest.tool_decision_enabled` to `true`, then use the existing normal boot or
-refresh procedure. Set false (or omit) and refresh to disable. Native daemons
+`manifest.tool_decision_tools` to `["shell"]`, then use the existing normal boot or
+refresh procedure. Set `[]` (or omit) and refresh to disable. Native daemons
 have a separate default-off opt-in through their owning daemon setup (see below);
 no separate reviewer provider/model/credential selector exists.
-The shipped `init.jsonc` example remains false. Authoring this prototype does
+The shipped `init.jsonc` example remains empty. Authoring this prototype does
 not authorize activation.
 
 The first phase reuses the **active effective LLM service**: same provider,
@@ -289,12 +295,12 @@ from lingtai.kernel.tool_decision import ToolDecisionPhase, ToolDecisionResult
 # Supply an implementation of review(call: ToolCall) -> ToolDecisionResult.
 # It receives a detached current call, not the Agent; it must never dispatch tools.
 # Pass these arguments to ordinary Agent/BaseAgent construction:
-# config=AgentConfig(tool_decision_enabled=True), tool_decision_phase=my_phase
+# config=AgentConfig(tool_decision_tools=["shell"]), tool_decision_phase=my_phase
 ```
 
 For enabled Agent/BaseAgent instances, `SessionManager.send` reviews the complete
 API response after streaming assembly and before returning to the tool loop.
-Every sibling is reviewed before any tool executes. Original assistant text,
+Every selected sibling is reviewed before any tool executes. Original assistant text,
 tool calls and history stay intact; refusals receive ordinary paired error
 ToolResults. Executors consume single-use receipts bound to call identity,
 id/name/arguments and API round; missing, changed or replayed receipts deny.
@@ -302,9 +308,9 @@ Dispatch never invokes inference, and deterministic guards still apply.
 
 Native `backend="lingtai"` daemons use the same Core post-response phase at
 their direct ChatSession send boundary. They have a **separate default-off**
-`capabilities={"daemon": {"tool_decision_enabled": True}}` setup flag; the parent
-Agent flag does not enable daemon review. Standalone hosts explicitly select
-`DaemonService(state_root, tool_decision_enabled=True)`. This uses the worker's
+`capabilities={"daemon": {"tool_decision_tools": ["shell"]}}` setup list; the parent
+Agent list does not enable daemon review. Standalone hosts explicitly select
+`DaemonService(state_root, tool_decision_tools=["shell"])`. This uses the worker's
 actual effective preset/service/model/endpoint and existing daemon dual-ledger
 sink. See the [daemon manual](../../../../tools/daemon/manual/SKILL.md#native-tool-decision-phase).
 External CLI-owned internal tools outside kernel `ToolExecutor` remain **outside

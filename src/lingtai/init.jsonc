@@ -25,9 +25,9 @@
     // "en" = English, "zh" = Chinese, "wen" = Classical Chinese (文言文)
     "language": "en",
 
-    // Opt-in prototype: isolated active-preset review before kernel tool dispatch.
+    // Exact tool-name opt-in, e.g. ["shell"]: isolated active-preset review before dispatch.
     // Default OFF; not a sandbox or proof of human authorization. See llm-adapters manual.
-    "tool_decision_enabled": false,
+    "tool_decision_tools": [],
 
     // -------------------------------------------------------
     // LLM configuration

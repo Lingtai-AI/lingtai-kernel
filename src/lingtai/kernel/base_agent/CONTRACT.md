@@ -752,14 +752,19 @@ authorization.
 ## Tool decision prototype
 
 Guarded by [BA013](BEHAVIORS.md#behavior-ba013). The explicit
-`AgentConfig.tool_decision_enabled` defaults to false: disabled or pure-text
-responses do not construct a phase, reviewer session or review request. A bare
-enabled BaseAgent needs an injected `ToolDecisionPhase`; absent/failed phases
-produce denials, not provider-send exceptions that could replay effects.
+`AgentConfig.tool_decision_tools: list[str]` defaults to empty. Empty lists,
+pure text and responses with no exact-name matches construct zero phases,
+reviewer sessions or review requests. Names are arbitrary SDK/custom tool names;
+there is no alias/prefix inference or Shell special case. A bare BaseAgent with
+selected calls needs an injected `ToolDecisionPhase`; absent/failed phases
+produce selected-call denials, not provider-send exceptions that could replay effects.
+Unselected calls never require a receipt and remain unaffected by review errors.
+In a mixed Shell/Telegram batch with `["shell"]`, review failure or denial blocks
+Shell only; Telegram executes normally subject to its existing guards.
 
 `SessionManager.send` reviews the complete main API response **after** provider
 return (after full streaming assembly) and **before** returning it to a dispatch
-loop. All returned calls, including parallel siblings, are reviewed before any
+loop. All selected returned calls, including parallel siblings, are reviewed before any
 handler executes. The wrapper's default `ActivePresetToolDecisionPhase` uses
 the effective service's exact provider/model/endpoint/auth/defaults. Each call
 gets a fresh untracked direct ChatSession: fixed policy plus only this typed
@@ -796,7 +801,7 @@ authorization or provide a hard sandbox guarantee.
 Native daemons have their [own independent opt-in](../../tools/daemon/CONTRACT.md#native-tool-decision-phase),
 not Agent inheritance. This baseline has no `multi_tool_use.parallel` parser or
 executor expansion: a literal wrapper is unknown, not authorization to execute
-its embedded calls. Typed provider-returned sibling calls are reviewed individually.
+its embedded calls. Selected typed provider-returned sibling calls are reviewed individually.
 A host-supplied wrapper that performs its own nested execution needs an explicit
 pre-review normalization/ID contract; its hidden children are not covered by an
 outer-call approval. External CLI internal tools outside kernel dispatch are

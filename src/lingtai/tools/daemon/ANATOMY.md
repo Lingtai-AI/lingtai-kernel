@@ -459,12 +459,12 @@ intentional omission of the parent notification axis.
 
 `__init__.py:298-340` (`_review_native_tool_response`) composes the shared Core phase using
 the effective worker service and `DaemonRunDir.append_tokens` usage sink.
-`__init__.py:3931-3938` (`DaemonManager._run_emanation._send`) wraps its seven main
+`__init__.py:3936-3943` (`DaemonManager._run_emanation._send`) wraps its seven main
 API send sites; every response passes review before reaching the executor.
 Review is not in ToolCallGuard; ToolExecutor only consumes bound receipts.
-`setup` / `_bind_daemon` pass a separate default-off boolean through existing
+`setup` / `_bind_daemon` pass a separate default-empty exact-name list through existing
 manager options. `_spawn_detached_lingtai_run` writes the optional typed
-`tool_decision_enabled` manifest field; `execution_host.py:84-87` (`DetachedDaemonExecutionHost.__init__`)
+`tool_decision_tools` manifest field; `execution_host.py:84-89` (`DetachedDaemonExecutionHost.__init__`)
 restores it without constructing a parent Agent. `services/daemon.py:DaemonService`
 exposes the standalone explicit opt-in. No dispatch scheduling/lifecycle changes.
 Acceptance: [D012](BEHAVIORS.md#behavior-d012).

@@ -215,12 +215,13 @@ Generic agent kernel. Single class `BaseAgent` with methods distributed across 6
 ## Tool decision prototype composition
 
 `BaseAgent.__init__` injects `_get_tool_decision_phase` and cancellation callbacks
-into `SessionManager`. `session.py:544-550` (`SessionManager.send`) calls
+into `SessionManager`. `session.py:544-551` (`SessionManager.send`) calls
 `tool_decision.review_tool_response` after complete API/stream return only when
-`AgentConfig.tool_decision_enabled` is true. Pure text bypasses phase creation.
+`AgentConfig.tool_decision_tools` is nonempty; only exact-name matched calls
+are reviewed. Pure text/no matches bypass phase creation.
 `LLMResponse.tool_decisions` holds call/round-bound, single-use receipts;
 `turn.py:2997-3000` (`_process_response`) passes them to ToolExecutor. `_make_tool_executor` sets
-`tool_decision_required` while its existing deterministic guard list is unchanged.
+the per-name `tool_decision_tools` requirement while its deterministic guard list is unchanged.
 `tool_executor.py:657-666` (`ToolExecutor._evaluate_call`) only consumes receipts; it never invokes a phase.
 The wrapper composes `adapters.tool_decision.ActivePresetToolDecisionPhase`
 against the active effective service/config unless the SDK injects a phase.

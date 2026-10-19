@@ -208,13 +208,17 @@ class DaemonService:
     Args:
         state_root: Existing caller-owned directory for daemon runs, manager
             records, task snapshots, control spools, and notifications.
-        tool_decision_enabled: Independent native post-response review opt-in;
-            default false, never inherited from a parent Agent.
+        tool_decision_tools: Independent native post-response review opt-in;
+            empty by default, never inherited from a parent Agent.
     """
 
-    def __init__(self, state_root: str | Path, *, tool_decision_enabled: bool = False) -> None:
-        if type(tool_decision_enabled) is not bool:
-            raise DaemonServiceError("tool_decision_enabled must be a boolean")
+    def __init__(self, state_root: str | Path, *, tool_decision_tools: list[str] | None = None) -> None:
+        if tool_decision_tools is None:
+            tool_decision_tools = []
+        if not isinstance(tool_decision_tools, list) or not all(
+            isinstance(name, str) for name in tool_decision_tools
+        ):
+            raise DaemonServiceError("tool_decision_tools must be a list[str]")
         root = Path(state_root).expanduser().resolve()
         if not root.is_dir():
             raise DaemonServiceError(f"state root is not a directory: {root}")
@@ -227,7 +231,7 @@ class DaemonService:
         options = {
             "max_turns": config.max_turns,
             "timeout": 3600.0,
-            "tool_decision_enabled": tool_decision_enabled,
+            "tool_decision_tools": list(tool_decision_tools),
             "notify_threshold": 20,
             "manager_pool_size": config.manager_pool_size,
             "system_prompt_budget_chars": config.system_prompt_budget_chars,
@@ -261,7 +265,7 @@ class DaemonService:
                 manager_pool_size=options["manager_pool_size"],
                 system_prompt_budget_chars=options["system_prompt_budget_chars"],
                 workdir=self._workdir,
-                tool_decision_enabled=options["tool_decision_enabled"],
+                tool_decision_tools=options["tool_decision_tools"],
             )
             self._runtime.attach_daemon_manager(self._manager)
             self._write_dispatcher = DaemonFamilyDispatcher(

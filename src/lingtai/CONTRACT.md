@@ -289,7 +289,8 @@ operation's prerequisite ordering and outcomes; boot/refresh behavior is unchang
 ## Tool decision opt-in
 
 Guarded by [IR002](BEHAVIORS.md#behavior-ir002). The reader accepts exactly one
-new boolean manifest field, `tool_decision_enabled`; omission is false.
+manifest field, `tool_decision_tools: list[str]`; omission/empty means off.
+Names match current SDK/custom tool names exactly, without alias inference.
 `build_agent_config` carries it through the existing CLI `_setup_from_init`
 composition without writing raw init, changing preset selection or adding a
 provider route. This is an explicit prototype opt-in, not a default activation.

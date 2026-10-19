@@ -295,7 +295,7 @@ def _build_daemon_apriori_summarizer_fn(service, run_dir, *, provider, model, en
     return _summarize
 
 
-def _review_native_tool_response(response, service, run_dir, *, enabled=False,
+def _review_native_tool_response(response, service, run_dir, *, tool_decision_tools=None,
                                  model=None, endpoint=None, cancelled=None,
                                  phase_factory=None):
     """Native API return seam; independent of the parent Agent opt-in.
@@ -303,7 +303,7 @@ def _review_native_tool_response(response, service, run_dir, *, enabled=False,
     Reuse the exact worker service and existing dual-ledger sink, never the
     parent's history/model/endpoint. External CLI internal tools do not pass here.
     """
-    if enabled is not True or not response.tool_calls:
+    if not tool_decision_tools or not response.tool_calls:
         return response
     from types import SimpleNamespace
     from lingtai.adapters.tool_decision import ActivePresetToolDecisionPhase
@@ -335,6 +335,7 @@ def _review_native_tool_response(response, service, run_dir, *, enabled=False,
             service, SimpleNamespace(model=model, thinking="default"), record_usage,
         )),
         lambda kind, **fields: run_dir.append_event(kind, **fields), cancelled,
+        tool_decision_tools=tool_decision_tools,
     )
 
 
@@ -1514,7 +1515,7 @@ def _bind_daemon(host) -> BoundToolPlugin:
         manager_pool_size=options["manager_pool_size"],
         system_prompt_budget_chars=options["system_prompt_budget_chars"],
         workdir=host.workdir,
-        tool_decision_enabled=options.get("tool_decision_enabled", False),
+        tool_decision_tools=options.get("tool_decision_tools", []),
         process_port=options.get("process_port"),
         interactive_terminal_port=options.get("interactive_terminal_port"),
     )
@@ -1686,7 +1687,7 @@ class DaemonManager:
                  notify_threshold: int = 20,
                  manager_pool_size: int = 100,
                  system_prompt_budget_chars: int = DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
-                 *, tool_decision_enabled: bool = False,
+                 *, tool_decision_tools: list[str] | None = None,
                  workdir: Any | None = None,
                  process_port: DaemonProcessPort | None = None,
                  interactive_terminal_port: InteractiveTerminalPort | None = None):
@@ -1710,9 +1711,13 @@ class DaemonManager:
                 lambda: getattr(agent, "_working_dir")
                 if hasattr(agent, "_working_dir") else agent.working_dir
             )
-        if type(tool_decision_enabled) is not bool:
-            raise ValueError("daemon tool_decision_enabled must be a boolean")
-        self._tool_decision_enabled = tool_decision_enabled
+        if tool_decision_tools is None:
+            tool_decision_tools = []
+        if not isinstance(tool_decision_tools, list) or not all(
+            isinstance(name, str) for name in tool_decision_tools
+        ):
+            raise ValueError("daemon tool_decision_tools must be a list[str]")
+        self._tool_decision_tools = list(tool_decision_tools)
         self._runtime = runtime
         self._workdir = workdir
         self._max_turns = self._env_positive_int(
@@ -3524,7 +3529,7 @@ class DaemonManager:
             preset_name=preset_name,
             preset_llm=preset_llm,
             preset_capabilities=preset_capabilities,
-            tool_decision_enabled=getattr(self, "_tool_decision_enabled", False),
+            tool_decision_tools=getattr(self, "_tool_decision_tools", []),
         )
         write_manifest(run_dir.path, manifest)
 
@@ -3920,7 +3925,7 @@ class DaemonManager:
             meta_fn=lambda: {"agent_state": daemon_meta_state.snapshot(session)},
             working_dir=self._workdir.path,
             tool_call_guard=self._runtime.tool_call_guard,
-            tool_decision_required=getattr(self, "_tool_decision_enabled", False),
+            tool_decision_tools=getattr(self, "_tool_decision_tools", []),
             summarizer_fn=daemon_summarizer_fn,
             raw_log_path=run_dir.events_path.relative_to(
                 self._workdir.path
@@ -3932,7 +3937,7 @@ class DaemonManager:
             response = session.send(message)
             return _review_native_tool_response(
                 response, service, run_dir,
-                enabled=getattr(self, "_tool_decision_enabled", False),
+                tool_decision_tools=getattr(self, "_tool_decision_tools", []),
                 model=effective_model, endpoint=endpoint,
                 cancelled=cancel_event.is_set,
             )
@@ -9265,7 +9270,7 @@ def setup(agent: "Agent",
           notify_threshold: int = 20,
           manager_pool_size: int | None = None,
           system_prompt_budget_chars: int | None = None,
-          tool_decision_enabled: bool = False,
+          tool_decision_tools: list[str] | None = None,
           process_port: DaemonProcessPort | None = None,
           interactive_terminal_port: InteractiveTerminalPort | None = None) -> DaemonManager:
     """Set up Daemon through its official declared-host plugin route.
@@ -9307,7 +9312,7 @@ def setup(agent: "Agent",
         "notify_threshold": notify_threshold,
         "manager_pool_size": manager_pool_size,
         "system_prompt_budget_chars": system_prompt_budget_chars,
-        "tool_decision_enabled": tool_decision_enabled,
+        "tool_decision_tools": tool_decision_tools,
         "process_port": process_port,
         "interactive_terminal_port": interactive_terminal_port,
     }
@@ -9343,7 +9348,7 @@ def setup(agent: "Agent",
         notify_threshold=notify_threshold,
         manager_pool_size=manager_pool_size,
         system_prompt_budget_chars=system_prompt_budget_chars,
-        tool_decision_enabled=tool_decision_enabled,
+        tool_decision_tools=tool_decision_tools,
         process_port=process_port,
         interactive_terminal_port=interactive_terminal_port,
     )

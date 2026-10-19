@@ -70,7 +70,7 @@ Pass when the suite passes, `init.json` is untouched, and the outcome is typed r
 2. Inspect the real init-reader → config hydration → real Agent minimal CLI-construction seam → `SessionManager.send` → `_make_tool_executor` test, and the disabled no-op regression.
 
 ### Expected evidence
-- [ ] The default is off, and explicit true reaches reviewer composition.
+- [ ] The default is empty/off, and an explicit exact-name list reaches reviewer composition.
 - [ ] The raw init bytes, main prompt and main chat identity remain unchanged.
 - [ ] Returned reviewer usage is attributed separately and the recording handler executes only after an allow.
 

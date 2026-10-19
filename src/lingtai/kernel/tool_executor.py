@@ -104,7 +104,7 @@ class ToolExecutor:
         summarizer_fn: Callable[[str, str, str, str | None], str] | None = None,
         raw_log_path: str | None = None,
         raw_event_type: str | None = None,
-        tool_decision_required: bool = False,
+        tool_decision_tools: list[str] | None = None,
     ) -> None:
         self._dispatch_fn = dispatch_fn
         self._make_tool_result_fn = make_tool_result_fn
@@ -118,7 +118,7 @@ class ToolExecutor:
         self._max_result_chars = _resolve_max_result_chars(max_result_chars)
         self._tool_call_guard = tool_call_guard or ToolCallGuard()
         self._current_api_call_id: str | None = None
-        self._tool_decision_required = tool_decision_required is True
+        self._tool_decision_tools = frozenset(tool_decision_tools or [])
         self._current_tool_decisions: ToolDecisionBatch | None = None
         self._summarize_notification_threshold = _resolve_hint_threshold(
             summarize_notification_threshold
@@ -656,8 +656,9 @@ class ToolExecutor:
 
     def _evaluate_call(self, tc: ToolCall, proposal: ToolProposal) -> GuardDecision:
         # Inference already finished at the API return boundary. Never review here.
-        if self._tool_decision_required:
-            batch = self._current_tool_decisions
+        batch = self._current_tool_decisions
+        if (tc.name in self._tool_decision_tools
+                or (type(batch) is ToolDecisionBatch and batch.reviewed(tc))):
             decision = (batch.consume(tc, self._current_api_call_id)
                         if type(batch) is ToolDecisionBatch else missing_tool_decision())
             if not decision.allowed:

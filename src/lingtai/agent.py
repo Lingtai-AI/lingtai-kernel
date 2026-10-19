@@ -158,7 +158,7 @@ def build_agent_config(
         # Keep AgentConfig.max_turns at its default for API compatibility, but
         # deliberately ignore stale init.json values here.
         language=manifest.get("language", defaults.language),
-        tool_decision_enabled=manifest.get("tool_decision_enabled", False),
+        tool_decision_tools=manifest.get("tool_decision_tools", []),
         activeness=policy.get("activeness", defaults.activeness),
         context_limit=policy.get("context_limit", defaults.context_limit),
         # Providers that own their omitted-thinking default keep the "default"

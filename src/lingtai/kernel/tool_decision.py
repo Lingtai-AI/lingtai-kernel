@@ -62,7 +62,12 @@ class ToolDecisionBatch:
     def __init__(self, api_call_id: str | None, entries: list[_ReviewedCall]):
         self._api_call_id = api_call_id
         self._entries = entries
+        self._reviewed_calls = tuple(entry.call for entry in entries)
         self._lock = Lock()
+
+    def reviewed(self, call: ToolCall) -> bool:
+        """Keep reviewed objects gated even if their name is later mutated."""
+        return any(original is call for original in self._reviewed_calls)
 
     def consume(self, call: ToolCall, api_call_id: str | None) -> GuardDecision:
         with self._lock:
@@ -96,22 +101,25 @@ def review_tool_response(
     phase_factory: Callable[[], ToolDecisionPhase | None],
     logger_fn: Callable | None = None,
     cancelled: Callable[[], bool] | None = None,
+    *, tool_decision_tools: list[str] | None = None,
 ) -> LLMResponse:
     """Review a COMPLETE API response before returning it to any dispatch loop.
 
-    The caller owns its explicit opt-in. Pure text never constructs a phase.
+    Exact configured names select calls; empty/no matches constructs no phase.
     Failures become per-call denials, not send failures/retries; assistant text,
-    calls and provider history are left intact. Every sibling is reviewed before
-    this function returns. The reviewer sees only a detached raw typed call.
+    calls and provider history are left intact. Every selected sibling is reviewed
+    before this returns. The reviewer sees only a detached raw typed call.
     """
-    if not response.tool_calls:
+    selected = [call for call in response.tool_calls
+                if call.name in (tool_decision_tools or [])]
+    if not selected:
         return response
     try:
         phase = phase_factory()
     except Exception:
         phase = None
     entries = []
-    for call in response.tool_calls:
+    for call in selected:
         started = monotonic()
         payload = None
         failure = None

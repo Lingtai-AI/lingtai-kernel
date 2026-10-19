@@ -30,7 +30,7 @@ class RecordingPhase:
         return ToolDecisionResult(True, allowed, 0)
 
 
-def executor(checks, handled, events, *, required=True):
+def executor(checks, handled, events, *, tools=None):
     def dispatch(call):
         handled.append(deepcopy(call))
         return {"status": "ok"}
@@ -39,7 +39,7 @@ def executor(checks, handled, events, *, required=True):
         dispatch, lambda name, result, **kw: ToolResultBlock(
             id=kw.get("tool_call_id"), name=name, content=result,
         ), LoopGuard(max_total_calls=50),
-        tool_call_guard=ToolCallGuard(checks), tool_decision_required=required,
+        tool_call_guard=ToolCallGuard(checks), tool_decision_tools=(["custom", "mcp__record"] if tools is None else tools),
         logger_fn=lambda kind, **fields: events.append((kind, fields)),
     )
 
@@ -48,7 +48,8 @@ def reviewed(calls, phase, events=None, cancelled=None):
     response = LLMResponse(tool_calls=calls, api_call_id="main-round")
     return review_tool_response(response, lambda: phase,
                                 (lambda kind, **fields: events.append((kind, fields)))
-                                if events is not None else None, cancelled)
+                                if events is not None else None, cancelled,
+                                tool_decision_tools=[call.name for call in calls])
 
 
 def execute_response(ex, response):
@@ -59,7 +60,7 @@ def execute_response(ex, response):
 def test_pure_text_does_not_construct_phase_or_session():
     factory = MagicMock()
     response = LLMResponse(text="ordinary answer")
-    assert review_tool_response(response, factory) is response
+    assert review_tool_response(response, factory, tool_decision_tools=["shell"]) is response
     factory.assert_not_called()
     assert response.tool_decisions is None
 
@@ -208,12 +209,12 @@ def test_real_init_reader_config_and_agent_executor_composition(tmp_path, monkey
     from tests._agent_presence_helpers import make_test_presence_store
 
     raw = json.dumps({"manifest": {"llm": {"provider": "openai", "model": "effective-model"},
-                                   "tool_decision_enabled": True}, "pad": "private history"})
+                                   "tool_decision_tools": ["custom"]}, "pad": "private history"})
     (tmp_path / "init.json").write_text(raw)
     outcome = read_init(tmp_path)
     assert outcome.data is not None
     config = build_agent_config(outcome.data["manifest"], max_rpm=0)
-    assert config.tool_decision_enabled is True
+    assert config.tool_decision_tools == ["custom"]
     service, prompts, options, _ = make_service(
         LLMResponse(text='{"dangerous":false,"pass":true,"confidence":0.5}'),
     )
@@ -301,7 +302,7 @@ def test_session_send_reviews_complete_response_before_return(monkeypatch, strea
         order.append("review:" + call.id) or ToolDecisionResult(False, True, 0)))
     factory = MagicMock(return_value=phase)
     manager = module.SessionManager(
-        llm_service=SimpleNamespace(model="main"), config=AgentConfig(tool_decision_enabled=enabled),
+        llm_service=SimpleNamespace(model="main"), config=AgentConfig(tool_decision_tools=["custom"] if enabled else []),
         streaming=streaming, build_system_prompt_fn=lambda: "main private prompt",
         build_tool_schemas_fn=lambda: [], logger_fn=lambda *a, **kw: None,
         tool_decision_phase_fn=factory,
@@ -323,7 +324,7 @@ def test_session_send_reviews_complete_response_before_return(monkeypatch, strea
     assert order == (["assembled" if streaming else "api"] +
                      (["review:0", "review:1"] if enabled else []))
     assert factory.call_count == int(enabled)
-    results, _, _ = execute_response(executor([], handled, events, required=enabled), returned)
+    results, _, _ = execute_response(executor([], handled, events, tools=["custom"] if enabled else []), returned)
     assert len(results) == len(handled) == 2
     assert factory.call_count == int(enabled)  # dispatch never infers
     manager._timeout_pool.shutdown(wait=True)
@@ -410,8 +411,8 @@ def test_actual_native_loop_separate_opt_in_failure_pair_and_usage(tmp_path, mon
         check_name="native_existing", reason="existing native guard",
     )] if existing_denial else [])
     host._runtime = SimpleNamespace(tool_call_guard=native_guard, language="en",
-                                    max_aed_attempts=1, _config=AgentConfig(tool_decision_enabled=not enabled))
-    host._tool_decision_enabled = enabled
+                                    max_aed_attempts=1, _config=AgentConfig(tool_decision_tools=[] if enabled else ["custom"]))
+    host._tool_decision_tools = ["custom"] if enabled else []
     host._daemon_provider_defaults.side_effect = lambda *args, **kwargs: {}
     host._daemon_intrinsic_surface.return_value = ({}, {})
     host._drain_followup.return_value = None
@@ -453,20 +454,23 @@ def test_actual_native_loop_separate_opt_in_failure_pair_and_usage(tmp_path, mon
 def test_standalone_and_detached_manifest_explicit_default_off(tmp_path):
     from lingtai.services.daemon import DaemonService, DaemonServiceError
     from lingtai.kernel.daemon_supervisor.manifest import build_manifest, write_manifest, read_manifest, manifest_path_for
-    for enabled in (False, True):
-        service = DaemonService(tmp_path, tool_decision_enabled=enabled)
-        assert service._runtime.manager_options["tool_decision_enabled"] is enabled
+    for tools in ([], ["shell", "SDK.exact-name"]):
+        service = DaemonService(tmp_path, tool_decision_tools=tools)
+        assert service._runtime.manager_options["tool_decision_tools"] == tools
         manifest = build_manifest(
             run_id=tmp_path.name, backend="lingtai", parent_working_dir=str(tmp_path),
             run_dir=str(tmp_path), task="task", tools=[], max_turns=1, timeout_s=1,
-            group_id=None, tool_decision_enabled=enabled,
+            group_id=None, tool_decision_tools=tools,
         )
-        assert manifest["tool_decision_enabled"] is enabled
+        assert manifest["tool_decision_tools"] == tools
         write_manifest(tmp_path, manifest)
-        assert read_manifest(manifest_path_for(tmp_path))["tool_decision_enabled"] is enabled
-    assert DaemonService(tmp_path)._runtime.manager_options["tool_decision_enabled"] is False
+        assert read_manifest(manifest_path_for(tmp_path))["tool_decision_tools"] == tools
+    manifest.pop("tool_decision_tools")
+    write_manifest(tmp_path, manifest)
+    assert read_manifest(manifest_path_for(tmp_path)).get("tool_decision_tools", []) == []
+    assert DaemonService(tmp_path)._runtime.manager_options["tool_decision_tools"] == []
     with pytest.raises(DaemonServiceError):
-        DaemonService(tmp_path, tool_decision_enabled="true")
+        DaemonService(tmp_path, tool_decision_tools="true")
 
 
 def test_literal_parallel_wrapper_is_unknown_not_unreviewed_child_dispatch():
@@ -482,7 +486,7 @@ def test_literal_parallel_wrapper_is_unknown_not_unreviewed_child_dispatch():
     ex = ToolExecutor(
         lambda tc: handled.append(tc) or {"ok": True},
         lambda name, result, **kw: ToolResultBlock(kw.get("tool_call_id"), name, result),
-        LoopGuard(), known_tools={"custom"}, tool_decision_required=True,
+        LoopGuard(), known_tools={"custom"}, tool_decision_tools=["multi_tool_use.parallel"],
     )
     results, _, _ = execute_response(ex, response)
     assert not handled
@@ -573,3 +577,99 @@ def test_real_sdk_review_request_shape_without_network(wire_api, structured):
             chat = service.create_session(system_prompt="offline plain control", tools=None, tracked=False)
             assert chat.send("plain control").text == decision
         assert len(requests) == 1
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("tools", [[], ["Shell"], ["SDK.custom-exact"]])
+def test_empty_or_no_exact_selected_calls_construct_zero_reviewers(native, tools):
+    from lingtai.tools.daemon import _review_native_tool_response
+
+    factory = MagicMock(side_effect=RuntimeError("must not construct"))
+    response = LLMResponse(tool_calls=[ToolCall("shell", {}, id="unselected")])
+    if native:
+        returned = _review_native_tool_response(
+            response, MagicMock(), MagicMock(), tool_decision_tools=tools,
+            phase_factory=factory,
+        )
+    else:
+        returned = review_tool_response(response, factory, tool_decision_tools=tools)
+    assert returned is response and response.tool_decisions is None
+    factory.assert_not_called()
+    handled, events = [], []
+    results, _, _ = execute_response(executor([], handled, events, tools=tools), response)
+    assert len(handled) == 1 and [r.id for r in results] == ["unselected"]
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("failure", ["factory", "provider", "denial", "missing"])
+def test_mixed_selected_shell_failure_never_blocks_unselected_telegram(native, failure):
+    from lingtai.tools.daemon import _review_native_tool_response
+
+    calls = [ToolCall("shell", {"command": "harmless", "summarize": False}, id="selected"),
+             ToolCall("telegram", {"message": "ordinary", "summarize": False}, id="unselected")]
+    original = deepcopy(calls)
+    review = MagicMock(side_effect=RuntimeError("private provider failure")) if failure == "provider" else MagicMock(
+        return_value=ToolDecisionResult(False, False, 1))
+    factory = MagicMock(return_value=SimpleNamespace(review=review))
+    if failure == "factory":
+        factory.side_effect = RuntimeError("unavailable")
+    response = LLMResponse(tool_calls=calls, api_call_id="mixed-round")
+    if failure != "missing":
+        if native:
+            _review_native_tool_response(response, MagicMock(), MagicMock(),
+                                         tool_decision_tools=["shell"], phase_factory=factory)
+        else:
+            review_tool_response(response, factory, tool_decision_tools=["shell"])
+    handled, events = [], []
+    assert not handled  # all selected review is complete before execution
+    results, _, _ = execute_response(executor([], handled, events, tools=["shell"]), response)
+    assert calls == original
+    assert [r.id for r in results] == ["selected", "unselected"]
+    assert [call.name for call in handled] == ["telegram"]
+    assert results[0].content["error_type"] == "ToolCallGuardDenied"
+    assert results[1].content["status"] == "ok"
+    if failure in ("provider", "denial"):
+        assert [c.args[0].name for c in review.call_args_list] == ["shell"]
+
+
+def test_arbitrary_exact_sdk_name_is_selected_without_alias_or_prefix_inference():
+    name = "SDK.Custom-exact.v2"
+    calls = [ToolCall(name, {}, id="sdk"), ToolCall(name.lower(), {}, id="case-sensitive")]
+    phase = SimpleNamespace(review=MagicMock(return_value=ToolDecisionResult(False, True, 1)))
+    response = LLMResponse(tool_calls=calls, api_call_id="sdk-round")
+    review_tool_response(response, lambda: phase, tool_decision_tools=[name])
+    assert phase.review.call_count == 1 and phase.review.call_args.args[0].name == name
+    handled, events = [], []
+    results, _, _ = execute_response(executor([], handled, events, tools=[name]), response)
+    assert {call.name for call in handled} == {name, name.lower()}
+    assert [r.id for r in results] == ["sdk", "case-sensitive"]
+
+
+@pytest.mark.parametrize("invalid", [True, False, "shell", {}, [1], ["shell", None]])
+def test_review_list_boundaries_reject_non_string_lists(tmp_path, invalid):
+    from lingtai.init_schema import validate_init
+    from lingtai.services.daemon import DaemonService, DaemonServiceError
+    from lingtai.kernel.daemon_supervisor.manifest import build_manifest, read_manifest, write_manifest
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+
+    with pytest.raises(TypeError):
+        AgentConfig(tool_decision_tools=invalid)
+    valid_init = {"pad": "", "manifest": {"llm": {"provider": "openai", "model": "test"},
+                                           "tool_decision_tools": ["shell"]}}
+    assert validate_init(valid_init) == []
+    with pytest.raises(ValueError, match="tool_decision_tools"):
+        validate_init({"pad": "", "manifest": {"llm": {"provider": "openai", "model": "test"},
+                                                 "tool_decision_tools": invalid}})
+    with pytest.raises(DaemonServiceError):
+        DaemonService(tmp_path, tool_decision_tools=invalid)
+    kwargs = dict(run_id=tmp_path.name, backend="lingtai", parent_working_dir=str(tmp_path),
+                  run_dir=str(tmp_path), task="task", tools=[], max_turns=1, timeout_s=1, group_id=None)
+    with pytest.raises(ValueError):
+        build_manifest(**kwargs, tool_decision_tools=invalid)
+    manifest = build_manifest(**kwargs)
+    manifest["tool_decision_tools"] = invalid
+    path = write_manifest(tmp_path, manifest)
+    with pytest.raises(ValueError):
+        read_manifest(path)
+    with pytest.raises(ValueError):
+        DetachedDaemonExecutionHost(tmp_path, manifest, MagicMock(), MagicMock())

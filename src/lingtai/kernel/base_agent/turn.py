@@ -2484,7 +2484,7 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
         summarize_notification_threshold=getattr(
             agent, "_summarize_notification_threshold", None
         ),
-        tool_decision_required=agent._config.tool_decision_enabled is True,
+        tool_decision_tools=agent._config.tool_decision_tools,
         reconstruction_event_fn=lambda: build_reconstruction_tool_meta(agent),
         summarizer_fn=_build_apriori_summarizer_fn(agent),
     )

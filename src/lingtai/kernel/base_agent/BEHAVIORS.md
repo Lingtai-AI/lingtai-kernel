@@ -381,12 +381,13 @@ test is not startup proof; report exact failed or unexecuted checks.
 
 ### Steps
 1. Run `.venv/bin/python -m pytest -q tests/test_tool_decision_phase.py` from the repository root; retain the result.
-2. Inspect complete-response/streaming-return ordering, whole-batch review, single/parallel handlers, disabled factory, strict failure cases and real reader/config/Agent/SessionManager/executor composition. Inspect stale/mutated/replayed receipt denials.
+2. Inspect complete-response/streaming-return ordering, selected-call review, single/parallel handlers, disabled factory, strict failure cases and real reader/config/Agent/SessionManager/executor composition. Inspect stale/mutated/replayed receipt denials.
 3. Inspect reviewer session options: no history/interface, tools=None, fixed instructions, only current tool name/arguments. Confirm Anthropic receives no pseudo-tool schema.
 
 ### Expected evidence
-- [ ] Disabled constructs no phase and makes no review request.
-- [ ] All sibling reviews finish at API return before any handler effect; each retains its result id and original assistant call. Dispatch does not infer again.
+- [ ] Empty/no exact-name matches constructs no phase/session/request; arbitrary exact SDK names work.
+- [ ] In a mixed Shell/Telegram batch with `["shell"]`, review failure/denial blocks only Shell; Telegram executes and original result ids/order survive.
+- [ ] All selected sibling reviews finish at API return before any handler effect; each retains its result id and original assistant call. Dispatch does not infer again.
 - [ ] Missing, stale, mutated and replayed receipts cannot authorize execution.
 - [ ] A literal unsupported parallel wrapper cannot dispatch embedded children; its unknown-tool result preserves the outer wire id.
 - [ ] Injected phase mutation cannot change handler arguments; an existing denial still wins.

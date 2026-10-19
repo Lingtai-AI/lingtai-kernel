@@ -156,10 +156,11 @@ Shell job.
 
 ## Native review manifest option
 
-`manifest.py:build_manifest` / `read_manifest` carry optional boolean
-`tool_decision_enabled` (omitted means false). The native daemon host writes its
-own setup flag, not the parent Agent flag; `DetachedDaemonExecutionHost` restores
-it for the shared post-response review phase. Non-booleans are invalid. This
+`manifest.py:build_manifest` / `read_manifest` carry optional `list[str]`
+`tool_decision_tools` (omitted/empty means off). The native daemon host writes its
+own exact-name selection, not the parent Agent list; `DetachedDaemonExecutionHost`
+validates and restores it for shared post-response review. Non-lists or non-string
+entries are invalid; names are not restricted to a built-in catalog. This
 additive value does not change supervisor identity, launch, cancellation or
 resume ownership. See the [daemon owner contract](../../tools/daemon/CONTRACT.md#native-tool-decision-phase),
 [manual](../../tools/daemon/manual/SKILL.md#native-tool-decision-phase) and

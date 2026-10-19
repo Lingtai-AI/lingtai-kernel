@@ -299,9 +299,9 @@ existing kernel/project Contract, not this outer registration layer.
 
 ## Tool decision opt-in wiring
 
-`init_schema.MANIFEST_OPTIONAL` validates the one boolean
-`manifest.tool_decision_enabled`; `agent.build_agent_config` hydrates it on the
-existing CLI/setup/refresh path (default false). Preset materialization and
+`init_schema.MANIFEST_OPTIONAL` and `validate_init` validate the string list
+`manifest.tool_decision_tools`; `agent.build_agent_config` hydrates it on the
+existing CLI/setup/refresh path (default empty). Preset materialization and
 LLM/capability selection remain unchanged. `Agent._get_tool_decision_phase`
 selects an injected Core phase or constructs the small
 `adapters/tool_decision.py:44` active-service adapter; no Agent/persona/workdir
