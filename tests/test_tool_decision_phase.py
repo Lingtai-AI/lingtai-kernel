@@ -522,3 +522,54 @@ def test_review_uses_the_same_adapter_as_main_sdk_provider_override(monkeypatch,
             None if override == "anthropic" else DECISION_SCHEMA)
     finally:
         manager._timeout_pool.shutdown(wait=True)
+
+
+@pytest.mark.parametrize("wire_api,structured", [
+    ("responses", True), ("responses", False), ("chat_completions", True),
+])
+def test_real_sdk_review_request_shape_without_network(wire_api, structured):
+    import httpx
+    from openai import OpenAI
+    from lingtai.llm.service import LLMService
+    from lingtai.adapters.tool_decision import DECISION_SCHEMA
+
+    requests = []
+    decision = '{"dangerous":false,"pass":true,"confidence":1}'
+
+    def respond(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        usage = {"input_tokens": 9, "output_tokens": 7, "total_tokens": 16}
+        if wire_api == "responses":
+            assert "response_format" not in body
+            if structured:
+                assert body["text"]["format"] == {"type": "json_schema", "name": "response", "strict": True, "schema": DECISION_SCHEMA}
+            else:
+                assert "text" not in body
+            payload = {"id": "resp_fixture", "object": "response", "created_at": 1,
+                       "status": "completed", "model": "gpt-6.1-sol", "usage": usage,
+                       "output": [{"id": "msg_fixture", "type": "message", "status": "completed", "role": "assistant",
+                                   "content": [{"type": "output_text", "text": decision, "annotations": []}]}]}
+        else:
+            assert body["response_format"]["json_schema"]["schema"] == DECISION_SCHEMA
+            payload = {"id": "chatcmpl_fixture", "object": "chat.completion", "created": 1,
+                       "model": "gpt-6.1-sol", "usage": {"prompt_tokens": 9, "completion_tokens": 7, "total_tokens": 16},
+                       "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": decision}}]}
+        return httpx.Response(200, json=payload)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        client = OpenAI(api_key="offline-not-a-real-key", base_url="https://offline.invalid/v1", http_client=http, max_retries=0)
+        service = LLMService("openai", "gpt-6.1-sol", api_key="offline-not-a-real-key", base_url="https://offline.invalid/v1",
+                             provider_defaults={"openai": {"wire_api": wire_api, "max_rpm": 0}})
+        adapter = service.get_adapter("openai")
+        adapter._client.close()  # only this newly constructed fixture client
+        adapter._client = client
+        if structured:
+            recorded = []
+            phase = ActivePresetToolDecisionPhase(service, AgentConfig(provider="openai", model="gpt-6.1-sol"), lambda response, *_args: recorded.append(response))
+            assert phase.review(ToolCall("shell", {"action": "run", "input": {"command": "printf harmless"}}, id="sdk-real")).passed
+            assert len(recorded) == 1 and recorded[0].usage.input_tokens == 9
+        else:
+            chat = service.create_session(system_prompt="offline plain control", tools=None, tracked=False)
+            assert chat.send("plain control").text == decision
+        assert len(requests) == 1
