@@ -9,7 +9,10 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..tool_decision import ToolDecisionBatch
 
 from lingtai.kernel.config import tool_prose_section_enabled
 from lingtai.kernel.logging import get_logger
@@ -230,6 +233,8 @@ class LLMResponse:
     # BaseAgent/ToolExecutor propagate it to every tool event produced from
     # the same assistant response so UI/replay code can group tool batches.
     api_call_id: str | None = None
+    # Core-only review receipts; never serialized into provider history.
+    tool_decisions: ToolDecisionBatch | None = field(default=None, repr=False, compare=False)
 
 
 def is_all_empty_response(response: LLMResponse) -> bool:

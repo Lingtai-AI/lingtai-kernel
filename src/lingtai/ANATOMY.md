@@ -1,5 +1,8 @@
 ---
 related_files:
+  - tests/test_tool_decision_phase.py
+  - src/lingtai/adapters/tool_decision.py
+  - src/lingtai/kernel/tool_decision.py
   - src/lingtai/kernel/project/inventory.py
   - src/lingtai/kernel/project/external_lifecycle.py
   - src/lingtai/adapters/project_recipe_native.py
@@ -293,3 +296,20 @@ implemented in the CLI.
 `project_recipe_native.py` retains Go owner documents opaquely in the bound
 caller. Their policy Ports and native/unknown-result obligations belong to the
 existing kernel/project Contract, not this outer registration layer.
+
+## Tool decision opt-in wiring
+
+`init_schema.MANIFEST_OPTIONAL` and `validate_init` validate the string list
+`manifest.tool_decision_tools`; `agent.build_agent_config` hydrates it on the
+existing CLI/setup/refresh path (default empty). Preset materialization and
+LLM/capability selection remain unchanged. `Agent._get_tool_decision_phase`
+selects an injected Core phase or constructs the small
+`adapters/tool_decision.py:44` active-service adapter; no Agent/persona/workdir
+is constructed for review. Kernel post-response composition lives in
+`kernel/session.py:SessionManager.send`; `kernel/base_agent/turn.py` forwards
+bound receipts to the executor, which never invokes review. Native daemons
+compose separately in `tools/daemon/__init__.py:_review_native_tool_response`. Guarding acceptance:
+[IR002](BEHAVIORS.md#behavior-ir002),
+[BA013](kernel/base_agent/BEHAVIORS.md#behavior-ba013).
+Enablement and limitations:
+[LLM adapter manual](intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md#opt-in-tool-decision-prototype).

@@ -3531,9 +3531,11 @@ class OpenAIAdapter(LLMAdapter):
         extra_kwargs: dict[str, Any] = {}
 
         if json_schema is not None:
-            extra_kwargs["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
+            # Responses selects structured output via text.format, not the
+            # Chat Completions-only response_format keyword.
+            extra_kwargs["text"] = {
+                "format": {
+                    "type": "json_schema",
                     "name": json_schema.get("title", "response"),
                     "strict": True,
                     "schema": json_schema,

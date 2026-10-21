@@ -5,6 +5,10 @@ labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - src/lingtai/kernel/tool_decision.py
+  - src/lingtai/adapters/tool_decision.py
+  - tests/test_tool_decision_phase.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
   - tests/test_agents_memory.py
   - src/lingtai/kernel/prompt.py
   - tests/test_apriori_summary_session_cost.py
@@ -367,3 +371,32 @@ hermetic test does not establish live provider behavior or native Windows result
 ### Pass / Fail
 Pass only if the suite passes on the candidate tree. A compilation or unexecuted
 test is not startup proof; report exact failed or unexecuted checks.
+
+## Behavior BA013
+
+- **id**: BA013
+- **title**: opt-in tool-call-only review gates handlers and fails closed
+- **guards**: `agent-runtime` § [Tool decision prototype](CONTRACT.md#tool-decision-prototype)
+- **runner**: a parent-authorized validation agent with repository Python
+- **prerequisites**: offline checkout and test dependencies; no provider credentials
+- **estimate**: ≈ 2 minutes
+
+### Steps
+1. Run `.venv/bin/python -m pytest -q tests/test_tool_decision_phase.py` from the repository root; retain the result.
+2. Inspect complete-response/streaming-return ordering, selected-call review, single/parallel handlers, disabled factory, strict failure cases and real reader/config/Agent/SessionManager/executor composition. Inspect stale/mutated/replayed receipt denials.
+3. Inspect reviewer session options: no history/interface, tools=None, fixed instructions, only current tool name/arguments. Confirm Anthropic receives no pseudo-tool schema.
+
+### Expected evidence
+- [ ] Empty/no exact-name matches constructs no phase/session/request; arbitrary exact SDK names work.
+- [ ] In a mixed Shell/Telegram batch with `["shell"]`, review failure/denial blocks only Shell; Telegram executes and original result ids/order survive.
+- [ ] All selected sibling reviews finish at API return before any handler effect; each retains its result id and original assistant call. Dispatch does not infer again.
+- [ ] Missing, stale, mutated and replayed receipts cannot authorize execution.
+- [ ] A literal unsupported parallel wrapper cannot dispatch embedded children; its unknown-tool result preserves the outer wire id.
+- [ ] Injected phase mutation cannot change handler arguments; an existing denial still wins.
+- [ ] Malformed/refused/unexpected-tool/failed inference and unsupported transport block.
+- [ ] Main session/config/raw init remain unchanged; usage has a distinct ledger source.
+
+### Pass / Fail
+Pass only after the offline suite succeeds and these source boundaries hold.
+This is not live-provider, full CLI initialization, sandbox or platform acceptance;
+report those gaps explicitly. Authorship alone is not passing evidence.

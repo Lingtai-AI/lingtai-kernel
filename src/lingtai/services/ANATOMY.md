@@ -49,7 +49,7 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 | File | LOC | Role |
 |---|---|---|
 | `__init__.py` | 1 | Docstring-only package marker |
-| `daemon.py` | — | `DaemonService(state_root)`: standalone, non-Agent composition of the existing `DaemonManager` and `DaemonFamilyDispatcher`; native calls require direct preset paths and readback uses ledger-driven mutation-free views |
+| `daemon.py` | — | `DaemonService(state_root, tool_decision_tools=["shell"])`: independently opted-in native post-response review; standalone, non-Agent composition of the existing `DaemonManager` and `DaemonFamilyDispatcher`; native calls require direct preset paths and readback uses ledger-driven mutation-free views |
 | `mail.py` | 19 | High-level compatibility surface: re-exports the Core `MailTransportPort` as `MailService` and the POSIX adapter as both `PosixFilesystemMailAdapter` and the legacy public name `FilesystemMailService` |
 | `mcp.py` | 1130 | `MCPClient` (stdio) + `HTTPMCPClient` (streamable HTTP) — async-to-sync bridges over the official MCP Python SDK v2 `mcp.Client`, with shared schema-aware host-private argument preparation (`mcp.py:32-88`), tool-record adaptation, rich-result preservation, and the legacy structured-result projection |
 | `session_mcp.py` | — | Process-local stdio MCP overlay ownership for driving sessions: the standalone process profile uses a collision-checked global publication lease; resident Puffo attach uses a separate connection lease whose catalog is never published on Agent globals and is visible only through the Core turn-local tool view. Both preflight and close started clients on failure. |

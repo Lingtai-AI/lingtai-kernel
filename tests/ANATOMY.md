@@ -1,5 +1,6 @@
 ---
 related_files:
+  - tests/test_tool_decision_phase.py
   - tests/test_agents_memory.py
   - src/lingtai/tools/plugin/ANATOMY.md
   - tests/test_plugin_mcp_mode.py
@@ -245,3 +246,15 @@ unrelated smoke. Restore a focused regression from Git history when a
 concrete defect or required native/manual acceptance earns it.
 
 `tests/test_project_recipe.py` carries twelve thin existing local Recipe fake/filesystem and actual CLI source contracts; PRJ004 guards its Project owner promises. Execution is parent-owned, not an authored passing receipt.
+
+## Tool decision prototype regression
+
+`test_tool_decision_phase.py` is one offline module covering disabled no-op,
+single/parallel allow versus deny before a recording handler, fresh/current-call
+review input, strict failure closure, substituted phases, response-bound single-use
+receipts, complete streaming-response ordering and real init-reader / Agent /
+SessionManager / executor wiring. A native-loop fixture checks independent opt-in,
+paired denial and worker-scoped usage; standalone and detached manifest flags are
+covered. A literal unsupported parallel wrapper is rejected without child dispatch,
+preserving its outer wire id; no new wrapper parsing semantics are introduced. It does not certify live providers, full CLI setup or process lifecycle.
+Acceptance: BA013 (runtime), IR002 (reader), D012 (native daemon).

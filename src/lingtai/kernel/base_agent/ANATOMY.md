@@ -1,5 +1,9 @@
 ---
 related_files:
+  - src/lingtai/kernel/tool_decision.py
+  - src/lingtai/adapters/tool_decision.py
+  - tests/test_tool_decision_phase.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
   - tests/test_agents_memory.py
   - src/lingtai/kernel/prompt.py
   - tests/test_apriori_summary_session_cost.py
@@ -208,3 +212,22 @@ Generic agent kernel. Single class `BaseAgent` with methods distributed across 6
 - **Public-family ownership (current slice).** `task_card` is now an intrinsic `lingtai.tools` family registered independently of messaging channels. Its producer contract is channel-neutral and writes only the agent-local `taskcard/` artifact. Telegram and Feishu are consumer-only adapters; neither owns a public `task_card` MCP family.
 
 - **Intrinsic Task Card producer.** The public `task_card` tool now lives at `src/lingtai/tools/task_card/`. It validates a renderer within the agent workdir, writes `taskcard/taskcard.md` atomically, writes `taskcard/status` as exact `active` or `inactive`, keeps one active watch per agent, and emits deduped `task_card.error` / `task_card.limit` notifications. `lifecycle._stop` calls `shutdown_for_agent_stop` on the intrinsic manager so the updater stops with `inactive` written first. Consumer-specific projection and resident composition are documented under `src/lingtai/mcp_servers/telegram/task_card/` and `src/lingtai/mcp_servers/feishu/task_card.py`.
+
+## Tool decision prototype composition
+
+`BaseAgent.__init__` injects `_get_tool_decision_phase` and cancellation callbacks
+into `SessionManager`. `session.py:544-551` (`SessionManager.send`) calls
+`tool_decision.review_tool_response` after complete API/stream return only when
+`AgentConfig.tool_decision_tools` is nonempty; only exact-name matched calls
+are reviewed. Pure text/no matches bypass phase creation.
+`LLMResponse.tool_decisions` holds call/round-bound, single-use receipts;
+`turn.py:2997-3000` (`_process_response`) passes them to ToolExecutor. `_make_tool_executor` sets
+the per-name `tool_decision_tools` requirement while its deterministic guard list is unchanged.
+`tool_executor.py:657-666` (`ToolExecutor._evaluate_call`) only consumes receipts; it never invokes a phase.
+The wrapper composes `adapters.tool_decision.ActivePresetToolDecisionPhase`
+against the active effective service/config unless the SDK injects a phase.
+`turn._record_apriori_summary_usage` reuses its existing ledger sink with
+`source="tool_decision"` / `tool_decision_usage`. Native daemon composition is
+independent and lives in the daemon owner, not this Agent setting.
+Guarding acceptance: [BA013](BEHAVIORS.md#behavior-ba013).
+[Operator/SDK procedure](../../intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md#opt-in-tool-decision-prototype).

@@ -1,5 +1,9 @@
 ---
 related_files:
+  - tests/test_tool_decision_phase.py
+  - src/lingtai/kernel/tool_decision.py
+  - src/lingtai/adapters/tool_decision.py
+  - src/lingtai/tools/daemon/execution_host.py
   - tests/test_daemon_standalone_tools.py
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
@@ -450,3 +454,19 @@ intentional omission of the parent notification axis.
   in `daemon/runtime.py`.
 - **Contract:** `daemon/CONTRACT.md` — unified daemon contract for tool-surface behavior, selected skills, one-run MCP registrations, completion, artifacts, backend support status, review triggers, and acceptance gates.
 - **Kernel hooks:** `setup()` is called during capability initialization; `DaemonFamilyDispatcher.handle()` (`daemon/_tool_family.py`) is registered as the `daemon` tool handler, and translates one envelope call into `DaemonManager.handle()`'s unchanged flat shape. `daemon` is on `kernel/tool_result_summary.py`'s `_LTP_V2_MIGRATED_FAMILIES` allowlist, so the canonical root `summarize` control it advertises is actually honored.
+
+## Native post-response review composition
+
+`__init__.py:298-340` (`_review_native_tool_response`) composes the shared Core phase using
+the effective worker service and `DaemonRunDir.append_tokens` usage sink.
+`__init__.py:3936-3943` (`DaemonManager._run_emanation._send`) wraps its seven main
+API send sites; every response passes review before reaching the executor.
+Review is not in ToolCallGuard; ToolExecutor only consumes bound receipts.
+`setup` / `_bind_daemon` pass a separate default-empty exact-name list through existing
+manager options. `_spawn_detached_lingtai_run` writes the optional typed
+`tool_decision_tools` manifest field; `execution_host.py:84-89` (`DetachedDaemonExecutionHost.__init__`)
+restores it without constructing a parent Agent. `services/daemon.py:DaemonService`
+exposes the standalone explicit opt-in. No dispatch scheduling/lifecycle changes.
+Acceptance: [D012](BEHAVIORS.md#behavior-d012).
+[Contract](CONTRACT.md#native-tool-decision-phase) and
+[manual](manual/SKILL.md#native-tool-decision-phase).

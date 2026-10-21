@@ -80,6 +80,7 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "admin": dict,
     "time_awareness": bool,
     "timezone_awareness": bool,
+    "tool_decision_tools": list,
     "pseudo_agent_subscriptions": list,
     "preset": dict,
     # Large-result hint threshold.  `current_tool_result_chars` always ranks
@@ -331,6 +332,10 @@ def validate_init(data: dict) -> list[str]:
     manifest = data["manifest"]
     _require_keys(manifest, MANIFEST_REQUIRED, prefix="manifest")
     _optional_keys(manifest, MANIFEST_OPTIONAL, prefix="manifest")
+
+    decision_tools = manifest.get("tool_decision_tools", [])
+    if not all(isinstance(name, str) for name in decision_tools):
+        raise ValueError("manifest.tool_decision_tools: expected list[str]")
 
     disable = manifest.get("disable")
     if isinstance(disable, list):

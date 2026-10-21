@@ -5,6 +5,11 @@ labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - tests/test_tool_decision_phase.py
+  - src/lingtai/kernel/tool_decision.py
+  - src/lingtai/adapters/tool_decision.py
+  - src/lingtai/kernel/daemon_supervisor/manifest.py
+  - src/lingtai/tools/daemon/execution_host.py
   - tests/test_daemon_standalone_tools.py
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/run_dir.py
@@ -562,3 +567,30 @@ on failure, or a regression in the unchanged `list` action.
 Pass only when every assertion passes. Failure, timeout, or mere schema presence
 is not execution proof. This does not claim live provider, public network,
 resident refresh, or native Windows acceptance.
+
+## Behavior D012
+
+- **id**: D012
+- **title**: native daemon review is independently opted in at API return
+- **guards**: `daemon-contract` § [Native tool decision phase](CONTRACT.md#native-tool-decision-phase)
+- **runner**: parent-authorized validation agent with repository Python
+- **prerequisites**: offline checkout and test dependencies; no live provider or process manager
+- **estimate**: ≈ 2 minutes
+
+### Steps
+1. Run `.venv/bin/python -m pytest -q tests/test_tool_decision_phase.py`.
+2. Inspect the actual `_run_emanation` fake-provider loop: complete API response → review → dispatch → paired results. Parent and native exact-name lists intentionally disagree.
+3. Inspect standalone default-off, typed manifest roundtrip and native detached-host restoration; verify external CLI internal tools remain excluded.
+
+### Expected evidence
+- [ ] Default-off native path makes no reviewer session even with parent opt-in.
+- [ ] Selected review uses worker model/endpoint; all selected reviews finish before dispatch.
+- [ ] Empty/no matches constructs zero reviewers; mixed Shell/Telegram failures block only selected Shell.
+- [ ] Invalid/pass=false responses have no handler effect and retain call/result ids.
+- [ ] Reviewer usage uses the existing daemon token sink with distinct review events.
+- [ ] Ordinary deterministic guards remain independently enforced; no review inference in the executor.
+
+### Pass / Fail
+Pass requires the offline tests and source boundary review, not authorship.
+Detached process lifecycle, real-provider behavior and platform acceptance are
+separate parent-owned gates; the fake-provider loop does not certify them.

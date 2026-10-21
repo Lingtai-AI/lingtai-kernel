@@ -7,6 +7,10 @@ description: >
 version: 0.19.0
 last_changed_at: 2026-09-09T00:00:00Z
 related_files:
+- tests/test_tool_decision_phase.py
+- src/lingtai/kernel/tool_decision.py
+- src/lingtai/adapters/tool_decision.py
+- src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/services/daemon.py
@@ -157,3 +161,37 @@ External CLIs retain their existing no-preset mechanics. Daemon capability does 
 evidence deletion, or other work beyond the approved scope. `reclaim` stops work but does not clean
 folders; molt clears conversation context and does not wipe durable stores or
 daemon run folders.
+
+## Native tool decision phase
+
+`tool_decision_tools` is a list of exact SDK/custom tool names, not capability
+aliases or action names. Empty/no matches constructs zero reviewer sessions.
+The first runtime trial selects `["shell"]` only. In a mixed Shell/Telegram batch,
+review denial/provider failure blocks only selected Shell; unselected Telegram
+continues normally. Original batch order and call/result pairing are preserved.
+
+Default **off**, independently of the parent Agent's review setting. Authorized
+hosts may use `Agent(capabilities={"daemon": {"tool_decision_tools": ["shell"]}}, ...)`
+or `DaemonService(state_root, tool_decision_tools=["shell"])` for standalone native
+workers. Omit/empty disables it. This is a host setup option, not an `emanate`
+argument, CLI flag, environment setting or model-selectable permission bypass.
+Use the existing boot/refresh procedure only with authorization; this document
+is not activation authority. Detached native runs carry the typed string list in
+the existing supervisor manifest. No Shell/Web defaults or scheduling change.
+
+Every completed native main API response is checked for selected calls before
+any returned call can execute. All selected siblings are reviewed first; refused calls stay in assistant
+history and receive paired error results. The review uses that worker's actual
+effective preset/service/model/endpoint, not the parent history or another
+provider. Only fixed policy plus this call name/raw arguments is disclosed,
+with no tools, schemas or conversation. Only `pass` gates execution; dangerous
+and confidence are not additional thresholds. Review errors deny selected calls without a main
+API retry. Existing deterministic guards still apply after receipt consumption.
+This classification cannot establish human authority or guarantee a sandbox.
+
+For accounting, inspect ordinary daemon dual-ledger rows (still
+`source="daemon"`) and `tool_decision_usage` / `tool_decision` events in the run
+log. Invalid/refused normalized responses count; thrown calls with no returned
+usage remain unknown. Parent main-session counters do not include review calls.
+External CLI internal tools outside the kernel are **not covered**.
+[Strict output, supported transports and Core SDK injection](../../../intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md#opt-in-tool-decision-prototype).

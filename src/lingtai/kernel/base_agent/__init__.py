@@ -27,6 +27,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from ..config import AgentConfig
+from ..tool_decision import ToolDecisionPhase
 from ..event_journal import EventJournalPort
 from ..state import AgentState
 from ..workdir import WorkingDir
@@ -451,6 +452,10 @@ class BaseAgent:
     # Inbox polling interval (seconds)
     _inbox_timeout: float = 1.0
 
+    def _get_tool_decision_phase(self) -> "ToolDecisionPhase | None":
+        """Return an SDK-injected phase; bare enabled Core fails closed if absent."""
+        return self._tool_decision_phase
+
     @_release_acquired_workdir_lease_on_init_failure
     def __init__(
         self,
@@ -465,6 +470,7 @@ class BaseAgent:
         snapshot_port: SnapshotPort,
         source_revision_port: SourceRevisionPort,
         refresh_watcher: RefreshWatcherPort | None = None,
+        tool_decision_phase: "ToolDecisionPhase | None" = None,
         provider_call_admission_port=None,
         derived_launch_admission_port=None,
         intrinsics: "Mapping[str, Mapping[str, Any]] | None" = None,
@@ -505,6 +511,7 @@ class BaseAgent:
                 service, provider_call_admission_port
             )
         self._config = config or AgentConfig()
+        self._tool_decision_phase = tool_decision_phase
         # Preset-loader hook: Agent wrapper composes it; None on a bare BaseAgent so `load_preset` fails loud.
         self._preset_loader: Callable[..., dict] | None = None
         self._context = context
@@ -978,6 +985,8 @@ class BaseAgent:
             build_tool_schemas_fn=self._build_tool_schemas,
             logger_fn=self._log,
             build_system_batches_fn=self._build_system_prompt_batches,
+            tool_decision_phase_fn=self._get_tool_decision_phase,
+            tool_decision_cancelled_fn=lambda: self._cancel_event.is_set(),
             tool_result_recovery_lookup_fn=self._recover_pending_tool_result,
             molt_count_fn=lambda: self._molt_count,
             cache_miss_budget_fn=lambda: getattr(

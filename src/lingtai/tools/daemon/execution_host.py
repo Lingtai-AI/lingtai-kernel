@@ -81,6 +81,12 @@ class DetachedDaemonExecutionHost:
         self._cancel_event = cancel_event
         self._timeout_event = timeout_event
         self._manifest = manifest
+        decision_tools = manifest.get("tool_decision_tools", [])
+        if not isinstance(decision_tools, list) or not all(
+            isinstance(name, str) for name in decision_tools
+        ):
+            raise ValueError("manifest tool_decision_tools must be a list[str]")
+        self._tool_decision_tools = list(decision_tools)
         self._capsule = capsule if isinstance(capsule, dict) else {}
         self._adopted_fd = adopted_fd
         self._driver_authority = None
