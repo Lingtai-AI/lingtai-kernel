@@ -95,6 +95,41 @@ class _OpenAIToolPairingError(ValueError):
         super().__init__(f"tool pairing rejected: reason={reason} phase={phase}")
 
 
+def _dedupe_openai_tool_results(messages: list[dict]) -> list[dict]:
+    """Drop repeated ``role=tool`` entries that reuse an already-seen id.
+
+    A session rebuild or an interrupted turn can re-append a tool result that
+    an earlier segment already recorded, so the same ``tool_call_id`` appears
+    twice in the history.  The strict pairing guard below rejects such history
+    (``duplicate`` / ``non_contiguous``) and the agent then fails every request
+    forever.  A repeat carries no new information, so the first occurrence is
+    kept and later copies are removed here, before validation; message content
+    is never rewritten and only whole duplicate entries are dropped.
+    """
+    if not isinstance(messages, list):
+        return messages
+    seen: set[str] = set()
+    repaired: list[Any] = []
+    dropped: list[str] = []
+    for message in messages:
+        if isinstance(message, dict) and message.get("role") == "tool":
+            result_id = message.get("tool_call_id")
+            if isinstance(result_id, str) and result_id:
+                if result_id in seen:
+                    dropped.append(result_id)
+                    continue
+                seen.add(result_id)
+        repaired.append(message)
+    if dropped:
+        logger.warning(
+            "openai.tool_result.duplicate_dropped count=%d ids=%s — one repeated "
+            "tool result per id was kept; later copies were removed from the request",
+            len(dropped),
+            ",".join(dict.fromkeys(dropped)),
+        )
+    return repaired
+
+
 def _validate_openai_tool_pairing(messages: list[dict]) -> None:
     """Fail closed unless every Chat Completions tool batch is positional.
 
@@ -2616,6 +2651,11 @@ class OpenAIChatSession(ChatSession):
             # any orphan assistant[tool_calls] that aren't immediately followed
             # by matching role=tool entries. Canonical interface untouched.
             candidate = self._pair_orphan_tool_calls(candidate)
+            # A re-appended tool result for an already-answered call is
+            # redundant, not structural damage; drop the repeat instead of
+            # failing the turn (a single duplicate would otherwise wedge
+            # every later request). See issue #1872.
+            candidate = _dedupe_openai_tool_results(candidate)
             _validate_openai_tool_pairing(candidate)
             kw: dict[str, Any] = {
                 "model": self._model,
@@ -2776,6 +2816,11 @@ class OpenAIChatSession(ChatSession):
             candidate = self._build_messages()
             # Final wire-layer guard — same as non-streaming send().
             candidate = self._pair_orphan_tool_calls(candidate)
+            # A re-appended tool result for an already-answered call is
+            # redundant, not structural damage; drop the repeat instead of
+            # failing the turn (a single duplicate would otherwise wedge
+            # every later request). See issue #1872.
+            candidate = _dedupe_openai_tool_results(candidate)
             _validate_openai_tool_pairing(candidate)
             kw: dict[str, Any] = {
                 "model": self._model,
