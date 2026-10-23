@@ -106,6 +106,105 @@ _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
 _NOTIFICATION_CHANNEL = "mcp.telegram"
 _COMPOUND_ID_RE = re.compile(r"#([^\s:#]+:-?\d+:\d+)\b")
 _CONVERSATION_PREVIEW_MESSAGES = 20
+_TG_INDEX_LIMIT_DEFAULT = 30
+_TG_INDEX_CACHE: dict[str, tuple[float, int, list[dict]]] = {}
+
+
+def _tg_scan_limit() -> int:
+    """How many newest messages the legacy fallback keeps in memory (0 = all)."""
+    try:
+        raw = os.environ.get("LINGTAI_TELEGRAM_SCAN_LIMIT", "")
+        value = int(raw) if raw.strip() else _TG_INDEX_LIMIT_DEFAULT
+    except ValueError:
+        value = _TG_INDEX_LIMIT_DEFAULT
+    return max(0, value)
+
+
+def _tg_index_path(account_dir: Path, folder: str) -> Path:
+    return account_dir / f"_index_{folder}.jsonl"
+
+
+def _tg_index_append_dir(msg_dir: Path, folder: str, payload: dict) -> None:
+    """Append one message record to the account sidecar index (best effort)."""
+    try:
+        account_dir = msg_dir.parent.parent
+        record = dict(payload)
+        record["_folder"] = folder
+        record["_dir"] = str(msg_dir)
+        path = _tg_index_path(account_dir, folder)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        _TG_INDEX_CACHE.pop(str(path), None)
+    except Exception:  # index is an optimisation; never break persistence
+        log.warning("telegram index append failed", exc_info=True)
+
+
+def _tg_index_rows(account_dir: Path, folder: str) -> list[dict] | None:
+    """Return indexed messages newest-first, or None when no index exists yet."""
+    path = _tg_index_path(account_dir, folder)
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = str(path)
+    cached = _TG_INDEX_CACHE.get(key)
+    if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+        return cached[2]
+    rows: list[dict] = []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict):
+                    rec["_folder"] = folder
+                    rows.append(rec)
+    except OSError:
+        return None
+    rows.sort(key=lambda m: m.get("date") or "", reverse=True)
+    _TG_INDEX_CACHE[key] = (st.st_mtime, st.st_size, rows)
+    return rows
+
+
+_TG_INDEX_REBUILD_LOCK = threading.Lock()
+
+
+def _tg_index_rebuild(account_dir: Path, folder: str, messages: list[dict]) -> None:
+    """Persist a freshly scanned folder so later reads skip the directory walk.
+
+    Runs the first time a pre-index mirror is read, so existing installations
+    migrate themselves without a manual backfill step.
+    """
+    if not messages:
+        return
+    path = _tg_index_path(account_dir, folder)
+    with _TG_INDEX_REBUILD_LOCK:
+        if path.exists():
+            return
+        tmp_path = path.with_name(path.name + ".tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as fh:
+                for row in messages:
+                    record = {k: v for k, v in row.items() if k != "_folder"}
+                    record["_folder"] = folder
+                    fh.write(
+                        json.dumps(record, ensure_ascii=False, default=str) + "\n"
+                    )
+            os.replace(tmp_path, path)
+        except OSError:
+            log.warning("telegram index rebuild failed", exc_info=True)
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            return
+        _TG_INDEX_CACHE.pop(str(path), None)
+        log.info("telegram index built: %s (%d messages)", path, len(messages))
 # Keep 20 structured Telegram messages below the MCP inbox structured metadata cap.
 _STRUCTURED_MESSAGE_TEXT_CAP = 500
 # Max serialized chars for a full raw envelope attached to a structured
@@ -1554,6 +1653,7 @@ class TelegramManager:
         (persist_dir / "message.json").write_text(
             json.dumps(payload, indent=2, default=str), encoding="utf-8",
         )
+        _tg_index_append_dir(persist_dir, "inbox", payload)
 
         # Forward to host via LICC. Body is a conversation preview showing the
         # last 20 messages. The agent uses telegram(action="check"|"read") to
@@ -1769,9 +1869,13 @@ class TelegramManager:
 
     def _list_messages(self, account: str, folder: str = "inbox") -> list[dict]:
         """Load all messages from a folder, sorted by date (newest first)."""
-        folder_dir = self._account_dir(account) / folder
+        acct_dir = self._account_dir(account)
+        folder_dir = acct_dir / folder
         if not folder_dir.is_dir():
             return []
+        indexed = _tg_index_rows(acct_dir, folder)
+        if indexed is not None:
+            return [dict(row) for row in indexed]
         messages = []
         for msg_dir in folder_dir.iterdir():
             msg_file = msg_dir / "message.json"
@@ -1783,6 +1887,7 @@ class TelegramManager:
                 except (json.JSONDecodeError, OSError):
                     continue
         messages.sort(key=lambda m: m.get("date", ""), reverse=True)
+        _tg_index_rebuild(acct_dir, folder, messages)
         return messages
 
     def _find_inbox_by_compound_id(self, account: str, compound_id: str) -> Path | None:
@@ -1823,6 +1928,29 @@ class TelegramManager:
             folder_dir = acct_dir / folder
             if not folder_dir.is_dir():
                 continue
+            indexed = _tg_index_rows(acct_dir, folder)
+            if indexed is None:
+                # First read on a pre-index mirror: scan once via
+                # _list_messages, which also persists the index.
+                self._list_messages(account_alias, folder)
+                indexed = _tg_index_rows(acct_dir, folder)
+            if indexed is not None:
+                for data in indexed:
+                    msg_id = data.get("id", "")
+                    msg_chat_id: int | str | None = None
+                    if msg_id:
+                        parts = msg_id.split(":")
+                        if len(parts) == 3:
+                            try:
+                                msg_chat_id = int(parts[1])
+                            except ValueError:
+                                msg_chat_id = parts[1]
+                    if msg_chat_id != target_chat_id:
+                        continue
+                    row = dict(data)
+                    row["_folder"] = folder
+                    messages.append(row)
+                continue
             for msg_dir in folder_dir.iterdir():
                 msg_file = msg_dir / "message.json"
                 if not (msg_dir.is_dir() and msg_file.is_file()):
@@ -1858,6 +1986,19 @@ class TelegramManager:
         """
         acct_dir = self._account_dir(account_alias)
         for folder in ("inbox", "sent"):
+            indexed = _tg_index_rows(acct_dir, folder)
+            if indexed is None:
+                # First read on a pre-index mirror: scan once via
+                # _list_messages, which also persists the index.
+                self._list_messages(account_alias, folder)
+                indexed = _tg_index_rows(acct_dir, folder)
+            if indexed is not None:
+                for row in indexed:
+                    if row.get("id") == compound_id:
+                        found = dict(row)
+                        found["_folder"] = folder
+                        return found
+                continue
             folder_dir = acct_dir / folder
             if not folder_dir.is_dir():
                 continue
@@ -4823,6 +4964,7 @@ class TelegramManager:
         (sent_dir / "message.json").write_text(
             json.dumps(sent_record, indent=2, default=str), encoding="utf-8",
         )
+        _tg_index_append_dir(sent_dir, "sent", sent_record)
 
         response: dict[str, Any] = {
             "status": "sent",
