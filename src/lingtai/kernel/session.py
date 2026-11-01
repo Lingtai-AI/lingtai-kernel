@@ -288,9 +288,26 @@ class SessionManager:
 
     @chat.setter
     def chat(self, value: ChatSession | None) -> None:
+        self._release_chat(self._chat, replacement=value)
         self._chat = value
         self._attach_tool_result_recovery_lookup(value)
         self._bind_reasoning_effort(value)
+
+    def discard_chat(self) -> None:
+        """Drop the current chat (molt) and release it from the service registry."""
+        self._release_chat(self._chat)
+        self._chat = None
+
+    def _release_chat(
+        self, old: ChatSession | None, replacement: ChatSession | None = None,
+    ) -> None:
+        """Release a replaced tracked chat so it can be garbage-collected."""
+        if old is None or old is replacement:
+            return
+        session_id = getattr(old, "session_id", "")
+        release = getattr(self._llm_service, "release_session", None)
+        if session_id and callable(release):
+            release(session_id)
 
     @property
     def token_decomp_dirty(self) -> bool:
@@ -367,6 +384,7 @@ class SessionManager:
         self, interface: "ChatInterface", tracked: bool = True,
     ) -> None:
         """Create a new chat session with current config, preserving history."""
+        old = self._chat
         self._chat = self._llm_service.create_session(
             system_prompt=self._build_system_prompt_fn(),
             tools=self._build_tool_schemas_fn() or None,
@@ -377,6 +395,9 @@ class SessionManager:
             provider=self._config.provider,
             interface=interface,
         )
+        # Released only after the replacement exists, so a failed rebuild
+        # keeps the old session registered.
+        self._release_chat(old, replacement=self._chat)
         self._attach_tool_result_recovery_lookup(self._chat)
         self._bind_reasoning_effort(self._chat)
 

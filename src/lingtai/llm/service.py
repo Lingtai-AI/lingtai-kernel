@@ -471,6 +471,16 @@ class LLMService(LLMServiceABC):
         """Look up an active session by ID."""
         return self._sessions.get(session_id)
 
+    def release_session(self, session_id: str) -> None:
+        """Forget a tracked session its owner has replaced or discarded.
+
+        Without this the registry keeps every tracked session ever created
+        (and whatever it owns, such as a claude-code prompt-cache file) alive
+        for the life of the process.
+        """
+        if session_id:
+            self._sessions.pop(session_id, None)
+
     # --- One-shot generation ---
 
     def generate(

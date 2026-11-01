@@ -105,3 +105,82 @@ def test_session_prompt_file_is_removed_when_session_is_collected(fake_cli):
     gc.collect()
 
     assert not os.path.exists(path)
+
+
+# -- Replaced sessions must be released, or their prompt files outlive them --
+#
+# ``LLMService`` registers every tracked session. ``SessionManager`` replaces
+# its chat on rebuild (AED recovery, refresh, restore, MCP tool changes) and
+# discards it on molt; the replaced session has to leave the registry so it can
+# be collected and its prompt-cache file removed.
+
+
+def _claude_code_service(cli: str):
+    from lingtai.llm import LLMService
+
+    service = LLMService("claude-code", "opus")
+    service._adapters[("claude-code", None)] = ClaudeCodeAdapter(cli_path=cli)
+    return service
+
+
+def _session_manager(service):
+    from lingtai.kernel.config import AgentConfig
+    from lingtai.kernel.session import SessionManager
+
+    return SessionManager(
+        llm_service=service,
+        config=AgentConfig(provider="claude-code", model="opus"),
+        agent_name="scientist",
+        streaming=False,
+        build_system_prompt_fn=lambda: "MAIN AGENT: you are scientist.",
+        build_tool_schemas_fn=lambda: [_telegram_tool()],
+        logger_fn=None,
+    )
+
+
+def test_release_session_forgets_only_that_session(fake_cli):
+    cli, _ = fake_cli
+    service = _claude_code_service(cli)
+    first = service.create_session("one", tracked=True)
+    second = service.create_session("two", tracked=True)
+
+    service.release_session(first.session_id)
+    service.release_session("")  # untracked sessions have no id: a no-op
+
+    assert service.get_session(first.session_id) is None
+    assert service.get_session(second.session_id) is second
+
+
+def test_rebuild_releases_replaced_session_and_its_prompt_file(fake_cli):
+    cli, _ = fake_cli
+    service = _claude_code_service(cli)
+    manager = _session_manager(service)
+
+    old = manager.ensure_session()
+    old_id, old_path = old.session_id, old._system_prompt_file
+    manager._rebuild_session(old.interface)
+    new = manager.chat
+
+    assert new is not old
+    assert service.get_session(old_id) is None
+    assert service.get_session(new.session_id) is new
+    del old
+    gc.collect()
+    assert not os.path.exists(old_path)
+    assert os.path.exists(new._system_prompt_file)
+
+
+def test_discard_chat_releases_session_and_its_prompt_file(fake_cli):
+    cli, _ = fake_cli
+    service = _claude_code_service(cli)
+    manager = _session_manager(service)
+
+    chat = manager.ensure_session()
+    chat_id, path = chat.session_id, chat._system_prompt_file
+    manager.discard_chat()
+
+    assert manager.chat is None
+    assert service.get_session(chat_id) is None
+    del chat
+    gc.collect()
+    assert not os.path.exists(path)
