@@ -114,6 +114,7 @@ related_files:
   - tests/test_outbound_file_containment.py
   - tests/test_perform_refresh_handshake.py
   - tests/test_portable_adapter_encoding.py
+  - tests/test_claude_code_session_prompt_file.py
   - tests/test_powershell_decode_windows_output.py
   - tests/test_pre_request_hook.py
   - tests/test_process_identity.py

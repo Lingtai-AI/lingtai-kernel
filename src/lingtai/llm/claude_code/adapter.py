@@ -14,6 +14,7 @@ import re
 import subprocess
 import tempfile
 import uuid
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -94,11 +95,12 @@ _SYSTEM_PROMPT_FILE_FLAGS = {
     "replace": "--system-prompt-file",
 }
 
-# Sentinel for ``_invoke_raw``'s optional ``system_prompt_file`` argument so a
-# caller can explicitly pass ``None`` (no system-prompt file — used by the
-# one-shot ``generate`` path) while the default still resolves to the adapter's
-# stable prompt-cache file.
-_UNSET = object()
+def _unlink_quietly(path: Path) -> None:
+    """Remove a session's prompt-cache file once the session is collected."""
+    try:
+        path.unlink()
+    except OSError:
+        pass
 
 
 # Provider-local: the installed ``claude`` CLI's own ``--effort`` vocabulary
@@ -298,7 +300,16 @@ class ClaudeCodeChatSession(ChatSession):
         # Seeded from the constructor content so the first per-turn resync in
         # ``SessionManager.send`` is already recognised as a no-op.
         self._stable_context_digest = self._system_block_digest()
-        # Persist the stable system context to the adapter's prompt-cache file
+        # The prompt-cache file is owned by THIS session, never shared through
+        # the adapter. ``LLMService`` caches one adapter per (provider,
+        # base_url), so every session in the process (the main chat, the
+        # a-priori tool-result summarizer, daemons) is built on the same
+        # adapter; a shared file let the last-constructed session overwrite
+        # the main chat's system block with its own prompt and tool list.
+        self._system_prompt_file = adapter._new_system_prompt_file()
+        if self._system_prompt_file is not None:
+            weakref.finalize(self, _unlink_quietly, self._system_prompt_file)
+        # Persist the stable system context to the session's prompt-cache file
         # so the first ``send`` already has it in the cached system block.
         self._write_system_file()
 
@@ -405,6 +416,7 @@ class ClaudeCodeChatSession(ChatSession):
                     return self._adapter._invoke(
                         prompt,
                         self._model,
+                        system_prompt_file=self._system_prompt_file,
                         resume_session_id=self._remote_session_id,
                         effort_argv=self._effort_argv_for_snapshot(effort_snapshot),
                     )
@@ -624,8 +636,8 @@ class ClaudeCodeChatSession(ChatSession):
         return "\n".join(parts)
 
     def _write_system_file(self) -> None:
-        """Write the stable context to the adapter's system-prompt file."""
-        path = self._adapter._system_prompt_file
+        """Write the stable context to this session's system-prompt file."""
+        path = self._system_prompt_file
         if path is None:
             return
         try:
@@ -721,22 +733,26 @@ class ClaudeCodeAdapter(LLMAdapter):
         except OSError:
             self._cwd = Path(tempfile.gettempdir())
 
-        # Stable context file for prompt caching. Claude Code puts a cache
-        # breakpoint on the *system* block, so the stable protocol/system/tools
-        # context must be passed via the mode-selected system-prompt-file flag
-        # instead of being embedded in the per-turn user message, which is
-        # rewritten every turn as the conversation grows (forcing a full cache
-        # write each turn). The file path is stable per adapter instance; the
-        # session rewrites its content only when the system prompt or tools
-        # change.
-        self._system_prompt_file = Path(tempfile.gettempdir()) / (
+    def _new_system_prompt_file(self) -> Path | None:
+        """Create an empty prompt-cache file for one chat session.
+
+        Claude Code puts a cache breakpoint on the *system* block, so the
+        stable protocol/system/tools context must be passed via the
+        mode-selected system-prompt-file flag instead of being embedded in the
+        per-turn user message, which is rewritten every turn as the
+        conversation grows (forcing a full cache write each turn). Each session
+        gets its own file (see ``ClaudeCodeChatSession.__init__``) and rewrites
+        it only when its system prompt or tools change.
+        """
+        path = Path(tempfile.gettempdir()) / (
             f"lingtai-claude-sp-{uuid.uuid4().hex[:12]}.txt"
         )
         try:
-            self._system_prompt_file.write_text("", encoding="utf-8")
+            path.write_text("", encoding="utf-8")
         except OSError:
             logger.warning("[claude-code] could not create system-prompt file; prompt caching disabled")
-            self._system_prompt_file = None
+            return None
+        return path
 
     # -- LLMAdapter contract --------------------------------------------------
 
@@ -885,18 +901,17 @@ class ClaudeCodeAdapter(LLMAdapter):
         self,
         prompt: str,
         model: str,
-        system_prompt_file: Any = _UNSET,
+        system_prompt_file: Path | None = None,
         resume_session_id: str | None = None,
         effort_argv: list[str] | None = None,
     ) -> tuple[str, UsageMetadata, dict]:
         """Run ``claude -p`` once. Returns (result_text, usage, envelope).
 
-        ``system_prompt_file`` defaults to the adapter's stable prompt-cache
-        file (the chat path), and ``system_prompt_mode`` selects whether Claude
-        appends or replaces its native system prompt. Pass ``None`` to omit the
-        flag entirely — used by the one-shot ``generate`` path, which has no
-        cross-turn cache to protect and must not reuse (or poison) the chat
-        system-prompt file.
+        ``system_prompt_file`` is the calling chat session's own prompt-cache
+        file, and ``system_prompt_mode`` selects whether Claude appends or
+        replaces its native system prompt. ``None`` omits the flag entirely —
+        used by the one-shot ``generate`` path, which has no cross-turn cache
+        to protect.
 
         ``effort_argv`` is the session's already-frozen Claude effort decision
         (``["--effort", <level>]``, or empty for omitted). Defaults to
@@ -931,8 +946,6 @@ class ClaudeCodeAdapter(LLMAdapter):
         # is expected to fail loud rather than silently re-leak; older versions
         # are not verified.
         cmd += ["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
-        if system_prompt_file is _UNSET:
-            system_prompt_file = self._system_prompt_file
         if system_prompt_file:
             cmd += [
                 _SYSTEM_PROMPT_FILE_FLAGS[self._system_prompt_mode],
@@ -1032,6 +1045,7 @@ class ClaudeCodeAdapter(LLMAdapter):
         prompt: str,
         model: str,
         *,
+        system_prompt_file: Path | None = None,
         resume_session_id: str | None = None,
         effort_argv: list[str] | None = None,
     ) -> tuple[dict, UsageMetadata, dict]:
@@ -1039,6 +1053,7 @@ class ClaudeCodeAdapter(LLMAdapter):
         result_str, usage, envelope = self._invoke_raw(
             prompt,
             model,
+            system_prompt_file=system_prompt_file,
             resume_session_id=resume_session_id,
             effort_argv=effort_argv,
         )
