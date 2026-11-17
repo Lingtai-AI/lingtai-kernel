@@ -1364,6 +1364,14 @@ def _move_type_into_union_branches(node: Any) -> Any:
     return out
 
 
+def _build_codex_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
+    """Keep native Codex function schemas explicitly non-strict on every model."""
+    tools = _build_responses_tools(schemas)
+    for tool in tools or []:
+        tool["strict"] = False
+    return tools
+
+
 def _apply_site_quirks(
     base_url: str | None,
     tools: list[dict] | None,
@@ -4291,7 +4299,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         does not use that mode, so it must update both the request payload and
         the interface snapshot on every turn.
         """
-        self._tools = _apply_site_quirks(self._base_url, _build_responses_tools(tools))
+        self._tools = _apply_site_quirks(self._base_url, _build_codex_responses_tools(tools))
         self._interface.add_system(
             self._interface.current_system_prompt or "",
             tools=FunctionSchema.list_to_dicts(tools),
@@ -7142,7 +7150,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             interface.add_system(system_prompt, tools=FunctionSchema.list_to_dicts(tools))
 
         context = self._new_codex_account_context(model, interface)
-        openai_tools = _apply_site_quirks(self.base_url, _build_responses_tools(tools))
+        openai_tools = _apply_site_quirks(self.base_url, _build_codex_responses_tools(tools))
         tool_choice: str | None = None
         if force_tool_call and openai_tools:
             tool_choice = "required"

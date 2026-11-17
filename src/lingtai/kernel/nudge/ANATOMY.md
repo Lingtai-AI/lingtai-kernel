@@ -67,7 +67,7 @@ the ordinary Notification Store channel; it does not create a second transport.
   a later heartbeat (`src/lingtai/kernel/nudge/__init__.py:295-488`).
 - `init_config.py` — consumes the last structured real-reader outcome and
   publishes/clears the typed configuration-shape finding; it never reads
-  `init.json` independently (`src/lingtai/kernel/nudge/init_config.py:1-74`).
+  `init.json` independently (`src/lingtai/kernel/nudge/init_config.py:10-69`).
 - `folder_size.py` — separates its read-only recursive size walk (`observe`)
   from persisted-fact rendering (`evaluate`). The daily tree walk is scheduled
   by the single-flight owner off heartbeat; heartbeat re-evaluates its last
@@ -91,7 +91,7 @@ the ordinary Notification Store channel; it does not create a second transport.
   one probe (~60s) after the fetch completes.
 - `source_drift.py` — read-only runtime/source comparison in a separate
   integrity/diagnostic channel; it remains active for editable/source/dev
-  runtimes (`src/lingtai/kernel/nudge/source_drift.py:21-111`).
+  runtimes (`src/lingtai/kernel/nudge/source_drift.py:30-108`).
 - `goal.py` — IDLE-only protected-goal reminder projected into the ordinary
   `system` notification channel, gated by an in-memory 10-second check
   cadence (`src/lingtai/kernel/nudge/goal.py:20-75`).

@@ -69,6 +69,7 @@ OpenAI adapter — wraps the `openai` SDK for the `openai` provider (official Op
 | `_codex_responses_trace_path()` / `_codex_responses_trace_record()` | `adapter.py:856`, `adapter.py:882` | Opt-in Codex Responses stream diagnostic trace helpers; safe metadata only, default off |
 | `_build_http_timeout()` | `adapter.py:953` | `httpx.Timeout` per-phase caps (connect≤30s, read≤60s, pool=10s) |
 | `_build_tools()` | `adapter.py:975` | `FunctionSchema` → OpenAI CC tool format (`{type, function: {name, description, parameters}}`) |
+| `_build_codex_responses_tools()` | `adapter.py` | Native Codex-only wrapper over existing Responses schema lowering; adds `strict: false` for every function, shared by initial session construction and `CodexResponsesSession.update_tools`. |
 | `_build_responses_tools()` | `adapter.py:1055` | `FunctionSchema` → Responses API flat format (`{type, name, description, parameters}`); scrubs disallowed top-level JSON-Schema combinators (`allOf`, `oneOf`, etc.) |
 | `_parse_response()` | `adapter.py:1104` | ChatCompletion → `LLMResponse` (extracts reasoning from `reasoning_content` or `reasoning`) |
 | `_handle_responses_reasoning_event()` | `adapter.py:1492` | Responses stream reasoning-summary event handler; accumulates `summary_text` deltas/done fallback without raw reasoning text |

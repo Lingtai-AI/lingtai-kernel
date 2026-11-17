@@ -1,5 +1,6 @@
 ---
 related_files:
+  - tests/test_codex_tool_strict.py
   - tests/test_agents_memory.py
   - src/lingtai/tools/plugin/ANATOMY.md
   - tests/test_plugin_mcp_mode.py
@@ -44,6 +45,7 @@ related_files:
   - tests/test_resident_acp_socket.py
   - tests/test_shell_sandbox_containment.py
   - tests/test_source_drift.py
+  - tests/test_static_meta_instruction.py
   - tests/test_system_declared_plugin.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_tool_family_email_migration.py
@@ -183,6 +185,8 @@ graph.
 - The 31 explicitly named macOS/Windows CI selector modules are retained
   with unchanged executable assertions as a separate native/platform tier; CI triggers and failure
   semantics are untouched. These are not all blackbox smoke.
+- `test_static_meta_instruction.py` checks resident metadata guidance and
+  sidecar construction while preserving historical and dynamic metadata.
 - `test_architecture_documents.py`, `test_docs_governance.py`,
   `test_anatomy_drift_checker.py`, and `test_labt_validation.py` retain graph and
   document validation; retaining them is not runtime conformance evidence.
@@ -245,3 +249,7 @@ unrelated smoke. Restore a focused regression from Git history when a
 concrete defect or required native/manual acceptance earns it.
 
 `tests/test_project_recipe.py` carries twelve thin existing local Recipe fake/filesystem and actual CLI source contracts; PRJ004 guards its Project owner promises. Execution is parent-owned, not an authored passing receipt.
+
+`test_codex_tool_strict.py` exercises native Codex adapter-created sessions and
+tool updates with inert transport doubles; generic OpenAI tool strictness remains
+unchanged.
