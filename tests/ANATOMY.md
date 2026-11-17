@@ -1,6 +1,5 @@
 ---
 related_files:
-  - tests/test_codex_tool_strict.py
   - tests/test_agents_memory.py
   - src/lingtai/tools/plugin/ANATOMY.md
   - tests/test_plugin_mcp_mode.py
@@ -163,7 +162,7 @@ maintenance: |
 ---
 # tests/
 
-A deliberately small retained validation surface: 104 pytest modules, shared
+A deliberately small retained validation surface: 103 pytest modules, shared
 fixtures, and fake executables. This is a navigation-only inventory, not a
 governed component or a promise of comprehensive product conformance.
 `tests/CONTRACT.md` remains the methodology charter outside the root contract
@@ -250,6 +249,6 @@ concrete defect or required native/manual acceptance earns it.
 
 `tests/test_project_recipe.py` carries twelve thin existing local Recipe fake/filesystem and actual CLI source contracts; PRJ004 guards its Project owner promises. Execution is parent-owned, not an authored passing receipt.
 
-`test_codex_tool_strict.py` exercises native Codex adapter-created sessions and
-tool updates with inert transport doubles; generic OpenAI tool strictness remains
-unchanged.
+`contracts/llm_conversation_input/test_send_str.py` also checks native Codex
+adapter-created tool schemas and updates using the shared inert REST transport;
+generic OpenAI tool strictness remains unchanged.

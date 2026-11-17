@@ -10,7 +10,12 @@ mocked transport (no network). It also asserts each ``send`` returns a real
 """
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
+
+from lingtai.kernel.llm.base import FunctionSchema
+from lingtai.llm.openai.adapter import CodexOpenAIAdapter, OpenAIAdapter
 
 from tests.contracts.llm_conversation_input import regimes
 
@@ -49,3 +54,57 @@ def _assert_text_present(regime: regimes.Regime, wire) -> None:
     assert regimes.USER_TEXT in json.dumps(wire, default=str), (
         f"{regime.name}: text not found in {wire!r}"
     )
+
+
+@pytest.mark.parametrize("provider", ["codex", "responses", "chat_completions"])
+def test_tool_schema_policy_on_creation_and_update(monkeypatch, provider):
+    """Adapter conformance: conditional schemas survive; only Codex sets strict=False."""
+    monkeypatch.setenv("LINGTAI_CODEX_TRANSPORT", "rest")
+    monkeypatch.delenv("LINGTAI_CODEX_WS", raising=False)
+    client = regimes._CodexRestClient()
+    monkeypatch.setattr("lingtai.llm.openai.adapter.openai.OpenAI", lambda **kw: client)
+    native = provider == "codex"
+    adapter = (CodexOpenAIAdapter if native else OpenAIAdapter)(
+        api_key="inert", base_url="https://adapter.invalid",
+        wire_api="responses" if native else provider,
+    )
+    parameters = {
+        "type": "object",
+        "properties": {"action": {"type": "string"}, "value": {"type": "string"}},
+        "allOf": [{"if": {"properties": {"action": {"const": "set"}}},
+                   "then": {"required": ["value"]}}],
+    }
+    for phase in ("initial", "updated"):
+        schemas = [FunctionSchema(phase + name, "description", deepcopy(parameters))
+                   for name in ("one", "two")]
+        snapshot = deepcopy(schemas)
+        if phase == "initial":
+            session = adapter.create_chat("arbitrary-model", "system", tools=schemas)
+        else:
+            session.update_tools(schemas)
+        tools = session._tools
+        if native:
+            session.send(regimes.USER_TEXT)
+            payload = client.responses.kwargs[-1]
+            tools = payload["tools"]
+            assert session._ws_frame_request(payload, payload["input"])["tools"] == tools
+        assert len(tools) == len(schemas)
+        for tool, schema in zip(tools, schemas):
+            function = tool.get("function", tool)
+            if native:
+                assert function.get("strict") is False
+            else:
+                assert "strict" not in function
+            assert function["name"] == schema.name
+            assert function["parameters"] == parameters
+        assert schemas == snapshot
+    for empty in ([], None):
+        session.update_tools(empty)
+        assert session._tools is None
+        if native:
+            session.send(regimes.USER_TEXT)
+            assert "tools" not in client.responses.kwargs[-1]
+    session.update_tools(schemas)
+    assert session._tools
+    if native:
+        assert all(tool.get("strict") is False for tool in session._tools)
