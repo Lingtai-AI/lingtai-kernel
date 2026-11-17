@@ -44,6 +44,7 @@ related_files:
   - tests/test_resident_acp_socket.py
   - tests/test_shell_sandbox_containment.py
   - tests/test_source_drift.py
+  - tests/test_static_meta_instruction.py
   - tests/test_system_declared_plugin.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_tool_family_email_migration.py
@@ -161,7 +162,7 @@ maintenance: |
 ---
 # tests/
 
-A deliberately small retained validation surface: 104 pytest modules, shared
+A deliberately small retained validation surface: 103 pytest modules, shared
 fixtures, and fake executables. This is a navigation-only inventory, not a
 governed component or a promise of comprehensive product conformance.
 `tests/CONTRACT.md` remains the methodology charter outside the root contract
@@ -183,6 +184,8 @@ graph.
 - The 31 explicitly named macOS/Windows CI selector modules are retained
   with unchanged executable assertions as a separate native/platform tier; CI triggers and failure
   semantics are untouched. These are not all blackbox smoke.
+- `test_static_meta_instruction.py` checks resident metadata guidance and
+  sidecar construction while preserving historical and dynamic metadata.
 - `test_architecture_documents.py`, `test_docs_governance.py`,
   `test_anatomy_drift_checker.py`, and `test_labt_validation.py` retain graph and
   document validation; retaining them is not runtime conformance evidence.
@@ -245,3 +248,7 @@ unrelated smoke. Restore a focused regression from Git history when a
 concrete defect or required native/manual acceptance earns it.
 
 `tests/test_project_recipe.py` carries twelve thin existing local Recipe fake/filesystem and actual CLI source contracts; PRJ004 guards its Project owner promises. Execution is parent-owned, not an authored passing receipt.
+
+`contracts/llm_conversation_input/test_send_str.py` also checks native Codex
+adapter-created tool schemas and updates using the shared inert REST transport;
+generic OpenAI tool strictness remains unchanged.
