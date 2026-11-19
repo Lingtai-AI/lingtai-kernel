@@ -77,9 +77,12 @@ pool: `deepseek`, `zhipu`, `glm`, `mimo`, `minimax`, `openrouter`, `grok`,
 manifest keys `api_compat`, `reasoning_effort_vocab`, and `use_responses_api`
 are recognized and ignored.
 
-Native `codex` function tools explicitly send `strict: false` for every model,
-including tools replaced during a session. This preserves conditional parameter
-schemas without requesting strict schema enforcement. Generic `openai` tool
+Responses function tools explicitly send `strict: false` for every model,
+including tools replaced during a session, on native `codex` and on `openai`
+with `wire_api: responses` alike. This preserves conditional parameter schemas
+without requesting strict schema enforcement: a model that treats an omitted
+`strict` as true (GPT-6.2 Sol, also through an OpenAI-compatible gateway)
+otherwise rejects them with `400 invalid_json_schema`. Chat Completions tool
 serialization is unchanged.
 
 On the Responses wire (`openai` with `wire_api: responses`, and `codex`) the

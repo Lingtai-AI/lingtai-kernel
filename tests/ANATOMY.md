@@ -252,7 +252,8 @@ concrete defect or required native/manual acceptance earns it.
 
 `contracts/llm_conversation_input/test_send_str.py` also checks native Codex
 adapter-created tool schemas and updates using the shared inert REST transport;
-generic OpenAI tool strictness remains unchanged.
+both Responses routes (native Codex and plain `openai`) send `strict: false`, and
+Chat Completions tool strictness remains unchanged.
 
 `contracts/llm_conversation_input/test_responses_system_prompt_wire.py` checks that
 every Responses request (plain `openai` and native Codex sessions, one-shot

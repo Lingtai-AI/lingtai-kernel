@@ -58,7 +58,7 @@ def _assert_text_present(regime: regimes.Regime, wire) -> None:
 
 @pytest.mark.parametrize("provider", ["codex", "responses", "chat_completions"])
 def test_tool_schema_policy_on_creation_and_update(monkeypatch, provider):
-    """Adapter conformance: conditional schemas survive; only Codex sets strict=False."""
+    """Adapter conformance: conditional schemas survive; Responses routes set strict=False."""
     monkeypatch.setenv("LINGTAI_CODEX_TRANSPORT", "rest")
     monkeypatch.delenv("LINGTAI_CODEX_WS", raising=False)
     client = regimes._CodexRestClient()
@@ -91,10 +91,10 @@ def test_tool_schema_policy_on_creation_and_update(monkeypatch, provider):
         assert len(tools) == len(schemas)
         for tool, schema in zip(tools, schemas):
             function = tool.get("function", tool)
-            if native:
-                assert function.get("strict") is False
-            else:
+            if provider == "chat_completions":
                 assert "strict" not in function
+            else:
+                assert function.get("strict") is False
             assert function["name"] == schema.name
             assert function["parameters"] == parameters
         assert schemas == snapshot
@@ -106,5 +106,5 @@ def test_tool_schema_policy_on_creation_and_update(monkeypatch, provider):
             assert "tools" not in client.responses.kwargs[-1]
     session.update_tools(schemas)
     assert session._tools
-    if native:
+    if provider != "chat_completions":
         assert all(tool.get("strict") is False for tool in session._tools)
