@@ -1314,6 +1314,12 @@ def _build_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] |
                 "name": s.name,
                 "description": wire_tool_description(s.description),
                 "parameters": params,
+                # Explicitly non-strict on every Responses route. A model that
+                # treats an omitted ``strict`` as true (gpt-6.2-sol, also when
+                # reached through an OpenAI-compatible gateway) rejects the
+                # ToolFamily root ``allOf``/``if``/``then`` correlation with
+                # 400 ``invalid_json_schema``.
+                "strict": False,
             }
         )
     return tools
@@ -1365,7 +1371,11 @@ def _move_type_into_union_branches(node: Any) -> Any:
 
 
 def _build_codex_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
-    """Keep native Codex function schemas explicitly non-strict on every model."""
+    """Native Codex function schemas: the shared Responses lowering.
+
+    ``_build_responses_tools`` already marks every function ``strict: false``;
+    this wrapper stays as the Codex seam and re-asserts it.
+    """
     tools = _build_responses_tools(schemas)
     for tool in tools or []:
         tool["strict"] = False
