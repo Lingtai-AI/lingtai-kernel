@@ -1372,6 +1372,64 @@ def _build_codex_responses_tools(schemas: list[FunctionSchema] | None) -> list[d
     return tools
 
 
+# Top-level ``instructions`` kept on the wire once the system prompt has moved
+# into the leading ``developer`` input message (``_responses_wire_request``).
+# The field stays non-empty on purpose: the native Codex endpoint requires it,
+# and Codex-backed gateways substitute their own default prompt when it is
+# empty.
+_RESPONSES_INSTRUCTIONS_POINTER = (
+    "Your instructions are in the developer message at the start of this "
+    "conversation. Follow them."
+)
+
+
+def _system_prompt_input_item(system_prompt: str) -> dict[str, Any]:
+    """The system prompt as a leading ``developer`` Responses input message."""
+    return {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": system_prompt}],
+    }
+
+
+def _responses_wire_request(request: dict[str, Any]) -> dict[str, Any]:
+    """Return ``request`` as it goes on the wire: system prompt first in ``input``.
+
+    Sessions build and track their requests with the system prompt in
+    ``instructions`` (continuation planning, token estimates and compaction all
+    read that logical shape). This is the single seam that rewrites it for
+    transmission, applied at every ``responses.create`` call and WebSocket
+    frame:
+
+      * the system prompt becomes the first ``input`` item, a ``developer``
+        message;
+      * ``instructions`` carries only ``_RESPONSES_INSTRUCTIONS_POINTER``.
+
+    Why: models starting with GPT-6.2 append top-level ``instructions`` AFTER
+    ``input`` and never serve them from the prompt cache, so a system prompt
+    sent there is billed uncached on every request (OpenAI prompt-caching
+    guide). A leading developer message is part of the cached prefix on 6.2 and
+    on earlier models alike, so the placement is the same for every model.
+
+    A request that continues a server-side chain (``previous_response_id``)
+    carries only a delta: the developer message is already in the chain, so
+    only ``instructions`` is rewritten. The input mapping is never mutated; a
+    request without a system prompt is returned unchanged.
+    """
+    system_prompt = request.get("instructions")
+    if not isinstance(system_prompt, str) or not system_prompt:
+        return request
+    wire = dict(request)
+    wire["instructions"] = _RESPONSES_INSTRUCTIONS_POINTER
+    if request.get("previous_response_id"):
+        return wire
+    items = request.get("input")
+    if isinstance(items, str):
+        items = [{"role": "user", "content": items}]
+    wire["input"] = [_system_prompt_input_item(system_prompt), *(items or [])]
+    return wire
+
+
 def _apply_site_quirks(
     base_url: str | None,
     tools: list[dict] | None,
@@ -3198,7 +3256,7 @@ class OpenAIResponsesSession(ChatSession):
             if self._prompt_cache_key:
                 kwargs["prompt_cache_key"] = self._prompt_cache_key
 
-            raw = self._client.responses.create(**kwargs)
+            raw = self._client.responses.create(**_responses_wire_request(kwargs))
             if isinstance(raw, str):
                 logger.warning(
                     "Responses endpoint returned SSE text to a non-streaming request; "
@@ -3264,7 +3322,7 @@ class OpenAIResponsesSession(ChatSession):
                 kwargs["prompt_cache_key"] = self._prompt_cache_key
 
             request_started_at = time.monotonic()
-            stream = self._client.responses.create(**kwargs)
+            stream = self._client.responses.create(**_responses_wire_request(kwargs))
             response, response_id = _consume_responses_stream(
                 stream, on_chunk, request_started_at=request_started_at,
             )
@@ -3742,7 +3800,8 @@ class OpenAIAdapter(LLMAdapter):
                 },
             }
 
-        raw = self._gated_call(lambda: self._client.responses.create(**kwargs))
+        wire = _responses_wire_request(kwargs)
+        raw = self._gated_call(lambda: self._client.responses.create(**wire))
         return _parse_responses_api_response(raw)
 
     def make_tool_result_message(
@@ -4780,7 +4839,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         def _events():
             response_id_local: str | None = None
             try:
-                for event in transport.stream(frame):
+                for event in transport.stream(_responses_wire_request(frame)):
                     etype = getattr(event, "type", None)
                     if etype == "response.completed":
                         response_id_local = getattr(getattr(event, "response", None), "id", None)
@@ -5772,7 +5831,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
                         "deadline before the bounded provider retry"
                     )
                 request_kwargs["timeout"] = _build_http_timeout(remaining)
-            return self._client.responses.create(**request_kwargs)
+            return self._client.responses.create(**_responses_wire_request(request_kwargs))
         try:
             retry_stream = callback(
                 exc,
@@ -5803,7 +5862,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         if remaining is not None:
             request_kwargs["timeout"] = _build_http_timeout(remaining)
         try:
-            stream = self._client.responses.create(**request_kwargs)
+            stream = self._client.responses.create(**_responses_wire_request(request_kwargs))
         except Exception as exc:
             recovery = self._codex_try_token_expired_recovery(exc, request_kwargs)
             if recovery is None:

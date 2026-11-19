@@ -309,14 +309,17 @@ def test_responses_wire_replays_full_history_without_resume_id(label: str) -> No
 
     assert "previous_response_id" not in transport.kwargs[0]
     assert "previous_response_id" not in transport.kwargs[1]
-    # Turn 2 replays the whole conversation, not a delta: user 1, the recorded
-    # assistant turn 1 (its exact item shape — projected text or the replayed
-    # raw provider output item — is owned by the converter tests), user 2.
+    # Turn 2 replays the whole conversation, not a delta: the system prompt as
+    # the leading developer message, user 1, the recorded assistant turn 1 (its
+    # exact item shape — projected text or the replayed raw provider output
+    # item — is owned by the converter tests), user 2.
     replay = transport.kwargs[1]["input"]
-    assert len(replay) == 3
-    assert replay[0] == {"role": "user", "content": "first"}
-    assert replay[2] == {"role": "user", "content": "second"}
-    assert "ok" in json.dumps(replay[1])
+    assert len(replay) == 4
+    assert replay[0]["role"] == "developer"
+    assert replay[0] == transport.kwargs[0]["input"][0]
+    assert replay[1] == {"role": "user", "content": "first"}
+    assert replay[3] == {"role": "user", "content": "second"}
+    assert "ok" in json.dumps(replay[2])
     assert session.session_resume_id is None
 
 

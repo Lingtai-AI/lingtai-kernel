@@ -536,8 +536,9 @@ def to_responses_input(
 ) -> list[dict]:
     """Convert canonical interface to OpenAI Responses API ``input`` items.
 
-    System entries are excluded (the Responses API takes the system prompt
-    via the ``instructions`` kwarg, not as an input item).
+    System entries are excluded: the session holds the system prompt itself and
+    ``lingtai.llm.openai.adapter._responses_wire_request`` places it on the wire
+    as the leading ``developer`` input message.
 
     Item shapes per the Responses API:
       * user text       -> ``{"role": "user", "content": <str>}``

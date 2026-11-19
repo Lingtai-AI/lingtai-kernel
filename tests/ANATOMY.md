@@ -74,6 +74,7 @@ related_files:
   - tests/contracts/llm_conversation_input/regimes.py
   - tests/contracts/llm_conversation_input/test_openai_responses_tool_result_conversion.py
   - tests/contracts/llm_conversation_input/test_regime_inventory.py
+  - tests/contracts/llm_conversation_input/test_responses_system_prompt_wire.py
   - tests/contracts/llm_conversation_input/test_send_str.py
   - tests/contracts/llm_conversation_input/test_send_tool_results.py
   - tests/opencode
@@ -252,3 +253,8 @@ concrete defect or required native/manual acceptance earns it.
 `contracts/llm_conversation_input/test_send_str.py` also checks native Codex
 adapter-created tool schemas and updates using the shared inert REST transport;
 generic OpenAI tool strictness remains unchanged.
+
+`contracts/llm_conversation_input/test_responses_system_prompt_wire.py` checks that
+every Responses request (plain `openai` and native Codex sessions, one-shot
+generation) carries the system prompt as the leading `developer` input message
+with only the constant pointer in top-level `instructions`.
