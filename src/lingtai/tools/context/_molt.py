@@ -407,7 +407,7 @@ def _context_molt(agent, args: dict) -> dict:
     )
 
     # Wipe context
-    agent._session._chat = None
+    agent._session.discard_chat()
     agent._session._interaction_id = None
 
     # Track molt count and persist to manifest
@@ -679,7 +679,7 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
     )
 
     # Wipe context
-    agent._session._chat = None
+    agent._session.discard_chat()
     agent._session._interaction_id = None
 
     agent._molt_count += 1

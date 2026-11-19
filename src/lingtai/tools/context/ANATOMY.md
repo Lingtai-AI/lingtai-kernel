@@ -61,7 +61,9 @@ passive lifecycle scenarios.
 - `_molt.py` — agent and system molt implementations; shared
   `_select_keep_last_entries` atomically selects suffixes around complete
   single/parallel assistant tool-result batches; replay selection,
-  archive/wipe, post-molt hook invocation before fresh-session creation, and
+  archive/wipe (the wipe is `SessionManager.discard_chat`, which also releases
+  the old chat from the service registry), post-molt hook invocation before
+  fresh-session creation, and
   post-molt notification publishing.
 - `_session_journal.py` — fail-closed journal-path/frontmatter gate.
 - `_snapshots.py` — atomic pre-molt snapshots and retrospective persistence.
