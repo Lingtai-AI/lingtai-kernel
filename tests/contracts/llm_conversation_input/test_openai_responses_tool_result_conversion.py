@@ -60,7 +60,14 @@ def _make_session():
 
 
 def _sent_input(client) -> list:
-    return client.responses.create.call_args.kwargs["input"]
+    """The converted message items, after the leading system-prompt message."""
+    sent = client.responses.create.call_args.kwargs["input"]
+    assert sent[0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "system"}],
+    }
+    return sent[1:]
 
 
 def test_canonical_tool_result_becomes_function_call_output() -> None:

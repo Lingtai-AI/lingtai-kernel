@@ -82,6 +82,13 @@ including tools replaced during a session. This preserves conditional parameter
 schemas without requesting strict schema enforcement. Generic `openai` tool
 serialization is unchanged.
 
+On the Responses wire (`openai` with `wire_api: responses`, and `codex`) the
+system prompt is sent as a `developer` message at the start of `input`, not in
+top-level `instructions`, which carries only a one-line pointer to it. Models
+starting with GPT-6.2 append `instructions` after `input` and never serve them
+from the prompt cache; the leading developer message is cached on those and on
+earlier models alike. Chat Completions is unchanged (`system` message).
+
 ## Standard parameters
 
 - **`thinking`** (`none|minimal|low|medium|high|xhigh|max`, every family) is
